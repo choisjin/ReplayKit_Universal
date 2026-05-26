@@ -1,5 +1,0 @@
-[2026-05-18 11:57:33] v1.1.0 — 006060b5 feat: ExtractAllText 기능에 min_length 파라미터 추가 및 설명 업데이트
-[2026-05-07 17:09:51] v1.0.2 — 17a86e99 현대 Turn left, right Hardkey Disabled
-[2026-04-30 14:52:23] v1.0.1 — 3caf601e fix: 버전 번호를 1.0.0에서 1.0.1로 업데이트
-[2026-04-30 09:32:18] v1.0.0 — b7bf61ef fix: DLTLogging 및 SerialLogging의 연결 해제 및 파일 저장 예외 처리 개선
-[2026-04-30 09:14:59] v1.0.0 — 5a7c030a feat: installer.iss 파일의 MyAppVersion 갱신 기능 추가

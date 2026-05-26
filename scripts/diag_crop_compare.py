@@ -6,9 +6,9 @@
   - SSIM blur on/off에 따른 점수 차이
 
 사용:
-  venv/Scripts/python scripts/diag_crop_compare.py <serial>
-  venv/Scripts/python scripts/diag_crop_compare.py <serial> --display 131
-  venv/Scripts/python scripts/diag_crop_compare.py <serial> --x 0 --y 0 --w 200 --h 200 --gap 1.0
+  venv/bin/python scripts/diag_crop_compare.py <serial>
+  venv/bin/python scripts/diag_crop_compare.py <serial> --display 131
+  venv/bin/python scripts/diag_crop_compare.py <serial> --x 0 --y 0 --w 200 --h 200 --gap 1.0
 
 디바이스가 결정적이면 identical=True, ssim=1.0이 나와야 정상.
 """

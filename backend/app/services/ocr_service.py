@@ -57,7 +57,7 @@ def _get_engine(language: Optional[str] = None):
         logger.error(
             "OCR: rapidocr_onnxruntime import 실패: %s\n"
             "  현재 Python: %s\n"
-            "  → 백엔드를 venv Python으로 실행하세요: venv/Scripts/python.exe -m uvicorn ...",
+            "  → 백엔드를 venv Python으로 실행하세요: venv/bin/python -m uvicorn ...",
             e, sys.executable,
         )
         return None

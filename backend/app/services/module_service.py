@@ -344,16 +344,26 @@ def list_available_modules() -> list[dict]:
 
 
 def _ensure_module_deps(module_name: str, module_dir: Path) -> None:
-    """모듈이 필요로 하는 DLL 등을 modules/ 폴더에서 모듈 위치로 복사."""
+    """모듈이 필요로 하는 native library 를 modules/ 폴더에서 모듈 위치로 복사.
+
+    플랫폼별 확장자: Windows .dll, Linux .so, macOS .dylib.
+    """
     import shutil
+    import sys as _sys
     if not _MODULES_DIR.is_dir():
         return
-    # module_name에 매칭되는 DLL 파일 복사 (예: CANAT → CANatTransportProcDll.dll)
-    for dll in _MODULES_DIR.glob("*.dll"):
-        dest = module_dir / dll.name
-        if not dest.exists():
-            shutil.copy2(str(dll), str(dest))
-            logger.info("Copied %s → %s", dll.name, dest)
+    if _sys.platform == "win32":
+        patterns = ("*.dll",)
+    elif _sys.platform == "darwin":
+        patterns = ("*.dylib", "*.so")
+    else:
+        patterns = ("*.so",)
+    for pat in patterns:
+        for lib in _MODULES_DIR.glob(pat):
+            dest = module_dir / lib.name
+            if not dest.exists():
+                shutil.copy2(str(lib), str(dest))
+                logger.info("Copied %s → %s", lib.name, dest)
 
 
 def _import_module_class(module_name: str):
