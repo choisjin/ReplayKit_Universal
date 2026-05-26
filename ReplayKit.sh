@@ -7,6 +7,21 @@ cd "$(dirname "$(readlink -f "$0")")"
 unset PYTHONHOME PYTHONPATH PYTHONSTARTUP
 export PYTHONNOUSERSITE=1
 
+# ---- Python 우선순위 결정: embedded > venv > (없음) ----
+# Windows ReplayKit.bat 의 python\python.exe → venv → 시스템 우선순위 등가.
+PY=""
+PY_DIR=""
+PY_MODE=""
+if [ -x "python/bin/python3" ]; then
+    PY="python/bin/python3"
+    PY_DIR="python"
+    PY_MODE="embedded"
+elif [ -x "venv/bin/python" ]; then
+    PY="venv/bin/python"
+    PY_DIR="venv"
+    PY_MODE="venv"
+fi
+
 # ---- Offline 모드 ----
 OFFLINE_MODE=0
 if [ -f ".offline_mode" ]; then
@@ -79,7 +94,7 @@ git_pull() {
 }
 
 update_deps() {
-    local req_hash_file="venv/.req_hash"
+    local req_hash_file="${PY_DIR}/.req_hash"
     local old_hash=""
     local new_hash
     [ -f "$req_hash_file" ] && old_hash=$(cat "$req_hash_file")
@@ -90,21 +105,21 @@ update_deps() {
 
     # critical modules 체크
     local critical_missing=0
-    if ! venv/bin/python -c "import rapidocr_onnxruntime, rapidfuzz" >/dev/null 2>&1; then
+    if ! "$PY" -c "import rapidocr_onnxruntime, rapidfuzz" >/dev/null 2>/dev/null; then
         need_install=1
         critical_missing=1
     fi
     [ $need_install -eq 0 ] && return
 
     echo "[DEPS] Installing/updating packages..."
-    if ! venv/bin/python -m pip install -r requirements.txt -q; then
+    if ! "$PY" -m pip install -r requirements.txt -q; then
         echo "[DEPS] Install failed - continuing with existing packages."
         return
     fi
     if [ $critical_missing -eq 1 ]; then
-        if ! venv/bin/python -c "import rapidocr_onnxruntime, rapidfuzz" >/dev/null 2>&1; then
+        if ! "$PY" -c "import rapidocr_onnxruntime, rapidfuzz" >/dev/null 2>/dev/null; then
             echo "[DEPS] Critical modules still missing - installing directly..."
-            venv/bin/python -m pip install rapidocr-onnxruntime rapidfuzz -q
+            "$PY" -m pip install rapidocr-onnxruntime rapidfuzz -q
         fi
     fi
     echo "$new_hash" > "$req_hash_file"
@@ -115,14 +130,14 @@ update_ocr_models() {
     local sentinel="backend/app/services/ocr_models/korean/rec_infer.onnx"
     [ -f "$sentinel" ] && return
     echo "[OCR] Multilingual models not found - first-time setup..."
-    if ! venv/bin/python -m paddle2onnx.command --version >/dev/null 2>&1; then
+    if ! "$PY" -m paddle2onnx.command --version >/dev/null 2>/dev/null; then
         echo "[OCR] Installing paddle2onnx + paddlepaddle (one-time, ~160MB)..."
-        if ! venv/bin/python -m pip install paddle2onnx paddlepaddle -q; then
+        if ! "$PY" -m pip install paddle2onnx paddlepaddle -q; then
             echo "[OCR] Install failed - Korean OCR will fall back to bundled Chinese model."
             return
         fi
     fi
-    venv/bin/python scripts/download_ocr_models.py || echo "[OCR] Model download partially failed."
+    "$PY" scripts/download_ocr_models.py || echo "[OCR] Model download partially failed."
 }
 
 stop_existing_server
@@ -142,14 +157,14 @@ fi
 # ---- 의존성 자동 업데이트 ----
 if [ "$OFFLINE_MODE" = "1" ]; then
     echo "[DEPS] Skipped (offline mode)."
-elif [ -x "venv/bin/python" ] && [ -f "requirements.txt" ]; then
+elif [ -n "$PY" ] && [ -f "requirements.txt" ]; then
     update_deps
 fi
 
 # ---- OCR 모델 (최초 부팅) ----
 if [ "$OFFLINE_MODE" = "1" ]; then
     echo "[OCR] Skipped (offline mode - models must be bundled)."
-elif [ -x "venv/bin/python" ] && [ -f "scripts/download_ocr_models.py" ]; then
+elif [ -n "$PY" ] && [ -f "scripts/download_ocr_models.py" ]; then
     update_ocr_models
 fi
 
@@ -157,16 +172,21 @@ fi
 ENTRY="server.py"
 [ -f "_launcher.py" ] && ENTRY="_launcher.py"
 
-if [ ! -x "venv/bin/python" ]; then
-    echo "[ERROR] Python not found. Run ./setup.sh first."
+if [ -z "$PY" ]; then
+    echo "[ERROR] Python not found."
+    echo "        해결책 (택1):"
+    echo "          a) ./setup.sh                              (시스템 Python 사용)"
+    echo "          b) ./scripts/install_embedded_python.sh    (embedded Python 설치)"
     exit 1
 fi
+
+echo "[PYTHON] mode=${PY_MODE}, bin=${PY}"
 
 # DISPLAY 없으면 (헤드리스) GUI 없이 backend/frontend 만 직접 실행
 if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     echo "[START] Headless mode - starting backend (uvicorn) directly"
-    exec venv/bin/python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+    exec "$PY" -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
 else
-    echo "[START] venv/bin/python $ENTRY"
-    exec venv/bin/python "$ENTRY"
+    echo "[START] ${PY} ${ENTRY}"
+    exec "$PY" "$ENTRY"
 fi

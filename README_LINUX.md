@@ -50,11 +50,55 @@ sudo apt install -y \
 ./setup.sh
 ```
 
-내부적으로:
-1. `python3.10 -m venv venv`
-2. `venv/bin/pip install -r requirements.txt`
+`setup.sh` 의 Python 우선순위 (Windows ReplayKit.bat 등가):
+
+| 우선순위 | 조건 | 사용 경로 | 모드 |
+| --- | --- | --- | --- |
+| 1 | `python/bin/python3` 존재 | embedded (자기완결) | `embedded` |
+| 2 | `venv/bin/python` 존재 | 기존 venv 재사용 | `venv` |
+| 3 | 시스템 `python3.10~3.12` | 새 venv 생성 후 사용 | `venv` |
+
+내부 수행:
+1. 위 우선순위로 Python 선택 (embedded 면 venv 생략)
+2. `<PY> -m pip install -r requirements.txt`
 3. `lge.auto-*.whl` 이 있으면 자동 설치
-4. `frontend && npm install`
+4. `frontend && npm install` (dev 모드)
+
+#### 2-2-a. (옵션) Embedded Python — 시스템 의존 없는 배포용
+
+Windows 원본은 `python-3.10.4-embed-amd64.zip` 을 함께 배포해 OS Python 과
+무관하게 동작합니다. Linux 등가물은 [`python-build-standalone`](https://github.com/astral-sh/python-build-standalone)
+(Astral 제공) 의 `install_only` tarball — 약 30MB, 압축 해제만으로
+`python/bin/python3` 가 바로 동작합니다.
+
+```bash
+# 최신 릴리스 자동 조회 (기본: 3.10.14, 자동 arch 감지)
+./scripts/install_embedded_python.sh
+
+# 버전/아키텍처 지정
+./scripts/install_embedded_python.sh --version 3.11.9 --arch aarch64
+
+# 특정 릴리스 태그 고정 (재현성 필요할 때)
+./scripts/install_embedded_python.sh --release 20240814
+
+# 기존 python/ 덮어쓰기
+./scripts/install_embedded_python.sh --force
+```
+
+설치 후:
+```bash
+./setup.sh           # python/ 자동 감지 → venv 생략, requirements.txt 만 설치
+./ReplayKit.sh       # [PYTHON] mode=embedded, bin=python/bin/python3 로 실행
+```
+
+| 장점 | 단점 |
+| --- | --- |
+| 시스템 Python 의존성 0 | tkinter 미포함 (GUI 서버 사용 불가, 헤드리스만) |
+| 배포본 자기완결 (OS Python 충돌 회피) | 첫 다운로드 ~30MB |
+| `python/` 디렉토리 통째로 복사하면 이식 가능 | x86_64 / aarch64 만 지원 |
+
+> tkinter GUI (`server.py`) 가 필요하면 시스템 Python + `python3-tk` 를 사용하거나
+> `DISPLAY= ./ReplayKit.sh` 헤드리스 모드를 사용하세요.
 
 ### 2-3. ADB 설정
 
@@ -151,14 +195,16 @@ DISPLAY= ./ReplayKit.sh
 ```
 원본 (Recording_Test) → Replaykit_for_linux
 ─────────────────────────────────────────────
-+ setup.sh, ReplayKit.sh, sync_and_run.sh   (Linux 실행 스크립트)
-+ README_LINUX.md                           (본 문서)
-- setup.bat, ReplayKit.bat, sync_and_run.bat (Windows 전용 제거)
-- build_dist.py, installer.iss              (Windows 빌드 전용 제거)
-- tools/ffmpeg.exe                          (Linux 는 system ffmpeg)
-~ requirements.txt                          (pywin32 등 sys_platform 분기)
-~ module_service.py                         (.dll 외 .so/.dylib glob 추가)
-~ ocr_service.py, scripts/diag_*.py         (venv/Scripts → venv/bin)
++ setup.sh, ReplayKit.sh, sync_and_run.sh           (Linux 실행 스크립트)
++ scripts/install_embedded_python.sh                (Linux embedded Python 설치)
++ README_LINUX.md                                   (본 문서)
+- setup.bat, ReplayKit.bat, sync_and_run.bat        (Windows 전용 제거)
+- build_dist.py, installer.iss                      (Windows 빌드 전용 제거)
+- tools/ffmpeg.exe                                  (Linux 는 system ffmpeg)
+~ requirements.txt                                  (pywin32 등 sys_platform 분기)
+~ module_service.py                                 (.dll 외 .so/.dylib glob 추가)
+~ ocr_service.py, scripts/diag_*.py                 (venv/Scripts → venv/bin)
+~ setup.sh / ReplayKit.sh                           (embedded > venv > system 우선순위)
 ```
 
 Python 소스의 로직은 그대로 두었습니다 — 이미 `sys.platform` 가드가
