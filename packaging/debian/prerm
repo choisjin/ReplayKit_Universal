@@ -1,0 +1,22 @@
+#!/bin/sh
+# prerm — ReplayKit
+# 실행 중인 인스턴스가 있으면 종료 시도. 사용자 데이터(~/.local/share/ReplayKit)
+# 는 절대 삭제하지 않는다.
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        # 백그라운드 서버 종료 (있을 때만)
+        if command -v pkill >/dev/null 2>/dev/null; then
+            pkill -f '/opt/ReplayKit/python/bin/python3' >/dev/null 2>/dev/null || true
+        fi
+        ;;
+    failed-upgrade)
+        ;;
+    *)
+        echo "prerm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

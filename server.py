@@ -40,7 +40,12 @@ for _var in ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP"):
 os.environ.setdefault("PYTHONNOUSERSITE", "1")
 
 # Backend Python: embedded > venv > system (self)
-_embed_python = os.path.join(PROJECT_ROOT, "python", "python.exe")
+# Windows embedded: python/python.exe (python-3.10.4-embed-amd64)
+# Linux embedded:   python/bin/python3 (python-build-standalone install_only)
+if sys.platform == "win32":
+    _embed_python = os.path.join(PROJECT_ROOT, "python", "python.exe")
+else:
+    _embed_python = os.path.join(PROJECT_ROOT, "python", "bin", "python3")
 _venv_python = os.path.join(PROJECT_ROOT, "venv", "Scripts", "python.exe")
 if not os.path.exists(_venv_python):
     _venv_python = os.path.join(PROJECT_ROOT, "venv", "bin", "python")

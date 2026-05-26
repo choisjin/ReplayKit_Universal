@@ -1,0 +1,16 @@
+Package: replaykit
+Version: @@VERSION@@
+Section: utils
+Priority: optional
+Architecture: @@ARCH@@
+Depends: libgl1, libglib2.0-0, libxcb1, libxkbcommon0
+Recommends: scrcpy, ffmpeg, android-tools-adb, python3-tk, fonts-noto-cjk, gstreamer1.0-plugins-good
+Maintainer: choi3206@gmail.com
+Homepage: https://github.com/choisjin/ReplayKit_Dev_For_Linux
+Description: ReplayKit - Android automation testing tool (Linux port)
+ Replay/record Android device interactions with OCR-based UI validation.
+ Bundles a self-contained Python runtime (python-build-standalone) so it
+ does not depend on the system Python installation.
+ .
+ System tools that this package recommends (scrcpy, ffmpeg, adb) are used
+ for screen capture, video encoding and device control respectively.

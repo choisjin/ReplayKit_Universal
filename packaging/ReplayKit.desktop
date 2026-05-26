@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=ReplayKit
+GenericName=Android Automation
+Comment=Replay/record Android device interactions with OCR validation
+Exec=ReplayKit
+Icon=replaykit
+Terminal=false
+Categories=Development;Utility;
+Keywords=android;adb;scrcpy;automation;testing;ocr;
+StartupNotify=true
+StartupWMClass=ReplayKit

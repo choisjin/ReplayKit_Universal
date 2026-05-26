@@ -1,0 +1,34 @@
+#!/bin/sh
+# postinst — ReplayKit
+# 아이콘 캐시 및 .desktop 데이터베이스 갱신.
+set -e
+
+case "$1" in
+    configure)
+        if [ -x /usr/bin/gtk-update-icon-cache ]; then
+            gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>/dev/null || true
+        fi
+        if [ -x /usr/bin/update-desktop-database ]; then
+            update-desktop-database -q /usr/share/applications >/dev/null 2>/dev/null || true
+        fi
+        # 시스템 의존성 안내 (apt 가 자동으로 Depends 는 끌어오지만 Recommends 는
+        # --install-recommends 옵션이 꺼져있을 수 있음).
+        echo ""
+        echo "ReplayKit installed to /opt/ReplayKit"
+        echo ""
+        echo "  Run from terminal:        ReplayKit"
+        echo "  Or from application menu: ReplayKit"
+        echo ""
+        echo "Recommended system tools (install if missing):"
+        echo "  sudo apt install scrcpy ffmpeg android-tools-adb"
+        echo ""
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

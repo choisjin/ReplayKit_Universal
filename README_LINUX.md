@@ -190,13 +190,57 @@ DISPLAY= ./ReplayKit.sh
 | `port 8000 already in use` | `./ReplayKit.sh` 의 stop_existing_server 가 자동 정리 |
 | OCR rapidocr 미설치 | `venv/bin/pip install rapidocr-onnxruntime` |
 
-## 8. 원본과의 차이 요약
+## 8. .deb 패키지 빌드 (원클릭 설치본 제작)
+
+Windows `installer.iss` (Inno Setup `.exe`) 의 Linux 등가물. 결과적으로
+`replaykit_<VERSION>_<ARCH>.deb` 파일 하나를 만들어 Ubuntu/Debian 사용자가
+다음 한 줄로 설치 가능:
+
+```bash
+sudo apt install ./replaykit_1.1.0_amd64.deb
+ReplayKit            # CLI 또는 앱 메뉴 아이콘
+```
+
+### 8-1. 빌드
+
+```bash
+# Linux 머신 또는 WSL 에서
+sudo apt install -y dpkg-dev nodejs npm imagemagick
+./scripts/build_deb.sh                # 자동 (현재 arch)
+./scripts/build_deb.sh --arch arm64   # 크로스 빌드
+```
+
+결과: `dist/replaykit_<VERSION>_<ARCH>.deb`.
+
+### 8-2. 설치 레이아웃
+
+| 경로 | 내용 |
+| --- | --- |
+| `/opt/ReplayKit/` | 임베디드 Python, backend, frontend/dist, tools/ — read-only |
+| `/usr/bin/ReplayKit` | launcher wrapper |
+| `/usr/share/applications/ReplayKit.desktop` | 앱 메뉴 entry |
+| `/usr/share/icons/hicolor/256x256/apps/replaykit.png` | 아이콘 |
+| `~/.local/share/ReplayKit/` | 사용자 데이터 (scenarios, screenshots, results) — 최초 실행 시 생성, 패키지 제거 후에도 보존 |
+
+상세 가이드: [`packaging/README.md`](packaging/README.md)
+
+### 8-3. 제거
+
+```bash
+sudo apt remove replaykit       # 패키지만 제거, 사용자 데이터 보존
+sudo apt purge  replaykit       # 패키지 + 설정 제거 (사용자 데이터는 ~/.local/share/ReplayKit 에 그대로)
+rm -rf ~/.local/share/ReplayKit # 사용자 데이터까지 완전 제거
+```
+
+## 9. 원본과의 차이 요약
 
 ```
 원본 (Recording_Test) → Replaykit_for_linux
 ─────────────────────────────────────────────
 + setup.sh, ReplayKit.sh, sync_and_run.sh           (Linux 실행 스크립트)
 + scripts/install_embedded_python.sh                (Linux embedded Python 설치)
++ scripts/build_deb.sh                              (.deb 패키지 빌드 — installer.iss 등가)
++ packaging/                                        (debian control, launcher, .desktop, postinst 등)
 + README_LINUX.md                                   (본 문서)
 - setup.bat, ReplayKit.bat, sync_and_run.bat        (Windows 전용 제거)
 - build_dist.py, installer.iss                      (Windows 빌드 전용 제거)
