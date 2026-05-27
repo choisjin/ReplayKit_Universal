@@ -101,18 +101,59 @@ fetch_file() {
     fi
 }
 
-# --release 비어있으면 GitHub API 에서 최신 태그 조회
+# github.com/<owner>/<repo>/releases/latest 의 HTTP 302 Location 헤더를 긁어
+# 최신 릴리스 태그를 알아낸다. api.github.com 의 시간당 60회 비인증 rate limit
+# (HTTP 403) 을 우회. github.com 본 도메인은 사람이 보는 페이지라 사실상 제한 없음.
+fetch_latest_tag_via_redirect() {
+    local html_url="https://github.com/astral-sh/python-build-standalone/releases/latest"
+    if [ "$DOWNLOAD_TOOL" = "curl" ]; then
+        # curl -sI 는 HEAD 요청, redirect 따라가지 않고 Location 헤더만 반환
+        curl -sI "$html_url" \
+            | grep -i '^location:' | tail -1 \
+            | sed -E 's|.*/tag/([^[:space:]/]+).*|\1|' \
+            | tr -d '\r\n'
+    else
+        # wget --max-redirect=0 으로 첫 응답만 받고 Location 헤더 파싱
+        wget --max-redirect=0 --server-response -q -O /dev/null "$html_url" 2>/tmp/.pbs_redirect.$$ || true
+        grep -i 'Location:' /tmp/.pbs_redirect.$$ 2>/dev/null \
+            | tail -1 \
+            | sed -E 's|.*/tag/([^[:space:]/]+).*|\1|' \
+            | tr -d '\r\n'
+        rm -f /tmp/.pbs_redirect.$$
+    fi
+}
+
+fetch_latest_tag_via_api() {
+    local api_url="https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest"
+    fetch_text "$api_url" 2>/dev/null \
+        | grep '"tag_name"' | head -1 \
+        | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
+}
+
+# --release 비어있으면 자동 조회 (redirect 우선, API 폴백)
 if [ -z "$RELEASE" ]; then
     echo "[INFO] python-build-standalone 최신 릴리스 조회 중..."
-    api_url="https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest"
-    RELEASE=$(fetch_text "$api_url" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+
+    # 1순위: github.com redirect (rate limit 없음)
+    RELEASE=$(fetch_latest_tag_via_redirect || true)
+    if [ -n "$RELEASE" ]; then
+        echo "[INFO] 최신 릴리스 (via redirect): ${RELEASE}"
+    else
+        # 2순위: GitHub API (rate limit 적용)
+        echo "[INFO] redirect 실패, API 폴백 시도..."
+        RELEASE=$(fetch_latest_tag_via_api || true)
+        if [ -n "$RELEASE" ]; then
+            echo "[INFO] 최신 릴리스 (via API): ${RELEASE}"
+        fi
+    fi
+
     if [ -z "$RELEASE" ]; then
-        echo "[ERROR] 최신 릴리스 태그 조회 실패."
+        echo "[ERROR] 최신 릴리스 태그 조회 실패 (redirect + API 모두 실패)."
         echo "        --release YYYYMMDD 로 직접 지정해주세요."
         echo "        예: $0 --release 20240814"
+        echo "        목록: https://github.com/astral-sh/python-build-standalone/releases"
         exit 1
     fi
-    echo "[INFO] 최신 릴리스: ${RELEASE}"
 fi
 
 FILENAME="cpython-${VERSION}+${RELEASE}-${ARCH}-unknown-linux-gnu-install_only.tar.gz"
