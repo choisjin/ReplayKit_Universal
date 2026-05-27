@@ -169,13 +169,13 @@ def check_host_compat(target: str) -> None:
         sys.exit(2)
 
 
-def run_build(target: str) -> int:
+def run_build(target: str, version: str = "") -> int:
     """대상 OS 의 빌드 스크립트 호출. exit code 반환."""
     if target == "win":
-        # build_dist.py 는 자체 버전 prompt 가 있는데 우리가 이미 version.txt 를
-        # 갱신했으니 그대로 사용 — 단 인터랙티브 prompt 가 다시 뜨므로 사용자가
-        # 엔터로 '유지' 선택. 향후 build_dist.py 에 --version 인자 추가 필요.
+        # build_dist.py 의 --version 인자로 SemVer 모달 prompt 스킵.
         cmd = [sys.executable, str(ROOT / "build_dist.py")]
+        if version:
+            cmd += ["--version", version.lstrip("v")]
         print(cyan(f"\n[BUILD] $ {' '.join(cmd)}\n"))
         return subprocess.call(cmd, cwd=ROOT)
     if target == "linux":
@@ -271,7 +271,7 @@ def main():
 
     # 4) 빌드
     if not args.skip_build:
-        rc = run_build(target)
+        rc = run_build(target, version=new_ver)
         if rc != 0:
             print(red(f"\n[ABORT] 빌드 실패 (exit {rc}) — push 건너뜀."))
             sys.exit(rc)

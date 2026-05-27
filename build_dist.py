@@ -926,7 +926,18 @@ def main():
         print("        통합 TUI:   ./scripts/release.py", file=sys.stderr)
         sys.exit(2)
 
-    args = set(sys.argv[1:])
+    # --version <ver> 추출 — release.py 의 자동 모드 호환. 인자 처리는 단순 set 으로 하던 기존 패턴
+    # 보존하면서 --version 만 별도 파싱.
+    args_list = list(sys.argv[1:])
+    cli_version: str | None = None
+    i = 0
+    while i < len(args_list):
+        if args_list[i] == "--version" and i + 1 < len(args_list):
+            cli_version = args_list[i + 1].lstrip("v")
+            del args_list[i:i + 2]
+            continue
+        i += 1
+    args = set(args_list)
     force = "--full" in args
     offline = "--offline" in args
 
@@ -943,11 +954,16 @@ def main():
         return
 
     # ── 빌드 시작: SemVer 모달 ──
-    print("\n버전 선택 모달을 표시합니다...")
-    new_version = _prompt_version_modal()
-    if new_version is None:
-        print("\n빌드 취소: 버전이 선택되지 않았습니다.")
-        return
+    # release.py 등 외부 자동화에서 --version <N.N.N> 으로 호출한 경우 prompt 스킵.
+    if cli_version:
+        new_version = cli_version
+        print(f"\n버전 인자: v{new_version} (CLI --version, prompt 스킵)")
+    else:
+        print("\n버전 선택 모달을 표시합니다...")
+        new_version = _prompt_version_modal()
+        if new_version is None:
+            print("\n빌드 취소: 버전이 선택되지 않았습니다.")
+            return
 
     current_version = _read_version()
     version_changed = new_version != current_version
