@@ -526,6 +526,16 @@ class LinControlService:
         logger.info("LinControl attached: xid=%d pid=%s name=%s exe=%s title=%r class=%s",
                     self._hwnd, self._pid, self._process_name, self._exe_path,
                     self._window_title, self._window_class)
+        # 임베드 시점에 1회 활성화 — 가려져 있던 윈도우라도 첫 캡처가 최신 콘텐츠를 잡도록.
+        # composited 환경에서 비활성 윈도우는 GPU backbuffer 가 stale 일 수 있어 검은 화면이
+        # 나올 수 있으나, 활성화하면 강제 re-paint 가 발생해 정상 비트맵 확보.
+        # WinControlService 의 _capture_via_screen_activated 와 동일한 의도 — 임베드 1회만
+        # 활성화하고 이후 정상 사용 시엔 사용자 워크플로우 방해 안 함.
+        try:
+            self._activate(int(hwnd))
+            time.sleep(0.30)  # WM 가 _NET_ACTIVE_WINDOW 처리 + 앱이 expose 받아 paint 완료까지
+        except Exception as e:
+            logger.debug("LinControl attach-time activate failed: %s", e)
         return self.status()
 
     def detach(self) -> None:
@@ -612,7 +622,32 @@ class LinControlService:
             pass
         return (0, 0, 0, 0)
 
-    def get_window_size(self) -> tuple[int, int]:
+    def _get_gtk_frame_extents(self, hwnd: int) -> tuple[int, int, int, int]:
+        """_GTK_FRAME_EXTENTS (left, right, top, bottom) — GTK 의 CSD 그림자 두께.
+
+        GTK3/4 앱은 자체적으로 윈도우 주변에 ~32px 그림자를 그리며, X 의 윈도우 크기에
+        이 그림자가 포함되어 있음. 사용자가 보는 'visible' 영역은 윈도우 크기에서 이
+        그림자 두께를 뺀 만큼. WinControl 의 DWM EXTENDED_FRAME_BOUNDS 와 동일 컨셉.
+
+        GTK 앱이 아니거나 그림자가 없으면 (0,0,0,0). _NET_FRAME_EXTENTS 와는 의미가 달라
+        둘 다 따로 조회한다 (전자는 WM frame 두께 = X 가 추가, 후자는 GTK 그림자 = X 윈도우
+        크기에 이미 포함되어 있어 차감 필요).
+        """
+        if not self._ensure_display():
+            return (0, 0, 0, 0)
+        try:
+            with self._dpy_lock:
+                win = self._dpy.create_resource_object("window", int(hwnd))
+                prop = self._get_property(win, "_GTK_FRAME_EXTENTS")
+                if prop and prop.value and len(prop.value) >= 4:
+                    return (int(prop.value[0]), int(prop.value[1]),
+                            int(prop.value[2]), int(prop.value[3]))
+        except Exception:
+            pass
+        return (0, 0, 0, 0)
+
+    def _get_raw_window_size(self) -> tuple[int, int]:
+        """get_geometry 가 반환하는 X 윈도우 크기 — GTK CSD 그림자 포함 raw 값."""
         if not self.is_attached():
             return (0, 0)
         try:
@@ -623,8 +658,23 @@ class LinControlService:
         except Exception:
             return (0, 0)
 
+    def get_window_size(self) -> tuple[int, int]:
+        """사용자가 보는 visible client 크기 — GTK CSD 그림자 제거 후.
+
+        WinControl 의 client area 와 의미 동일. GTK 앱이 아니면 raw 크기 그대로.
+        """
+        rw, rh = self._get_raw_window_size()
+        if rw <= 0 or rh <= 0:
+            return (0, 0)
+        gl, gr, gt, gb = self._get_gtk_frame_extents(self._hwnd)
+        return (max(1, rw - gl - gr), max(1, rh - gt - gb))
+
     def get_outer_size(self) -> tuple[int, int]:
-        """타이틀바/보더 포함 outer 크기 — client + frame extents."""
+        """타이틀바/보더 포함 outer 크기 — visible client + WM frame extents.
+
+        GTK CSD 의 경우 타이틀바가 이미 visible client 안에 포함됨 (앱이 직접 그림) →
+        outer == client. 비-CSD 앱은 WM 가 그린 frame 두께만큼 더 큼.
+        """
         if not self.is_attached():
             return (0, 0)
         cw, ch = self.get_window_size()
@@ -632,7 +682,10 @@ class LinControlService:
         return (cw + l + r, ch + t + b)
 
     def get_client_offset(self) -> tuple[int, int]:
-        """outer 비트맵 (0,0) → client (0,0) 오프셋 = (left frame, top frame)."""
+        """outer 비트맵 (0,0) → client (0,0) 오프셋 = (left frame, top frame).
+
+        GTK CSD 의 경우 타이틀바가 client 안에 포함되므로 추가 오프셋 없음.
+        """
         if not self.is_attached():
             return (0, 0)
         l, _r, t, _b = self._get_frame_extents(self._hwnd)
@@ -734,16 +787,24 @@ class LinControlService:
                     return None
                 geom = win.get_geometry()
                 tc = win.translate_coords(self._root, 0, 0)
-                x = -int(tc.x)
-                y = -int(tc.y)
-                w = int(geom.width)
-                h = int(geom.height)
-                # outer(타이틀바 포함) 영역으로 확장 — WinControlService 의 _capture_via_screen 과 의미 통일.
-                l, r, t, b = self._get_frame_extents(hwnd)
-                x -= l
-                y -= t
-                w += l + r
-                h += t + b
+                raw_x = -int(tc.x)
+                raw_y = -int(tc.y)
+                raw_w = int(geom.width)
+                raw_h = int(geom.height)
+                # GTK CSD 그림자 제거 — X 윈도우 크기에 그림자가 포함되어 있음.
+                gl, gr, gt, gb = self._get_gtk_frame_extents(hwnd)
+                # visible client (그림자 제외) 의 root 좌표/크기
+                x = raw_x + gl
+                y = raw_y + gt
+                w = max(1, raw_w - gl - gr)
+                h = max(1, raw_h - gt - gb)
+                # WM frame extents 가 있으면 outer (타이틀바 포함) 영역으로 확장 — 비-CSD WM 용.
+                # GTK 앱은 보통 frame_extents=(0,0,0,0) 이라 이 분기는 no-op.
+                fl, fr, ft, fb = self._get_frame_extents(hwnd)
+                x -= fl
+                y -= ft
+                w += fl + fr
+                h += ft + fb
         except Exception as e:
             logger.debug("LinControl capture geometry failed: %s", e)
             return None
@@ -779,19 +840,21 @@ class LinControlService:
                 logger.warning("LinControl mss grab failed (region=%dx%d+%d+%d, screen=%dx%d): %s — falling back to Xlib",
                                cw, ch, cx, cy, screen_w, screen_h, e)
 
-        # 2) Xlib XGetImage 폴백 — same Display 사용. window-local 좌표 (0,0)~(w,h).
-        # frame_extents 가 있는 경우 윈도우의 (0,0) 은 client area 시작이므로 outer 전체를
-        # 한 번에 잡으려면 frame parent 윈도우에서 잡아야 하지만, 대부분 WM 에서 frame
-        # parent 직접 접근은 비표준. client area 만 캡처하는 걸로 단순화.
-        img = self._capture_via_xlib(hwnd, 0, 0, int(geom.width), int(geom.height))
+        # 2) Xlib XGetImage 폴백 — same Display 사용. window-local 좌표.
+        # GTK CSD 그림자는 윈도우 좌표계에서 (gl, gt) 위치부터 visible 영역. 그림자 영역을
+        # 잘라내고 visible 만 잡으면 클릭 좌표계와 일관됨.
+        # frame_extents 가 있는 경우 (대개 비-CSD WM) 윈도우의 (0,0) 은 이미 client 시작 —
+        # outer 전체는 frame parent 에서 잡아야 하지만 비표준이므로 client(=visible) 만 잡고
+        # outer 크기로 paste.
+        vis_w = max(1, raw_w - gl - gr)
+        vis_h = max(1, raw_h - gt - gb)
+        img = self._capture_via_xlib(hwnd, gl, gt, vis_w, vis_h)
         if img is None:
             return None
-        # outer 크기로 맞춰서 반환 — 클릭 좌표계 일관성. frame 영역은 검은색.
-        l, r, t, b = self._get_frame_extents(hwnd)
-        if (l, r, t, b) == (0, 0, 0, 0):
+        if (fl, fr, ft, fb) == (0, 0, 0, 0):
             return img
-        outer = Image.new("RGB", (int(geom.width) + l + r, int(geom.height) + t + b), (0, 0, 0))
-        outer.paste(img, (l, t))
+        outer = Image.new("RGB", (vis_w + fl + fr, vis_h + ft + fb), (0, 0, 0))
+        outer.paste(img, (fl, ft))
         return outer
 
     def _capture_window_image_for(self, hwnd: int, *_args, **_kwargs):
@@ -1067,15 +1130,20 @@ class LinControlService:
 
     # ── 좌표 변환 ──────────────────────────────────────────
     def _client_to_screen(self, x: int, y: int) -> tuple[int, int]:
-        """client (0,0) 기준 좌표 → root(screen) 좌표."""
+        """visible client (0,0) 기준 좌표 → root(screen) 좌표.
+
+        client 좌표계는 캡처 비트맵과 동일한 visible 영역 — GTK CSD 그림자는 제외된
+        시점의 (0,0). 따라서 screen 좌표 = raw_root_pos + gtk_shadow_offset + (x, y).
+        """
         hwnd = self._hwnd
         if not hwnd:
             return (int(x), int(y))
         root_xy = self._get_window_root_pos(hwnd)
         if root_xy is None:
             return (int(x), int(y))
-        sx = int(root_xy[0]) + int(x)
-        sy = int(root_xy[1]) + int(y)
+        gl, _gr, gt, _gb = self._get_gtk_frame_extents(hwnd)
+        sx = int(root_xy[0]) + int(gl) + int(x)
+        sy = int(root_xy[1]) + int(gt) + int(y)
         return (sx, sy)
 
     # ── 입력 (XTest) ────────────────────────────────────────

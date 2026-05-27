@@ -129,11 +129,23 @@ def main() -> int:
 
     hdr("좌표/Frame 상세")
     hwnd = int(target["hwnd"])
-    print("get_window_size  :", svc.get_window_size())
-    print("get_outer_size   :", svc.get_outer_size())
-    print("get_client_offset:", svc.get_client_offset())
-    print("frame_extents    :", svc._get_frame_extents(hwnd))
-    print("window_root_pos  :", svc._get_window_root_pos(hwnd))
+    print("get_window_size      :", svc.get_window_size(), "  ← visible (GTK 그림자 제외)")
+    if hasattr(svc, "_get_raw_window_size"):
+        print("_get_raw_window_size :", svc._get_raw_window_size(), "  ← X 가 보는 raw 크기 (그림자 포함)")
+    print("get_outer_size       :", svc.get_outer_size())
+    print("get_client_offset    :", svc.get_client_offset())
+    print("frame_extents (WM)   :", svc._get_frame_extents(hwnd), "  ← WM frame 두께")
+    print("gtk_frame_extents    :", svc._get_gtk_frame_extents(hwnd), "  ← GTK CSD 그림자 (raw 크기에서 차감)")
+    print("window_root_pos (raw):", svc._get_window_root_pos(hwnd))
+
+    # 현재 활성 윈도우와 대상 일치 여부
+    try:
+        active = svc._get_active_window()
+        match = (active == hwnd) if active else None
+        print(f"_NET_ACTIVE_WINDOW   : 0x{active:08x} (대상과 일치={match})" if active
+              else "_NET_ACTIVE_WINDOW   : <none>")
+    except Exception as e:
+        print("_NET_ACTIVE_WINDOW   :", "error:", e)
 
     hdr("외부 도구 비교")
     if shutil.which("xdotool"):
