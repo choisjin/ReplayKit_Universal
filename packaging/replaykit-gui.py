@@ -1,20 +1,25 @@
-#!/usr/bin/python3
-"""ReplayKit GUI Launcher — Linux.
+#!/usr/bin/env python3
+"""ReplayKit GUI Launcher — Linux (PySide6).
 
-Windows server.py 의 borderless 미니 launcher 와 동일한 스타일:
-  - 360x70 우하단 floating 위젯
-  - 5개 버튼: ▶/■ 토글, ↻ 재시작, 🌐 브라우저, ━ 최소화, ✕ 종료
-  - 우측에 상태 텍스트
-  - 타이틀 클릭+드래그로 이동
+Windows server.py 의 borderless 미니멀 위젯 디자인 (360x70 우하단 floating) 을
+PySide6 로 포팅. embedded Python (/opt/ReplayKit/python/bin/python3) 에 설치된
+PySide6 로 실행 — 시스템 Python 의존 없음.
 
-!!중요!! 이 스크립트는 **시스템 Python (/usr/bin/python3)** 으로 실행됨.
-embedded Python (python-build-standalone) 의 bundled Tk 가 Linux 최신 libxcb
-와 ABI 호환이 안 되어 import tkinter 만으로 'xcb_xlib_unknown_seq_number'
-assertion 으로 죽기 때문. 백엔드 uvicorn 만 embedded Python 으로 subprocess
-실행 — GUI 와 백엔드는 분리된 Python.
+기능:
+  ┌─ ReplayKit ──────────────  ━  ✕ ┐
+  │  ▶  ↻  🌐         실행 중 PID    │
+  └─────────────────────────────────┘
 
-stdlib 만 사용하므로 (tkinter, subprocess, os, signal, webbrowser, pathlib, json)
-시스템 python3 + python3-tk 만 있으면 동작. Ubuntu 22.04+ 기본.
+- ▶/■ 토글 (시작/종료)
+- ↻ 재시작
+- 🌐 브라우저 열기
+- ━ 화면 모서리로 이동
+- ✕ 창 닫기 (서버는 살려둠 — 명시적 종료는 ■)
+- 타이틀 클릭+드래그로 윈도우 이동
+- backend/settings.json theme 따라 dark/light 적용
+
+PyQt 가 아닌 PySide6 (LGPL, Qt for Python) 를 사용하여 .deb 배포 가능.
+embedded Python 의 bundled Tkinter 가 libxcb 와 ABI 충돌하는 문제 회피.
 """
 
 from __future__ import annotations
@@ -27,7 +32,12 @@ import sys
 import webbrowser
 from pathlib import Path
 
-import tkinter as tk
+from PySide6.QtCore import Qt, QTimer, QPoint
+from PySide6.QtGui import QFont, QCursor, QMouseEvent
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QLabel, QPushButton,
+    QHBoxLayout, QVBoxLayout, QFrame,
+)
 
 
 # ─── 경로 / 환경 ───────────────────────────────────────────
@@ -47,7 +57,7 @@ SERVER_URL = f"http://localhost:{PORT}"
 PID_FILE = USER_DATA / "replaykit.pid"
 
 
-# ─── 색상 (Windows server.py 의 다크 테마 그대로) ────────
+# ─── 테마 (Windows server.py 와 동일 팔레트) ──────────────
 def _read_theme() -> str:
     try:
         with open(USER_DATA / "backend" / "settings.json", encoding="utf-8") as f:
@@ -63,11 +73,9 @@ _LIGHT = {"BG": "#f5f5f5", "BG_CARD": "#ffffff", "FG": "#1f1f1f", "FG_DIM": "#88
           "GREEN": "#389e0d", "RED": "#cf1322", "YELLOW": "#d48806",
           "ACCENT": "#722ed1"}
 _C = _DARK if _read_theme() == "dark" else _LIGHT
-BG, BG_CARD, FG, FG_DIM = _C["BG"], _C["BG_CARD"], _C["FG"], _C["FG_DIM"]
-GREEN, RED, YELLOW, ACCENT = _C["GREEN"], _C["RED"], _C["YELLOW"], _C["ACCENT"]
 
 
-# ─── PID 관리 ──────────────────────────────────────────────
+# ─── PID 추적 ──────────────────────────────────────────────
 def is_pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -97,107 +105,179 @@ def get_running_pid() -> int | None:
 
 
 # ─── GUI ───────────────────────────────────────────────────
-class Launcher:
-    def __init__(self, root: tk.Tk) -> None:
-        self.root = root
-        self.root.title("ReplayKit")
+class Launcher(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("ReplayKit")
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
+        self.setFixedSize(360, 70)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+
+        self._server_proc: subprocess.Popen | None = None
+        self._drag_pos: QPoint | None = None
+
         self._build_ui()
+        self._position_bottom_right()
 
-        self._drag = {"x": 0, "y": 0}
-        self._proc: subprocess.Popen | None = None
-        self.root.protocol("WM_DELETE_WINDOW", self._quit)
-        self.root.after(0, self._poll_status)
+        # 폴링 타이머 (1초)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._poll_status)
+        self.timer.start(1000)
+        self._poll_status()
 
-    # ----- UI -----
+    # ----- UI 빌드 -----
     def _build_ui(self) -> None:
-        self.root.overrideredirect(True)
-        self.root.geometry("360x70")
-        self.root.configure(bg=BG)
+        # 외곽선 프레임 (1px FG_DIM)
+        self.setStyleSheet(f"""
+            QWidget {{ background-color: {_C['BG']}; color: {_C['FG']}; font-family: 'DejaVu Sans'; }}
+            QFrame#outer {{ border: 1px solid {_C['FG_DIM']}; }}
+        """)
 
-        # 우하단 위치
-        self.root.update_idletasks()
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
-        self.root.geometry(f"+{sw - 380}+{sh - 120}")
+        outer = QFrame(self)
+        outer.setObjectName("outer")
+        outer.setGeometry(0, 0, 360, 70)
 
-        # 1px 외곽선
-        outer = tk.Frame(self.root, bg=FG_DIM, bd=1, relief="solid")
-        outer.pack(fill="both", expand=True)
-        main = tk.Frame(outer, bg=BG)
-        main.pack(fill="both", expand=True, padx=1, pady=1)
+        v = QVBoxLayout(outer)
+        v.setContentsMargins(1, 1, 1, 1)
+        v.setSpacing(0)
 
-        # 타이틀 행
-        title_bar = tk.Frame(main, bg=BG)
-        title_bar.pack(fill="x")
+        # ── 타이틀 행 ───────────────────────────────────
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(10, 4, 4, 0)
+        title_row.setSpacing(0)
 
-        title = tk.Label(title_bar, text="ReplayKit", bg=BG, fg=ACCENT,
-                         font=("DejaVu Sans", 11, "bold"), cursor="fleur")
-        title.pack(side="left", padx=(10, 0), pady=(4, 0))
-        title.bind("<Button-1>", lambda e: self._drag.update(x=e.x, y=e.y))
-        title.bind("<B1-Motion>", self._on_drag)
+        self.title_lbl = QLabel("ReplayKit")
+        f = QFont("DejaVu Sans", 11, QFont.Weight.Bold)
+        self.title_lbl.setFont(f)
+        self.title_lbl.setStyleSheet(f"color: {_C['ACCENT']}; background: transparent;")
+        self.title_lbl.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+        # 드래그용 — installEventFilter 대신 mouse* 이벤트 직접 처리.
+        # 라벨에서 시작된 클릭은 self 의 mousePressEvent 에 자동 전달되도록
+        # 라벨에 mouseTracking 활성화.
+        title_row.addWidget(self.title_lbl)
+        title_row.addStretch()
 
-        # 우측: 최소화 / 종료
-        ctrl = tk.Frame(title_bar, bg=BG)
-        ctrl.pack(side="right", padx=(0, 4), pady=(4, 0))
-        for text, color, cmd in [("━", FG_DIM, self._minimize),
-                                 ("✕", RED, self._quit)]:
-            b = tk.Label(ctrl, text=text, bg=BG, fg=color,
-                         font=("DejaVu Sans", 10), cursor="hand2", padx=6)
-            b.pack(side="left")
-            b.bind("<Button-1>", lambda e, c=cmd: c())
-            b.bind("<Enter>", lambda e, b=b: b.configure(bg=BG_CARD))
-            b.bind("<Leave>", lambda e, b=b: b.configure(bg=BG))
+        # 최소화 / 종료 버튼
+        for text, color, slot in [("━", _C['FG_DIM'], self._minimize),
+                                  ("✕", _C['RED'], self._quit)]:
+            btn = self._mk_ctrl_btn(text, color, slot)
+            title_row.addWidget(btn)
 
-        # 하단 컨트롤 행
-        bottom = tk.Frame(main, bg=BG)
-        bottom.pack(fill="x", padx=10, pady=(2, 0))
+        v.addLayout(title_row)
 
-        self.btn_toggle = tk.Button(
-            bottom, text="▶", bg=BG_CARD, fg=GREEN,
-            activebackground=BG, activeforeground=GREEN,
-            font=("DejaVu Sans", 14, "bold"), relief="flat", bd=0,
-            cursor="hand2", width=2, command=self._toggle,
+        # ── 컨트롤 행 ───────────────────────────────────
+        ctrl_row = QHBoxLayout()
+        ctrl_row.setContentsMargins(10, 2, 10, 2)
+        ctrl_row.setSpacing(4)
+
+        # ▶/■ 토글
+        self.btn_toggle = QPushButton("▶")
+        self.btn_toggle.setFixedSize(36, 30)
+        self.btn_toggle.setFont(QFont("DejaVu Sans", 14, QFont.Weight.Bold))
+        self.btn_toggle.setStyleSheet(self._btn_style(_C['GREEN']))
+        self.btn_toggle.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_toggle.clicked.connect(self._toggle)
+        ctrl_row.addWidget(self.btn_toggle)
+
+        # ↻ 재시작
+        btn_restart = QPushButton("↻")
+        btn_restart.setFixedSize(32, 30)
+        btn_restart.setFont(QFont("DejaVu Sans", 12, QFont.Weight.Bold))
+        btn_restart.setStyleSheet(self._btn_style(_C['YELLOW']))
+        btn_restart.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_restart.clicked.connect(self._restart)
+        ctrl_row.addWidget(btn_restart)
+
+        # 🌐 브라우저
+        btn_web = QPushButton("🌐")
+        btn_web.setFixedSize(32, 30)
+        btn_web.setFont(QFont("DejaVu Sans", 11))
+        btn_web.setStyleSheet(self._btn_style(_C['ACCENT']))
+        btn_web.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_web.clicked.connect(self._open_web)
+        ctrl_row.addWidget(btn_web)
+
+        ctrl_row.addStretch()
+
+        # 상태 텍스트
+        self.status_lbl = QLabel("확인 중")
+        self.status_lbl.setFont(QFont("DejaVu Sans", 9))
+        self.status_lbl.setStyleSheet(f"color: {_C['FG_DIM']}; background: transparent;")
+        self.status_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        ctrl_row.addWidget(self.status_lbl)
+
+        v.addLayout(ctrl_row)
+
+    def _mk_ctrl_btn(self, text: str, color: str, slot) -> QLabel:
+        """타이틀바 우측의 최소화/종료 버튼 (Label 로 만들어 hover 효과)."""
+        lbl = QLabel(text)
+        lbl.setFont(QFont("DejaVu Sans", 10))
+        lbl.setStyleSheet(
+            f"color: {color}; background: transparent; padding: 0 6px;"
         )
-        self.btn_toggle.pack(side="left", padx=(0, 4))
+        lbl.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.mousePressEvent = lambda e, s=slot: s()  # type: ignore[assignment]
+        # Hover effect
+        orig_style = lbl.styleSheet()
+        hover_style = orig_style.replace("background: transparent", f"background-color: {_C['BG_CARD']}")
+        lbl.enterEvent = lambda e, l=lbl, s=hover_style: l.setStyleSheet(s)  # type: ignore[assignment]
+        lbl.leaveEvent = lambda e, l=lbl, s=orig_style: l.setStyleSheet(s)  # type: ignore[assignment]
+        return lbl
 
-        self._mk_btn(bottom, "↻", YELLOW, self._restart).pack(side="left", padx=(0, 4))
-        self._mk_btn(bottom, "🌐", ACCENT, self._open_web).pack(side="left")
+    def _btn_style(self, color: str) -> str:
+        return f"""
+            QPushButton {{
+                background-color: {_C['BG_CARD']};
+                color: {color};
+                border: none;
+                border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                background-color: {_C['BG']};
+                border: 1px solid {color};
+            }}
+            QPushButton:pressed {{
+                background-color: {_C['FG_DIM']};
+            }}
+        """
 
-        self.status_lbl = tk.Label(bottom, text="확인 중", bg=BG, fg=FG_DIM,
-                                   font=("DejaVu Sans", 9), anchor="e")
-        self.status_lbl.pack(side="right", padx=(0, 4))
+    def _position_bottom_right(self) -> None:
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.move(screen.right() - self.width() - 20, screen.bottom() - self.height() - 20)
 
-    def _mk_btn(self, parent, text: str, color: str, command) -> tk.Button:
-        btn = tk.Button(
-            parent, text=text, bg=BG_CARD, fg=color,
-            activebackground=BG, activeforeground=color,
-            font=("DejaVu Sans", 11), relief="flat", bd=0,
-            cursor="hand2", width=2, command=command,
-        )
-        return btn
+    # ----- 드래그 이동 -----
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
 
-    # ----- 드래그 -----
-    def _on_drag(self, e) -> None:
-        x = self.root.winfo_x() + e.x - self._drag["x"]
-        y = self.root.winfo_y() + e.y - self._drag["y"]
-        self.root.geometry(f"+{x}+{y}")
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        self._drag_pos = None
 
     # ----- 상태 폴링 -----
     def _poll_status(self) -> None:
         pid = get_running_pid()
-        if pid is None and self._proc and self._proc.poll() is None:
-            pid = self._proc.pid
+        if pid is None and self._server_proc and self._server_proc.poll() is None:
+            pid = self._server_proc.pid
 
         if pid:
-            self.btn_toggle.config(text="■", fg=RED, activeforeground=RED)
-            self.status_lbl.config(text=f"실행 중  PID {pid}", fg=GREEN)
-            self.root.title("ReplayKit — 실행 중")
+            self.btn_toggle.setText("■")
+            self.btn_toggle.setStyleSheet(self._btn_style(_C['RED']))
+            self.status_lbl.setText(f"실행 중  PID {pid}")
+            self.status_lbl.setStyleSheet(f"color: {_C['GREEN']}; background: transparent;")
+            self.setWindowTitle("ReplayKit — 실행 중")
         else:
-            self.btn_toggle.config(text="▶", fg=GREEN, activeforeground=GREEN)
-            self.status_lbl.config(text="정지", fg=FG_DIM)
-            self.root.title("ReplayKit — 정지")
-
-        self.root.after(1000, self._poll_status)
+            self.btn_toggle.setText("▶")
+            self.btn_toggle.setStyleSheet(self._btn_style(_C['GREEN']))
+            self.status_lbl.setText("정지")
+            self.status_lbl.setStyleSheet(f"color: {_C['FG_DIM']}; background: transparent;")
+            self.setWindowTitle("ReplayKit — 정지")
 
     # ----- 서버 제어 -----
     def _toggle(self) -> None:
@@ -210,7 +290,7 @@ class Launcher:
         if get_running_pid() is not None:
             return
         if not PY.exists():
-            self.status_lbl.config(text="Python 없음", fg=RED)
+            self.status_lbl.setText("Python 없음")
             return
 
         env = os.environ.copy()
@@ -225,17 +305,19 @@ class Launcher:
         (USER_DATA / "logs").mkdir(parents=True, exist_ok=True)
 
         try:
-            self._proc = subprocess.Popen(
+            self._server_proc = subprocess.Popen(
                 [str(PY), "-m", "uvicorn", "backend.app.main:app",
                  "--host", "0.0.0.0", "--port", str(PORT)],
                 cwd=str(USER_DATA), env=env,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-            PID_FILE.write_text(str(self._proc.pid))
-            self.status_lbl.config(text="시작 중...", fg=YELLOW)
+            PID_FILE.write_text(str(self._server_proc.pid))
+            self.status_lbl.setText("시작 중...")
+            self.status_lbl.setStyleSheet(f"color: {_C['YELLOW']}; background: transparent;")
         except Exception as e:
-            self.status_lbl.config(text=f"오류: {e}", fg=RED)
+            self.status_lbl.setText(f"오류: {e}"[:40])
+            self.status_lbl.setStyleSheet(f"color: {_C['RED']}; background: transparent;")
 
     def _stop(self) -> None:
         pid = get_running_pid()
@@ -243,10 +325,11 @@ class Launcher:
             return
         try:
             os.kill(pid, signal.SIGTERM)
-            self.status_lbl.config(text="종료 중...", fg=YELLOW)
-            self.root.after(5000, lambda p=pid: self._force_kill(p))
+            self.status_lbl.setText("종료 중...")
+            self.status_lbl.setStyleSheet(f"color: {_C['YELLOW']}; background: transparent;")
+            QTimer.singleShot(5000, lambda p=pid: self._force_kill(p))
         except OSError as e:
-            self.status_lbl.config(text=f"오류: {e}", fg=RED)
+            self.status_lbl.setText(f"오류: {e}"[:40])
 
     def _force_kill(self, pid: int) -> None:
         if is_pid_alive(pid):
@@ -262,7 +345,7 @@ class Launcher:
     def _restart(self) -> None:
         if get_running_pid():
             self._stop()
-            self.root.after(2500, self._start)
+            QTimer.singleShot(2500, self._start)
         else:
             self._start()
 
@@ -276,25 +359,24 @@ class Launcher:
                 pass
 
     def _minimize(self) -> None:
-        # overrideredirect 모드는 iconify 가 잘 동작 안 함 — withdraw 후
-        # 사용자가 다시 띄울 방법이 없으므로 그냥 작게 줄이는 정도로.
-        # Linux 트레이는 환경 따라 다름 — 단순화를 위해 최소화 미지원,
-        # 대신 화면 모서리로 이동.
-        self.root.geometry("+0+0")
+        # FramelessWindowHint + Tool 윈도우는 일부 DE 에서 iconify 가 잘 안 됨.
+        # 안전하게 좌상단으로 이동 (사용자가 다시 드래그해 가져올 수 있게).
+        self.move(0, 0)
 
     def _quit(self) -> None:
-        # 서버는 살려두고 윈도우만 종료 (서버 종료는 ■ 버튼으로 명시적)
-        self.root.destroy()
+        # 서버는 살려두고 윈도우만 종료 (서버 종료는 ■ 버튼)
+        QApplication.quit()
 
 
 def main() -> int:
     if not APP_DIR.exists():
         sys.stderr.write(f"[ERROR] {APP_DIR} 없음.\n")
         return 1
-    root = tk.Tk()
-    Launcher(root)
-    root.mainloop()
-    return 0
+    app = QApplication(sys.argv)
+    # X11 에서 Qt 가 자체 멀티스레딩 처리 → libxcb 충돌 없음
+    launcher = Launcher()
+    launcher.show()
+    return app.exec()
 
 
 if __name__ == "__main__":

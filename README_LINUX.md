@@ -259,8 +259,9 @@ ReplayKit status       # PID, URL, 헬스 응답 여부 출력
 
 Windows `server.py` 와 동일한 미니멀 디자인 — 360x70 borderless 위젯, 화면 우하단 floating.
 
-> **GUI 는 시스템 Python (`/usr/bin/python3`) + `python3-tk` 사용** — embedded Python 의 bundled Tk 가 Linux 최신 libxcb 와 ABI 호환이 안 되어 `xcb_xlib_unknown_seq_number` assertion 으로 죽기 때문. 백엔드 uvicorn 만 embedded Python 으로 subprocess 실행.
-> `python3-tk` 가 없으면 자동으로 headless (브라우저 자동 오픈) 모드로 폴백.
+> **embedded Python + PySide6 (LGPL)** 로 완전 self-contained.
+> python-build-standalone 의 bundled Tk 가 시스템 libxcb 와 ABI 호환 안 되는 문제 (`xcb_xlib_unknown_seq_number`) 를 회피하기 위해 Tkinter 대신 PySide6 (Qt for Python) 사용. Qt 의 XCB 플랫폼 플러그인이 자체적으로 안전한 X11 멀티스레딩 처리.
+> 시스템 Python 의존성 0 — `python3-tk` 같은 추가 시스템 패키지 불필요.
 
 ```
 ┌─ ReplayKit ────────────  ━  ✕ ┐

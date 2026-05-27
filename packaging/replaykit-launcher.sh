@@ -361,38 +361,25 @@ fi
 # 실행 분기: GUI 모드 vs Headless 모드
 # ============================================================
 if [ "$LAUNCH_MODE" = "gui" ]; then
-    # GUI 모드: Tkinter launcher 띄움.
-    # !!중요!! embedded Python (python-build-standalone) 의 bundled Tk 는
-    # Linux 최신 libxcb 와 ABI 호환이 안 되어 import tkinter 만으로
-    # 'xcb_xlib_unknown_seq_number' assertion 으로 죽음.
-    # → GUI 만 시스템 Python (python3-tk) 사용. 백엔드는 GUI 가 subprocess 로
-    #   embedded Python 띄우므로 embedded 그대로.
+    # GUI 모드: PySide6 launcher 띄움. embedded Python 의 PySide6 사용
+    # (시스템 Python 불필요). PySide6 가 Qt 자체 멀티스레딩 처리 →
+    # 임베디드 Tk + libxcb 충돌 회피.
     GUI_SCRIPT="$APP_DIR/replaykit-gui.py"
     if [ ! -f "$GUI_SCRIPT" ]; then
         echo "[WARN] $GUI_SCRIPT 없음 — headless 모드로 폴백" >&2
         LAUNCH_MODE="headless"
-    else
-        SYS_PY=""
-        if command -v python3 >/dev/null 2>/dev/null; then
-            # tkinter 가 정상 작동하는지 확인
-            if python3 -c "import tkinter" >/dev/null 2>/dev/null; then
-                SYS_PY="python3"
-            fi
-        fi
-        if [ -z "$SYS_PY" ]; then
-            echo "[WARN] 시스템 python3 또는 python3-tk 없음 — headless 모드로 폴백." >&2
-            echo "       GUI 사용하려면: sudo apt install python3-tk" >&2
-            notify_user "ReplayKit" "GUI 사용 불가 — python3-tk 가 없습니다.
-sudo apt install python3-tk
+    elif ! "$PY" -c "import PySide6" >/dev/null 2>/dev/null; then
+        echo "[WARN] embedded Python 에 PySide6 미설치 — headless 모드로 폴백" >&2
+        echo "       fix: $PY -m pip install PySide6-Essentials" >&2
+        notify_user "ReplayKit" "GUI 사용 불가 — embedded Python 에 PySide6 가 없습니다.
 브라우저 자동 오픈 모드로 진행합니다."
-            LAUNCH_MODE="headless"
-        else
-            echo "[START] GUI launcher: $SYS_PY $GUI_SCRIPT"
-            export REPLAYKIT_APP_DIR="$APP_DIR"
-            export REPLAYKIT_USER_DATA="$USER_DATA"
-            export RECORDING_PROJECT_ROOT="$USER_DATA"
-            exec "$SYS_PY" "$GUI_SCRIPT" "$@"
-        fi
+        LAUNCH_MODE="headless"
+    else
+        echo "[START] GUI launcher: $PY $GUI_SCRIPT"
+        export REPLAYKIT_APP_DIR="$APP_DIR"
+        export REPLAYKIT_USER_DATA="$USER_DATA"
+        export RECORDING_PROJECT_ROOT="$USER_DATA"
+        exec "$PY" "$GUI_SCRIPT" "$@"
     fi
 fi
 
