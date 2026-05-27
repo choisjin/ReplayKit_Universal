@@ -9,5 +9,7 @@ Icon=replaykit
 Terminal=false
 Categories=Development;Utility;
 Keywords=android;adb;scrcpy;automation;testing;ocr;
-StartupNotify=true
-StartupWMClass=ReplayKit
+# StartupNotify=false: launcher 는 GUI 창을 만들지 않고 백그라운드 uvicorn 만
+# 띄움. true 로 두면 DE 가 "starting" feedback 을 표시하다가 매칭 창이 안 나타나
+# 어색한 시각 효과(예: 부정확한 로딩 표시) 가 발생할 수 있음.
+StartupNotify=false

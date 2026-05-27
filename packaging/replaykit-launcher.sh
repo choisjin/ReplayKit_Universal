@@ -30,6 +30,39 @@ for d in scenarios screenshots results logs; do
     mkdir -p "$USER_DATA/$d"
 done
 
+# ---- TTY 미연결 (아이콘 클릭 등) → launcher.log 로 출력 리다이렉트 ----
+# stdout 이 terminal 이 아니면 (icon click / desktop entry / systemd) 모든 출력을
+# 파일에 기록. 사용자가 'tail -f ~/.local/share/ReplayKit/logs/launcher.log' 로
+# 진단 가능. 터미널에서 실행 시에는 평소처럼 화면에 출력.
+LAUNCHER_LOG="$USER_DATA/logs/launcher.log"
+if ! [ -t 1 ]; then
+    # 로그 회전: 너무 커지면 잘라냄 (마지막 1MB만 유지)
+    if [ -f "$LAUNCHER_LOG" ] && [ "$(stat -c %s "$LAUNCHER_LOG" 2>/dev/null || echo 0)" -gt 1048576 ]; then
+        tail -c 524288 "$LAUNCHER_LOG" > "${LAUNCHER_LOG}.tmp" && mv "${LAUNCHER_LOG}.tmp" "$LAUNCHER_LOG"
+    fi
+    echo "" >> "$LAUNCHER_LOG"
+    echo "===== $(date '+%Y-%m-%d %H:%M:%S') ReplayKit start =====" >> "$LAUNCHER_LOG"
+    exec >> "$LAUNCHER_LOG" 2>> "$LAUNCHER_LOG"
+fi
+
+# 데스크탑 알림 헬퍼 (있을 때만)
+notify_user() {
+    local title="$1"
+    local body="$2"
+    if command -v notify-send >/dev/null 2>/dev/null && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        notify-send -i replaykit "$title" "$body" 2>/dev/null || true
+    fi
+}
+
+# 치명적 오류 처리: 사용자 알림 + 로그 안내
+fatal() {
+    local msg="$1"
+    echo "[FATAL] $msg" >&2
+    notify_user "ReplayKit 시작 실패" "$msg
+자세한 내용: $LAUNCHER_LOG"
+    exit 1
+}
+
 # ---- 2. read-only 대용량 자산: symlink ----
 # (python: ~150MB embedded, frontend/dist: ~5MB built, tools: ~3MB, docs/scripts: 작음)
 link_if_missing() {
@@ -128,12 +161,45 @@ if [ ! -x "$PY" ]; then
     exit 1
 fi
 
-# ---- 브라우저 자동 오픈 (DISPLAY 있을 때만, REPLAYKIT_NO_BROWSER 로 끄기 가능) ----
-# 백그라운드 서브셸이 서버 ready (openapi.json 응답) 까지 polling 후 xdg-open 호출.
-# 30회 * 0.5초 = 최대 15초 대기. embedded Python 은 tkinter 미포함이라 server.py
-# (Tkinter GUI) 는 사용하지 않고 항상 uvicorn 으로 통일.
+# ---- 포트 충돌 감지 ----
+# 같은 포트에 이미 다른 프로세스 (또는 좀비 ReplayKit) 가 바인드 중이면
+# uvicorn 이 OSError: address already in use 로 즉시 죽음 — 아이콘 클릭 모드에선
+# 사용자가 원인을 모름. 사전에 친절히 안내.
 PORT="${REPLAYKIT_PORT:-8000}"
 SERVER_URL="http://localhost:${PORT}"
+
+port_in_use() {
+    if command -v ss >/dev/null 2>/dev/null; then
+        ss -tln 2>/dev/null | awk '{print $4}' | grep -qE ":${PORT}\$"
+    elif command -v netstat >/dev/null 2>/dev/null; then
+        netstat -tln 2>/dev/null | awk '{print $4}' | grep -qE ":${PORT}\$"
+    elif command -v lsof >/dev/null 2>/dev/null; then
+        lsof -iTCP:${PORT} -sTCP:LISTEN >/dev/null 2>/dev/null
+    else
+        return 1   # 검사 도구 없으면 그냥 시도
+    fi
+}
+
+if port_in_use; then
+    # 우리가 만든 좀비 ReplayKit 인지 확인 시도
+    OUR_PID=""
+    if command -v pgrep >/dev/null 2>/dev/null; then
+        OUR_PID=$(pgrep -f "${APP_DIR}/python/bin/python3.*uvicorn" | head -1 || true)
+    fi
+    if [ -n "$OUR_PID" ]; then
+        fatal "이전 ReplayKit 인스턴스가 포트 ${PORT} 에서 실행 중입니다 (PID ${OUR_PID}).
+브라우저에서 ${SERVER_URL} 로 직접 접속하거나, 종료 후 재시도:
+    kill ${OUR_PID}
+또는 모든 인스턴스 강제 종료:
+    pkill -f '${APP_DIR}/python'"
+    else
+        fatal "포트 ${PORT} 가 다른 프로세스에 의해 사용 중입니다.
+다른 포트로 실행:    REPLAYKIT_PORT=9000 ReplayKit
+또는 점유 프로세스 확인:
+    sudo fuser ${PORT}/tcp
+    sudo lsof -iTCP:${PORT} -sTCP:LISTEN"
+    fi
+fi
 
 want_browser=0
 if [ -z "${REPLAYKIT_NO_BROWSER:-}" ]; then
