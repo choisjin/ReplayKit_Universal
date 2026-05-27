@@ -3,8 +3,8 @@ Version: @@VERSION@@
 Section: utils
 Priority: optional
 Architecture: @@ARCH@@
-Depends: libgl1, libglib2.0-0, libxcb1, libxkbcommon0, curl
-Recommends: scrcpy, ffmpeg, android-tools-adb, python3-tk, fonts-noto-cjk, gstreamer1.0-plugins-good, xdg-utils
+Depends: libgl1, libglib2.0-0, libxcb1, libxkbcommon0, curl, python3 (>= 3.10), python3-tk
+Recommends: scrcpy, ffmpeg, android-tools-adb, fonts-noto-cjk, gstreamer1.0-plugins-good, xdg-utils
 Maintainer: choi3206@gmail.com
 Homepage: https://github.com/choisjin/ReplayKit_Dev_For_Linux
 Description: ReplayKit - Android automation testing tool (Linux port)

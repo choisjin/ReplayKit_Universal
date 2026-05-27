@@ -259,6 +259,9 @@ ReplayKit status       # PID, URL, 헬스 응답 여부 출력
 
 Windows `server.py` 와 동일한 미니멀 디자인 — 360x70 borderless 위젯, 화면 우하단 floating.
 
+> **GUI 는 시스템 Python (`/usr/bin/python3`) + `python3-tk` 사용** — embedded Python 의 bundled Tk 가 Linux 최신 libxcb 와 ABI 호환이 안 되어 `xcb_xlib_unknown_seq_number` assertion 으로 죽기 때문. 백엔드 uvicorn 만 embedded Python 으로 subprocess 실행.
+> `python3-tk` 가 없으면 자동으로 headless (브라우저 자동 오픈) 모드로 폴백.
+
 ```
 ┌─ ReplayKit ────────────  ━  ✕ ┐
 │  ▶  ↻  🌐         실행 중 PID 12345 │

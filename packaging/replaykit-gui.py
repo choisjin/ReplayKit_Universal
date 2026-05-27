@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """ReplayKit GUI Launcher — Linux.
 
 Windows server.py 의 borderless 미니 launcher 와 동일한 스타일:
@@ -7,9 +7,14 @@ Windows server.py 의 borderless 미니 launcher 와 동일한 스타일:
   - 우측에 상태 텍스트
   - 타이틀 클릭+드래그로 이동
 
-embedded Python bundled tkinter 사용. 스레드 없이 tk.after() 폴링만 — Linux XCB
-충돌 방지. subprocess.Popen 으로 uvicorn 관리, start_new_session=True 로 부모
-launcher 와 신호 분리.
+!!중요!! 이 스크립트는 **시스템 Python (/usr/bin/python3)** 으로 실행됨.
+embedded Python (python-build-standalone) 의 bundled Tk 가 Linux 최신 libxcb
+와 ABI 호환이 안 되어 import tkinter 만으로 'xcb_xlib_unknown_seq_number'
+assertion 으로 죽기 때문. 백엔드 uvicorn 만 embedded Python 으로 subprocess
+실행 — GUI 와 백엔드는 분리된 Python.
+
+stdlib 만 사용하므로 (tkinter, subprocess, os, signal, webbrowser, pathlib, json)
+시스템 python3 + python3-tk 만 있으면 동작. Ubuntu 22.04+ 기본.
 """
 
 from __future__ import annotations
