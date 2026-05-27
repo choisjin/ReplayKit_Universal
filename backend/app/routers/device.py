@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 from ..dependencies import adb_service as adb, device_manager as dm
 from ..services.adb_service import resolve_sf_display_id, resolve_input_display_id
 from ..services.module_service import list_available_modules, get_module_functions, execute_module_function
+# 윈도우 컨트롤 라벨/누락 의존성 메시지 — OS 별 분기 (Linux→LinControl/python-xlib, Win→WinControl/pywin32).
+from ..services.device_manager import _WIN_CTRL_DISPLAY_NAME, _WIN_CTRL_IS_LINUX
+_WC_MISSING_DEP_MSG = "python-xlib not installed" if _WIN_CTRL_IS_LINUX else "pywin32 not installed"
 
 
 def _with_protected_flag(devices: list) -> list[dict]:
@@ -1046,7 +1049,7 @@ async def device_input(req: InputRequest):
             if not wc.is_available():
                 raise HTTPException(
                     status_code=503,
-                    detail=f"WinControl unavailable: {wc.import_error() or 'pywin32 not installed'}",
+                    detail=f"{_WIN_CTRL_DISPLAY_NAME} unavailable: {wc.import_error() or _WC_MISSING_DEP_MSG}",
                 )
             import asyncio
             loop = asyncio.get_event_loop()
@@ -2057,7 +2060,7 @@ async def wincontrol_list_processes():
     """현재 시스템의 가시 윈도우/프로세스 목록 (콤보용)."""
     wc = dm.get_wincontrol_service()
     if not wc.is_available():
-        raise HTTPException(status_code=503, detail=f"WinControl unavailable: {wc.import_error()}")
+        raise HTTPException(status_code=503, detail=f"{_WIN_CTRL_DISPLAY_NAME} unavailable: {wc.import_error() or _WC_MISSING_DEP_MSG}")
     import asyncio
     loop = asyncio.get_event_loop()
     procs = await loop.run_in_executor(None, wc.list_processes)
@@ -2075,7 +2078,7 @@ async def wincontrol_attach(req: WinControlAttachRequest):
     """대상 프로세스 윈도우에 임베드 — 디바이스 connection 과는 별개."""
     wc = dm.get_wincontrol_service()
     if not wc.is_available():
-        raise HTTPException(status_code=503, detail=f"WinControl unavailable: {wc.import_error()}")
+        raise HTTPException(status_code=503, detail=f"{_WIN_CTRL_DISPLAY_NAME} unavailable: {wc.import_error() or _WC_MISSING_DEP_MSG}")
     try:
         info = wc.attach(req.hwnd)
     except ValueError as e:
@@ -2100,7 +2103,7 @@ async def wincontrol_resize(req: WinControlResizeRequest):
     """
     wc = dm.get_wincontrol_service()
     if not wc.is_available():
-        raise HTTPException(status_code=503, detail=f"WinControl unavailable: {wc.import_error()}")
+        raise HTTPException(status_code=503, detail=f"{_WIN_CTRL_DISPLAY_NAME} unavailable: {wc.import_error() or _WC_MISSING_DEP_MSG}")
     if not wc.is_attached():
         raise HTTPException(status_code=400, detail="WinControl: no window attached")
     if req.client_w <= 0 or req.client_h <= 0:

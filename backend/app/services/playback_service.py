@@ -2728,8 +2728,11 @@ class PlaybackService:
             # 임베드 보장 — 저장된 process_name/exe_path 로 자동 attach 또는 launch.
             wc = self.dm.get_wincontrol_service()
             if not wc.is_available():
+                # OS 별 라벨/누락 의존성 메시지 (Linux→LinControl/python-xlib, Win→WinControl/pywin32).
+                from .device_manager import _WIN_CTRL_DISPLAY_NAME, _WIN_CTRL_IS_LINUX
+                _missing = "python-xlib not installed" if _WIN_CTRL_IS_LINUX else "pywin32 not installed"
                 raise ValueError(
-                    f"WinControl unavailable: {wc.import_error() or 'pywin32 not installed'}"
+                    f"{_WIN_CTRL_DISPLAY_NAME} unavailable: {wc.import_error() or _missing}"
                 )
             try:
                 import asyncio
