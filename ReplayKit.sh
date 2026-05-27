@@ -40,7 +40,7 @@ if [ "${1:-}" = "--home" ]; then
     fi
 fi
 
-CANONICAL_REMOTE="http://mod.lge.com/hub/dqa_replay_kit/replay_kit.git"
+CANONICAL_REMOTE="http://mod.lge.com/hub/dqa_dcv_auto/rnavn_project.git"
 
 # ---- 기존 서버 종료 ----
 stop_existing_server() {
