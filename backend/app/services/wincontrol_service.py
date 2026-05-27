@@ -10,11 +10,20 @@ import contextlib
 import ctypes
 import io
 import logging
+import sys
 import threading
 import time
-from ctypes import windll, Structure, Union, c_long, c_short
+from ctypes import Structure, Union, c_long, c_short
 from ctypes.wintypes import DWORD, HANDLE, HWND, LONG, WORD
 from typing import Callable, Optional, TypeVar
+
+# windll 은 ctypes 의 Windows-only 어트리뷰트. Linux/macOS 에서는 존재하지
+# 않아 module import 자체가 실패함. 모듈 로드는 항상 성공시키되, 실제 호출은
+# 아래 _WIN32_AVAILABLE 가드로 차단된다.
+if sys.platform == "win32":
+    from ctypes import windll  # type: ignore[attr-defined]
+else:
+    windll = None  # type: ignore[assignment]
 
 
 _T = TypeVar("_T")
