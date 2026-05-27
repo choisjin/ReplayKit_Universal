@@ -152,6 +152,39 @@ if [ ${#whl_files[@]} -gt 0 ]; then
 fi
 shopt -u nullglob
 
+# ---- [3.5/6] PySide6 명시 설치 + 검증 ----
+# GUI launcher (replaykit-gui.py) 가 PySide6 에 의존. requirements.txt 의 핀이
+# 이 Python 버전에 wheel 이 없거나 install 실패해도 -q 가 가려서 사용자가
+# 모르는 경우를 막기 위한 안전망.
+echo "      Verifying PySide6 (GUI launcher dependency)..."
+if ! ./python/bin/python3 -c "import PySide6" >/dev/null 2>/dev/null; then
+    echo "      PySide6 not present after requirements.txt — installing explicitly (verbose)..."
+    # 명시적 설치 — 출력 보이게 (-q 제거)
+    if ./python/bin/python3 -m pip install --upgrade "PySide6-Essentials"; then
+        :
+    else
+        echo "      [WARN] PySide6-Essentials 실패 → PySide6 (meta) 로 재시도..."
+        ./python/bin/python3 -m pip install --upgrade "PySide6" || true
+    fi
+fi
+# 최종 검증 — 없으면 빌드 중단 (배포 후 사용자가 '미설치' 메시지 보는 것 방지)
+if ! ./python/bin/python3 -c "import PySide6, PySide6.QtCore; print('      OK: PySide6', PySide6.__version__)" ; then
+    echo ""
+    echo "[ERROR] PySide6 미설치 또는 import 실패."
+    echo "        진단:"
+    echo "          ./python/bin/python3 -m pip list | grep -i pyside"
+    echo "          ./python/bin/python3 -c 'import PySide6'"
+    echo ""
+    echo "        가능한 원인:"
+    echo "          - PySide6 wheel 이 이 Python 버전 ($(./python/bin/python3 --version)) 에 없음"
+    echo "          - 네트워크 / 디스크 / 권한 이슈"
+    echo "          - requirements.txt 의 PySide6 핀이 wheel 없는 버전"
+    echo ""
+    echo "        해결:"
+    echo "          requirements.txt 에서 PySide6-Essentials 핀 풀거나 다른 버전 시도"
+    exit 1
+fi
+
 # ---- [4/6] Staging /opt/ReplayKit ----
 echo "[4/6] Staging files → $OPT_DIR"
 

@@ -70,7 +70,8 @@ PyJWT==2.11.0
 PyNaCl==1.6.2
 # PyQt6 (GPL) — 미사용 leftover. PySide6 (LGPL) 로 대체 (Linux launcher GUI).
 # PySide6-Essentials = QtCore + QtGui + QtWidgets (QtWebEngine 등 거대 모듈 제외).
-PySide6-Essentials==6.7.3
+# 핀 없이 pip 가 Python ABI 에 맞는 최신 안정 버전 선택. build_deb.sh 가 install 검증.
+PySide6-Essentials>=6.7,<6.10 ; sys_platform == "linux"
 pyserial==3.5
 PySocks==1.7.1
 pytesseract==0.3.13
