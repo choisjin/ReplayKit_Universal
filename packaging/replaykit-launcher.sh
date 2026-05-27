@@ -128,14 +128,47 @@ if [ ! -x "$PY" ]; then
     exit 1
 fi
 
-ENTRY="server.py"
-[ -f "$USER_DATA/_launcher.py" ] && ENTRY="_launcher.py"
+# ---- 브라우저 자동 오픈 (DISPLAY 있을 때만, REPLAYKIT_NO_BROWSER 로 끄기 가능) ----
+# 백그라운드 서브셸이 서버 ready (openapi.json 응답) 까지 polling 후 xdg-open 호출.
+# 30회 * 0.5초 = 최대 15초 대기. embedded Python 은 tkinter 미포함이라 server.py
+# (Tkinter GUI) 는 사용하지 않고 항상 uvicorn 으로 통일.
+PORT="${REPLAYKIT_PORT:-8000}"
+SERVER_URL="http://localhost:${PORT}"
 
-# DISPLAY 없으면 headless (서버 단독 실행)
-if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-    echo "[START] Headless mode — uvicorn at http://localhost:8000"
-    exec "$PY" -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 "$@"
-else
-    echo "[START] $PY $ENTRY (mode=installed)"
-    exec "$PY" "$ENTRY" "$@"
+want_browser=0
+if [ -z "${REPLAYKIT_NO_BROWSER:-}" ]; then
+    if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        if command -v xdg-open >/dev/null 2>/dev/null; then
+            want_browser=1
+        else
+            echo "[WEB] xdg-open 명령 없음 — 브라우저 자동 오픈 생략 (sudo apt install xdg-utils)"
+        fi
+    fi
 fi
+
+if [ "$want_browser" = "1" ]; then
+    (
+        for i in $(seq 1 30); do
+            sleep 0.5
+            if curl -fsS "${SERVER_URL}/openapi.json" >/dev/null 2>/dev/null; then
+                echo "[WEB] 서버 ready → 브라우저 오픈: ${SERVER_URL}"
+                xdg-open "${SERVER_URL}" >/dev/null 2>/dev/null &
+                exit 0
+            fi
+        done
+        echo "[WEB] 서버 ready 대기 15초 초과 — 브라우저는 수동으로 ${SERVER_URL} 열어주세요." >&2
+    ) &
+fi
+
+# ---- 서버 실행 (foreground) ----
+if [ "$want_browser" = "1" ]; then
+    echo "[START] uvicorn at ${SERVER_URL} (브라우저 자동 오픈 예정)"
+else
+    if [ -n "${REPLAYKIT_NO_BROWSER:-}" ]; then
+        echo "[START] uvicorn at ${SERVER_URL} (REPLAYKIT_NO_BROWSER=1, 헤드리스)"
+    else
+        echo "[START] uvicorn at ${SERVER_URL} (DISPLAY 없음, 헤드리스)"
+    fi
+fi
+
+exec "$PY" -m uvicorn backend.app.main:app --host 0.0.0.0 --port "$PORT" "$@"

@@ -243,7 +243,22 @@ sudo apt install -y nodejs
 
 상세 가이드: [`packaging/README.md`](packaging/README.md)
 
-### 8-3. 제거
+### 8-3. 실행 동작
+
+```bash
+ReplayKit              # uvicorn 시작 → ready 되면 기본 브라우저로 http://localhost:8000 자동 오픈
+```
+
+| 환경 변수 | 효과 |
+| --- | --- |
+| `REPLAYKIT_NO_BROWSER=1` | 브라우저 자동 오픈 비활성 (서버 머신 / CI 용) |
+| `REPLAYKIT_PORT=9000` | 8000 외의 포트 사용 |
+| `DISPLAY` / `WAYLAND_DISPLAY` 없음 | 자동으로 헤드리스 — 브라우저 안 띄움 |
+
+브라우저 자동 오픈은 `xdg-open` (xdg-utils 패키지) 으로 시스템 기본 브라우저 호출.
+GNOME/KDE/XFCE/i3 등 모든 데스크톱에서 동작.
+
+### 8-4. 제거
 
 ```bash
 sudo apt remove replaykit       # 패키지만 제거, 사용자 데이터 보존
