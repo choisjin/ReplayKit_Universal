@@ -140,18 +140,138 @@ def _host_os() -> str:
     return sys.platform
 
 
+# Modernized 다이얼로그 스타일시트 — 깔끔한 minimal 디자인.
+# 컬러 톤: 라이트 회색 배경 + 차분한 파란 액센트 (#2563eb 류). border-radius 8px.
+_DIALOG_QSS = """
+QDialog {
+    background: #f6f7f9;
+}
+QLabel#headerTitle {
+    font-size: 16px;
+    font-weight: 600;
+    color: #111827;
+}
+QLabel#headerSub {
+    font-size: 11px;
+    color: #6b7280;
+}
+QLabel#sectionTitle {
+    font-size: 11px;
+    font-weight: 600;
+    color: #6b7280;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    margin-top: 4px;
+}
+QFrame#card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+}
+QRadioButton, QCheckBox {
+    font-size: 13px;
+    color: #1f2937;
+    spacing: 8px;
+    padding: 4px 0;
+}
+QRadioButton::indicator, QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+}
+QLineEdit {
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    color: #111827;
+    selection-background-color: #bfdbfe;
+}
+QLineEdit:focus {
+    border: 1px solid #2563eb;
+}
+QPushButton {
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    color: #374151;
+}
+QPushButton:hover {
+    background: #f3f4f6;
+    border: 1px solid #9ca3af;
+}
+QPushButton:pressed {
+    background: #e5e7eb;
+}
+QPushButton#primary {
+    background: #2563eb;
+    color: #ffffff;
+    border: 1px solid #2563eb;
+    font-weight: 600;
+    padding: 8px 18px;
+}
+QPushButton#primary:hover {
+    background: #1d4ed8;
+}
+QPushButton#primary:pressed {
+    background: #1e40af;
+}
+QPushButton#ghost {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #6b7280;
+    padding: 8px 16px;
+}
+QPushButton#ghost:hover {
+    color: #111827;
+    background: #f3f4f6;
+}
+QLabel#warning {
+    color: #b91c1c;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+}
+QLabel#hint {
+    color: #6b7280;
+    font-size: 11px;
+}
+"""
+
+
+def _card(parent_layout, title: str):
+    """카드 컨테이너 — section title + QFrame#card 안에 children layout."""
+    from PySide6.QtWidgets import QFrame, QVBoxLayout, QLabel
+    t = QLabel(title)
+    t.setObjectName("sectionTitle")
+    parent_layout.addWidget(t)
+    frame = QFrame()
+    frame.setObjectName("card")
+    inner = QVBoxLayout(frame)
+    inner.setContentsMargins(14, 12, 14, 12)
+    inner.setSpacing(10)
+    parent_layout.addWidget(frame)
+    return inner
+
+
 def _show_release_dialog():
-    """PySide6 release 다이얼로그. (target_os, version, do_build, do_push) 또는 None 반환.
+    """PySide6 release 다이얼로그. (target_os, version, do_build, do_frontend, do_push) 또는 None.
 
     None = 사용자 취소.  target_os ∈ {'win', 'linux'}.  version = 'v1.2.3' 형식.
+    do_build / do_frontend / do_push 모두 bool.
     """
     try:
         from PySide6.QtWidgets import (
-            QApplication, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
+            QApplication, QDialog, QVBoxLayout, QHBoxLayout,
             QLabel, QLineEdit, QPushButton, QRadioButton, QButtonGroup,
-            QCheckBox, QGroupBox, QMessageBox,
+            QCheckBox, QMessageBox,
         )
         from PySide6.QtCore import Qt
+        from PySide6.QtGui import QFont
     except ImportError as e:
         msg = (
             "[ERROR] PySide6 미설치 — GUI 모드 사용 불가.\n"
@@ -167,98 +287,129 @@ def _show_release_dialog():
 
     app = QApplication.instance() or QApplication(sys.argv)
     dlg = QDialog()
-    dlg.setWindowTitle("ReplayKit — Release")
-    dlg.setMinimumWidth(440)
+    dlg.setWindowTitle("ReplayKit · Release")
+    dlg.setMinimumWidth(480)
+    dlg.setStyleSheet(_DIALOG_QSS)
 
     root = QVBoxLayout(dlg)
+    root.setContentsMargins(22, 20, 22, 18)
+    root.setSpacing(12)
 
-    # 헤더
-    header = QLabel(f"<b>ReplayKit Release</b><br><span style='color:#888'>host OS: {host}, current version: v{current}</span>")
-    header.setTextFormat(Qt.RichText)
-    root.addWidget(header)
+    # ── 헤더 ──
+    head_box = QVBoxLayout()
+    head_box.setSpacing(2)
+    title = QLabel("ReplayKit Release")
+    title.setObjectName("headerTitle")
+    sub = QLabel(f"host {OS_LABELS.get(host, host)}  ·  current v{current.lstrip('vV')}")
+    sub.setObjectName("headerSub")
+    head_box.addWidget(title)
+    head_box.addWidget(sub)
+    root.addLayout(head_box)
 
-    # OS 선택
-    os_group = QGroupBox("대상 OS")
-    os_layout = QHBoxLayout()
-    rb_win = QRadioButton("Windows  (.exe installer)")
-    rb_lin = QRadioButton("Linux    (.deb package)")
+    # ── 대상 OS ──
+    os_layout = _card(root, "TARGET OS")
+    os_row = QHBoxLayout()
+    rb_win = QRadioButton("Windows  ·  .exe installer")
+    rb_lin = QRadioButton("Linux  ·  .deb package")
     btn_group = QButtonGroup(dlg)
     btn_group.addButton(rb_win)
     btn_group.addButton(rb_lin)
-    # default = host OS
     if host == "linux":
         rb_lin.setChecked(True)
     else:
         rb_win.setChecked(True)
-    os_layout.addWidget(rb_win)
-    os_layout.addWidget(rb_lin)
-    os_group.setLayout(os_layout)
-    root.addWidget(os_group)
+    os_row.addWidget(rb_win)
+    os_row.addSpacing(12)
+    os_row.addWidget(rb_lin)
+    os_row.addStretch()
+    os_layout.addLayout(os_row)
 
-    # 버전
-    ver_group = QGroupBox("버전")
-    ver_layout = QFormLayout()
+    # ── 버전 ──
+    ver_layout = _card(root, "VERSION")
+    ver_row = QHBoxLayout()
+    ver_row.setSpacing(8)
+    vprefix = QLabel("v")
+    vprefix.setStyleSheet("color:#6b7280; font-size:13px;")
     ver_edit = QLineEdit(current.lstrip("vV"))
-    ver_edit.setPlaceholderText("예: 1.2.0")
-    ver_layout.addRow("새 버전 (v 생략):", ver_edit)
+    ver_edit.setPlaceholderText("1.2.0")
+    ver_edit.setMaximumWidth(140)
+    ver_row.addWidget(vprefix)
+    ver_row.addWidget(ver_edit)
+    ver_row.addStretch()
+    ver_layout.addLayout(ver_row)
 
     bump_row = QHBoxLayout()
+    bump_row.setSpacing(6)
     for kind in ("patch", "minor", "major"):
-        b = QPushButton(f"{kind} → {_bump(current, kind).lstrip('v')}")
-        # closure 변수 캡처
+        b = QPushButton(f"{kind}  v{_bump(current, kind).lstrip('v')}")
         b.clicked.connect(lambda _checked=False, k=kind: ver_edit.setText(_bump(current, k).lstrip("v")))
         bump_row.addWidget(b)
-    keep_btn = QPushButton(f"유지 ({current})")
+    keep_btn = QPushButton(f"유지  v{current.lstrip('vV')}")
     keep_btn.clicked.connect(lambda: ver_edit.setText(current.lstrip("vV")))
     bump_row.addWidget(keep_btn)
-    ver_layout.addRow("", _layout_to_widget(bump_row))
-    ver_group.setLayout(ver_layout)
-    root.addWidget(ver_group)
+    bump_row.addStretch()
+    ver_layout.addLayout(bump_row)
 
-    # 옵션
-    opt_group = QGroupBox("옵션")
-    opt_layout = QVBoxLayout()
-    cb_build = QCheckBox("빌드 실행 (해당 OS 의 빌드 스크립트)")
+    # ── 옵션 ──
+    opt_layout = _card(root, "OPTIONS")
+    cb_build = QCheckBox("빌드 실행")
     cb_build.setChecked(True)
-    cb_push = QCheckBox("배포 git push (force, OS 별 LG remote)")
+    cb_frontend = QCheckBox("frontend 빌드 포함  (npm run build — 약 30~90초)")
+    cb_frontend.setChecked(True)
+    cb_push = QCheckBox("배포 git push  (force, OS 별 LG remote)")
     cb_push.setChecked(True)
     opt_layout.addWidget(cb_build)
+    opt_layout.addWidget(cb_frontend)
     opt_layout.addWidget(cb_push)
-    opt_group.setLayout(opt_layout)
-    root.addWidget(opt_group)
+    hint = QLabel("frontend 변경이 없거나 frontend/dist 이미 최신이면 체크 해제로 빌드 시간 단축.")
+    hint.setObjectName("hint")
+    hint.setWordWrap(True)
+    opt_layout.addWidget(hint)
 
-    # 호스트-대상 호환성 경고 라벨 (동적)
+    # frontend 체크박스는 build 체크박스가 켜져 있을 때만 의미 — 동기 disable
+    def _sync_fe():
+        cb_frontend.setEnabled(cb_build.isChecked())
+    cb_build.toggled.connect(_sync_fe)
+    _sync_fe()
+
+    # ── 호환성 경고 (동적) ──
     warn_lbl = QLabel("")
-    warn_lbl.setStyleSheet("color: #c0392b;")
+    warn_lbl.setObjectName("warning")
     warn_lbl.setWordWrap(True)
+    warn_lbl.hide()
     root.addWidget(warn_lbl)
 
     def _update_warn():
         target = "win" if rb_win.isChecked() else "linux"
         if cb_build.isChecked() and target != host:
             warn_lbl.setText(
-                f"⚠ 빌드는 호스트 OS 와 일치해야 합니다 (host={host}, target={target}).\n"
-                f"   체크 해제하거나 {OS_LABELS[target]} 머신에서 다시 실행하세요."
+                f"⚠  빌드는 호스트 OS 와 일치해야 합니다  ·  host={OS_LABELS.get(host, host)} / target={OS_LABELS[target]}\n"
+                f"     {OS_LABELS[target]} 머신에서 실행하거나 '빌드 실행' 해제 후 push 만 진행."
             )
+            warn_lbl.show()
         else:
-            warn_lbl.setText("")
+            warn_lbl.hide()
 
     rb_win.toggled.connect(_update_warn)
     rb_lin.toggled.connect(_update_warn)
     cb_build.toggled.connect(_update_warn)
     _update_warn()
 
-    # 버튼
+    # ── 액션 버튼 ──
     btn_row = QHBoxLayout()
-    ok_btn = QPushButton("Build / Push")
-    ok_btn.setDefault(True)
+    btn_row.setContentsMargins(0, 6, 0, 0)
     cancel_btn = QPushButton("취소")
+    cancel_btn.setObjectName("ghost")
+    ok_btn = QPushButton("Build & Push")
+    ok_btn.setObjectName("primary")
+    ok_btn.setDefault(True)
     btn_row.addStretch()
     btn_row.addWidget(cancel_btn)
+    btn_row.addSpacing(6)
     btn_row.addWidget(ok_btn)
     root.addLayout(btn_row)
 
-    result = {"target": None, "version": None, "build": True, "push": True}
+    result = {"target": None, "version": None, "build": True, "frontend": True, "push": True}
 
     def _accept():
         target = "win" if rb_win.isChecked() else "linux"
@@ -270,7 +421,7 @@ def _show_release_dialog():
         if cb_build.isChecked() and target != host:
             r = QMessageBox.question(
                 dlg, "호스트 불일치",
-                f"host={host} 에서 {target} 빌드는 실패합니다. 빌드 체크 해제하고 push 만 진행할까요?",
+                f"host={OS_LABELS.get(host, host)} 에서 {OS_LABELS[target]} 빌드는 실패합니다.\n빌드 체크 해제하고 push 만 진행할까요?",
                 QMessageBox.Yes | QMessageBox.No,
             )
             if r != QMessageBox.Yes:
@@ -279,6 +430,7 @@ def _show_release_dialog():
         result["target"] = target
         result["version"] = f"v{ver}"
         result["build"] = cb_build.isChecked()
+        result["frontend"] = cb_frontend.isChecked()
         result["push"] = cb_push.isChecked()
         dlg.accept()
 
@@ -287,27 +439,23 @@ def _show_release_dialog():
 
     if dlg.exec() != QDialog.Accepted:
         return None
-    return (result["target"], result["version"], result["build"], result["push"])
-
-
-def _layout_to_widget(layout):
-    """QHBoxLayout 같은 layout 을 QFormLayout.addRow 에 직접 넣기 위한 wrapper."""
-    from PySide6.QtWidgets import QWidget
-    w = QWidget()
-    w.setLayout(layout)
-    return w
+    return (result["target"], result["version"], result["build"], result["frontend"], result["push"])
 
 
 # ── release.py 에서 이식: build dispatch + deploy push ──
-def _run_target_build(target: str, version: str) -> int:
-    """대상 OS 의 빌드 본체 호출. exit code 반환."""
+def _run_target_build(target: str, version: str, do_frontend: bool = True) -> int:
+    """대상 OS 의 빌드 본체 호출. exit code 반환.
+
+    do_frontend=False 면:
+      - Windows: step_build_frontend 스킵, 기존 frontend/dist 그대로 패키징
+      - Linux:   build_deb.sh 에 --no-frontend 인자 전달
+    """
     host = _host_os()
     if target == "win":
         if host != "win":
             print(f"[ERROR] Windows 빌드는 Windows 호스트에서만 가능 (current: {host})", file=sys.stderr)
             return 2
-        # Win 호스트 + Win 빌드 — 이 파일 자신의 _run_native_build 호출 (Cython + Inno).
-        return _run_native_win_build(version)
+        return _run_native_win_build(version, do_frontend=do_frontend)
     if target == "linux":
         if host != "linux":
             print(f"[ERROR] Linux 빌드는 Linux 호스트에서만 가능 (current: {host})", file=sys.stderr)
@@ -319,14 +467,20 @@ def _run_target_build(target: str, version: str) -> int:
         # SKIP_LGE_PUSH=1 — push 는 이쪽 release flow 가 통합 관리.
         env = os.environ.copy()
         env["SKIP_LGE_PUSH"] = "1"
-        print(f"\n[BUILD] $ SKIP_LGE_PUSH=1 bash {sh}\n")
-        return subprocess.call(["bash", str(sh)], cwd=PROJECT_ROOT, env=env)
+        cmd = ["bash", str(sh)]
+        if not do_frontend:
+            cmd.append("--no-frontend")
+        print(f"\n[BUILD] $ SKIP_LGE_PUSH=1 {' '.join(cmd)}\n")
+        return subprocess.call(cmd, cwd=PROJECT_ROOT, env=env)
     print(f"[ERROR] unknown OS target: {target}", file=sys.stderr)
     return 1
 
 
-def _run_native_win_build(version: str) -> int:
-    """기존 build_dist.py 의 Windows 빌드 단계 호출 (Cython → frontend → 패키지 → installer)."""
+def _run_native_win_build(version: str, do_frontend: bool = True) -> int:
+    """기존 build_dist.py 의 Windows 빌드 단계 (Cython → [frontend] → 패키지 → installer).
+
+    do_frontend=False 면 npm run build 스킵 — frontend/dist 이미 빌드돼 있을 때 시간 단축.
+    """
     if sys.platform != "win32":
         print("[ERROR] _run_native_win_build 는 Windows 에서만 실행 가능", file=sys.stderr)
         return 2
@@ -340,14 +494,24 @@ def _run_native_win_build(version: str) -> int:
 
     t_start = time.time()
     print("=" * 50)
-    print(f"  ReplayKit — Windows 배포 빌드 v{new_version}")
+    fe_tag = "with frontend" if do_frontend else "no frontend"
+    print(f"  ReplayKit — Windows 배포 빌드 v{new_version}  ({fe_tag})")
     print("=" * 50)
     if not step_compile_backend(False):
         print("\n빌드 중단: backend 컴파일 실패")
         return 1
-    if not step_build_frontend(False):
-        print("\n빌드 중단: frontend 빌드 실패")
-        return 1
+    if do_frontend:
+        if not step_build_frontend(False):
+            print("\n빌드 중단: frontend 빌드 실패")
+            return 1
+    else:
+        # frontend/dist 가 없으면 패키징이 깨짐 — 사전 검증.
+        fe_dist = PROJECT_ROOT / "frontend" / "dist" / "index.html"
+        if not fe_dist.is_file():
+            print(f"\n[ERROR] frontend 빌드를 스킵했지만 {fe_dist} 가 없음 — 먼저 빌드 필요", file=sys.stderr)
+            print("        해결: GUI 에서 'frontend 빌드 포함' 체크 또는 cd frontend && npm run build", file=sys.stderr)
+            return 1
+        print("[FRONTEND] 스킵 (--skip-frontend / GUI 체크 해제) — 기존 frontend/dist 사용")
     if not step_package(False, offline=False):
         print("\n빌드 중단: 패키지 조립 실패")
         return 1
@@ -1152,6 +1316,7 @@ def main():
     offline = "--offline" in args
     do_skip_build = "--skip-build" in args
     do_skip_push = "--skip-push" in args
+    do_skip_frontend = "--skip-frontend" in args
     legacy_deploy = "--deploy" in args
 
     # ── 레거시 명령 (Windows 호스트 전용 — 기존 build_dist.py 호환) ──
@@ -1189,15 +1354,16 @@ def main():
         target = "linux" if cli_os in ("linux", "lin", "l", "2") else "win"
         version = f"v{cli_version}"
         do_build = not do_skip_build
+        do_frontend = not do_skip_frontend
         do_push = not do_skip_push
-        print(f"[CLI] OS={OS_LABELS[target]}, version={version}, build={do_build}, push={do_push}")
+        print(f"[CLI] OS={OS_LABELS[target]}, version={version}, build={do_build}, frontend={do_frontend}, push={do_push}")
     else:
         # GUI dialog
         out = _show_release_dialog()
         if out is None:
             print("\n[ABORT] 사용자 취소")
             return
-        target, version, do_build, do_push = out
+        target, version, do_build, do_frontend, do_push = out
 
     # version.txt 갱신
     current = _read_version()
@@ -1209,7 +1375,7 @@ def main():
 
     # 빌드
     if do_build:
-        rc = _run_target_build(target, version)
+        rc = _run_target_build(target, version, do_frontend=do_frontend)
         if rc != 0:
             print(f"\n[ABORT] 빌드 실패 (exit {rc}) — push 건너뜀.", file=sys.stderr)
             sys.exit(rc)
