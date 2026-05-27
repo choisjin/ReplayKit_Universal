@@ -255,15 +255,23 @@ ReplayKit restart      # stop 후 start
 ReplayKit status       # PID, URL, 헬스 응답 여부 출력
 ```
 
-#### GUI launcher 기능 (`ReplayKit gui` / 아이콘 클릭)
+#### GUI launcher (`ReplayKit gui` / 아이콘 클릭)
 
-Tkinter 기반 윈도우 — embedded Python 의 bundled tkinter 사용 (의존성 0).
+Windows `server.py` 와 동일한 미니멀 디자인 — 360x70 borderless 위젯, 화면 우하단 floating.
 
-- 상태 표시 (● 실행 중 PID / ○ 종료 상태) + URL
-- 시작 / 종료 / 재시작 버튼
-- 브라우저 열기 / 로그 폴더 / 데이터 폴더 버튼
-- `backend.log` 실시간 표시 (마지막 300줄, ERROR/WARN/INFO 컬러)
-- "창 닫을 때 서버도 종료" 체크박스 (기본 OFF — 백그라운드 유지)
+```
+┌─ ReplayKit ────────────  ━  ✕ ┐
+│  ▶  ↻  🌐         실행 중 PID 12345 │
+└──────────────────────────────────┘
+```
+
+- **▶/■** — 시작 / 종료 토글
+- **↻** — 재시작
+- **🌐** — 브라우저 열기
+- **━** — 화면 모서리로 이동 (Linux 트레이 환경 의존성 회피)
+- **✕** — 창 닫기 (서버는 살려둠; 서버 종료는 ■ 버튼)
+- 타이틀 클릭+드래그로 윈도우 이동
+- `backend/settings.json` 의 theme 따라 dark/light 자동 적용
 
 #### 종료 방법
 

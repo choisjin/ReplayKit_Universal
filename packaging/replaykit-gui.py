@@ -1,25 +1,20 @@
 #!/usr/bin/env python3
-"""ReplayKit GUI Launcher — Linux installed mode.
+"""ReplayKit GUI Launcher — Linux.
 
-Windows server.py 의 Tkinter 윈도우 등가물. embedded Python 의 bundled tkinter
-를 사용하므로 추가 의존성 없음.
+Windows server.py 의 borderless 미니 launcher 와 동일한 스타일:
+  - 360x70 우하단 floating 위젯
+  - 5개 버튼: ▶/■ 토글, ↻ 재시작, 🌐 브라우저, ━ 최소화, ✕ 종료
+  - 우측에 상태 텍스트
+  - 타이틀 클릭+드래그로 이동
 
-핵심 설계:
-- 스레드 없이 Tk 의 after() 폴링만 사용 → Tkinter + Xlib XCB 충돌 회피.
-  (Windows server.py 의 threading-based 로그 캡처가 Linux 에서 xcb_io.c 의
-   `!xcb_xlib_unknown_seq_number` assertion 으로 죽는 문제 회피.)
-- subprocess.Popen 으로 uvicorn 관리, Popen.poll() 로 상태 확인.
-- ~/.local/share/ReplayKit/replaykit.pid 로 외부 launcher.sh 와 PID 공유.
-
-호출 흐름:
-    데스크탑 아이콘 클릭
-        → /usr/bin/ReplayKit (launcher.sh)
-            → DISPLAY 있으면 이 파일 실행
-            → DISPLAY 없으면 uvicorn 직접 실행 (헤드리스)
+embedded Python bundled tkinter 사용. 스레드 없이 tk.after() 폴링만 — Linux XCB
+충돌 방지. subprocess.Popen 으로 uvicorn 관리, start_new_session=True 로 부모
+launcher 와 신호 분리.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -28,12 +23,9 @@ import webbrowser
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
 
 
-# ============================================================
-# 경로/설정
-# ============================================================
+# ─── 경로 / 환경 ───────────────────────────────────────────
 APP_DIR = Path(os.environ.get("REPLAYKIT_APP_DIR", "/opt/ReplayKit"))
 USER_DATA = Path(
     os.environ.get(
@@ -47,34 +39,44 @@ USER_DATA = Path(
 PY = APP_DIR / "python" / "bin" / "python3"
 PORT = int(os.environ.get("REPLAYKIT_PORT", "8000"))
 SERVER_URL = f"http://localhost:{PORT}"
-LOG_FILE = USER_DATA / "logs" / "backend.log"
 PID_FILE = USER_DATA / "replaykit.pid"
 
-# 로그 뷰어 설정
-LOG_MAX_LINES = 300       # 메모리에 유지할 최대 라인 수
-LOG_POLL_MS = 500         # 로그 갱신 주기
-STATUS_POLL_MS = 1000     # 상태 갱신 주기
+
+# ─── 색상 (Windows server.py 의 다크 테마 그대로) ────────
+def _read_theme() -> str:
+    try:
+        with open(USER_DATA / "backend" / "settings.json", encoding="utf-8") as f:
+            return json.load(f).get("theme", "dark")
+    except Exception:
+        return "dark"
 
 
-# ============================================================
-# 유틸리티
-# ============================================================
+_DARK = {"BG": "#1e1e2e", "BG_CARD": "#2a2a3d", "FG": "#cdd6f4", "FG_DIM": "#6c7086",
+         "GREEN": "#a6e3a1", "RED": "#f38ba8", "YELLOW": "#f9e2af",
+         "ACCENT": "#cba6f7"}
+_LIGHT = {"BG": "#f5f5f5", "BG_CARD": "#ffffff", "FG": "#1f1f1f", "FG_DIM": "#888888",
+          "GREEN": "#389e0d", "RED": "#cf1322", "YELLOW": "#d48806",
+          "ACCENT": "#722ed1"}
+_C = _DARK if _read_theme() == "dark" else _LIGHT
+BG, BG_CARD, FG, FG_DIM = _C["BG"], _C["BG_CARD"], _C["FG"], _C["FG_DIM"]
+GREEN, RED, YELLOW, ACCENT = _C["GREEN"], _C["RED"], _C["YELLOW"], _C["ACCENT"]
+
+
+# ─── PID 관리 ──────────────────────────────────────────────
 def is_pid_alive(pid: int) -> bool:
-    """PID 가 살아있고 우리 ReplayKit 프로세스인지 확인."""
     try:
         os.kill(pid, 0)
     except OSError:
         return False
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as f:
-            cmdline = f.read().decode("utf-8", errors="ignore")
-        return "uvicorn" in cmdline and "backend.app.main" in cmdline
+            cmdline = f.read()
+        return b"uvicorn" in cmdline and b"backend.app.main" in cmdline
     except OSError:
         return False
 
 
 def get_running_pid() -> int | None:
-    """PID 파일에서 실행 중인 ReplayKit PID 확인. 없거나 죽었으면 None."""
     if PID_FILE.exists():
         try:
             pid = int(PID_FILE.read_text().strip())
@@ -82,7 +84,6 @@ def get_running_pid() -> int | None:
                 return pid
         except (ValueError, OSError):
             pass
-        # stale PID 파일 정리
         try:
             PID_FILE.unlink()
         except OSError:
@@ -90,179 +91,124 @@ def get_running_pid() -> int | None:
     return None
 
 
-# ============================================================
-# GUI
-# ============================================================
-class ReplayKitLauncher:
+# ─── GUI ───────────────────────────────────────────────────
+class Launcher:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("ReplayKit Launcher")
-        self.root.geometry("780x560")
-        self.root.minsize(600, 400)
-
-        # 내부 상태
-        self.server_proc: subprocess.Popen | None = None  # 우리가 띄운 경우
-        self.log_position = 0  # backend.log 의 어디까지 읽었는지 (byte offset)
-
+        self.root.title("ReplayKit")
         self._build_ui()
-        # 윈도우 닫기 동작
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # 초기 1회 + 주기 폴링 시작
-        self.root.after(0, self._refresh_status)
-        self.root.after(100, self._refresh_log)
+        self._drag = {"x": 0, "y": 0}
+        self._proc: subprocess.Popen | None = None
+        self.root.protocol("WM_DELETE_WINDOW", self._quit)
+        self.root.after(0, self._poll_status)
 
-    # ----- UI 구성 -----
+    # ----- UI -----
     def _build_ui(self) -> None:
-        style = ttk.Style()
-        # 시스템 기본 테마 유지 (clam/alt 강제 안 함 — DE 통합)
+        self.root.overrideredirect(True)
+        self.root.geometry("360x70")
+        self.root.configure(bg=BG)
 
-        # ── 상태 영역 ───────────────────────────────────────
-        top = ttk.Frame(self.root, padding=(12, 10))
-        top.pack(fill=tk.X)
+        # 우하단 위치
+        self.root.update_idletasks()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.root.geometry(f"+{sw - 380}+{sh - 120}")
 
-        ttk.Label(top, text="ReplayKit", font=("", 14, "bold")).pack(side=tk.LEFT)
-        self.status_label = ttk.Label(top, text="확인 중...", font=("", 10))
-        self.status_label.pack(side=tk.LEFT, padx=(15, 0))
+        # 1px 외곽선
+        outer = tk.Frame(self.root, bg=FG_DIM, bd=1, relief="solid")
+        outer.pack(fill="both", expand=True)
+        main = tk.Frame(outer, bg=BG)
+        main.pack(fill="both", expand=True, padx=1, pady=1)
 
-        self.url_label = ttk.Label(top, text="", font=("", 9), foreground="#555")
-        self.url_label.pack(side=tk.RIGHT)
+        # 타이틀 행
+        title_bar = tk.Frame(main, bg=BG)
+        title_bar.pack(fill="x")
 
-        # ── 버튼 행 ────────────────────────────────────────
-        btn_frame = ttk.Frame(self.root, padding=(12, 0, 12, 8))
-        btn_frame.pack(fill=tk.X)
+        title = tk.Label(title_bar, text="ReplayKit", bg=BG, fg=ACCENT,
+                         font=("DejaVu Sans", 11, "bold"), cursor="fleur")
+        title.pack(side="left", padx=(10, 0), pady=(4, 0))
+        title.bind("<Button-1>", lambda e: self._drag.update(x=e.x, y=e.y))
+        title.bind("<B1-Motion>", self._on_drag)
 
-        self.btn_start = ttk.Button(btn_frame, text="▶ 시작", command=self.start_server, width=10)
-        self.btn_start.pack(side=tk.LEFT, padx=(0, 4))
+        # 우측: 최소화 / 종료
+        ctrl = tk.Frame(title_bar, bg=BG)
+        ctrl.pack(side="right", padx=(0, 4), pady=(4, 0))
+        for text, color, cmd in [("━", FG_DIM, self._minimize),
+                                 ("✕", RED, self._quit)]:
+            b = tk.Label(ctrl, text=text, bg=BG, fg=color,
+                         font=("DejaVu Sans", 10), cursor="hand2", padx=6)
+            b.pack(side="left")
+            b.bind("<Button-1>", lambda e, c=cmd: c())
+            b.bind("<Enter>", lambda e, b=b: b.configure(bg=BG_CARD))
+            b.bind("<Leave>", lambda e, b=b: b.configure(bg=BG))
 
-        self.btn_stop = ttk.Button(btn_frame, text="■ 종료", command=self.stop_server, width=10)
-        self.btn_stop.pack(side=tk.LEFT, padx=4)
+        # 하단 컨트롤 행
+        bottom = tk.Frame(main, bg=BG)
+        bottom.pack(fill="x", padx=10, pady=(2, 0))
 
-        self.btn_restart = ttk.Button(btn_frame, text="↻ 재시작", command=self.restart_server, width=10)
-        self.btn_restart.pack(side=tk.LEFT, padx=4)
-
-        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
-
-        ttk.Button(btn_frame, text="🌐 브라우저 열기", command=self.open_browser, width=15).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_frame, text="📁 로그 폴더", command=self.open_log_folder, width=12).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_frame, text="📂 데이터 폴더", command=self.open_data_folder, width=12).pack(side=tk.LEFT, padx=4)
-
-        ttk.Button(btn_frame, text="✕ 창 닫기", command=self._on_close, width=10).pack(side=tk.RIGHT)
-
-        # ── 옵션 행 ────────────────────────────────────────
-        opt_frame = ttk.Frame(self.root, padding=(12, 0, 12, 8))
-        opt_frame.pack(fill=tk.X)
-
-        self.var_stop_on_close = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            opt_frame,
-            text="창 닫을 때 서버도 종료 (체크 해제하면 백그라운드 유지)",
-            variable=self.var_stop_on_close,
-        ).pack(side=tk.LEFT)
-
-        # ── 로그 영역 ──────────────────────────────────────
-        log_frame = ttk.LabelFrame(self.root, text=f"backend.log  ({LOG_FILE})", padding=6)
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
-
-        self.log_text = scrolledtext.ScrolledText(
-            log_frame,
-            wrap=tk.NONE,
-            font=("monospace", 9),
-            background="#1e1e1e",
-            foreground="#d4d4d4",
-            insertbackground="#d4d4d4",
+        self.btn_toggle = tk.Button(
+            bottom, text="▶", bg=BG_CARD, fg=GREEN,
+            activebackground=BG, activeforeground=GREEN,
+            font=("DejaVu Sans", 14, "bold"), relief="flat", bd=0,
+            cursor="hand2", width=2, command=self._toggle,
         )
-        self.log_text.pack(fill=tk.BOTH, expand=True)
-        self.log_text.configure(state="disabled")
+        self.btn_toggle.pack(side="left", padx=(0, 4))
 
-        # 컬러 태그
-        self.log_text.tag_configure("error", foreground="#ff6b6b")
-        self.log_text.tag_configure("warn", foreground="#ffd166")
-        self.log_text.tag_configure("info", foreground="#a0c4ff")
+        self._mk_btn(bottom, "↻", YELLOW, self._restart).pack(side="left", padx=(0, 4))
+        self._mk_btn(bottom, "🌐", ACCENT, self._open_web).pack(side="left")
+
+        self.status_lbl = tk.Label(bottom, text="확인 중", bg=BG, fg=FG_DIM,
+                                   font=("DejaVu Sans", 9), anchor="e")
+        self.status_lbl.pack(side="right", padx=(0, 4))
+
+    def _mk_btn(self, parent, text: str, color: str, command) -> tk.Button:
+        btn = tk.Button(
+            parent, text=text, bg=BG_CARD, fg=color,
+            activebackground=BG, activeforeground=color,
+            font=("DejaVu Sans", 11), relief="flat", bd=0,
+            cursor="hand2", width=2, command=command,
+        )
+        return btn
+
+    # ----- 드래그 -----
+    def _on_drag(self, e) -> None:
+        x = self.root.winfo_x() + e.x - self._drag["x"]
+        y = self.root.winfo_y() + e.y - self._drag["y"]
+        self.root.geometry(f"+{x}+{y}")
 
     # ----- 상태 폴링 -----
-    def _refresh_status(self) -> None:
+    def _poll_status(self) -> None:
         pid = get_running_pid()
-        # 우리가 띄운 subprocess 도 함께 확인
-        if pid is None and self.server_proc and self.server_proc.poll() is None:
-            pid = self.server_proc.pid
+        if pid is None and self._proc and self._proc.poll() is None:
+            pid = self._proc.pid
 
         if pid:
-            self.status_label.config(text=f"● 실행 중 (PID {pid})", foreground="#2d8a2d")
-            self.url_label.config(text=SERVER_URL)
-            self.btn_start.config(state=tk.DISABLED)
-            self.btn_stop.config(state=tk.NORMAL)
-            self.btn_restart.config(state=tk.NORMAL)
+            self.btn_toggle.config(text="■", fg=RED, activeforeground=RED)
+            self.status_lbl.config(text=f"실행 중  PID {pid}", fg=GREEN)
+            self.root.title("ReplayKit — 실행 중")
         else:
-            self.status_label.config(text="○ 종료 상태", foreground="#888")
-            self.url_label.config(text="")
-            self.btn_start.config(state=tk.NORMAL)
-            self.btn_stop.config(state=tk.DISABLED)
-            self.btn_restart.config(state=tk.DISABLED)
+            self.btn_toggle.config(text="▶", fg=GREEN, activeforeground=GREEN)
+            self.status_lbl.config(text="정지", fg=FG_DIM)
+            self.root.title("ReplayKit — 정지")
 
-        self.root.after(STATUS_POLL_MS, self._refresh_status)
-
-    # ----- 로그 폴링 -----
-    def _refresh_log(self) -> None:
-        if LOG_FILE.exists():
-            try:
-                size = LOG_FILE.stat().st_size
-                # 로그가 회전되어 작아진 경우 처음부터
-                if size < self.log_position:
-                    self.log_position = 0
-                    self._clear_log_display()
-                if size > self.log_position:
-                    with open(LOG_FILE, "rb") as f:
-                        f.seek(self.log_position)
-                        new_data = f.read(size - self.log_position)
-                    self.log_position = size
-                    text = new_data.decode("utf-8", errors="replace")
-                    self._append_log(text)
-            except OSError:
-                pass
-        self.root.after(LOG_POLL_MS, self._refresh_log)
-
-    def _append_log(self, text: str) -> None:
-        if not text:
-            return
-        self.log_text.configure(state=tk.NORMAL)
-        # 단순 추가 — 정확한 라인별 색상 매칭은 비용/효용 trade-off 라 생략
-        # 단, [ERROR]/[WARNING] 포함 라인은 컬러로
-        for line in text.splitlines(keepends=True):
-            tag = ""
-            ucase = line.upper()
-            if "[ERROR]" in ucase or "ERROR:" in ucase or "TRACEBACK" in ucase:
-                tag = "error"
-            elif "[WARNING]" in ucase or "WARNING:" in ucase or "[WARN]" in ucase:
-                tag = "warn"
-            elif "[INFO]" in ucase or "INFO:" in ucase:
-                tag = "info"
-            if tag:
-                self.log_text.insert(tk.END, line, tag)
-            else:
-                self.log_text.insert(tk.END, line)
-        # 라인 수 제한
-        line_count = int(self.log_text.index("end-1c").split(".")[0])
-        if line_count > LOG_MAX_LINES:
-            self.log_text.delete("1.0", f"{line_count - LOG_MAX_LINES}.0")
-        self.log_text.see(tk.END)
-        self.log_text.configure(state=tk.DISABLED)
-
-    def _clear_log_display(self) -> None:
-        self.log_text.configure(state=tk.NORMAL)
-        self.log_text.delete("1.0", tk.END)
-        self.log_text.configure(state=tk.DISABLED)
+        self.root.after(1000, self._poll_status)
 
     # ----- 서버 제어 -----
-    def start_server(self) -> None:
+    def _toggle(self) -> None:
+        if get_running_pid():
+            self._stop()
+        else:
+            self._start()
+
+    def _start(self) -> None:
         if get_running_pid() is not None:
-            return  # 이미 실행 중
+            return
         if not PY.exists():
-            messagebox.showerror("오류", f"임베디드 Python 없음:\n{PY}")
+            self.status_lbl.config(text="Python 없음", fg=RED)
             return
 
         env = os.environ.copy()
-        # 시스템 Python 환경 격리
         for k in ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP"):
             env.pop(k, None)
         env["PYTHONNOUSERSITE"] = "1"
@@ -274,90 +220,74 @@ class ReplayKitLauncher:
         (USER_DATA / "logs").mkdir(parents=True, exist_ok=True)
 
         try:
-            self.server_proc = subprocess.Popen(
-                [
-                    str(PY), "-m", "uvicorn", "backend.app.main:app",
-                    "--host", "0.0.0.0", "--port", str(PORT),
-                ],
-                cwd=str(USER_DATA),
-                env=env,
-                stdout=subprocess.DEVNULL,   # backend 가 자체 로그 파일에 기록
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,       # 부모 (GUI) 와 신호 분리
+            self._proc = subprocess.Popen(
+                [str(PY), "-m", "uvicorn", "backend.app.main:app",
+                 "--host", "0.0.0.0", "--port", str(PORT)],
+                cwd=str(USER_DATA), env=env,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
-            PID_FILE.write_text(str(self.server_proc.pid))
+            PID_FILE.write_text(str(self._proc.pid))
+            self.status_lbl.config(text="시작 중...", fg=YELLOW)
         except Exception as e:
-            messagebox.showerror("시작 실패", f"서버 시작 실패:\n{e}")
+            self.status_lbl.config(text=f"오류: {e}", fg=RED)
 
-    def stop_server(self) -> None:
+    def _stop(self) -> None:
         pid = get_running_pid()
         if pid is None:
             return
         try:
             os.kill(pid, signal.SIGTERM)
+            self.status_lbl.config(text="종료 중...", fg=YELLOW)
+            self.root.after(5000, lambda p=pid: self._force_kill(p))
         except OSError as e:
-            messagebox.showwarning("종료 경고", f"SIGTERM 전송 실패: {e}")
-            return
-        # 5초 후에도 살아있으면 SIGKILL — 비동기로 처리
-        self.root.after(5000, lambda p=pid: self._force_kill_if_alive(p))
+            self.status_lbl.config(text=f"오류: {e}", fg=RED)
 
-    def _force_kill_if_alive(self, pid: int) -> None:
+    def _force_kill(self, pid: int) -> None:
         if is_pid_alive(pid):
             try:
                 os.kill(pid, signal.SIGKILL)
             except OSError:
                 pass
-        # PID 파일 정리
         try:
-            PID_FILE.unlink(missing_ok=True)
-        except (OSError, TypeError):
-            try:
-                PID_FILE.unlink()
-            except OSError:
-                pass
+            PID_FILE.unlink()
+        except OSError:
+            pass
 
-    def restart_server(self) -> None:
-        self.stop_server()
-        # 종료 대기 후 재시작 — 너무 빠르면 포트 TIME_WAIT 충돌
-        self.root.after(2500, self.start_server)
+    def _restart(self) -> None:
+        if get_running_pid():
+            self._stop()
+            self.root.after(2500, self._start)
+        else:
+            self._start()
 
-    def open_browser(self) -> None:
+    def _open_web(self) -> None:
         try:
             webbrowser.open(SERVER_URL)
         except Exception:
-            # webbrowser 실패하면 xdg-open 폴백
-            subprocess.Popen(["xdg-open", SERVER_URL])
+            try:
+                subprocess.Popen(["xdg-open", SERVER_URL])
+            except FileNotFoundError:
+                pass
 
-    def open_log_folder(self) -> None:
-        log_dir = USER_DATA / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            subprocess.Popen(["xdg-open", str(log_dir)])
-        except FileNotFoundError:
-            messagebox.showinfo("로그 폴더", str(log_dir))
+    def _minimize(self) -> None:
+        # overrideredirect 모드는 iconify 가 잘 동작 안 함 — withdraw 후
+        # 사용자가 다시 띄울 방법이 없으므로 그냥 작게 줄이는 정도로.
+        # Linux 트레이는 환경 따라 다름 — 단순화를 위해 최소화 미지원,
+        # 대신 화면 모서리로 이동.
+        self.root.geometry("+0+0")
 
-    def open_data_folder(self) -> None:
-        USER_DATA.mkdir(parents=True, exist_ok=True)
-        try:
-            subprocess.Popen(["xdg-open", str(USER_DATA)])
-        except FileNotFoundError:
-            messagebox.showinfo("데이터 폴더", str(USER_DATA))
-
-    # ----- 윈도우 닫기 -----
-    def _on_close(self) -> None:
-        if self.var_stop_on_close.get() and get_running_pid() is not None:
-            self.stop_server()
-            # 종료 신호만 보내고 즉시 창 닫음 — 백엔드는 자체 cleanup
+    def _quit(self) -> None:
+        # 서버는 살려두고 윈도우만 종료 (서버 종료는 ■ 버튼으로 명시적)
         self.root.destroy()
 
 
 def main() -> int:
     if not APP_DIR.exists():
-        # CLI 환경에서 호출되었을 때
-        sys.stderr.write(f"[ERROR] {APP_DIR} 가 없습니다. ReplayKit 패키지가 설치되었는지 확인하세요.\n")
+        sys.stderr.write(f"[ERROR] {APP_DIR} 없음.\n")
         return 1
     root = tk.Tk()
-    ReplayKitLauncher(root)
+    Launcher(root)
     root.mainloop()
     return 0
 
