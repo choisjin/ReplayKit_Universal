@@ -17,9 +17,17 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
+import sys
+
 from ..services.compositor_service import get_compositor_service
 from ..services.webcam_service import get_webcam_service
-from ..services.wincontrol_service import WinControlService
+
+# OS 분기 — Linux 에선 LinControlService 가 동일 API surface 로 동작.
+if sys.platform.startswith("linux"):
+    from ..services.lincontrol_service import LinControlService as _WindowControlService
+else:
+    from ..services.wincontrol_service import WinControlService as _WindowControlService
+
 from ..dependencies import device_manager
 
 logger = logging.getLogger(__name__)
@@ -94,9 +102,13 @@ async def list_webcam_sources():
 
 @router.get("/sources/windows")
 async def list_window_sources():
-    """현재 가시 최상위 윈도우 목록 (WinControlService.list_processes 재사용)."""
-    helper = WinControlService()
-    if not WinControlService.is_available():
+    """현재 가시 최상위 윈도우 목록 (WindowControlService.list_processes 재사용).
+
+    OS 에 따라 WinControlService(Win32) 또는 LinControlService(X11) 가 활성화.
+    """
+    helper = _WindowControlService()
+    # is_available 는 인스턴스/클래스 양쪽 호환 — Linux 구현은 인스턴스에서 display 연결까지 검증.
+    if not helper.is_available():
         return {"available": False, "windows": []}
     return {"available": True, "windows": helper.list_processes()}
 

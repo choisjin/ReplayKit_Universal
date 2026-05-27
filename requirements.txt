@@ -135,3 +135,9 @@ pywinauto==0.6.9 ; sys_platform == "win32"
 comtypes==1.4.16 ; sys_platform == "win32"
 pyreadline3==3.5.6 ; sys_platform == "win32"
 # py-canoe 는 Vector CANoe (Windows COM 기반) - Linux 에서 미사용
+
+# ---- Linux 전용 (LinControl: X11 윈도우 컨트롤) ----
+# WinControl 의 Linux 등가물. python-xlib 는 순수 Python — C 확장 없음.
+# Xtest 확장(libxtst)으로 마우스/키보드 합성 입력. 화면 캡처는 mss 재사용.
+# Wayland 세션에서는 자동 비활성 (LinControlService.is_available()=False).
+python-xlib>=0.33 ; sys_platform == "linux"

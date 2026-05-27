@@ -232,19 +232,25 @@ class WindowCapture(_SourceBase):
         self._resolve_interval: float = 2.0  # 매 2초마다 hwnd 재확인
 
     def _resolve_hwnd(self) -> int:
-        """preferred_hwnd 살아있으면 그대로, 아니면 process_name/title로 재탐색."""
+        """preferred_hwnd 살아있으면 그대로, 아니면 process_name/title로 재탐색.
+
+        OS 분기 — Linux 면 LinControlService(X11), Windows 면 WinControlService(Win32).
+        두 서비스는 동일한 is_valid_window/find_window API 를 노출.
+        """
         try:
-            from .wincontrol_service import WinControlService
-            import win32gui  # type: ignore
+            if sys.platform.startswith("linux"):
+                from .lincontrol_service import LinControlService as _WCS
+            else:
+                from .wincontrol_service import WinControlService as _WCS
         except Exception:
             return 0
         if self.preferred_hwnd:
             try:
-                if win32gui.IsWindow(self.preferred_hwnd):
+                if _WCS.is_valid_window(self.preferred_hwnd):
                     return self.preferred_hwnd
             except Exception:
                 pass
-        helper = WinControlService()
+        helper = _WCS()
         match = helper.find_window(
             process_name=self.process_name,
             title_pattern=self.title_pattern,
@@ -266,7 +272,11 @@ class WindowCapture(_SourceBase):
         return True
 
     def _loop(self) -> None:
-        from .wincontrol_service import WinControlService
+        # OS 분기 — Linux 면 LinControlService(X11), Windows 면 WinControlService(Win32).
+        if sys.platform.startswith("linux"):
+            from .lincontrol_service import LinControlService as _WCS
+        else:
+            from .wincontrol_service import WinControlService as _WCS
         interval = 1.0 / max(1.0, self.capture_fps)
         while not self._stop.is_set():
             now = time.monotonic()
@@ -277,7 +287,7 @@ class WindowCapture(_SourceBase):
             hwnd = self._current_hwnd
             if hwnd:
                 try:
-                    img = WinControlService.capture_hwnd_bgr(hwnd)
+                    img = _WCS.capture_hwnd_bgr(hwnd)
                     if img is not None:
                         self._set_latest(img)
                 except Exception as e:

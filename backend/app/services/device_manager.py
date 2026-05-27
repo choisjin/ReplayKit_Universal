@@ -21,6 +21,14 @@ from .icas_agent_service import ICASAgentService
 from .mib_agent_service import MIBAgentService
 from .ssh_service import SSHConnection
 from .wincontrol_service import WinControlService
+from .lincontrol_service import LinControlService
+
+# OS 에 따라 WinControl(Win32) vs LinControl(X11) 분기.
+# 양쪽 모두 동일 API surface (is_available/list_processes/attach/.../send_*)를 노출하므로
+# 라우터/메인 캡처 루프는 단일 get_wincontrol_service() 호출만으로 OS 호환.
+_WIN_CTRL_IS_LINUX = sys.platform.startswith("linux")
+_WindowControlService = LinControlService if _WIN_CTRL_IS_LINUX else WinControlService
+_WIN_CTRL_DISPLAY_NAME = "LinControl" if _WIN_CTRL_IS_LINUX else "WinControl"
 
 logger = logging.getLogger(__name__)
 
@@ -550,7 +558,10 @@ class DeviceManager:
         self._webcam_devs: dict[str, object] = {}  # device_id -> WebcamDevice instance
         self._ssh_conns: dict[str, SSHConnection] = {}  # device_id -> SSHConnection
         self._ever_connected: set[str] = set()  # 사용자가 명시적으로 연결한 디바이스만 자동 재연결
-        self._wincontrol = WinControlService()  # 단일 인스턴스 — WinControl 디바이스가 임베드한 윈도우 보유
+        # OS 분기: Linux 면 X11 기반 LinControlService, Windows 면 Win32 기반 WinControlService.
+        # 디바이스 ID/타입은 양쪽 모두 "WinControl"/"wincontrol" 로 유지 (프론트/시나리오 호환).
+        # 표시명만 OS 별로 다르게 적용.
+        self._wincontrol = _WindowControlService()  # type: ignore[assignment]
         self._load_auxiliary_devices()
         self._ensure_default_common_device()
         self._ensure_default_wincontrol_device()
@@ -617,6 +628,9 @@ class DeviceManager:
             existing.category = "auxiliary"
             # 재시작 시점엔 항상 미임베드 상태이므로 disconnected 로 시작.
             existing.status = "disconnected"
+            # OS 가 바뀌었거나 기존 디바이스 표시명이 다른 경우 갱신 (Linux 에선 LinControl, Win 에선 WinControl).
+            if existing.name != _WIN_CTRL_DISPLAY_NAME:
+                existing.name = _WIN_CTRL_DISPLAY_NAME
             return
         dev = ManagedDevice(
             id=self.DEFAULT_WINCONTROL_DEVICE_ID,
@@ -624,14 +638,20 @@ class DeviceManager:
             category="auxiliary",
             address="",
             status="disconnected",
-            name="WinControl",
+            name=_WIN_CTRL_DISPLAY_NAME,
             info={"connect_type": "none"},
         )
         self._devices[self.DEFAULT_WINCONTROL_DEVICE_ID] = dev
         self._save_auxiliary_devices()
-        logger.info("Registered default 'WinControl' device (disconnected)")
+        logger.info("Registered default '%s' device (disconnected)", _WIN_CTRL_DISPLAY_NAME)
 
-    def get_wincontrol_service(self) -> WinControlService:
+    def get_wincontrol_service(self):
+        """OS 에 따라 WinControlService(Windows) 또는 LinControlService(Linux) 반환.
+
+        반환 타입은 동일한 API surface 를 가진 union — 호출자(라우터, main 캡처 루프)는
+        구체 타입을 신경 쓰지 않고 is_available/is_attached/list_processes/capture_window/
+        send_tap/.../detach 만 사용. 함수명은 외부 호환을 위해 그대로 유지.
+        """
         return self._wincontrol
 
     def sync_wincontrol_status(self) -> None:
@@ -2170,12 +2190,15 @@ class DeviceManager:
         if dev.type == "wincontrol":
             # 별도 외부 연결 없음 — 서비스 가용 여부만 점검 후 status 전환.
             if not self._wincontrol.is_available():
-                err = self._wincontrol.import_error() or "pywin32 not installed"
+                # OS 에 따라 누락된 의존성 안내 메시지가 다름 (Win=pywin32, Linux=python-xlib/X11 display).
+                default_err = ("python-xlib unavailable or X server not reachable"
+                               if _WIN_CTRL_IS_LINUX else "pywin32 not installed")
+                err = self._wincontrol.import_error() or default_err
                 dev.status = "disconnected"
-                return f"WinControl unavailable: {err}"
+                return f"{_WIN_CTRL_DISPLAY_NAME} unavailable: {err}"
             dev.status = "connected"
             _mark_connected()
-            return f"WinControl connected: {dev.id}"
+            return f"{_WIN_CTRL_DISPLAY_NAME} connected: {dev.id}"
 
         if dev.type == "serial":
             module_name = dev.info.get("module", "")

@@ -149,7 +149,7 @@ DISPLAY= ./ReplayKit.sh
 
 | 기능 | 모듈 | Linux 동작 |
 | --- | --- | --- |
-| **WinControl** (다른 Win32 프로세스 윈도우 캡처/조작) | `wincontrol_service.py` | 비활성 (`available=False` 반환) |
+| **WinControl** (다른 Win32 프로세스 윈도우 캡처/조작) | `wincontrol_service.py` | **`LinControlService` 로 자동 대체** — X11 환경에서 동일 기능 동작 (python-xlib + Xtest). 디바이스 표시명은 "LinControl". Wayland 세션은 미지원(`available=False`). |
 | **CANoe RBS** (Vector CANoe COM 연동) | `plugins/CANoe_RBS.py` | import 실패 시 모듈 미등록 |
 | **DLT Viewer** (GENIVI DLT Viewer 자동화) | `plugins/DLTViewer.py` | Linux 빌드 가능 (별도 컴파일 필요) |
 | **VisionCamera** (Allied Vision Vimba X) | `plugins/VisionCamera.py` | Vimba X Linux SDK 설치 필요 |

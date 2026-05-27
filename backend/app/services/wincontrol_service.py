@@ -1139,6 +1139,20 @@ class WinControlService:
                 pass
 
     @staticmethod
+    def is_valid_window(hwnd: int) -> bool:
+        """임의 hwnd 가 현재 유효한지 — compositor 의 hwnd 캐시 검증용.
+
+        LinControlService.is_valid_window 와 인터페이스 동일 — cross-platform 호출처(compositor)에서
+        OS 분기 없이 같은 메서드명 사용 가능.
+        """
+        if not _WIN32_AVAILABLE or not hwnd:
+            return False
+        try:
+            return bool(win32gui.IsWindow(int(hwnd)))
+        except Exception:
+            return False
+
+    @staticmethod
     def capture_hwnd_bgr(hwnd: int) -> "Optional['np.ndarray']":  # type: ignore[name-defined]
         """임의 hwnd를 BGR numpy 배열로 캡처 (UWP/WinUI3 자동 폴백 포함).
 
