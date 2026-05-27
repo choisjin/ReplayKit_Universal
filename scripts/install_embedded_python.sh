@@ -156,6 +156,47 @@ if [ -z "$RELEASE" ]; then
     fi
 fi
 
+# 요청한 VERSION 이 릴리스에 없으면 같은 minor (예: 3.10.x) 의 다른 patch 자동 probe.
+# python-build-standalone 은 오래된 patch 버전을 새 릴리스에서 빼는 경향이 있어
+# --version 3.10.14 가 최신 release 에는 없을 수 있다.
+probe_version_exists() {
+    local v="$1"
+    # tar.gz 자체를 HEAD 로 probe. 신/구 릴리스 모두 호환.
+    # (예전 PBS 는 .tar.gz.sha256 sibling 이 있었지만 20260510 이후로는 SHA256SUMS 통합 파일로 변경됨)
+    local probe_url="https://github.com/astral-sh/python-build-standalone/releases/download/${RELEASE}/cpython-${v}+${RELEASE}-${ARCH}-unknown-linux-gnu-install_only.tar.gz"
+    if [ "$DOWNLOAD_TOOL" = "curl" ]; then
+        curl -fsI -o /dev/null "$probe_url"
+    else
+        wget --spider -q "$probe_url"
+    fi
+}
+
+MAJOR_MINOR=$(echo "$VERSION" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
+if ! probe_version_exists "$VERSION"; then
+    echo "[INFO] cpython-${VERSION}+${RELEASE} 가 이 릴리스에 없습니다."
+    echo "[INFO] 같은 minor (${MAJOR_MINOR}.x) 의 다른 patch 시도..."
+    FOUND_VERSION=""
+    # patch 시리즈를 높은 → 낮은 순서로 probe (최신 보안 패치 우선)
+    for p in 20 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0; do
+        cand="${MAJOR_MINOR}.${p}"
+        if [ "$cand" = "$VERSION" ]; then continue; fi
+        if probe_version_exists "$cand"; then
+            FOUND_VERSION="$cand"
+            break
+        fi
+    done
+    if [ -z "$FOUND_VERSION" ]; then
+        echo "[ERROR] 릴리스 ${RELEASE} 에 ${MAJOR_MINOR}.x 시리즈 빌드가 없습니다."
+        echo "        다른 --release 로 재시도하거나 페이지 직접 확인:"
+        echo "        https://github.com/astral-sh/python-build-standalone/releases/tag/${RELEASE}"
+        echo
+        echo "        예: $0 --release 20240814   # 3.10.14 보장"
+        exit 1
+    fi
+    echo "[INFO] 사용 가능한 patch 발견: ${FOUND_VERSION} (요청: ${VERSION})"
+    VERSION="$FOUND_VERSION"
+fi
+
 FILENAME="cpython-${VERSION}+${RELEASE}-${ARCH}-unknown-linux-gnu-install_only.tar.gz"
 URL="https://github.com/astral-sh/python-build-standalone/releases/download/${RELEASE}/${FILENAME}"
 TMPFILE="/tmp/${FILENAME}"
@@ -163,12 +204,21 @@ TMPFILE="/tmp/${FILENAME}"
 echo "[DOWNLOAD] ${URL}"
 fetch_file "$URL" "$TMPFILE"
 
-# SHA256 검증 (같은 릴리스 페이지에 .sha256 함께 게시됨)
-SHA_URL="${URL}.sha256"
+# SHA256 검증 - 두 가지 형식 지원
+#   (1) 구식 (20240814 등): tar.gz 와 같은 위치에 tar.gz.sha256 sibling
+#   (2) 신식 (20260510~): release 페이지 루트의 통합 SHA256SUMS 파일
 SHA_EXPECTED=""
-if SHA_EXPECTED=$(fetch_text "$SHA_URL" 2>/dev/null); then
-    SHA_EXPECTED=$(echo "$SHA_EXPECTED" | awk '{print $1}')
+if RAW=$(fetch_text "${URL}.sha256" 2>/dev/null); then
+    SHA_EXPECTED=$(echo "$RAW" | awk '{print $1}')
 fi
+if [ -z "$SHA_EXPECTED" ]; then
+    SUMS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${RELEASE}/SHA256SUMS"
+    if RAW=$(fetch_text "$SUMS_URL" 2>/dev/null); then
+        # SHA256SUMS 포맷: "<hash>  <filename>"
+        SHA_EXPECTED=$(echo "$RAW" | grep -F " ${FILENAME}" | awk '{print $1}' | head -1)
+    fi
+fi
+
 if [ -n "$SHA_EXPECTED" ] && command -v sha256sum >/dev/null 2>/dev/null; then
     SHA_ACTUAL=$(sha256sum "$TMPFILE" | awk '{print $1}')
     if [ "$SHA_EXPECTED" != "$SHA_ACTUAL" ]; then
@@ -180,7 +230,7 @@ if [ -n "$SHA_EXPECTED" ] && command -v sha256sum >/dev/null 2>/dev/null; then
     fi
     echo "[VERIFY] sha256 OK"
 else
-    echo "[WARN] SHA256 검증을 건너뜁니다 (sha256sum 없음 또는 .sha256 미게시)."
+    echo "[WARN] SHA256 검증을 건너뜁니다 (sha256sum 없음 또는 해시 게시 위치 변경)."
 fi
 
 echo "[EXTRACT] ${TMPFILE} -> ${PROJECT_ROOT}/python/"
