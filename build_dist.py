@@ -163,66 +163,83 @@ QLabel#sectionTitle {
     text-transform: uppercase;
     margin-top: 4px;
 }
+QLabel#sectionHint {
+    font-size: 10px;
+    color: #9ca3af;
+    margin-top: 4px;
+}
 QFrame#card {
     background: #ffffff;
     border: 1px solid #e5e7eb;
     border-radius: 8px;
 }
-QRadioButton, QCheckBox {
+QFrame#osPill {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 14px;
+    padding: 4px 12px;
+}
+QLabel#osPillText {
+    color: #1d4ed8;
+    font-size: 12px;
+    font-weight: 600;
+}
+QLabel#currentVer {
+    color: #374151;
+    font-size: 13px;
+    padding: 2px 0;
+}
+QLabel#currentVerVal {
+    color: #111827;
+    font-size: 14px;
+    font-weight: 600;
+}
+QCheckBox {
     font-size: 13px;
     color: #1f2937;
     spacing: 8px;
     padding: 4px 0;
 }
-QRadioButton::indicator, QCheckBox::indicator {
+QCheckBox::indicator {
     width: 16px;
     height: 16px;
 }
-QLineEdit {
+QPushButton#bumpBtn {
     background: #ffffff;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 13px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px 14px;
+    text-align: left;
     color: #111827;
-    selection-background-color: #bfdbfe;
+    font-size: 13px;
 }
-QLineEdit:focus {
-    border: 1px solid #2563eb;
+QPushButton#bumpBtn:hover {
+    background: #eff6ff;
+    border: 1px solid #93c5fd;
 }
-QPushButton {
-    background: #ffffff;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    padding: 6px 12px;
-    font-size: 12px;
-    color: #374151;
+QPushButton#bumpBtn:pressed {
+    background: #dbeafe;
+    border: 1px solid #60a5fa;
 }
-QPushButton:hover {
+QPushButton#bumpBtnKeep {
+    background: #fafafa;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px 14px;
+    text-align: left;
+    color: #6b7280;
+    font-size: 13px;
+}
+QPushButton#bumpBtnKeep:hover {
     background: #f3f4f6;
-    border: 1px solid #9ca3af;
-}
-QPushButton:pressed {
-    background: #e5e7eb;
-}
-QPushButton#primary {
-    background: #2563eb;
-    color: #ffffff;
-    border: 1px solid #2563eb;
-    font-weight: 600;
-    padding: 8px 18px;
-}
-QPushButton#primary:hover {
-    background: #1d4ed8;
-}
-QPushButton#primary:pressed {
-    background: #1e40af;
+    border: 1px solid #d1d5db;
 }
 QPushButton#ghost {
     background: transparent;
     border: 1px solid transparent;
     color: #6b7280;
-    padding: 8px 16px;
+    padding: 6px 14px;
+    font-size: 12px;
 }
 QPushButton#ghost:hover {
     color: #111827;
@@ -259,187 +276,158 @@ def _card(parent_layout, title: str):
 
 
 def _show_release_dialog():
-    """PySide6 release 다이얼로그. (target_os, version, do_build, do_frontend, do_push) 또는 None.
+    """PySide6 release 다이얼로그. (target_os, version, do_frontend, do_push) 또는 None.
 
-    None = 사용자 취소.  target_os ∈ {'win', 'linux'}.  version = 'v1.2.3' 형식.
-    do_build / do_frontend / do_push 모두 bool.
+    UI 흐름:
+      1. target OS = host OS 자동 (선택 불필요, pill 라벨로 표시)
+      2. OPTIONS 카드 — frontend 빌드 포함 / 배포 git push 체크
+      3. VERSION 카드 — 현재 버전 라벨 + 4개 bump 행 (patch/minor/major/유지).
+         각 행을 클릭하면 즉시 그 버전으로 dialog 종료 → 빌드 시작.
+      None = 사용자 취소 (X 또는 '취소' 버튼).
     """
     try:
         from PySide6.QtWidgets import (
             QApplication, QDialog, QVBoxLayout, QHBoxLayout,
-            QLabel, QLineEdit, QPushButton, QRadioButton, QButtonGroup,
-            QCheckBox, QMessageBox,
+            QLabel, QPushButton, QCheckBox, QFrame,
         )
         from PySide6.QtCore import Qt
-        from PySide6.QtGui import QFont
     except ImportError as e:
         msg = (
             "[ERROR] PySide6 미설치 — GUI 모드 사용 불가.\n"
             "  설치: pip install PySide6-Essentials\n"
             f"  원인: {e}\n"
-            "  대안: CLI 모드 — python build_dist.py --version 1.2.0 --os win"
+            "  대안: CLI 모드 — python build_dist.py --version 1.2.0"
         )
         print(msg, file=sys.stderr)
         return None
 
     current = _read_version()
     host = _host_os()
+    target = host  # 항상 host = target (현재 시스템에서만 빌드)
+    if target not in OS_LABELS:
+        print(f"[ERROR] 지원하지 않는 host OS: {host}", file=sys.stderr)
+        return None
 
     app = QApplication.instance() or QApplication(sys.argv)
     dlg = QDialog()
     dlg.setWindowTitle("ReplayKit · Release")
-    dlg.setMinimumWidth(480)
+    dlg.setMinimumWidth(520)
     dlg.setStyleSheet(_DIALOG_QSS)
 
     root = QVBoxLayout(dlg)
     root.setContentsMargins(22, 20, 22, 18)
-    root.setSpacing(12)
+    root.setSpacing(14)
 
-    # ── 헤더 ──
+    # ── 헤더 + OS pill (한 줄) ──
+    head_row = QHBoxLayout()
     head_box = QVBoxLayout()
     head_box.setSpacing(2)
     title = QLabel("ReplayKit Release")
     title.setObjectName("headerTitle")
-    sub = QLabel(f"host {OS_LABELS.get(host, host)}  ·  current v{current.lstrip('vV')}")
+    sub = QLabel("OS 선택은 호스트 자동 · 버전 선택 시 즉시 빌드 시작")
     sub.setObjectName("headerSub")
     head_box.addWidget(title)
     head_box.addWidget(sub)
-    root.addLayout(head_box)
+    head_row.addLayout(head_box)
+    head_row.addStretch()
 
-    # ── 대상 OS ──
-    os_layout = _card(root, "TARGET OS")
-    os_row = QHBoxLayout()
-    rb_win = QRadioButton("Windows  ·  .exe installer")
-    rb_lin = QRadioButton("Linux  ·  .deb package")
-    btn_group = QButtonGroup(dlg)
-    btn_group.addButton(rb_win)
-    btn_group.addButton(rb_lin)
-    if host == "linux":
-        rb_lin.setChecked(True)
-    else:
-        rb_win.setChecked(True)
-    os_row.addWidget(rb_win)
-    os_row.addSpacing(12)
-    os_row.addWidget(rb_lin)
-    os_row.addStretch()
-    os_layout.addLayout(os_row)
-
-    # ── 버전 ──
-    ver_layout = _card(root, "VERSION")
-    ver_row = QHBoxLayout()
-    ver_row.setSpacing(8)
-    vprefix = QLabel("v")
-    vprefix.setStyleSheet("color:#6b7280; font-size:13px;")
-    ver_edit = QLineEdit(current.lstrip("vV"))
-    ver_edit.setPlaceholderText("1.2.0")
-    ver_edit.setMaximumWidth(140)
-    ver_row.addWidget(vprefix)
-    ver_row.addWidget(ver_edit)
-    ver_row.addStretch()
-    ver_layout.addLayout(ver_row)
-
-    bump_row = QHBoxLayout()
-    bump_row.setSpacing(6)
-    for kind in ("patch", "minor", "major"):
-        b = QPushButton(f"{kind}  v{_bump(current, kind).lstrip('v')}")
-        b.clicked.connect(lambda _checked=False, k=kind: ver_edit.setText(_bump(current, k).lstrip("v")))
-        bump_row.addWidget(b)
-    keep_btn = QPushButton(f"유지  v{current.lstrip('vV')}")
-    keep_btn.clicked.connect(lambda: ver_edit.setText(current.lstrip("vV")))
-    bump_row.addWidget(keep_btn)
-    bump_row.addStretch()
-    ver_layout.addLayout(bump_row)
+    # 호스트 OS pill
+    pill = QFrame()
+    pill.setObjectName("osPill")
+    pill_lay = QHBoxLayout(pill)
+    pill_lay.setContentsMargins(10, 4, 10, 4)
+    pill_lay.setSpacing(6)
+    icon = QLabel("●")
+    icon.setStyleSheet("color:#2563eb; font-size:10px;")
+    pill_text = QLabel(f"target  ·  {OS_LABELS[target]}")
+    pill_text.setObjectName("osPillText")
+    pill_lay.addWidget(icon)
+    pill_lay.addWidget(pill_text)
+    head_row.addWidget(pill, 0, Qt.AlignTop)
+    root.addLayout(head_row)
 
     # ── 옵션 ──
     opt_layout = _card(root, "OPTIONS")
-    cb_build = QCheckBox("빌드 실행")
-    cb_build.setChecked(True)
-    cb_frontend = QCheckBox("frontend 빌드 포함  (npm run build — 약 30~90초)")
+    cb_frontend = QCheckBox("frontend 빌드 포함  (npm run build · 약 30~90초)")
     cb_frontend.setChecked(True)
     cb_push = QCheckBox("배포 git push  (force, OS 별 LG remote)")
     cb_push.setChecked(True)
-    opt_layout.addWidget(cb_build)
     opt_layout.addWidget(cb_frontend)
     opt_layout.addWidget(cb_push)
-    hint = QLabel("frontend 변경이 없거나 frontend/dist 이미 최신이면 체크 해제로 빌드 시간 단축.")
+    hint = QLabel("• frontend 변경이 없으면 체크 해제로 빌드 시간 단축\n• git push 해제 시 .deb / .exe 생성만 하고 배포 git 갱신은 건너뜀")
     hint.setObjectName("hint")
     hint.setWordWrap(True)
     opt_layout.addWidget(hint)
 
-    # frontend 체크박스는 build 체크박스가 켜져 있을 때만 의미 — 동기 disable
-    def _sync_fe():
-        cb_frontend.setEnabled(cb_build.isChecked())
-    cb_build.toggled.connect(_sync_fe)
-    _sync_fe()
+    # ── 버전 (마지막) ──
+    ver_layout = _card(root, "VERSION  ·  클릭 시 즉시 빌드 시작")
 
-    # ── 호환성 경고 (동적) ──
-    warn_lbl = QLabel("")
-    warn_lbl.setObjectName("warning")
-    warn_lbl.setWordWrap(True)
-    warn_lbl.hide()
-    root.addWidget(warn_lbl)
+    # 현재 버전 라벨 (편집 불가)
+    cur_row = QHBoxLayout()
+    cur_lbl = QLabel("현재 버전")
+    cur_lbl.setObjectName("currentVer")
+    cur_val = QLabel(f"v{current.lstrip('vV')}")
+    cur_val.setObjectName("currentVerVal")
+    cur_row.addWidget(cur_lbl)
+    cur_row.addSpacing(8)
+    cur_row.addWidget(cur_val)
+    cur_row.addStretch()
+    ver_layout.addLayout(cur_row)
 
-    def _update_warn():
-        target = "win" if rb_win.isChecked() else "linux"
-        if cb_build.isChecked() and target != host:
-            warn_lbl.setText(
-                f"⚠  빌드는 호스트 OS 와 일치해야 합니다  ·  host={OS_LABELS.get(host, host)} / target={OS_LABELS[target]}\n"
-                f"     {OS_LABELS[target]} 머신에서 실행하거나 '빌드 실행' 해제 후 push 만 진행."
-            )
-            warn_lbl.show()
+    # 구분선 한 줄 (subtle)
+    sep = QFrame()
+    sep.setFrameShape(QFrame.HLine)
+    sep.setStyleSheet("color:#f3f4f6; background:#f3f4f6; max-height:1px;")
+    ver_layout.addWidget(sep)
+
+    # 4개 bump 옵션 행 — 각 행 클릭 시 즉시 dialog accept + 해당 버전으로
+    result = {"version": None}
+
+    def _pick(kind: str):
+        if kind == "keep":
+            result["version"] = current if current.startswith("v") else f"v{current}"
         else:
-            warn_lbl.hide()
-
-    rb_win.toggled.connect(_update_warn)
-    rb_lin.toggled.connect(_update_warn)
-    cb_build.toggled.connect(_update_warn)
-    _update_warn()
-
-    # ── 액션 버튼 ──
-    btn_row = QHBoxLayout()
-    btn_row.setContentsMargins(0, 6, 0, 0)
-    cancel_btn = QPushButton("취소")
-    cancel_btn.setObjectName("ghost")
-    ok_btn = QPushButton("Build & Push")
-    ok_btn.setObjectName("primary")
-    ok_btn.setDefault(True)
-    btn_row.addStretch()
-    btn_row.addWidget(cancel_btn)
-    btn_row.addSpacing(6)
-    btn_row.addWidget(ok_btn)
-    root.addLayout(btn_row)
-
-    result = {"target": None, "version": None, "build": True, "frontend": True, "push": True}
-
-    def _accept():
-        target = "win" if rb_win.isChecked() else "linux"
-        ver = ver_edit.text().strip().lstrip("vV")
-        parts = ver.split(".")
-        if len(parts) != 3 or not all(p.isdigit() for p in parts):
-            QMessageBox.warning(dlg, "버전 오류", f"버전 형식: N.N.N (예: 1.2.0). 입력: {ver!r}")
-            return
-        if cb_build.isChecked() and target != host:
-            r = QMessageBox.question(
-                dlg, "호스트 불일치",
-                f"host={OS_LABELS.get(host, host)} 에서 {OS_LABELS[target]} 빌드는 실패합니다.\n빌드 체크 해제하고 push 만 진행할까요?",
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if r != QMessageBox.Yes:
-                return
-            cb_build.setChecked(False)
-        result["target"] = target
-        result["version"] = f"v{ver}"
-        result["build"] = cb_build.isChecked()
-        result["frontend"] = cb_frontend.isChecked()
-        result["push"] = cb_push.isChecked()
+            result["version"] = _bump(current, kind)
         dlg.accept()
 
-    ok_btn.clicked.connect(_accept)
+    bump_options = [
+        ("patch", _bump(current, "patch"),
+         "버그 수정 · 하위 호환 100%",
+         "1.0.0 → 1.0.1"),
+        ("minor", _bump(current, "minor"),
+         "하위 호환되는 기능 추가 (신규 API/기능)",
+         "1.0.0 → 1.1.0"),
+        ("major", _bump(current, "major"),
+         "하위 호환이 깨지는 변경 (API 제거/시그니처 변경)",
+         "1.0.0 → 2.0.0"),
+        ("keep",  current if current.startswith("v") else f"v{current}",
+         "버전 유지 · 동일 버전 재빌드 (build_history 기록 안 함)",
+         f"v{current.lstrip('vV')} 유지"),
+    ]
+
+    for kind, ver, desc, hint_text in bump_options:
+        btn = QPushButton()
+        btn.setObjectName("bumpBtnKeep" if kind == "keep" else "bumpBtn")
+        # 다중 줄: kind / 큰 버전 / 설명
+        btn.setText(f"{kind.upper():<6}   {ver}\n{desc}    ({hint_text})")
+        btn.setMinimumHeight(58)
+        btn.clicked.connect(lambda _checked=False, k=kind: _pick(k))
+        ver_layout.addWidget(btn)
+
+    # ── 취소 버튼 ──
+    btn_row = QHBoxLayout()
+    btn_row.setContentsMargins(0, 4, 0, 0)
+    cancel_btn = QPushButton("취소")
+    cancel_btn.setObjectName("ghost")
+    btn_row.addStretch()
+    btn_row.addWidget(cancel_btn)
+    root.addLayout(btn_row)
+
     cancel_btn.clicked.connect(dlg.reject)
 
     if dlg.exec() != QDialog.Accepted:
         return None
-    return (result["target"], result["version"], result["build"], result["frontend"], result["push"])
+    return (target, result["version"], cb_frontend.isChecked(), cb_push.isChecked())
 
 
 # ── release.py 에서 이식: build dispatch + deploy push ──
@@ -1350,20 +1338,26 @@ def main():
     # GUI: 인자 없거나 --os 만 지정 (버전 prompt 필요)
     # CLI: --os AND --version 둘 다 지정
     if cli_os and cli_version:
-        # 완전 자동 모드
-        target = "linux" if cli_os in ("linux", "lin", "l", "2") else "win"
+        # 완전 자동 모드 — CLI 가 --os 지정해도 host 와 다르면 거부 (GUI 와 동일 정책: target=host 고정).
+        requested = "linux" if cli_os in ("linux", "lin", "l", "2") else "win"
+        host = _host_os()
+        if requested != host:
+            print(f"[ERROR] target {requested!r} 가 host {host!r} 와 다릅니다. host OS 에서만 빌드 가능.", file=sys.stderr)
+            sys.exit(2)
+        target = requested
         version = f"v{cli_version}"
         do_build = not do_skip_build
         do_frontend = not do_skip_frontend
         do_push = not do_skip_push
         print(f"[CLI] OS={OS_LABELS[target]}, version={version}, build={do_build}, frontend={do_frontend}, push={do_push}")
     else:
-        # GUI dialog
+        # GUI dialog — 버전 클릭 = 즉시 빌드 시작. 빌드는 항상 실행 (불필요한 토글 제거).
         out = _show_release_dialog()
         if out is None:
             print("\n[ABORT] 사용자 취소")
             return
-        target, version, do_build, do_frontend, do_push = out
+        target, version, do_frontend, do_push = out
+        do_build = True
 
     # version.txt 갱신
     current = _read_version()
