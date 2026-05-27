@@ -2,8 +2,9 @@
 # /usr/bin/ReplayKit — installed-mode launcher (placed by replaykit.deb).
 #
 # 서브커맨드:
-#   ReplayKit            # start (기본)  — 이미 실행 중이면 브라우저만 오픈
-#   ReplayKit start      # 명시적 start
+#   ReplayKit            # 기본: DISPLAY 있으면 GUI launcher, 없으면 headless uvicorn
+#   ReplayKit gui        # 명시적 GUI launcher (Tkinter 윈도우)
+#   ReplayKit headless   # GUI 안 띄우고 uvicorn 직접 실행
 #   ReplayKit stop       # graceful 종료 (SIGTERM → 5초 대기 → SIGKILL)
 #   ReplayKit restart    # stop 후 start
 #   ReplayKit status     # 실행 상태 확인
@@ -111,7 +112,19 @@ do_status() {
 # ============================================================
 # 서브커맨드 디스패치
 # ============================================================
-case "${1:-start}" in
+# 기본 모드 결정: DISPLAY/WAYLAND_DISPLAY 있으면 gui, 없으면 headless.
+# REPLAYKIT_FORCE_HEADLESS=1 로 강제 headless 가능.
+if [ -n "${REPLAYKIT_FORCE_HEADLESS:-}" ]; then
+    DEFAULT_MODE="headless"
+elif [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    DEFAULT_MODE="gui"
+else
+    DEFAULT_MODE="headless"
+fi
+
+LAUNCH_MODE="${1:-$DEFAULT_MODE}"
+
+case "$LAUNCH_MODE" in
     stop)
         do_stop
         exit 0
@@ -122,34 +135,42 @@ case "${1:-start}" in
         ;;
     restart)
         do_stop
-        shift
+        shift || true
         echo "재시작 중..."
-        # fall through to start logic (set -- 으로 인자 재정렬)
-        set -- "$@"
+        # DISPLAY 상황 다시 평가
+        if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+            LAUNCH_MODE="gui"
+        else
+            LAUNCH_MODE="headless"
+        fi
         ;;
-    start|--start)
-        shift
+    gui)
+        shift || true
+        ;;
+    headless|start|--start)
+        # start 는 legacy alias — 기본 모드 사용
+        if [ "$LAUNCH_MODE" = "start" ] || [ "$LAUNCH_MODE" = "--start" ]; then
+            LAUNCH_MODE="$DEFAULT_MODE"
+        fi
+        shift || true
         ;;
     -h|--help|help)
         sed -n '2,15p' "$0" | sed 's/^# \?//'
         exit 0
         ;;
     -*)
-        # uvicorn 에 그대로 전달할 옵션 (예: --port 9000) — 처리 안 함, $@ 그대로
-        :
+        # 옵션 — 기본 모드로 동작, 옵션은 그대로 $@
+        LAUNCH_MODE="$DEFAULT_MODE"
         ;;
     *)
-        # 알 수 없는 서브커맨드면 안내
-        if [ -n "${1:-}" ]; then
-            echo "알 수 없는 명령: $1" >&2
-            echo "사용법: ReplayKit [start|stop|restart|status]" >&2
-            exit 1
-        fi
+        echo "알 수 없는 명령: $LAUNCH_MODE" >&2
+        echo "사용법: ReplayKit [gui|headless|stop|restart|status]" >&2
+        exit 1
         ;;
 esac
 
 # ============================================================
-# 여기서부터 start 로직 (기존 동작)
+# 여기서부터 start 로직 (gui 또는 headless 분기는 아래 exec 직전)
 # ============================================================
 
 # ---- 1. 사용자 쓰기 가능 디렉토리 시드 ----
@@ -308,17 +329,25 @@ port_in_use() {
 if port_in_use; then
     OUR_PID=$(get_running_pid)
     if [ -n "$OUR_PID" ]; then
-        # 우리 ReplayKit 가 이미 실행 중 — 새로 안 띄우고 브라우저만 오픈
-        echo "[INFO] ReplayKit 이미 실행 중 (PID $OUR_PID). 브라우저로 접속합니다."
-        if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
-            if command -v xdg-open >/dev/null 2>/dev/null; then
-                xdg-open "$SERVER_URL" >/dev/null 2>/dev/null &
-                exit 0
+        # 우리 ReplayKit 가 이미 실행 중
+        if [ "$LAUNCH_MODE" = "gui" ]; then
+            # GUI 모드: GUI 윈도우를 띄우되, 서버는 기존 인스턴스에 연결
+            # (replaykit-gui.py 자체가 PID 파일 보고 상태 표시함)
+            echo "[INFO] ReplayKit 이미 실행 중 (PID $OUR_PID). GUI 윈도우 띄우는 중..."
+            # 아래 GUI 실행 로직으로 폴쓰루
+        else
+            # headless 모드: 새로 안 띄우고 브라우저만 오픈
+            echo "[INFO] ReplayKit 이미 실행 중 (PID $OUR_PID). 브라우저로 접속합니다."
+            if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+                if command -v xdg-open >/dev/null 2>/dev/null; then
+                    xdg-open "$SERVER_URL" >/dev/null 2>/dev/null &
+                    exit 0
+                fi
             fi
+            echo "    수동 접속: $SERVER_URL"
+            echo "    종료:      ReplayKit stop"
+            exit 0
         fi
-        echo "    수동 접속: $SERVER_URL"
-        echo "    종료:      ReplayKit stop"
-        exit 0
     else
         fatal "포트 ${PORT} 가 다른 프로세스에 의해 사용 중입니다 (ReplayKit 외부).
 다른 포트로 실행:    REPLAYKIT_PORT=9000 ReplayKit
@@ -328,6 +357,27 @@ if port_in_use; then
     fi
 fi
 
+# ============================================================
+# 실행 분기: GUI 모드 vs Headless 모드
+# ============================================================
+if [ "$LAUNCH_MODE" = "gui" ]; then
+    # GUI 모드: Tkinter launcher 띄움. 서버 제어는 GUI 윈도우에서.
+    GUI_SCRIPT="$APP_DIR/replaykit-gui.py"
+    if [ ! -f "$GUI_SCRIPT" ]; then
+        echo "[WARN] $GUI_SCRIPT 없음 — headless 모드로 폴백" >&2
+        LAUNCH_MODE="headless"
+    else
+        echo "[START] GUI launcher: $PY $GUI_SCRIPT"
+        # GUI launcher 가 직접 uvicorn 을 subprocess 로 관리하므로, 여기선 서버 실행
+        # 하지 않음. GUI 윈도우가 사용자에게 보임 → 종료 버튼으로 깔끔하게.
+        export REPLAYKIT_APP_DIR="$APP_DIR"
+        exec "$PY" "$GUI_SCRIPT" "$@"
+    fi
+fi
+
+# ============================================================
+# Headless 모드: uvicorn 직접 실행 + 브라우저 자동 오픈
+# ============================================================
 want_browser=0
 if [ -z "${REPLAYKIT_NO_BROWSER:-}" ]; then
     if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
@@ -353,9 +403,8 @@ if [ "$want_browser" = "1" ]; then
     ) &
 fi
 
-# ---- 서버 실행 (foreground) ----
 if [ "$want_browser" = "1" ]; then
-    echo "[START] uvicorn at ${SERVER_URL} (브라우저 자동 오픈 예정)"
+    echo "[START] uvicorn at ${SERVER_URL} (헤드리스 + 브라우저 자동 오픈)"
 else
     if [ -n "${REPLAYKIT_NO_BROWSER:-}" ]; then
         echo "[START] uvicorn at ${SERVER_URL} (REPLAYKIT_NO_BROWSER=1, 헤드리스)"
@@ -368,9 +417,6 @@ echo "    종료:    ReplayKit stop    또는 Ctrl+C"
 # PID 파일에 자기 PID 기록. exec 가 현재 셸 프로세스를 uvicorn 으로 대체하므로
 # bash 의 $$ 가 그대로 uvicorn 의 PID 가 된다.
 echo $$ > "$PID_FILE"
-# 비정상 종료 (signal, exec 직전 실패 등) 시 PID 파일 정리.
-# 정상 종료는 uvicorn 이 자체적으로 처리하지만, 다음 launcher 실행 시
-# get_running_pid() 가 stale 검사하므로 안전.
 trap 'rm -f "$PID_FILE"' EXIT INT TERM
 
 exec "$PY" -m uvicorn backend.app.main:app --host 0.0.0.0 --port "$PORT" "$@"

@@ -185,10 +185,16 @@ find "$OPT_DIR" -type f -name '.gitignore' -delete || true
 # venv 가 우연히 staging 에 섞이지 않도록 확인
 [ -d "$OPT_DIR/venv" ] && rm -rf "$OPT_DIR/venv"
 
-# ---- [5/6] Launcher / Desktop / Icon ----
-echo "[5/6] Launcher + desktop entry + icon..."
+# ---- [5/6] Launcher / Desktop / Icon / GUI ----
+echo "[5/6] Launcher + GUI + desktop entry + icon..."
 cp packaging/replaykit-launcher.sh "$STAGING/usr/bin/ReplayKit"
 chmod 755 "$STAGING/usr/bin/ReplayKit"
+
+# GUI launcher (Tkinter) — DISPLAY 있을 때 launcher.sh 가 이걸 호출
+if [ -f packaging/replaykit-gui.py ]; then
+    cp packaging/replaykit-gui.py "$OPT_DIR/replaykit-gui.py"
+    chmod 644 "$OPT_DIR/replaykit-gui.py"
+fi
 
 cp packaging/ReplayKit.desktop "$STAGING/usr/share/applications/ReplayKit.desktop"
 chmod 644 "$STAGING/usr/share/applications/ReplayKit.desktop"

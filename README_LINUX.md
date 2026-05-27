@@ -246,20 +246,33 @@ sudo apt install -y nodejs
 ### 8-3. 실행 / 종료 동작
 
 ```bash
-ReplayKit              # 시작 (기본). 이미 실행 중이면 브라우저만 다시 오픈.
-ReplayKit start        # 명시적 시작 (위와 동일)
-ReplayKit stop         # graceful 종료 (SIGTERM → 최대 5초 대기 → SIGKILL)
+ReplayKit              # 기본: DISPLAY 있으면 Tkinter GUI launcher 윈도우,
+                       #       없으면 headless uvicorn (브라우저 자동 오픈)
+ReplayKit gui          # 명시적 GUI 윈도우 (Windows server.py 등가)
+ReplayKit headless     # GUI 안 띄우고 uvicorn 직접 실행
+ReplayKit stop         # graceful 종료 (SIGTERM → 5초 → SIGKILL)
 ReplayKit restart      # stop 후 start
 ReplayKit status       # PID, URL, 헬스 응답 여부 출력
 ```
 
-종료 방법 3가지:
+#### GUI launcher 기능 (`ReplayKit gui` / 아이콘 클릭)
+
+Tkinter 기반 윈도우 — embedded Python 의 bundled tkinter 사용 (의존성 0).
+
+- 상태 표시 (● 실행 중 PID / ○ 종료 상태) + URL
+- 시작 / 종료 / 재시작 버튼
+- 브라우저 열기 / 로그 폴더 / 데이터 폴더 버튼
+- `backend.log` 실시간 표시 (마지막 300줄, ERROR/WARN/INFO 컬러)
+- "창 닫을 때 서버도 종료" 체크박스 (기본 OFF — 백그라운드 유지)
+
+#### 종료 방법
 
 | 상황 | 종료 방법 |
 | --- | --- |
-| 터미널에서 `ReplayKit` 으로 실행 중 | `Ctrl+C` — uvicorn 이 SIGINT 받아 graceful shutdown |
-| 아이콘 클릭으로 백그라운드 실행 중 | 다른 터미널에서 `ReplayKit stop` |
-| 응답 없는 좀비 인스턴스 | `ReplayKit stop` 가 5초 후 SIGKILL 자동 적용 |
+| GUI 윈도우 | "종료" 버튼 |
+| 터미널에서 `ReplayKit` 으로 실행 중 (headless) | `Ctrl+C` |
+| 아이콘 클릭 후 GUI 창을 닫았지만 서버는 백그라운드 | 다른 터미널에서 `ReplayKit stop` 또는 GUI 다시 열기 |
+| 응답 없는 좀비 | `ReplayKit stop` 가 5초 후 SIGKILL 자동 적용 |
 
 PID 추적: `~/.local/share/ReplayKit/replaykit.pid` 파일 사용 + 살아있는지 검증
 (PID 재사용 방지를 위해 `/proc/$pid/cmdline` 까지 확인).
