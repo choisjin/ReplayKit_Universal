@@ -123,12 +123,32 @@ def _bump(current: str, kind: str) -> str:
 # 기존 tkinter _prompt_version_modal 대체. release.py 의 OS 선택 + 버전 + 옵션을
 # 하나의 다이얼로그로 통합. Linux 에서도 동일 GUI 사용 (PySide6 LGPL).
 
-# OS 별 배포 git URL — release.py 와 single source 로 일치시킴.
-DEPLOY_REMOTES = {
-    "win":   "http://mod.lge.com/hub/dqa_replay_kit/replay_kit.git",
-    "linux": "http://mod.lge.com/hub/dqa_dcv_auto/rnavn_project.git",
+# dist/ReplayKit (빌드 산출물) push 대상.
+# 회사 PC 빌드 시 두 곳 모두에 동일한 dist 내용을 force push:
+#   - github : 홈/외부 사용자가 ReplayKit.bat --home 으로 git_remote_home.txt 보고 pull
+#   - lge    : 사내 사용자가 ReplayKit.bat 으로 git_remote.txt 보고 pull (ReplayKit.bat
+#              의 CANONICAL_REMOTE 와 일치 — 사내 환경에서 origin URL 자동 교정 대상)
+# 소스코드 sync (개인PC ↔ 회사PC) 는 PROJECT_ROOT/.git 의 origin (ReplayKit_Universal)
+# 가 별도로 담당 — build_dist.py 와 무관.
+DIST_PUSH_REMOTES = {
+    "win": [
+        ("github", "https://github.com/choisjin/ReplayKit.git"),
+        ("lge",    "http://mod.lge.com/hub/dqa_replay_kit/replay_kit.git"),
+    ],
+    "linux": [
+        ("lge",    "http://mod.lge.com/hub/dqa_dcv_auto/rnavn_project.git"),
+        # linux 의 GitHub 배포는 현재 미정 — 필요 시 ("github", "...") 추가.
+    ],
 }
 OS_LABELS = {"win": "Windows", "linux": "Linux"}
+
+
+def _remote_url(target: str, name: str) -> str | None:
+    """DIST_PUSH_REMOTES 에서 (target, remote_name) 의 URL 조회."""
+    for n, u in DIST_PUSH_REMOTES.get(target, []):
+        if n == name:
+            return u
+    return None
 
 
 def _host_os() -> str:
@@ -514,32 +534,115 @@ def _run_native_win_build(version: str, do_frontend: bool = True) -> int:
     return 0
 
 
-def _deploy_force_push(target: str) -> int:
-    """OS 별 배포 git 으로 force push. release.py 의 deploy_push 와 동일 동작."""
-    url = DEPLOY_REMOTES.get(target)
-    if not url:
-        print(f"[ERROR] no deploy URL for OS={target}", file=sys.stderr)
+def _ensure_dist_git(target: str) -> bool:
+    """dist/ReplayKit 의 git repo 를 보장.
+
+    - DIST_DIR/.git 없으면 init (main branch).
+    - DIST_PUSH_REMOTES[target] 의 모든 (name, url) 을 등록/sync.
+    - PROJECT_ROOT/.git (소스 sync 용 ReplayKit_Universal) 과는 완전히 분리됨.
+    """
+    remotes = DIST_PUSH_REMOTES.get(target, [])
+    if not remotes:
+        print(f"[ERROR] no dist push remotes for OS={target}", file=sys.stderr)
+        return False
+    if not DIST_DIR.exists():
+        print(f"[ERROR] dist 폴더 없음 — 빌드 먼저 필요: {DIST_DIR}", file=sys.stderr)
+        return False
+
+    if not (DIST_DIR / ".git").exists():
+        r = subprocess.run(["git", "init", "-b", "main"], cwd=DIST_DIR)
+        if r.returncode != 0:
+            # 구버전 git 호환 — -b 플래그 미지원 시 init 후 branch -M main
+            subprocess.run(["git", "init"], cwd=DIST_DIR, check=True)
+            subprocess.run(["git", "checkout", "-b", "main"], cwd=DIST_DIR, check=False)
+        print(f"  dist/.git 초기화")
+        # safe.directory 등록 (Windows 권한 이슈 회피 — ReplayKit.bat 와 동일 패턴)
+        safe_dir = str(DIST_DIR).replace("\\", "/")
+        subprocess.run(
+            ["git", "config", "--global", "--add", "safe.directory", safe_dir],
+            check=False,
+        )
+
+    for name, url in remotes:
+        r = subprocess.run(
+            ["git", "remote", "get-url", name],
+            cwd=DIST_DIR, capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            subprocess.run(["git", "remote", "add", name, url], cwd=DIST_DIR, check=True)
+            print(f"  remote '{name}' 추가: {url}")
+        elif r.stdout.strip() != url:
+            subprocess.run(["git", "remote", "set-url", name, url], cwd=DIST_DIR, check=True)
+            print(f"  remote '{name}' URL 갱신: {url}")
+    return True
+
+
+def _deploy_force_push(target: str, version: str | None = None) -> int:
+    """dist/ReplayKit 의 빌드 산출물을 OS 별 모든 배포 remote 로 force push.
+
+    동작:
+      1. dist/.git 보장 (_ensure_dist_git) — 첫 빌드 시 자동 init + remote 등록.
+      2. add -A + commit (변경 있을 때만, 메시지에 version 포함).
+      3. branch -M main 으로 브랜치 고정.
+      4. DIST_PUSH_REMOTES[target] 의 모든 remote 로 차례로 force push.
+         일부 실패해도 나머지 remote 는 시도 (LG/GitHub 한쪽만 네트워크 문제일 때 부분 성공).
+    반환: 모든 remote 성공 = 0, 일부라도 실패 = 1.
+    """
+    if not _ensure_dist_git(target):
         return 1
-    remote_name = f"lge-{target}"
-    print(f"\n[PUSH] {OS_LABELS[target]} → {url}")
+    remotes = DIST_PUSH_REMOTES[target]
 
-    cur = subprocess.run(
-        ["git", "remote", "get-url", remote_name],
-        cwd=PROJECT_ROOT, capture_output=True, text=True,
+    # stage
+    subprocess.run(["git", "add", "-A"], cwd=DIST_DIR, check=False)
+
+    # 변경 있을 때만 commit (없으면 기존 HEAD 그대로 push)
+    r = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=DIST_DIR, capture_output=True, text=True,
     )
-    if cur.returncode != 0:
-        subprocess.run(["git", "remote", "add", remote_name, url], cwd=PROJECT_ROOT, check=True)
-        print(f"       remote '{remote_name}' 추가됨")
-    elif cur.stdout.strip() != url:
-        subprocess.run(["git", "remote", "set-url", remote_name, url], cwd=PROJECT_ROOT, check=True)
-        print(f"       remote '{remote_name}' URL 갱신")
+    if r.stdout.strip():
+        msg = f"Release {version}" if version else "Update build"
+        # 첫 commit 시 user.name/email 누락으로 실패할 수 있어 fallback config 적용.
+        commit_r = subprocess.run(
+            ["git", "commit", "-m", msg],
+            cwd=DIST_DIR, capture_output=True, text=True,
+        )
+        if commit_r.returncode != 0 and "Please tell me who you are" in (commit_r.stderr or ""):
+            print("  dist git user 미설정 — 로컬 fallback (ReplayKit Build / build@local) 적용")
+            subprocess.run(["git", "config", "user.name", "ReplayKit Build"], cwd=DIST_DIR, check=False)
+            subprocess.run(["git", "config", "user.email", "build@local"], cwd=DIST_DIR, check=False)
+            commit_r = subprocess.run(
+                ["git", "commit", "-m", msg],
+                cwd=DIST_DIR, capture_output=True, text=True,
+            )
+        if commit_r.returncode == 0:
+            print(f"  dist commit: {msg}")
+        else:
+            print(f"  dist commit 실패: {(commit_r.stderr or commit_r.stdout or '').strip()[:200]}")
+    else:
+        print("  dist 변경 없음 — 기존 HEAD push")
 
-    r = subprocess.run(["git", "push", "--force", remote_name, "main"], cwd=PROJECT_ROOT)
-    if r.returncode == 0:
-        print(f"[PUSH] OK — {OS_LABELS[target]} 배포 git 갱신 완료.")
-        return 0
-    print(f"[PUSH] FAILED — 수동: git push --force {remote_name} main", file=sys.stderr)
-    return r.returncode
+    # 브랜치 main 고정 (init 직후 HEAD 가 분리되어 있거나 master 인 경우 보정)
+    subprocess.run(["git", "branch", "-M", "main"], cwd=DIST_DIR, check=False)
+
+    failed: list[str] = []
+    for name, url in remotes:
+        print(f"\n[PUSH] {OS_LABELS[target]} dist → {name} ({url})")
+        rc = subprocess.run(
+            ["git", "push", "--force", name, "main"],
+            cwd=DIST_DIR,
+        ).returncode
+        if rc == 0:
+            print(f"[PUSH] OK — {name}")
+        else:
+            print(f"[PUSH] FAIL — {name}  (수동: cd {DIST_DIR} && git push --force {name} main)", file=sys.stderr)
+            failed.append(name)
+
+    if failed:
+        print(f"\n[PUSH] {len(failed)}/{len(remotes)} remote 실패: {', '.join(failed)}", file=sys.stderr)
+        return 1
+    print(f"\n[PUSH] OK — {len(remotes)}개 remote 모두 갱신.")
+    return 0
 
 
 # 기존 _prompt_version_modal 호환 stub — _bump 등 외부 참조 보존용 (deprecated).
@@ -840,14 +943,21 @@ def step_package(force=False, offline=False) -> bool:
     # ── 루트 인스톨러/wheel 자동 복사 (PROJECT_ROOT에 있는 것만) ──
     _copy_root_installers()
 
-    # ── git_remote.txt / .offline_mode ──
+    # ── git_remote.txt / git_remote_home.txt / .offline_mode ──
+    # 두 파일의 역할 (ReplayKit.bat 분석 결과):
+    #   git_remote.txt       → 사내 사용자 (기본 모드)         → LG GitLab URL
+    #   git_remote_home.txt  → 홈/외부 사용자 (--home 모드)    → GitHub URL
+    # ReplayKit.bat 의 CANONICAL_REMOTE 도 LG URL 이므로 사내 모드에서 origin 자동 교정 일관됨.
     git_remote_file = DIST_DIR / "git_remote.txt"
+    git_remote_home_file = DIST_DIR / "git_remote_home.txt"
     offline_marker = DIST_DIR / ".offline_mode"
+    host = _host_os()
     if offline:
         # 오프라인 모드: 자동 git pull 차단, 마커 파일 생성
-        if git_remote_file.exists():
-            git_remote_file.unlink()
-            print("  오프라인 모드: git_remote.txt 제거")
+        for f in (git_remote_file, git_remote_home_file):
+            if f.exists():
+                f.unlink()
+                print(f"  오프라인 모드: {f.name} 제거")
         offline_marker.write_text(
             "# 이 파일이 있으면 ReplayKit.bat / setup.bat이 네트워크 액세스를\n"
             "# 시도하지 않습니다. 삭제하면 온라인 모드로 동작합니다.\n",
@@ -855,14 +965,21 @@ def step_package(force=False, offline=False) -> bool:
         )
         print("  오프라인 모드: .offline_mode 마커 생성")
     else:
-        # 온라인 모드: 마커 제거 + git_remote.txt 자동 채움
+        # 온라인 모드: 마커 제거 + DIST_PUSH_REMOTES 기반 자동 채움
         if offline_marker.exists():
             offline_marker.unlink()
-        remote_url = _get_deploy_remote()
-        if remote_url:
-            git_remote_file.write_text(remote_url, encoding="utf-8")
+        lge_url = _remote_url(host, "lge")
+        github_url = _remote_url(host, "github")
+        if lge_url:
+            git_remote_file.write_text(lge_url, encoding="utf-8")
+            print(f"  git_remote.txt → {lge_url}")
         elif git_remote_file.exists():
             git_remote_file.unlink()
+        if github_url:
+            git_remote_home_file.write_text(github_url, encoding="utf-8")
+            print(f"  git_remote_home.txt → {github_url}")
+        elif git_remote_home_file.exists():
+            git_remote_home_file.unlink()
 
     # 통계
     total = sum(1 for _ in DIST_DIR.rglob("*") if _.is_file())
@@ -1184,15 +1301,10 @@ unins*
 """, encoding="utf-8")
 
 
-# ── 배포 repo ──
-
-def _get_deploy_remote() -> str:
-    try:
-        r = _run(["git", "remote", "get-url", "origin"], cwd=DIST_DIR, check=False)
-        return r.stdout.strip() if r.returncode == 0 else ""
-    except Exception:
-        return ""
-
+# ── 배포 repo (legacy --init-deploy / --deploy / --deploy-only 경로) ──
+# 신규 통합 release 흐름(_deploy_force_push)이 DIST_PUSH_REMOTES 기반으로
+# dist/.git 을 자동 init + multi-remote force push 하므로 init_deploy/deploy 는
+# 사실상 backward-compat 용. legacy CLI 플래그를 쓰는 외부 스크립트만 의존.
 
 def init_deploy():
     print("\n=== 배포 repo 초기화 ===")
@@ -1376,12 +1488,10 @@ def main():
     else:
         print("[BUILD] skipped")
 
-    # 배포 push (legacy --deploy 도 여기서 처리)
+    # 배포 push — DIST_PUSH_REMOTES 의 모든 remote (github + lge) 에 dist 산출물 force push.
+    # legacy --deploy 도 신규 흐름으로 흡수 (별도 deploy() 호출 불필요 — dist/.git 자동 init + multi-remote 처리됨).
     if do_push or legacy_deploy:
-        if target == "win" and legacy_deploy:
-            # 레거시 deploy() — dist/.git 별도 repo. 사용자가 명시 호출한 경우만.
-            deploy()
-        rc = _deploy_force_push(target)
+        rc = _deploy_force_push(target, version)
         if rc != 0:
             sys.exit(rc)
     else:
