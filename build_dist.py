@@ -119,83 +119,285 @@ def _bump(current: str, kind: str) -> str:
     return f"{major}.{minor}.{patch}"
 
 
-def _prompt_version_modal():
-    """SemVer 선택 모달. 새 버전 문자열(X.Y.Z) 반환.
-    창을 그냥 닫거나 취소하면 None 반환 → 호출 측에서 빌드 중단."""
-    import tkinter as tk
+# ── PySide6 release dialog — cross-platform GUI (Win + Linux) ──
+# 기존 tkinter _prompt_version_modal 대체. release.py 의 OS 선택 + 버전 + 옵션을
+# 하나의 다이얼로그로 통합. Linux 에서도 동일 GUI 사용 (PySide6 LGPL).
+
+# OS 별 배포 git URL — release.py 와 single source 로 일치시킴.
+DEPLOY_REMOTES = {
+    "win":   "http://mod.lge.com/hub/dqa_replay_kit/replay_kit.git",
+    "linux": "http://mod.lge.com/hub/dqa_dcv_auto/rnavn_project.git",
+}
+OS_LABELS = {"win": "Windows", "linux": "Linux"}
+
+
+def _host_os() -> str:
+    """현재 호스트의 OS 식별자 — 'win' / 'linux' / 그 외."""
+    if sys.platform == "win32":
+        return "win"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    return sys.platform
+
+
+def _show_release_dialog():
+    """PySide6 release 다이얼로그. (target_os, version, do_build, do_push) 또는 None 반환.
+
+    None = 사용자 취소.  target_os ∈ {'win', 'linux'}.  version = 'v1.2.3' 형식.
+    """
+    try:
+        from PySide6.QtWidgets import (
+            QApplication, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
+            QLabel, QLineEdit, QPushButton, QRadioButton, QButtonGroup,
+            QCheckBox, QGroupBox, QMessageBox,
+        )
+        from PySide6.QtCore import Qt
+    except ImportError as e:
+        msg = (
+            "[ERROR] PySide6 미설치 — GUI 모드 사용 불가.\n"
+            "  설치: pip install PySide6-Essentials\n"
+            f"  원인: {e}\n"
+            "  대안: CLI 모드 — python build_dist.py --version 1.2.0 --os win"
+        )
+        print(msg, file=sys.stderr)
+        return None
 
     current = _read_version()
-    result = {"version": None}
+    host = _host_os()
 
-    BG = "#fafafa"
-    ROW_BG = "#ffffff"
-    ROW_HOVER = "#eef3fb"
-    BORDER = "#d9d9d9"
+    app = QApplication.instance() or QApplication(sys.argv)
+    dlg = QDialog()
+    dlg.setWindowTitle("ReplayKit — Release")
+    dlg.setMinimumWidth(440)
 
-    root = tk.Tk()
-    root.title("ReplayKit — 빌드 버전 선택")
-    root.attributes("-topmost", True)
-    root.resizable(False, False)
-    root.configure(bg=BG)
+    root = QVBoxLayout(dlg)
 
-    frm = tk.Frame(root, padx=26, pady=22, bg=BG)
-    frm.pack(fill="both", expand=True)
+    # 헤더
+    header = QLabel(f"<b>ReplayKit Release</b><br><span style='color:#888'>host OS: {host}, current version: v{current}</span>")
+    header.setTextFormat(Qt.RichText)
+    root.addWidget(header)
 
-    tk.Label(frm, text=f"현재 버전:  v{current}",
-             font=("Segoe UI", 12, "bold"), bg=BG, fg="#222").pack(pady=(0, 4))
-    tk.Label(frm, text="시맨틱 버저닝 기반 — 빌드할 버전을 선택하세요",
-             font=("Segoe UI", 9), bg=BG, fg="#888").pack(pady=(0, 16))
+    # OS 선택
+    os_group = QGroupBox("대상 OS")
+    os_layout = QHBoxLayout()
+    rb_win = QRadioButton("Windows  (.exe installer)")
+    rb_lin = QRadioButton("Linux    (.deb package)")
+    btn_group = QButtonGroup(dlg)
+    btn_group.addButton(rb_win)
+    btn_group.addButton(rb_lin)
+    # default = host OS
+    if host == "linux":
+        rb_lin.setChecked(True)
+    else:
+        rb_win.setChecked(True)
+    os_layout.addWidget(rb_win)
+    os_layout.addWidget(rb_lin)
+    os_group.setLayout(os_layout)
+    root.addWidget(os_group)
 
-    def pick(kind: str):
-        result["version"] = _bump(current, kind)
-        root.destroy()
+    # 버전
+    ver_group = QGroupBox("버전")
+    ver_layout = QFormLayout()
+    ver_edit = QLineEdit(current.lstrip("vV"))
+    ver_edit.setPlaceholderText("예: 1.2.0")
+    ver_layout.addRow("새 버전 (v 생략):", ver_edit)
 
-    options = [
-        ("minor", _bump(current, "minor"), "하위 호환되는 기능 추가 (MINOR)"),
-        ("patch", _bump(current, "patch"), "버그 수정 (PATCH)"),
-        ("major", _bump(current, "major"), "하위 호환이 깨지는 변경 (MAJOR)"),
-        ("none",  current,                  "버전 유지"),
-    ]
+    bump_row = QHBoxLayout()
+    for kind in ("patch", "minor", "major"):
+        b = QPushButton(f"{kind} → {_bump(current, kind).lstrip('v')}")
+        # closure 변수 캡처
+        b.clicked.connect(lambda _checked=False, k=kind: ver_edit.setText(_bump(current, k).lstrip("v")))
+        bump_row.addWidget(b)
+    keep_btn = QPushButton(f"유지 ({current})")
+    keep_btn.clicked.connect(lambda: ver_edit.setText(current.lstrip("vV")))
+    bump_row.addWidget(keep_btn)
+    ver_layout.addRow("", _layout_to_widget(bump_row))
+    ver_group.setLayout(ver_layout)
+    root.addWidget(ver_group)
 
-    for kind, ver, desc in options:
-        row = tk.Frame(frm, bg=ROW_BG, cursor="hand2",
-                       highlightbackground=BORDER, highlightthickness=1)
-        row.pack(fill="x", pady=4, ipady=8)
+    # 옵션
+    opt_group = QGroupBox("옵션")
+    opt_layout = QVBoxLayout()
+    cb_build = QCheckBox("빌드 실행 (해당 OS 의 빌드 스크립트)")
+    cb_build.setChecked(True)
+    cb_push = QCheckBox("배포 git push (force, OS 별 LG remote)")
+    cb_push.setChecked(True)
+    opt_layout.addWidget(cb_build)
+    opt_layout.addWidget(cb_push)
+    opt_group.setLayout(opt_layout)
+    root.addWidget(opt_group)
 
-        # 버전 컬럼 (고정 너비, 가운데 정렬)
-        ver_lbl = tk.Label(row, text=f"v{ver}", width=10, anchor="center",
-                           bg=ROW_BG, fg="#1677ff",
-                           font=("Segoe UI", 11, "bold"))
-        ver_lbl.pack(side="left", padx=(12, 4))
+    # 호스트-대상 호환성 경고 라벨 (동적)
+    warn_lbl = QLabel("")
+    warn_lbl.setStyleSheet("color: #c0392b;")
+    warn_lbl.setWordWrap(True)
+    root.addWidget(warn_lbl)
 
-        # 구분자
-        sep_lbl = tk.Label(row, text="—", bg=ROW_BG, fg="#bbb",
-                           font=("Segoe UI", 11))
-        sep_lbl.pack(side="left", padx=8)
+    def _update_warn():
+        target = "win" if rb_win.isChecked() else "linux"
+        if cb_build.isChecked() and target != host:
+            warn_lbl.setText(
+                f"⚠ 빌드는 호스트 OS 와 일치해야 합니다 (host={host}, target={target}).\n"
+                f"   체크 해제하거나 {OS_LABELS[target]} 머신에서 다시 실행하세요."
+            )
+        else:
+            warn_lbl.setText("")
 
-        # 설명 컬럼 (좌측 정렬)
-        desc_lbl = tk.Label(row, text=desc, anchor="w",
-                            bg=ROW_BG, fg="#333",
-                            font=("Malgun Gothic", 10))
-        desc_lbl.pack(side="left", fill="x", expand=True, padx=(0, 12))
+    rb_win.toggled.connect(_update_warn)
+    rb_lin.toggled.connect(_update_warn)
+    cb_build.toggled.connect(_update_warn)
+    _update_warn()
 
-        widgets = (row, ver_lbl, sep_lbl, desc_lbl)
-        for w in widgets:
-            w.bind("<Button-1>", lambda _e, k=kind: pick(k))
-            w.bind("<Enter>", lambda _e, ws=widgets: [x.configure(bg=ROW_HOVER) for x in ws])
-            w.bind("<Leave>", lambda _e, ws=widgets: [x.configure(bg=ROW_BG) for x in ws])
+    # 버튼
+    btn_row = QHBoxLayout()
+    ok_btn = QPushButton("Build / Push")
+    ok_btn.setDefault(True)
+    cancel_btn = QPushButton("취소")
+    btn_row.addStretch()
+    btn_row.addWidget(cancel_btn)
+    btn_row.addWidget(ok_btn)
+    root.addLayout(btn_row)
 
-    root.update_idletasks()
-    w = max(root.winfo_reqwidth(), 420)
-    h = root.winfo_reqheight()
-    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-    root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+    result = {"target": None, "version": None, "build": True, "push": True}
 
-    # 창을 그냥 닫으면 result["version"]는 None 그대로 → 빌드 취소
-    root.protocol("WM_DELETE_WINDOW", root.destroy)
-    root.mainloop()
+    def _accept():
+        target = "win" if rb_win.isChecked() else "linux"
+        ver = ver_edit.text().strip().lstrip("vV")
+        parts = ver.split(".")
+        if len(parts) != 3 or not all(p.isdigit() for p in parts):
+            QMessageBox.warning(dlg, "버전 오류", f"버전 형식: N.N.N (예: 1.2.0). 입력: {ver!r}")
+            return
+        if cb_build.isChecked() and target != host:
+            r = QMessageBox.question(
+                dlg, "호스트 불일치",
+                f"host={host} 에서 {target} 빌드는 실패합니다. 빌드 체크 해제하고 push 만 진행할까요?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if r != QMessageBox.Yes:
+                return
+            cb_build.setChecked(False)
+        result["target"] = target
+        result["version"] = f"v{ver}"
+        result["build"] = cb_build.isChecked()
+        result["push"] = cb_push.isChecked()
+        dlg.accept()
 
-    return result["version"]
+    ok_btn.clicked.connect(_accept)
+    cancel_btn.clicked.connect(dlg.reject)
+
+    if dlg.exec() != QDialog.Accepted:
+        return None
+    return (result["target"], result["version"], result["build"], result["push"])
+
+
+def _layout_to_widget(layout):
+    """QHBoxLayout 같은 layout 을 QFormLayout.addRow 에 직접 넣기 위한 wrapper."""
+    from PySide6.QtWidgets import QWidget
+    w = QWidget()
+    w.setLayout(layout)
+    return w
+
+
+# ── release.py 에서 이식: build dispatch + deploy push ──
+def _run_target_build(target: str, version: str) -> int:
+    """대상 OS 의 빌드 본체 호출. exit code 반환."""
+    host = _host_os()
+    if target == "win":
+        if host != "win":
+            print(f"[ERROR] Windows 빌드는 Windows 호스트에서만 가능 (current: {host})", file=sys.stderr)
+            return 2
+        # Win 호스트 + Win 빌드 — 이 파일 자신의 _run_native_build 호출 (Cython + Inno).
+        return _run_native_win_build(version)
+    if target == "linux":
+        if host != "linux":
+            print(f"[ERROR] Linux 빌드는 Linux 호스트에서만 가능 (current: {host})", file=sys.stderr)
+            return 2
+        sh = PROJECT_ROOT / "scripts" / "build_deb.sh"
+        if not sh.is_file():
+            print(f"[ERROR] {sh} not found", file=sys.stderr)
+            return 1
+        # SKIP_LGE_PUSH=1 — push 는 이쪽 release flow 가 통합 관리.
+        env = os.environ.copy()
+        env["SKIP_LGE_PUSH"] = "1"
+        print(f"\n[BUILD] $ SKIP_LGE_PUSH=1 bash {sh}\n")
+        return subprocess.call(["bash", str(sh)], cwd=PROJECT_ROOT, env=env)
+    print(f"[ERROR] unknown OS target: {target}", file=sys.stderr)
+    return 1
+
+
+def _run_native_win_build(version: str) -> int:
+    """기존 build_dist.py 의 Windows 빌드 단계 호출 (Cython → frontend → 패키지 → installer)."""
+    if sys.platform != "win32":
+        print("[ERROR] _run_native_win_build 는 Windows 에서만 실행 가능", file=sys.stderr)
+        return 2
+    new_version = version.lstrip("vV")
+    current_version = _read_version().lstrip("vV")
+    version_changed = new_version != current_version
+    if version_changed:
+        _write_version(f"v{new_version}")
+        print(f"  version.txt: v{current_version} → v{new_version}")
+    _update_installer_iss(new_version)
+
+    t_start = time.time()
+    print("=" * 50)
+    print(f"  ReplayKit — Windows 배포 빌드 v{new_version}")
+    print("=" * 50)
+    if not step_compile_backend(False):
+        print("\n빌드 중단: backend 컴파일 실패")
+        return 1
+    if not step_build_frontend(False):
+        print("\n빌드 중단: frontend 빌드 실패")
+        return 1
+    if not step_package(False, offline=False):
+        print("\n빌드 중단: 패키지 조립 실패")
+        return 1
+    clean()
+    if version_changed:
+        _record_build_history(new_version)
+    elapsed = time.time() - t_start
+    print(f"\n{'=' * 50}")
+    print(f"  빌드 완료! v{new_version} ({elapsed:.1f}s)")
+    print(f"  배포 폴더: {DIST_DIR}")
+    print(f"{'=' * 50}")
+    return 0
+
+
+def _deploy_force_push(target: str) -> int:
+    """OS 별 배포 git 으로 force push. release.py 의 deploy_push 와 동일 동작."""
+    url = DEPLOY_REMOTES.get(target)
+    if not url:
+        print(f"[ERROR] no deploy URL for OS={target}", file=sys.stderr)
+        return 1
+    remote_name = f"lge-{target}"
+    print(f"\n[PUSH] {OS_LABELS[target]} → {url}")
+
+    cur = subprocess.run(
+        ["git", "remote", "get-url", remote_name],
+        cwd=PROJECT_ROOT, capture_output=True, text=True,
+    )
+    if cur.returncode != 0:
+        subprocess.run(["git", "remote", "add", remote_name, url], cwd=PROJECT_ROOT, check=True)
+        print(f"       remote '{remote_name}' 추가됨")
+    elif cur.stdout.strip() != url:
+        subprocess.run(["git", "remote", "set-url", remote_name, url], cwd=PROJECT_ROOT, check=True)
+        print(f"       remote '{remote_name}' URL 갱신")
+
+    r = subprocess.run(["git", "push", "--force", remote_name, "main"], cwd=PROJECT_ROOT)
+    if r.returncode == 0:
+        print(f"[PUSH] OK — {OS_LABELS[target]} 배포 git 갱신 완료.")
+        return 0
+    print(f"[PUSH] FAILED — 수동: git push --force {remote_name} main", file=sys.stderr)
+    return r.returncode
+
+
+# 기존 _prompt_version_modal 호환 stub — _bump 등 외부 참조 보존용 (deprecated).
+def _prompt_version_modal():
+    """Deprecated: PySide6 _show_release_dialog 로 통합됨. 직접 호출 금지."""
+    out = _show_release_dialog()
+    if out is None:
+        return None
+    target, version, do_build, do_push = out
+    return version.lstrip("vV")
 
 
 def _record_build_history(version: str):
@@ -918,105 +1120,119 @@ def clean():
 # ── 메인 ──
 
 def main():
-    # OS 가드 — Windows 전용 (Cython + MSVC + Inno Setup 필요).
-    # Linux 에선 scripts/build_deb.sh 또는 scripts/release.py 사용.
-    if sys.platform != "win32":
-        print(f"[ERROR] build_dist.py 는 Windows 전용입니다 (current: {sys.platform})", file=sys.stderr)
-        print("        Linux 빌드: ./scripts/build_deb.sh", file=sys.stderr)
-        print("        통합 TUI:   ./scripts/release.py", file=sys.stderr)
-        sys.exit(2)
+    """Cross-platform entry point.
 
-    # --version <ver> 추출 — release.py 의 자동 모드 호환. 인자 처리는 단순 set 으로 하던 기존 패턴
-    # 보존하면서 --version 만 별도 파싱.
+    동작 모드:
+      a) GUI (default, 인자 없음): PySide6 _show_release_dialog 띄움 → OS/버전/옵션 선택
+         → 해당 OS 빌드 + 배포 git force push.
+      b) CLI 자동 (--os / --version 지정): 인터랙티브 없이 즉시 빌드/push.
+      c) 레거시 (--clean / --init-deploy / --deploy / --backend / --full / --offline):
+         기존 build_dist.py 동작 보존 (Windows 호스트 전용).
+    Linux 에서도 GUI/CLI release 모드 사용 가능 — Linux 선택 시 scripts/build_deb.sh 호출.
+    """
     args_list = list(sys.argv[1:])
+
+    # --os / --version 분리 추출 (값을 가진 인자)
+    cli_os: str | None = None
     cli_version: str | None = None
     i = 0
     while i < len(args_list):
-        if args_list[i] == "--version" and i + 1 < len(args_list):
-            cli_version = args_list[i + 1].lstrip("v")
+        a = args_list[i]
+        if a == "--os" and i + 1 < len(args_list):
+            cli_os = args_list[i + 1].lower()
+            del args_list[i:i + 2]
+            continue
+        if a == "--version" and i + 1 < len(args_list):
+            cli_version = args_list[i + 1].lstrip("vV")
             del args_list[i:i + 2]
             continue
         i += 1
     args = set(args_list)
     force = "--full" in args
     offline = "--offline" in args
+    do_skip_build = "--skip-build" in args
+    do_skip_push = "--skip-push" in args
+    legacy_deploy = "--deploy" in args
 
+    # ── 레거시 명령 (Windows 호스트 전용 — 기존 build_dist.py 호환) ──
     if "--clean" in args:
         clean()
         return
-
     if "--init-deploy" in args:
+        if sys.platform != "win32":
+            print("[ERROR] --init-deploy 는 Windows 빌드 전용. Linux 는 build_deb.sh 자동 push.", file=sys.stderr)
+            sys.exit(2)
         init_deploy()
         return
-
     if "--deploy-only" in args:
+        if sys.platform != "win32":
+            print("[ERROR] --deploy-only 는 Windows 빌드 전용.", file=sys.stderr)
+            sys.exit(2)
         deploy()
         return
-
-    # ── 빌드 시작: SemVer 모달 ──
-    # release.py 등 외부 자동화에서 --version <N.N.N> 으로 호출한 경우 prompt 스킵.
-    if cli_version:
-        new_version = cli_version
-        print(f"\n버전 인자: v{new_version} (CLI --version, prompt 스킵)")
-    else:
-        print("\n버전 선택 모달을 표시합니다...")
-        new_version = _prompt_version_modal()
-        if new_version is None:
-            print("\n빌드 취소: 버전이 선택되지 않았습니다.")
-            return
-
-    current_version = _read_version()
-    version_changed = new_version != current_version
-    if version_changed:
-        _write_version(new_version)
-        print(f"  version.txt: v{current_version} → v{new_version}")
-    else:
-        print(f"  version.txt: v{current_version} (유지) — build_history.txt 기록 생략")
-    _update_installer_iss(new_version)
-
     if "--backend" in args:
+        if sys.platform != "win32":
+            print("[ERROR] --backend 는 Windows Cython 컴파일 전용.", file=sys.stderr)
+            sys.exit(2)
+        new_v = cli_version or _read_version().lstrip("vV")
         ok = step_compile_backend(force)
         clean()
-        if ok and version_changed:
-            _record_build_history(new_version)
+        if ok and new_v != _read_version().lstrip("vV"):
+            _record_build_history(new_v)
         return
 
-    t_start = time.time()
-    print("=" * 50)
-    mode_tag = []
-    if force:
-        mode_tag.append("FULL")
-    if offline:
-        mode_tag.append("OFFLINE")
-    tag = f" ({', '.join(mode_tag)})" if mode_tag else " (증분)"
-    print(f"  ReplayKit — 배포 빌드 v{new_version}{tag}")
-    print("=" * 50)
+    # ── 통합 release 모드 ──
+    # GUI: 인자 없거나 --os 만 지정 (버전 prompt 필요)
+    # CLI: --os AND --version 둘 다 지정
+    if cli_os and cli_version:
+        # 완전 자동 모드
+        target = "linux" if cli_os in ("linux", "lin", "l", "2") else "win"
+        version = f"v{cli_version}"
+        do_build = not do_skip_build
+        do_push = not do_skip_push
+        print(f"[CLI] OS={OS_LABELS[target]}, version={version}, build={do_build}, push={do_push}")
+    else:
+        # GUI dialog
+        out = _show_release_dialog()
+        if out is None:
+            print("\n[ABORT] 사용자 취소")
+            return
+        target, version, do_build, do_push = out
 
-    if not step_compile_backend(force):
-        print("\n빌드 중단: backend 컴파일 실패")
-        return
+    # version.txt 갱신
+    current = _read_version()
+    if version != current:
+        _write_version(version)
+        print(f"  version.txt: {current} → {version}")
+    else:
+        print(f"  version.txt: {version} (유지)")
 
-    if not step_build_frontend(force):
-        print("\n빌드 중단: frontend 빌드 실패")
-        return
+    # 빌드
+    if do_build:
+        rc = _run_target_build(target, version)
+        if rc != 0:
+            print(f"\n[ABORT] 빌드 실패 (exit {rc}) — push 건너뜀.", file=sys.stderr)
+            sys.exit(rc)
+    else:
+        print("[BUILD] skipped")
 
-    if not step_package(force, offline=offline):
-        print("\n빌드 중단: 패키지 조립 실패")
-        return
-    clean()
+    # 배포 push (legacy --deploy 도 여기서 처리)
+    if do_push or legacy_deploy:
+        if target == "win" and legacy_deploy:
+            # 레거시 deploy() — dist/.git 별도 repo. 사용자가 명시 호출한 경우만.
+            deploy()
+        rc = _deploy_force_push(target)
+        if rc != 0:
+            sys.exit(rc)
+    else:
+        print("[PUSH] skipped")
 
-    if version_changed:
-        _record_build_history(new_version)
-
-    elapsed = time.time() - t_start
-    print(f"\n{'=' * 50}")
-    print(f"  빌드 완료! v{new_version} ({elapsed:.1f}s)")
-    print(f"  배포 폴더: {DIST_DIR}")
-    print(f"{'=' * 50}")
-
-    if "--deploy" in args:
-        deploy()
+    print(f"\n=== Release 완료: {OS_LABELS[target]} {version} ===")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n[ABORT] 사용자 취소 (Ctrl+C)", file=sys.stderr)
+        sys.exit(130)

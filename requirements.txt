@@ -68,10 +68,14 @@ pyinstaller==6.19.0
 pyinstaller-hooks-contrib==2026.3
 PyJWT==2.11.0
 PyNaCl==1.6.2
-# PyQt6 (GPL) — 미사용 leftover. PySide6 (LGPL) 로 대체 (Linux launcher GUI).
+# PyQt6 (GPL) — 미사용 leftover. PySide6 (LGPL) 로 대체.
+# 용도:
+#   - Linux launcher GUI (.deb 의 packaging/replaykit-gui.py)
+#   - build_dist.py 의 release dialog (OS 선택 + 버전 + 빌드/푸시) — cross-platform GUI
 # PySide6-Essentials = QtCore + QtGui + QtWidgets (QtWebEngine 등 거대 모듈 제외).
 # 핀 없이 pip 가 Python ABI 에 맞는 최신 안정 버전 선택. build_deb.sh 가 install 검증.
-PySide6-Essentials>=6.7,<6.10 ; sys_platform == "linux"
+# Windows 에도 설치 — release GUI 를 Win dev 머신에서 띄우기 위함.
+PySide6-Essentials>=6.7,<6.10
 pyserial==3.5
 PySocks==1.7.1
 pytesseract==0.3.13
