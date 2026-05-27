@@ -6,6 +6,7 @@ import asyncio
 import functools
 import json
 import logging
+import os
 import re
 import socket
 import sys
@@ -27,9 +28,33 @@ _AUX_DEVICES_FILE = Path(__file__).resolve().parent.parent.parent / "auxiliary_d
 
 
 def _scan_serial_ports() -> list[dict]:
+    """USB/시리얼 장치 스캔.
+
+    Linux 노이즈 필터 (REPLAYKIT_SHOW_ALL_SERIAL=1 로 비활성화 가능):
+      - /dev/ttyS0~ttyS31 : 보드 내장 UART 슬롯. BIOS 가 무조건 등록하는 가상
+        포트라 보통 물리적으로 미사용. ReplayKit 워크플로우는 USB-Serial
+        (ttyUSB*/ttyACM*) 만 의미 있음.
+      - description "n/a" 또는 빈 값 : pyserial 이 메타데이터를 못 읽어낸
+        장치. 의미 있는 USB 장치라면 보통 vendor/product 문자열이 채워짐.
+
+    Windows / macOS 에서는 필터링 안 함 (각 OS 의 의미 있는 포트는 다름).
+    """
     from serial.tools import list_ports
+
+    show_all = bool(os.environ.get("REPLAYKIT_SHOW_ALL_SERIAL"))
+    is_linux = sys.platform.startswith("linux")
+
     ports = []
     for p in list_ports.comports():
+        if is_linux and not show_all:
+            # ttyS* 슬롯 노이즈 제거
+            if p.device and re.match(r"^/dev/ttyS\d+$", p.device):
+                continue
+            # description 없음 / "n/a" 제거
+            desc = (p.description or "").strip().lower()
+            if desc in ("", "n/a"):
+                continue
+
         ports.append({
             "port": p.device,
             "description": p.description,
