@@ -139,6 +139,10 @@ class LinControlService:
         self._defer_restore_active = False
         self._deferred_restore_ctxs: list[dict] = []
 
+        # attach 시점에 1회 떠두는 초기 캡처 — 첫 capture_window 호출에 의해 1회 소비.
+        # 임베드 직후 z-order 를 즉시 복구하지만 첫 프레임은 활성 상태에서 잡은 정상 비트맵.
+        self._initial_capture: Optional["Image.Image"] = None
+
         # X11 이 사용 가능하면 즉시 연결 시도 — 실패 시 _IMPORT_ERROR 갱신.
         if _X11_AVAILABLE:
             self._try_open_display()
@@ -526,16 +530,38 @@ class LinControlService:
         logger.info("LinControl attached: xid=%d pid=%s name=%s exe=%s title=%r class=%s",
                     self._hwnd, self._pid, self._process_name, self._exe_path,
                     self._window_title, self._window_class)
-        # 임베드 시점에 1회 활성화 — 가려져 있던 윈도우라도 첫 캡처가 최신 콘텐츠를 잡도록.
-        # composited 환경에서 비활성 윈도우는 GPU backbuffer 가 stale 일 수 있어 검은 화면이
-        # 나올 수 있으나, 활성화하면 강제 re-paint 가 발생해 정상 비트맵 확보.
-        # WinControlService 의 _capture_via_screen_activated 와 동일한 의도 — 임베드 1회만
-        # 활성화하고 이후 정상 사용 시엔 사용자 워크플로우 방해 안 함.
+        # 임베드 시점에 1회 activate → capture → restore z-order.
+        # 사용자가 작업 중이던 윈도우 (prev_fg) 가 뒤로 가버리지 않도록 캡처 직후 즉시 복구.
+        # 비활성 윈도우는 composited 환경에서 GPU backbuffer 가 stale 일 수 있어 첫 캡처가
+        # 검은 화면일 수 있는데, 활성화하면 강제 re-paint → 정상 비트맵 확보 가능.
+        # 결과는 self._initial_capture 에 캐시 — 첫 capture_window 호출이 1회 소비.
+        self._initial_capture = None
+        prev_fg: Optional[int] = None
+        try:
+            prev_fg = self._get_active_window()
+            if prev_fg == int(hwnd):
+                prev_fg = None  # 이미 같은 윈도우가 활성 — 복구 불필요
+        except Exception:
+            prev_fg = None
         try:
             self._activate(int(hwnd))
-            time.sleep(0.30)  # WM 가 _NET_ACTIVE_WINDOW 처리 + 앱이 expose 받아 paint 완료까지
+            # WM 가 _NET_ACTIVE_WINDOW 처리 + 앱이 expose 받아 paint 완료까지 대기.
+            time.sleep(0.30)
+            img = self._capture_via_screen(int(hwnd))
+            if img is not None:
+                self._initial_capture = img
+                logger.info("LinControl initial capture cached: size=%s", img.size)
+            else:
+                logger.warning("LinControl initial capture returned None")
         except Exception as e:
-            logger.debug("LinControl attach-time activate failed: %s", e)
+            logger.debug("LinControl attach-time capture failed: %s", e)
+        finally:
+            # 항상 z-order 복구 — 캡처 성공/실패 무관, 사용자 워크플로우 보존이 우선.
+            if prev_fg:
+                try:
+                    self._activate(int(prev_fg))
+                except Exception as e:
+                    logger.debug("LinControl attach-time restore failed: %s", e)
         return self.status()
 
     def detach(self) -> None:
@@ -549,6 +575,8 @@ class LinControlService:
         self._is_uwp = False
         self._content_hwnd = None
         self._aumid = ""
+        # attach 시 캐시한 초기 캡처도 무효화 — 다음 attach 가 다시 채울 것.
+        self._initial_capture = None
 
     def is_attached(self) -> bool:
         if not _X11_AVAILABLE or self._hwnd is None or self._dpy is None:
@@ -864,9 +892,17 @@ class LinControlService:
     def capture_window(self, fmt: str = "jpeg", render_full_content: bool = False) -> bytes:
         if not self.is_attached():
             raise RuntimeError("No window attached")
-        img = self._capture_via_screen(self._hwnd)
+        # attach 가 캐시해둔 첫 비트맵이 있으면 1회 우선 사용 — 그 때만 윈도우가 활성 상태에서
+        # 잡혔으니 정상 콘텐츠가 보장됨. 이후엔 비활성 상태의 라이브 캡처.
+        img: Optional["Image.Image"] = None
+        if self._initial_capture is not None:
+            img = self._initial_capture
+            self._initial_capture = None  # 1회만 소비
+            logger.debug("LinControl capture_window: served initial cached image")
+        else:
+            img = self._capture_via_screen(self._hwnd)
         if img is None:
-            raise RuntimeError("Capture failed (mss screen grab)")
+            raise RuntimeError("Capture failed (mss + Xlib fallback)")
         buf = io.BytesIO()
         if (fmt or "jpeg").lower() == "png":
             img.save(buf, format="PNG")
