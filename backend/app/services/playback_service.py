@@ -2942,7 +2942,7 @@ class PlaybackService:
         src_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if src_img is None:
             raise RuntimeError("image_tap: 화면 디코드 실패")
-        tpl_img = cv2.imread(str(tpl_path), cv2.IMREAD_COLOR)
+        tpl_img = safe_imread(tpl_path, cv2.IMREAD_COLOR)
         if tpl_img is None:
             raise RuntimeError(f"image_tap: template 로드 실패: {tpl_path}")
         src_gray = cv2.cvtColor(src_img, cv2.COLOR_BGR2GRAY)
