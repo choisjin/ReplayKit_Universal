@@ -1114,7 +1114,8 @@ export default function DevicePage() {
       <Tag color={getStatusColor(d.status)} style={{ flexShrink: 0 }}>
         {getStatusLabel(d.status)}
       </Tag>
-      <span style={{ fontWeight: 500, flexShrink: 0 }}>{d.id}</span>
+      {/* wincontrol 디바이스는 OS 별 표시명(LinControl/WinControl) 사용 — ID 는 시나리오 호환 위해 "WinControl" 고정. */}
+      <span style={{ fontWeight: 500, flexShrink: 0 }}>{d.type === 'wincontrol' && d.name ? d.name : d.id}</span>
       {d.protected && <Tag color="gold" style={{ flexShrink: 0 }}>SYSTEM</Tag>}
       <span style={{ color: '#aaa', fontSize: 11, flexShrink: 0 }}>{d.address}</span>
       {d.info?.module && <Tag color="cyan" style={{ flexShrink: 0 }}>{d.info.module}</Tag>}

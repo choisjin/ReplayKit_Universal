@@ -628,9 +628,11 @@ class DeviceManager:
             existing.category = "auxiliary"
             # 재시작 시점엔 항상 미임베드 상태이므로 disconnected 로 시작.
             existing.status = "disconnected"
-            # OS 가 바뀌었거나 기존 디바이스 표시명이 다른 경우 갱신 (Linux 에선 LinControl, Win 에선 WinControl).
+            # OS 가 바뀌었거나 기존 디바이스 표시명이 다른 경우 갱신 (Linux→LinControl, Win→WinControl).
+            # 디스크 캐시(auxiliary_devices.json) 에도 즉시 반영 — 안 그러면 다음 부팅 때 옛 name 으로 로드됨.
             if existing.name != _WIN_CTRL_DISPLAY_NAME:
                 existing.name = _WIN_CTRL_DISPLAY_NAME
+                self._save_auxiliary_devices()
             return
         dev = ManagedDevice(
             id=self.DEFAULT_WINCONTROL_DEVICE_ID,
