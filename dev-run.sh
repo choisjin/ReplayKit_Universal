@@ -42,6 +42,37 @@ echo "[DEV] Python: $PY ($("$PY" --version 2>&1))"
 
 PORT="${REPLAYKIT_PORT:-8000}"
 
+# frontend/dist 자동 빌드 — 백엔드가 정적 파일을 서빙하려면 dist/index.html 필요.
+# 없으면 npm install (node_modules 부재 시) + npm run build 1회 수행.
+# 빌드된 결과는 git ignore 되어 있어 항상 로컬에서 생성됨.
+if [ ! -f "frontend/dist/index.html" ]; then
+    echo "[DEV] frontend/dist/index.html 없음 — 자동 빌드 시도"
+    if ! command -v npm >/dev/null 2>&1; then
+        echo "[ERROR] npm 미설치. 다음 중 하나로 해결:"
+        echo "  a) sudo apt install -y nodejs npm"
+        echo "  b) NodeSource (권장): curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs"
+        echo "  c) 별도 머신에서 빌드 후 frontend/dist 복사"
+        exit 1
+    fi
+    if [ ! -d "frontend/node_modules" ]; then
+        echo "[DEV] cd frontend && npm install  (최초 1회, ~1~3분 소요)"
+        (cd frontend && npm install) || {
+            echo "[ERROR] npm install 실패 — 위 로그 확인"
+            exit 1
+        }
+    fi
+    echo "[DEV] cd frontend && npm run build"
+    (cd frontend && npm run build) || {
+        echo "[ERROR] npm run build 실패 — 위 로그 확인"
+        exit 1
+    }
+    if [ ! -f "frontend/dist/index.html" ]; then
+        echo "[ERROR] 빌드 끝났지만 frontend/dist/index.html 가 여전히 없음 — vite.config 확인 필요"
+        exit 1
+    fi
+    echo "[DEV] frontend/dist 생성 완료"
+fi
+
 # 기존 백엔드 종료 (8000/5173 모두 — 사용자가 ReplayKit.sh 로 띄웠던 잔재 정리)
 for port in "$PORT" 5173; do
     if command -v fuser >/dev/null 2>&1; then
