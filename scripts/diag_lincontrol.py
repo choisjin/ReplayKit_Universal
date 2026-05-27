@@ -164,11 +164,40 @@ def main() -> int:
     else:
         print("get_window_size 가 0 — 윈도우가 invalidated.")
 
-    hdr("캡처 결과")
+    hdr("캡처 결과 — mss 단독 시도 (raw 예외 노출)")
+    # mss 가 None 반환하는 진짜 원인을 보기 위해 _capture_via_screen 의 mss 부분만 직접 실행.
+    try:
+        import mss as _mss
+        ow, oh = svc.get_outer_size()
+        rx, ry = svc._get_window_root_pos(hwnd) or (0, 0)
+        l, r, t, b = svc._get_frame_extents(hwnd)
+        # outer 영역 (frame 포함)
+        x = rx - l
+        y = ry - t
+        w = ow
+        h = oh
+        screen_w, screen_h = svc._get_screen_size()
+        print(f"requested region : x={x} y={y} w={w} h={h}")
+        print(f"screen size      : {screen_w}x{screen_h}")
+        print(f"region rhs       : x+w={x+w} y+h={y+h}  ({'OK' if x+w<=screen_w and y+h<=screen_h else 'OUT-OF-SCREEN'})")
+        try:
+            with _mss.mss() as sct:
+                print(f"mss monitors     : {sct.monitors}")
+                monitor = {"left": x, "top": y, "width": w, "height": h}
+                sct_img = sct.grab(monitor)
+                print(f"mss grab OK      : size={sct_img.size}")
+        except Exception as e:
+            print(f"mss grab FAILED  : {type(e).__name__}: {e}")
+    except ImportError:
+        print("mss not installed")
+    except Exception as e:
+        print("mss diagnosis exception:", e)
+
+    hdr("캡처 결과 — LinControlService._capture_via_screen (mss + Xlib 폴백)")
     try:
         img = svc._capture_via_screen(hwnd)
         if img is None:
-            print("capture failed (mss returned None)")
+            print("capture failed (returned None — 두 경로 모두 실패)")
         else:
             print(f"PIL image size   : {img.size}  (mode={img.mode})")
             print(f"expected outer   : {svc.get_outer_size()}  ← status() 값")
@@ -178,8 +207,15 @@ def main() -> int:
             print(f"pixel (0,0)      : {img.getpixel((0, 0))}")
             cw, ch = img.size
             print(f"pixel center     : {img.getpixel((cw // 2, ch // 2))}")
+            # 빈 화면 (전부 검정 / 흰색) 감지 — 진단 목적
+            extrema = img.getextrema()
+            if isinstance(extrema[0], tuple):
+                all_blank = all((mx - mn) <= 4 for mn, mx in extrema)
+            else:
+                all_blank = (extrema[1] - extrema[0]) <= 4
+            print(f"all blank?       : {all_blank}  (True 면 캡처는 됐지만 내용이 단색 — GL/composited 윈도우 가능성)")
     except Exception as e:
-        print("capture exception:", e)
+        print("capture exception:", type(e).__name__, e)
 
     print()
     print("진단 끝 — 이 출력 전체를 그대로 공유해 주세요.")

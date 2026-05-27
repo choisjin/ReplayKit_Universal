@@ -683,11 +683,47 @@ class LinControlService:
             logger.debug("_set_maximized failed: %s", e)
 
     # ── 캡처 ─────────────────────────────────────────────────
-    def _capture_via_screen(self, hwnd: int):
-        """mss 로 윈도우 영역 화면 캡처 → PIL.Image (RGB).
+    def _get_screen_size(self) -> tuple[int, int]:
+        """root window 의 (width, height) — mss 영역 clipping 용."""
+        if not self._ensure_display():
+            return (0, 0)
+        try:
+            geom = self._root.get_geometry()
+            return (int(geom.width), int(geom.height))
+        except Exception:
+            return (0, 0)
 
-        WinControlService._capture_via_screen 과 동일 의미: DWM/컴포지터가 합성한 최종
-        픽셀을 화면에서 잘라옴. 가려진 윈도우는 위쪽 창의 픽셀이 잡힌다.
+    def _capture_via_xlib(self, hwnd: int, x: int, y: int, w: int, h: int):
+        """Xlib XGetImage 로 직접 윈도우 캡처. mss 폴백.
+
+        장점: same Display connection 사용 → composited 환경에서 mss 가 영역을 못 잡는
+              케이스에서도 동작. 윈도우 자체의 backing pixmap 에서 가져오므로 화면 밖
+              으로 벗어난 부분도 캡처 가능 (mss 는 화면 안쪽만).
+        단점: GL/하드웨어 가속 콘텐츠는 검은 영역으로 나올 수 있음 (GPU backbuffer).
+        """
+        if not self._ensure_display():
+            return None
+        try:
+            with self._dpy_lock:
+                win = self._dpy.create_resource_object("window", int(hwnd))
+                # 0xFFFFFFFF = AllPlanes, X.ZPixmap = pixel-major (BGRA per pixel on most servers)
+                ximg = win.get_image(0, 0, int(w), int(h), X.ZPixmap, 0xFFFFFFFF)
+                # ximg.data 는 raw bytes — 보통 BGRA 또는 BGRX. PIL 의 "raw" decoder 에 "BGRX" 모드.
+                # 검은 화면 방어: data 전체가 0 인지만 빠르게 확인 — 더 정밀한 blank 검출은 호출자 책임.
+                return Image.frombytes("RGB", (int(w), int(h)), ximg.data, "raw", "BGRX")
+        except Exception as e:
+            logger.debug("LinControl Xlib get_image fallback failed: %s", e)
+            return None
+
+    def _capture_via_screen(self, hwnd: int):
+        """윈도우 영역 캡처 → PIL.Image (RGB).
+
+        시도 순서:
+          1) mss 로 root region grab — composited 최종 픽셀, 정확. 좌표가 화면 밖이면
+             clip 해서 시도. 모든 영역이 화면 밖이면 None.
+          2) mss 실패 시 Xlib XGetImage 폴백 — 윈도우 자체에서 가져오므로 화면 밖이어도
+             가능. 단 일부 GL 콘텐츠는 검은 화면.
+        WinControlService._capture_via_screen 과 동일 의미.
         """
         if not _X11_AVAILABLE or not hwnd or not self._ensure_display():
             return None
@@ -713,16 +749,50 @@ class LinControlService:
             return None
         if w <= 0 or h <= 0:
             return None
-        try:
-            # mss 는 thread-local 컨텍스트 권장 — 새 인스턴스 사용.
-            with mss.mss() as sct:
-                monitor = {"left": x, "top": y, "width": w, "height": h}
-                sct_img = sct.grab(monitor)
-                # mss BGRA → PIL RGB
-                return Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-        except Exception as e:
-            logger.debug("LinControl mss grab failed: %s", e)
+
+        # 1) mss 시도 — root region 캡처. 화면 밖 영역은 clip.
+        # mss 는 mss 의 monitor dict 가 화면 경계를 살짝 벗어나면 grab 이 실패할 수 있어서
+        # 명시적으로 화면 안쪽으로 잘라낸 다음 호출. clipped 영역이 0 이면 mss 스킵.
+        screen_w, screen_h = self._get_screen_size()
+        cx = max(0, x)
+        cy = max(0, y)
+        cw = w - (cx - x)
+        ch = h - (cy - y)
+        if screen_w > 0 and cx + cw > screen_w:
+            cw = screen_w - cx
+        if screen_h > 0 and cy + ch > screen_h:
+            ch = screen_h - cy
+        if cw > 0 and ch > 0:
+            try:
+                with mss.mss() as sct:
+                    monitor = {"left": cx, "top": cy, "width": cw, "height": ch}
+                    sct_img = sct.grab(monitor)
+                    img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+                # 화면 밖으로 잘렸으면 원본 outer 크기 비트맵에 paste — 클릭 좌표계 일관성 보존.
+                if cx == x and cy == y and cw == w and ch == h:
+                    return img
+                full = Image.new("RGB", (w, h), (0, 0, 0))
+                full.paste(img, (cx - x, cy - y))
+                return full
+            except Exception as e:
+                # mss 실패 — 진단/문제 추적 위해 warning 으로 한 단계 격상.
+                logger.warning("LinControl mss grab failed (region=%dx%d+%d+%d, screen=%dx%d): %s — falling back to Xlib",
+                               cw, ch, cx, cy, screen_w, screen_h, e)
+
+        # 2) Xlib XGetImage 폴백 — same Display 사용. window-local 좌표 (0,0)~(w,h).
+        # frame_extents 가 있는 경우 윈도우의 (0,0) 은 client area 시작이므로 outer 전체를
+        # 한 번에 잡으려면 frame parent 윈도우에서 잡아야 하지만, 대부분 WM 에서 frame
+        # parent 직접 접근은 비표준. client area 만 캡처하는 걸로 단순화.
+        img = self._capture_via_xlib(hwnd, 0, 0, int(geom.width), int(geom.height))
+        if img is None:
             return None
+        # outer 크기로 맞춰서 반환 — 클릭 좌표계 일관성. frame 영역은 검은색.
+        l, r, t, b = self._get_frame_extents(hwnd)
+        if (l, r, t, b) == (0, 0, 0, 0):
+            return img
+        outer = Image.new("RGB", (int(geom.width) + l + r, int(geom.height) + t + b), (0, 0, 0))
+        outer.paste(img, (l, t))
+        return outer
 
     def _capture_window_image_for(self, hwnd: int, *_args, **_kwargs):
         """WinControlService 와 동일한 dispatch — X11 에선 screen 캡처 하나로 충분."""
