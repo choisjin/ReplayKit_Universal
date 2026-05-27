@@ -29,6 +29,8 @@ import os
 import signal
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -115,6 +117,9 @@ class Launcher(QWidget):
 
         self._server_proc: subprocess.Popen | None = None
         self._drag_pos: QPoint | None = None
+        # 브라우저 자동 오픈: _start() 호출 시 True, ready 후 또는 timeout 시 False
+        self._pending_browser_open = False
+        self._browser_check_attempts = 0
 
         self._build_ui()
         self._position_bottom_right()
@@ -124,6 +129,11 @@ class Launcher(QWidget):
         self.timer.timeout.connect(self._poll_status)
         self.timer.start(1000)
         self._poll_status()
+
+        # 자동 시작 (REPLAYKIT_NO_AUTOSTART=1 로 비활성화 가능).
+        # 윈도우가 화면에 그려진 후 시작하도록 500ms 지연 — UX 향상.
+        if not os.environ.get("REPLAYKIT_NO_AUTOSTART"):
+            QTimer.singleShot(500, self._auto_start)
 
     # ----- UI 빌드 -----
     def _build_ui(self) -> None:
@@ -279,6 +289,37 @@ class Launcher(QWidget):
             self.status_lbl.setStyleSheet(f"color: {_C['FG_DIM']}; background: transparent;")
             self.setWindowTitle("ReplayKit — 정지")
 
+    # ----- 자동 시작 / 브라우저 자동 오픈 -----
+    def _auto_start(self) -> None:
+        """앱 시작 시 자동 호출. 서버가 안 떠 있으면 시작, 떠 있으면 브라우저만."""
+        if get_running_pid() is None:
+            self._start()
+        else:
+            # 이미 실행 중 → 브라우저만 오픈 (사용자가 아이콘 두 번 클릭한 경우 등)
+            if not os.environ.get("REPLAYKIT_NO_BROWSER"):
+                self._open_web()
+
+    def _check_and_open_browser(self) -> None:
+        """서버 ready 감지 후 브라우저 자동 오픈. 최대 30초 시도."""
+        if not self._pending_browser_open:
+            return
+        self._browser_check_attempts += 1
+        if self._browser_check_attempts > 30:
+            # 30초 timeout — 포기
+            self._pending_browser_open = False
+            self.status_lbl.setText("서버 ready 대기 timeout")
+            self.status_lbl.setStyleSheet(f"color: {_C['RED']}; background: transparent;")
+            return
+        try:
+            urllib.request.urlopen(f"{SERVER_URL}/openapi.json", timeout=0.5)
+            # ready! 브라우저 오픈
+            self._pending_browser_open = False
+            if not os.environ.get("REPLAYKIT_NO_BROWSER"):
+                self._open_web()
+        except (urllib.error.URLError, OSError):
+            # 아직 ready 아님 → 1초 후 재시도
+            QTimer.singleShot(1000, self._check_and_open_browser)
+
     # ----- 서버 제어 -----
     def _toggle(self) -> None:
         if get_running_pid():
@@ -315,6 +356,10 @@ class Launcher(QWidget):
             PID_FILE.write_text(str(self._server_proc.pid))
             self.status_lbl.setText("시작 중...")
             self.status_lbl.setStyleSheet(f"color: {_C['YELLOW']}; background: transparent;")
+            # ready 감지 → 브라우저 자동 오픈 시퀀스 시작
+            self._pending_browser_open = True
+            self._browser_check_attempts = 0
+            QTimer.singleShot(1500, self._check_and_open_browser)  # 1.5s 후 첫 체크
         except Exception as e:
             self.status_lbl.setText(f"오류: {e}"[:40])
             self.status_lbl.setStyleSheet(f"color: {_C['RED']}; background: transparent;")
@@ -323,6 +368,8 @@ class Launcher(QWidget):
         pid = get_running_pid()
         if pid is None:
             return
+        # 종료 중에 브라우저 자동 오픈 시퀀스가 돌고 있으면 취소
+        self._pending_browser_open = False
         try:
             os.kill(pid, signal.SIGTERM)
             self.status_lbl.setText("종료 중...")
