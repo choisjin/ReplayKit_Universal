@@ -1,22 +1,30 @@
 #!/usr/bin/env bash
 # /usr/bin/ReplayKit — installed-mode launcher (placed by replaykit.deb).
 #
+# 서브커맨드:
+#   ReplayKit            # start (기본)  — 이미 실행 중이면 브라우저만 오픈
+#   ReplayKit start      # 명시적 start
+#   ReplayKit stop       # graceful 종료 (SIGTERM → 5초 대기 → SIGKILL)
+#   ReplayKit restart    # stop 후 start
+#   ReplayKit status     # 실행 상태 확인
+#
 # 전략:
 #   1. 진짜 immutable 자산 (python/, frontend/dist/, tools/, docs/, scripts/)
 #      → ~/.local/share/ReplayKit/<item> 으로 symlink (대용량, 변경 없음).
 #   2. backend Python 소스 + server.py 등 → user dir 에 "복사" (실시간 쓰기 필요).
-#      backend 코드가 Path(__file__).resolve().parent.parent.parent 로 PROJECT_ROOT
-#      를 구하는데 .resolve() 가 symlink 를 따라가서 /opt (read-only) 로 가버리는
-#      문제를 회피.
 #   3. 사용자 쓰기 가능 디렉토리 (scenarios/screenshots/results/logs) 생성.
 #   4. apt 업그레이드 후 /opt 의 version.txt 가 user dir 의 .installed-version 과
 #      다르면 backend/ 등을 자동 재복사 (코드 stale 방지).
-#   5. 임베디드 Python 으로 server.py (GUI) 또는 uvicorn (headless) 실행.
+#   5. 임베디드 Python + uvicorn 으로 backend.app.main:app 실행.
+#   6. PID 파일 (~/.local/share/ReplayKit/replaykit.pid) 로 종료 명령 지원.
 
 set -u
 
 APP_DIR="/opt/ReplayKit"
 USER_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/ReplayKit"
+PID_FILE="$USER_DATA/replaykit.pid"
+PORT="${REPLAYKIT_PORT:-8000}"
+SERVER_URL="http://localhost:${PORT}"
 
 if [ ! -d "$APP_DIR" ]; then
     echo "[ERROR] $APP_DIR 가 없습니다. 패키지가 손상되었거나 제거되었습니다." >&2
@@ -24,6 +32,125 @@ if [ ! -d "$APP_DIR" ]; then
 fi
 
 mkdir -p "$USER_DATA"
+
+# ============================================================
+# 서브커맨드 헬퍼 함수
+# ============================================================
+
+# PID 파일에서 PID 읽기 — 살아있고 우리 프로세스 (embedded python uvicorn) 면 echo, 아니면 빈값
+get_running_pid() {
+    if [ -f "$PID_FILE" ]; then
+        local pid
+        pid=$(cat "$PID_FILE" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            # 실제로 우리 launcher 가 띄운 uvicorn 인지 검증 (PID 재사용 방지)
+            if grep -qE "/opt/ReplayKit/python|backend\.app\.main" "/proc/$pid/cmdline" 2>/dev/null; then
+                echo "$pid"
+                return 0
+            fi
+        fi
+    fi
+    # PID 파일 없거나 잘못됐으면 pgrep 으로 fallback 탐색
+    if command -v pgrep >/dev/null 2>/dev/null; then
+        pgrep -f "${APP_DIR}/python/bin/python3.*uvicorn.*backend.app.main" 2>/dev/null | head -1
+    fi
+}
+
+do_stop() {
+    local pid
+    pid=$(get_running_pid)
+    if [ -z "$pid" ]; then
+        echo "ReplayKit 가 실행 중이지 않습니다."
+        rm -f "$PID_FILE"
+        return 0
+    fi
+
+    echo "ReplayKit 종료 중 (PID $pid)..."
+    kill -TERM "$pid" 2>/dev/null || true
+
+    # 최대 5초 대기 (graceful)
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "ReplayKit 정상 종료됨."
+            rm -f "$PID_FILE"
+            return 0
+        fi
+        sleep 0.5
+    done
+
+    # 안 죽으면 SIGKILL
+    echo "응답 없음 — 강제 종료 (SIGKILL)..."
+    kill -KILL "$pid" 2>/dev/null || true
+    sleep 0.3
+    rm -f "$PID_FILE"
+    echo "ReplayKit 강제 종료됨."
+}
+
+do_status() {
+    local pid
+    pid=$(get_running_pid)
+    if [ -n "$pid" ]; then
+        echo "ReplayKit 실행 중 (PID $pid)"
+        echo "  URL:      $SERVER_URL"
+        echo "  PID file: $PID_FILE"
+        if command -v curl >/dev/null 2>/dev/null; then
+            if curl -fsS "$SERVER_URL/openapi.json" >/dev/null 2>/dev/null; then
+                echo "  Health:   응답 정상"
+            else
+                echo "  Health:   포트는 열렸지만 응답 없음 (startup 중일 수 있음)"
+            fi
+        fi
+        return 0
+    else
+        echo "ReplayKit 종료 상태"
+        return 1
+    fi
+}
+
+# ============================================================
+# 서브커맨드 디스패치
+# ============================================================
+case "${1:-start}" in
+    stop)
+        do_stop
+        exit 0
+        ;;
+    status)
+        do_status
+        exit $?
+        ;;
+    restart)
+        do_stop
+        shift
+        echo "재시작 중..."
+        # fall through to start logic (set -- 으로 인자 재정렬)
+        set -- "$@"
+        ;;
+    start|--start)
+        shift
+        ;;
+    -h|--help|help)
+        sed -n '2,15p' "$0" | sed 's/^# \?//'
+        exit 0
+        ;;
+    -*)
+        # uvicorn 에 그대로 전달할 옵션 (예: --port 9000) — 처리 안 함, $@ 그대로
+        :
+        ;;
+    *)
+        # 알 수 없는 서브커맨드면 안내
+        if [ -n "${1:-}" ]; then
+            echo "알 수 없는 명령: $1" >&2
+            echo "사용법: ReplayKit [start|stop|restart|status]" >&2
+            exit 1
+        fi
+        ;;
+esac
+
+# ============================================================
+# 여기서부터 start 로직 (기존 동작)
+# ============================================================
 
 # ---- 1. 사용자 쓰기 가능 디렉토리 시드 ----
 for d in scenarios screenshots results logs; do
@@ -161,12 +288,10 @@ if [ ! -x "$PY" ]; then
     exit 1
 fi
 
-# ---- 포트 충돌 감지 ----
-# 같은 포트에 이미 다른 프로세스 (또는 좀비 ReplayKit) 가 바인드 중이면
-# uvicorn 이 OSError: address already in use 로 즉시 죽음 — 아이콘 클릭 모드에선
-# 사용자가 원인을 모름. 사전에 친절히 안내.
-PORT="${REPLAYKIT_PORT:-8000}"
-SERVER_URL="http://localhost:${PORT}"
+# ---- 포트 충돌 감지 / 이미 실행 중 처리 ----
+# 같은 포트에 이미 다른 프로세스 (또는 우리 인스턴스) 가 바인드 중이면
+# uvicorn 이 OSError: address already in use 로 즉시 죽음.
+# 우리 인스턴스면 그냥 브라우저만 오픈 (UX 향상), 다른 프로세스면 친절히 안내.
 
 port_in_use() {
     if command -v ss >/dev/null 2>/dev/null; then
@@ -181,19 +306,21 @@ port_in_use() {
 }
 
 if port_in_use; then
-    # 우리가 만든 좀비 ReplayKit 인지 확인 시도
-    OUR_PID=""
-    if command -v pgrep >/dev/null 2>/dev/null; then
-        OUR_PID=$(pgrep -f "${APP_DIR}/python/bin/python3.*uvicorn" | head -1 || true)
-    fi
+    OUR_PID=$(get_running_pid)
     if [ -n "$OUR_PID" ]; then
-        fatal "이전 ReplayKit 인스턴스가 포트 ${PORT} 에서 실행 중입니다 (PID ${OUR_PID}).
-브라우저에서 ${SERVER_URL} 로 직접 접속하거나, 종료 후 재시도:
-    kill ${OUR_PID}
-또는 모든 인스턴스 강제 종료:
-    pkill -f '${APP_DIR}/python'"
+        # 우리 ReplayKit 가 이미 실행 중 — 새로 안 띄우고 브라우저만 오픈
+        echo "[INFO] ReplayKit 이미 실행 중 (PID $OUR_PID). 브라우저로 접속합니다."
+        if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+            if command -v xdg-open >/dev/null 2>/dev/null; then
+                xdg-open "$SERVER_URL" >/dev/null 2>/dev/null &
+                exit 0
+            fi
+        fi
+        echo "    수동 접속: $SERVER_URL"
+        echo "    종료:      ReplayKit stop"
+        exit 0
     else
-        fatal "포트 ${PORT} 가 다른 프로세스에 의해 사용 중입니다.
+        fatal "포트 ${PORT} 가 다른 프로세스에 의해 사용 중입니다 (ReplayKit 외부).
 다른 포트로 실행:    REPLAYKIT_PORT=9000 ReplayKit
 또는 점유 프로세스 확인:
     sudo fuser ${PORT}/tcp
@@ -236,5 +363,14 @@ else
         echo "[START] uvicorn at ${SERVER_URL} (DISPLAY 없음, 헤드리스)"
     fi
 fi
+echo "    종료:    ReplayKit stop    또는 Ctrl+C"
+
+# PID 파일에 자기 PID 기록. exec 가 현재 셸 프로세스를 uvicorn 으로 대체하므로
+# bash 의 $$ 가 그대로 uvicorn 의 PID 가 된다.
+echo $$ > "$PID_FILE"
+# 비정상 종료 (signal, exec 직전 실패 등) 시 PID 파일 정리.
+# 정상 종료는 uvicorn 이 자체적으로 처리하지만, 다음 launcher 실행 시
+# get_running_pid() 가 stale 검사하므로 안전.
+trap 'rm -f "$PID_FILE"' EXIT INT TERM
 
 exec "$PY" -m uvicorn backend.app.main:app --host 0.0.0.0 --port "$PORT" "$@"

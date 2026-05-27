@@ -243,11 +243,26 @@ sudo apt install -y nodejs
 
 상세 가이드: [`packaging/README.md`](packaging/README.md)
 
-### 8-3. 실행 동작
+### 8-3. 실행 / 종료 동작
 
 ```bash
-ReplayKit              # uvicorn 시작 → ready 되면 기본 브라우저로 http://localhost:8000 자동 오픈
+ReplayKit              # 시작 (기본). 이미 실행 중이면 브라우저만 다시 오픈.
+ReplayKit start        # 명시적 시작 (위와 동일)
+ReplayKit stop         # graceful 종료 (SIGTERM → 최대 5초 대기 → SIGKILL)
+ReplayKit restart      # stop 후 start
+ReplayKit status       # PID, URL, 헬스 응답 여부 출력
 ```
+
+종료 방법 3가지:
+
+| 상황 | 종료 방법 |
+| --- | --- |
+| 터미널에서 `ReplayKit` 으로 실행 중 | `Ctrl+C` — uvicorn 이 SIGINT 받아 graceful shutdown |
+| 아이콘 클릭으로 백그라운드 실행 중 | 다른 터미널에서 `ReplayKit stop` |
+| 응답 없는 좀비 인스턴스 | `ReplayKit stop` 가 5초 후 SIGKILL 자동 적용 |
+
+PID 추적: `~/.local/share/ReplayKit/replaykit.pid` 파일 사용 + 살아있는지 검증
+(PID 재사용 방지를 위해 `/proc/$pid/cmdline` 까지 확인).
 
 | 환경 변수 | 효과 |
 | --- | --- |
