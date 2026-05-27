@@ -280,6 +280,47 @@ echo "============================================"
 echo "  Done: $OUTPUT"
 echo "============================================"
 ls -lh "$OUTPUT"
+
+# ---- [7/7] LG 배포 git 자동 갱신 push ----
+# 빌드 성공 시 ReplayKit.sh 의 CANONICAL_REMOTE (= 사용자 머신이 sync 받는 LG 배포본) 로
+# 현재 main HEAD 를 push. 인증/네트워크 실패해도 .deb 결과는 보존 — 핵심 산출물 손실 방지.
+# 비활성화하려면 SKIP_LGE_PUSH=1 환경변수로 호출:
+#   SKIP_LGE_PUSH=1 ./scripts/build_deb.sh
+if [ "${SKIP_LGE_PUSH:-0}" = "1" ]; then
+    echo
+    echo "[LGE PUSH] Skipped (SKIP_LGE_PUSH=1)."
+elif [ ! -d ".git" ] || ! command -v git >/dev/null 2>&1; then
+    echo
+    echo "[LGE PUSH] Skipped (not a git repo 또는 git 미설치)."
+else
+    # CANONICAL_REMOTE 를 ReplayKit.sh 에서 추출 — 한 곳에서만 정의 유지.
+    LGE_URL=$(grep -E '^CANONICAL_REMOTE=' ReplayKit.sh 2>/dev/null | head -1 | sed -e 's/^CANONICAL_REMOTE=//' -e 's/^"//' -e 's/"$//')
+    if [ -z "$LGE_URL" ]; then
+        echo
+        echo "[LGE PUSH] Skipped (ReplayKit.sh 에서 CANONICAL_REMOTE 추출 실패)."
+    else
+        echo
+        echo "[LGE PUSH] 배포본 sync → $LGE_URL"
+        # lge remote 가 없거나 URL 이 다르면 자동 등록/갱신
+        cur_lge=$(git remote get-url lge 2>/dev/null || true)
+        if [ -z "$cur_lge" ]; then
+            git remote add lge "$LGE_URL"
+            echo "[LGE PUSH] remote 'lge' 추가됨"
+        elif [ "$cur_lge" != "$LGE_URL" ]; then
+            git remote set-url lge "$LGE_URL"
+            echo "[LGE PUSH] remote 'lge' URL 갱신: $cur_lge → $LGE_URL"
+        fi
+        # force push — '기존 내용은 다 날리고 엎어쓰자' 정책. main 만 push.
+        if git push --force lge main; then
+            echo "[LGE PUSH] OK — 사용자 머신의 ReplayKit.sh 가 다음 실행 시 새 HEAD 로 sync."
+        else
+            echo "[LGE PUSH] FAILED — 인증/네트워크 확인 후 수동 재시도:"
+            echo "             git push --force lge main"
+            echo "             (.deb 산출물은 보존됨: $OUTPUT)"
+        fi
+    fi
+fi
+
 echo
 echo "Install:"
 echo "  sudo apt install $OUTPUT"
