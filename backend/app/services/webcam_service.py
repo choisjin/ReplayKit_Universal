@@ -31,17 +31,27 @@ _TOOLS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "tools"
 
 
 def _find_ffmpeg() -> Optional[str]:
-    """ffmpeg 실행 파일 경로 — 시스템 PATH → tools/ 폴더 순으로 탐색."""
-    found = shutil.which("ffmpeg")
-    if found:
-        return found
-    local = _TOOLS_DIR / "ffmpeg.exe"
-    if local.is_file():
-        return str(local)
-    local_bin = _TOOLS_DIR / "ffmpeg" / "bin" / "ffmpeg.exe"
-    if local_bin.is_file():
-        return str(local_bin)
-    return None
+    """ffmpeg 실행 파일 경로 — capture.ffmpeg_runtime.get_ffmpeg_path() 위임.
+
+    이전 구현은 (PATH → <repo>/tools/ffmpeg.exe) 만 탐색해 .exe 배포본의 설치 경로
+    (C:\\ReplayKit\\tools\\ffmpeg.exe) 를 못 찾는 경우가 있었음. 그 결과 ffmpeg writer
+    가 None 으로 떨어져 cv2.VideoWriter(mp4v) fallback → 브라우저에서 mp4v fourcc 코덱
+    재생 불가. ffmpeg_runtime.get_ffmpeg_path() 는 5단계 탐색 (FFMPEG_PATH 환경변수 →
+    repo/tools → CWD/tools → C:\\ReplayKit\\tools / /opt/ReplayKit/tools → PATH) 이라
+    배포/dev 둘 다 안정적.
+    """
+    try:
+        from .capture.ffmpeg_runtime import detect_ffmpeg
+        return detect_ffmpeg()
+    except Exception:
+        # ffmpeg_runtime import 실패 시 안전한 폴백 (이전 동작)
+        found = shutil.which("ffmpeg")
+        if found:
+            return found
+        local = _TOOLS_DIR / "ffmpeg.exe"
+        if local.is_file():
+            return str(local)
+        return None
 
 
 class _FfmpegProc:

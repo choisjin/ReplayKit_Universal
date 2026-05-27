@@ -43,6 +43,11 @@ tools/*
 # scrcpy-server.jar는 60KB로 작고 배포 패키지에 반드시 포함되어야 하므로 추적 대상.
 # 빌드/실행 시 디바이스에 push해 H.264 라이브 미러링 백엔드로 사용된다.
 !tools/scrcpy-server.jar
+# Windows 배포본 webcam 녹화의 H.264 libx264 인코딩 필수.
+# 누락 시 cv2.VideoWriter(mp4v) fallback → 브라우저에서 재생 불가.
+# capture/ffmpeg_runtime.py + webcam_service.py 둘 다 이 경로 탐색.
+# 97MB 라 LFS 후보지만 GitHub 100MB 한도 미만 → 직접 트래킹.
+!tools/ffmpeg.exe
 installer_output/
 DltViewerSDK_21.1.3_ver/
 
