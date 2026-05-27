@@ -36,6 +36,10 @@ backend/app/services/ocr_models/_tmp/
 
 # Large binaries (배포에만 포함)
 *.whl
+# build_dist.py 의 _copy_root_installers 가 PROJECT_ROOT 에서 찾아 dist 로 복사.
+# Win .exe installer 가 설치 시 silent install / 의존성 번들로 사용.
+# 모두 GitHub 100MB 단일 파일 한도 미만 — 직접 트래킹.
+!lge.auto-*.whl
 # tools/ 폴더는 binary들이 들어있어 기본적으로 ignore.
 # 단, "tools/" 형태(trailing slash)로 디렉토리를 통째로 ignore하면 negative
 # pattern(!) 이 적용되지 않으므로 "tools/*" 로 내용만 ignore해야 한다.
