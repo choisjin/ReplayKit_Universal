@@ -189,6 +189,9 @@ DISPLAY= ./ReplayKit.sh
 | 한글 깨짐 | `sudo apt install fonts-noto-cjk` |
 | `port 8000 already in use` | `./ReplayKit.sh` 의 stop_existing_server 가 자동 정리 |
 | OCR rapidocr 미설치 | `venv/bin/pip install rapidocr-onnxruntime` |
+| `error: command 'clang' failed: No such file or directory` (빌드 중) | embedded Python 의 sysconfig CC=clang. `sudo apt install -y clang` |
+| `portaudio.h: No such file or directory` (PyAudio 빌드) | `sudo apt install -y portaudio19-dev` |
+| Ubuntu 24.04 `apt install nodejs npm` 충돌 | NodeSource 사용: `curl -fsSL https://deb.nodesource.com/setup_20.x \| sudo -E bash -` 후 `sudo apt install nodejs` |
 
 ## 8. .deb 패키지 빌드 (원클릭 설치본 제작)
 
@@ -204,11 +207,27 @@ ReplayKit            # CLI 또는 앱 메뉴 아이콘
 ### 8-1. 빌드
 
 ```bash
-# Linux 머신 또는 WSL 에서
-sudo apt install -y dpkg-dev nodejs npm imagemagick
+# Linux 머신 또는 WSL 에서 (Ubuntu 22.04 / 24.04 기준)
+sudo apt install -y dpkg-dev imagemagick \
+                    build-essential clang \
+                    portaudio19-dev \
+                    libgl1 libglib2.0-0 libxcb1 libxkbcommon0
+
+# Node.js — Ubuntu 24.04 의 apt npm 은 의존성 충돌. NodeSource 권장:
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
 ./scripts/build_deb.sh                # 자동 (현재 arch)
 ./scripts/build_deb.sh --arch arm64   # 크로스 빌드
 ```
+
+> **왜 clang 과 portaudio19-dev 가 필요한가?**
+> `python-build-standalone` 의 임베디드 Python 은 Astral 이 clang 으로 빌드해
+> 배포하므로 sysconfig 의 `CC` 가 `clang` 으로 박혀있습니다. requirements.txt 의
+> `PyAudio` 등 sdist-only 패키지가 빌드될 때 pip 가 sysconfig 의 CC 를 그대로
+> 호출하기 때문에 시스템에 clang 이 있어야 합니다. `portaudio19-dev` 는 PyAudio
+> C extension 의 헤더(`portaudio.h`).
+> 대안: `CC=gcc CXX=g++ ./scripts/build_deb.sh` 로 gcc 강제. (그래도 portaudio dev 는 필요)
 
 결과: `dist/replaykit_<VERSION>_<ARCH>.deb`.
 

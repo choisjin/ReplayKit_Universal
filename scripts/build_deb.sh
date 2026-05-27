@@ -43,9 +43,29 @@ require() {
         exit 1
     }
 }
-require dpkg-deb "sudo apt install dpkg"
+require dpkg-deb "sudo apt install dpkg-dev"
 require tar "보통 시스템 기본"
-[ "$NO_FRONTEND" -eq 1 ] || require npm "sudo apt install nodejs npm"
+[ "$NO_FRONTEND" -eq 1 ] || require npm "NodeSource 또는 nvm 으로 Node.js 설치 (Ubuntu 24.04 의 apt npm 패키지는 의존성 충돌)"
+
+# python-build-standalone 의 Python 은 clang 으로 빌드되어 sysconfig 의 CC 가 clang.
+# PyAudio 같은 sdist-only C 확장 패키지가 빌드될 때 시스템에 clang 이 없으면 실패.
+# portaudio19-dev 는 PyAudio C extension 의 헤더.
+# build-essential 은 다른 일부 native 패키지 (e.g., 일부 OCR backend) 가 필요로 함.
+missing_apt=()
+command -v clang >/dev/null 2>/dev/null || missing_apt+=(clang)
+[ -f /usr/include/portaudio.h ] || missing_apt+=(portaudio19-dev)
+command -v gcc >/dev/null 2>/dev/null   || missing_apt+=(build-essential)
+
+if [ ${#missing_apt[@]} -gt 0 ]; then
+    echo "[ERROR] Python C 확장 빌드에 필요한 시스템 패키지가 부족합니다:"
+    echo "        ${missing_apt[*]}"
+    echo ""
+    echo "  해결: sudo apt install -y ${missing_apt[*]}"
+    echo ""
+    echo "  (embedded Python 은 clang 으로 빌드되어 있어 PyAudio 등 sdist 패키지가"
+    echo "   clang 을 호출함. portaudio19-dev 는 PyAudio C extension 의 헤더.)"
+    exit 1
+fi
 
 # ---- 메타데이터 ----
 if [ ! -f version.txt ]; then
