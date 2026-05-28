@@ -575,13 +575,28 @@ class DeviceManager:
     DEFAULT_OCR_DEVICE_ID = "OCR"
 
     def _ensure_default_common_device(self) -> None:
-        """Common(CMD) 디바이스를 기본값으로 등록 + 상태를 항상 connected로 고정."""
+        """Common 디바이스를 기본값으로 등록 + 상태를 항상 connected로 고정.
+
+        OS 별 module 분기:
+          - Windows: CMD (cmd.exe 기반)
+          - Linux/macOS: SHELL (bash 기반)
+        시나리오 이식성을 위해 device ID 는 "Common" 으로 동일. 다른 OS 에서 만든
+        시나리오를 열면 device 가 자동으로 host OS 의 module 을 사용 — module_command 의
+        params.module 도 device 의 info.module 을 따른다.
+        """
+        default_module = "SHELL" if sys.platform.startswith("linux") else "CMD"
         existing = self._devices.get(self.DEFAULT_COMMON_DEVICE_ID)
-        if existing and existing.info.get("module") == "CMD":
-            # 이미 등록되어 있으면 status만 강제 원상 복구 (연결 불필요)
+        if existing:
+            # 기존 디바이스가 있으면 상태/타입 복구 + cross-OS module 자동 교정.
             existing.status = "connected"
             existing.type = "module"
             existing.category = "auxiliary"
+            # 이전 OS 의 module 명이 박혀 있으면 (예: Windows 빌드본 → Linux 사용) 현재 OS 의 것으로 교체.
+            cur_module = (existing.info or {}).get("module")
+            if cur_module != default_module:
+                existing.info = {**(existing.info or {}), "module": default_module, "connect_type": "none"}
+                logger.info("Common device module auto-migrated: %s → %s", cur_module, default_module)
+                self._save_auxiliary_devices()
             return
         dev = ManagedDevice(
             id=self.DEFAULT_COMMON_DEVICE_ID,
@@ -590,11 +605,11 @@ class DeviceManager:
             address="",
             status="connected",  # 연결 불필요한 모듈이므로 바로 사용 가능
             name="Common",
-            info={"module": "CMD", "connect_type": "none"},
+            info={"module": default_module, "connect_type": "none"},
         )
         self._devices[self.DEFAULT_COMMON_DEVICE_ID] = dev
         self._save_auxiliary_devices()
-        logger.info("Registered default 'Common' device (CMD module)")
+        logger.info("Registered default 'Common' device (%s module)", default_module)
 
     def _ensure_default_ocr_device(self) -> None:
         """OCR 가상 디바이스를 기본값으로 등록 + 상태를 항상 connected로 고정."""

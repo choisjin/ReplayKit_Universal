@@ -5235,14 +5235,15 @@ export default function RecordPage() {
                               selectedModuleName === 'OCR' &&
                               (selectedModuleFunc === 'CheckText' || selectedModuleFunc === 'ClickText' || selectedModuleFunc === 'ExtractAllText') &&
                               p.name === 'language';
-                            // CMD.Check: match_mode → contains/exact 콤보박스
+                            // CMD/SHELL.Check: match_mode → contains/exact 콤보박스
+                            // SHELL 은 Linux 측 CMD 대응 모듈로 동일 인터페이스 — 같은 UI 헬퍼 적용.
                             const isCmdMatchMode =
-                              selectedModuleName === 'CMD' &&
+                              (selectedModuleName === 'CMD' || selectedModuleName === 'SHELL') &&
                               selectedModuleFunc === 'Check' &&
                               p.name === 'match_mode';
-                            // CMD.Check_Logic: logic → and/or 콤보박스
+                            // CMD/SHELL.Check_Logic: logic → and/or 콤보박스
                             const isCmdLogic =
-                              selectedModuleName === 'CMD' &&
+                              (selectedModuleName === 'CMD' || selectedModuleName === 'SHELL') &&
                               selectedModuleFunc === 'Check_Logic' &&
                               p.name === 'logic';
                             if (isOcrRegionParam && moduleFuncArgs['mode'] !== 'Region') return null;

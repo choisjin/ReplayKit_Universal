@@ -79,36 +79,46 @@ function AppContent() {
   const [chatOpen, setChatOpen] = useState(false);
   const [diskInfoList, setDiskInfoList] = useState<{ drive: string; free_gb: number; total_gb: number; used_percent: number }[]>([]);
   const [appVersion, setAppVersion] = useState<string>('');
-  // 페이지 로드 시점의 버전 — 이후 폴링으로 다른 값이 오면 백엔드가 업데이트된 것으로 판단하고
-  // 브라우저를 강제 reload (캐시된 stale frontend 자산 폐기).
+  // boot_id: 백엔드 프로세스 시작 시점에 생성되는 unique id. version.txt 가 안 바뀌어도
+  // 서버가 재시작되면 이 값이 바뀌므로 브라우저 reload 트리거에 사용.
+  const [appBootId, setAppBootId] = useState<string>('');
+  // 페이지 로드 시점의 (version, boot_id) — 이후 폴링으로 다른 값이 오면 reload.
   const initialVersionRef = useRef<string>('');
+  const initialBootIdRef = useRef<string>('');
   const reloadingRef = useRef<boolean>(false);
   const { settings, uploadWebcamRecording, fetchSettings } = useSettings();
   const { t } = useTranslation();
 
-  // 백엔드 버전이 페이지 로드 후 바뀌면 (= git pull / apt upgrade 직후) 강제 새로고침.
-  // index.html 은 no-cache 로 서빙되지만, 이미 메모리에 있는 SPA 는 자동 갱신되지 않아
-  // 명시적 location.reload 가 필요. 사용자에겐 1회 안내 후 reload — 무한 reload 방지를
-  // 위해 reloadingRef 로 guard.
+  // 백엔드 version 또는 boot_id 가 페이지 로드 후 바뀌면 강제 새로고침.
+  //   - version 변경: 빌드 업데이트 (git pull / apt upgrade)
+  //   - boot_id 변경: 서버 재시작 (version 변경 없는 hotfix 도 커버)
+  // 사용자에겐 1회 안내 후 reload — reloadingRef 로 무한 reload 방지.
   useEffect(() => {
-    if (!appVersion) return;
-    if (!initialVersionRef.current) {
+    if (!appVersion && !appBootId) return;
+    if (!initialVersionRef.current && !initialBootIdRef.current) {
       initialVersionRef.current = appVersion;
+      initialBootIdRef.current = appBootId;
       return;
     }
-    if (appVersion !== initialVersionRef.current && !reloadingRef.current) {
+    const versionChanged = appVersion && initialVersionRef.current && appVersion !== initialVersionRef.current;
+    const bootChanged = appBootId && initialBootIdRef.current && appBootId !== initialBootIdRef.current;
+    if ((versionChanged || bootChanged) && !reloadingRef.current) {
       reloadingRef.current = true;
-      console.log('[update] backend version changed', initialVersionRef.current, '→', appVersion, '· reloading');
-      // 캐시 무효화를 위한 query string + location.reload(true) (deprecated 하지만 일부 브라우저는 hint 사용)
+      const reason = versionChanged
+        ? `version ${initialVersionRef.current} → ${appVersion}`
+        : `boot ${initialBootIdRef.current} → ${appBootId} (server restarted)`;
+      console.log('[update] backend changed —', reason, '· reloading');
+      // query string 추가로 추가 캐시 무효화 + 새 index.html 강제 fetch
       try {
         const url = new URL(window.location.href);
-        url.searchParams.set('_v', appVersion);
+        url.searchParams.set('_v', appVersion || 'na');
+        url.searchParams.set('_b', appBootId.slice(0, 12) || 'na');
         window.location.replace(url.toString());
       } catch {
         window.location.reload();
       }
     }
-  }, [appVersion]);
+  }, [appVersion, appBootId]);
 
   // ── 로고 5연타 → 런처 로그 ──
   const logoClickRef = useRef<number[]>([]);
@@ -164,9 +174,10 @@ function AppContent() {
             // 배열이면 그대로, 단일 객체면 배열로 래핑 (하위호환)
             setDiskInfoList(Array.isArray(data) ? data : [data]);
           }).catch(() => {});
-          // 버전 조회
+          // 버전 + boot_id 조회. boot_id 가 바뀌면 서버 재시작 → useEffect 가 reload.
           serverApi.getVersion().then(res => {
             setAppVersion(res.data?.version || '');
+            setAppBootId(res.data?.boot_id || '');
           }).catch(() => {});
         }
       } catch {

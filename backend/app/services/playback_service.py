@@ -2226,9 +2226,10 @@ class PlaybackService:
 
             # MODULE_COMMAND는 step.device_id가 과거 녹화·편집 과정에서 엉뚱한 디바이스를
             # 가리키는 경우가 있음(예: HKMC/DLT address로 resolve). 모듈 이름이 일반
-            # 모듈(Android/CMD 제외)이면 현재 시점에 유일하게 해당 모듈이 붙어있는
+            # 모듈(Android/CMD/SHELL 제외)이면 현재 시점에 유일하게 해당 모듈이 붙어있는
             # auxiliary 디바이스가 있는지 찾아, 있으면 그것으로 강제 교체한다.
-            if module_name and module_name not in ("Android", "CMD"):
+            # CMD/SHELL 은 Common 디바이스 (OS 별로 다름) 에 묶여 있어 device 재탐색 불필요.
+            if module_name and module_name not in ("Android", "CMD", "SHELL"):
                 # HKMC6th는 hkmc_agent 타입 디바이스(primary)에서 찾는다.
                 # 그 외 모듈은 auxiliary 디바이스의 info.module로 매칭.
                 dev_module = (dev.info or {}).get("module") if dev else None

@@ -32,7 +32,17 @@ export default function ChangelogPage() {
       setCommits(res.data.commits || []);
       setBranch(res.data.branch || '');
       setTags(res.data.tags || []);
-    } catch {
+      // 백엔드가 200 OK 로 응답했지만 commits 가 비고 note/fetch_warning 이 있으면
+      // 정보성 메시지로 표시 (loadFailed popup 은 진짜 네트워크 에러일 때만).
+      const data: any = res.data || {};
+      if ((!data.commits || data.commits.length === 0) && (data.note || data.fetch_warning)) {
+        const detail = data.fetch_warning || data.note;
+        console.warn('[changelog]', detail);
+        message.info(detail, 4);
+      }
+    } catch (e) {
+      // axios HTTP 에러 (서버 5xx / 네트워크 단절) — 진짜 실패 케이스
+      console.error('[changelog] load failed', e);
       message.error(t('changelog.loadFailed'));
     } finally {
       setLoading(false);

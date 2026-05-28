@@ -438,22 +438,24 @@ async def git_log(limit: int = 100, fetch: bool = False):
       - Windows: 로컬 working tree (.git) 의 origin/main → main → HEAD 순 폴백.
 
     fetch=true 면 강제 갱신 (네트워크 필요), false 면 캐시/로컬만 조회.
+
+    예외 처리 정책: 어떤 실패에서도 HTTP 500 을 던지지 않고 200 OK + 빈 commits +
+    note/fetch_warning 으로 응답. 프론트는 빈 commits 자체를 정상 케이스로 보고
+    안내 메시지만 표시 (catch 블록의 message.error popup 안 뜸).
     """
     no_window = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     fetch_error: Optional[str] = None
 
-    # ── Windows: 로컬 working tree 기준 ──
-    if sys.platform == "win32":
-        git_root = _find_git_root()
-        if git_root is None:
-            return {
-                "branch": "(no git)",
-                "tags": [],
-                "commits": [],
-                "note": "git 트래킹이 설정되지 않았습니다.",
-            }
-        cwd = str(git_root)
-        try:
+    def _empty(note: str, **extra) -> dict:
+        return {"branch": "(unknown)", "tags": [], "commits": [], "note": note, **extra}
+
+    try:
+        # ── Windows: 로컬 working tree 기준 ──
+        if sys.platform == "win32":
+            git_root = _find_git_root()
+            if git_root is None:
+                return _empty("git 트래킹이 설정되지 않았습니다.")
+            cwd = str(git_root)
             if fetch:
                 fetch_r = subprocess.run(
                     ["git", "fetch", "origin", "main"],
@@ -505,56 +507,44 @@ async def git_log(limit: int = 100, fetch: bool = False):
             if not commits:
                 result["note"] = "git log 결과 없음."
             return result
-        except subprocess.TimeoutExpired:
-            raise HTTPException(status_code=500, detail="git command timed out")
-        except FileNotFoundError:
-            raise HTTPException(status_code=500, detail="git not found")
 
-    # ── Linux: 고정 URL 캐시 ──
-    try:
+        # ── Linux: 고정 URL 캐시 ──
         cache = _ensure_changelog_cache()
         cwd = str(cache)
 
-        # VS Code / GUI askpass 우회 + 터미널 prompt 안 뜨게 (서버 환경에 prompt 의미 없음).
-        # http URL 이라 credential 캐시 없으면 401 로 빠르게 실패.
-        push_env = os.environ.copy()
-        push_env.pop("GIT_ASKPASS", None)
-        push_env.pop("SSH_ASKPASS", None)
-        push_env["GIT_TERMINAL_PROMPT"] = "0"
+        env = os.environ.copy()
+        env.pop("GIT_ASKPASS", None)
+        env.pop("SSH_ASKPASS", None)
+        env["GIT_TERMINAL_PROMPT"] = "0"
 
-        # 캐시가 비어 있거나 fetch=true 면 fetch. depth=300 로 가벼운 history 만.
         cache_empty = not (cache / ".git" / "refs" / "remotes" / "origin").exists()
         if fetch or cache_empty:
             fetch_r = subprocess.run(
                 ["git", "-c", "core.askPass=", "fetch", "--depth=300", "origin", "main"],
                 cwd=cwd, capture_output=True, timeout=30,
-                encoding="utf-8", errors="replace", creationflags=no_window, env=push_env,
+                encoding="utf-8", errors="replace", creationflags=no_window, env=env,
             )
             if fetch_r.returncode != 0:
-                fetch_error = fetch_r.stderr.strip()
-                # cache 가 있으면 마지막 fetch 본으로 응답 — offline 회복력.
+                fetch_error = (fetch_r.stderr or fetch_r.stdout or "").strip()
+                logger.warning("[git-log] fetch failed: %s", fetch_error[:300])
 
         r = subprocess.run(
             ["git", "log", "origin/main", f"-{limit}", "--pretty=format:%H||%h||%an||%ae||%aI||%s"],
             cwd=cwd, capture_output=True, timeout=10,
             encoding="utf-8", errors="replace", creationflags=no_window,
         )
-        commits: list[dict] = []
+        commits = []
         if r.returncode == 0 and r.stdout.strip():
             for line in r.stdout.strip().split("\n"):
                 parts = line.split("||", 5)
                 if len(parts) < 6:
                     continue
                 commits.append({
-                    "hash": parts[0],
-                    "short_hash": parts[1],
-                    "author": parts[2],
-                    "email": parts[3],
-                    "date": parts[4],
-                    "message": parts[5],
+                    "hash": parts[0], "short_hash": parts[1],
+                    "author": parts[2], "email": parts[3],
+                    "date": parts[4], "message": parts[5],
                 })
 
-        # 태그 정보 (캐시 origin 기준)
         tag_r = subprocess.run(
             ["git", "tag", "--sort=-creatordate"],
             cwd=cwd, capture_output=True, timeout=5, encoding="utf-8", errors="replace",
@@ -562,7 +552,7 @@ async def git_log(limit: int = 100, fetch: bool = False):
         )
         tags = [t for t in tag_r.stdout.strip().split("\n") if t] if tag_r.returncode == 0 else []
 
-        result: dict = {
+        result = {
             "branch": "main",
             "tags": tags,
             "commits": commits,
@@ -571,12 +561,17 @@ async def git_log(limit: int = 100, fetch: bool = False):
         if fetch_error:
             result["fetch_warning"] = fetch_error
         if not commits:
-            result["note"] = "원격에서 commit 을 가져오지 못했습니다. 네트워크/인증을 확인하세요."
+            result["note"] = "원격에서 commit 을 가져오지 못했습니다. 네트워크/인증 확인 필요."
         return result
+
     except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=500, detail="git command timed out")
+        return _empty("git 명령 timeout — 네트워크 응답 지연.")
     except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="git not found")
+        return _empty("git 명령을 찾을 수 없습니다. apt install git 필요.")
+    except Exception as e:
+        # 예상 못한 모든 예외 — 500 대신 200 + 진단으로 응답해 popup 안 뜨게.
+        logger.exception("[git-log] unexpected error: %s", e)
+        return _empty(f"내부 오류: {type(e).__name__}: {e}")
 
 
 # ───────────── 메모리 사용량 모니터링 ─────────────
@@ -755,17 +750,32 @@ async def open_results_folder():
     return {"status": "ok", "path": str(results_dir)}
 
 
+# 프로세스 boot id — 모듈 import 시점(=백엔드 프로세스 시작 시점) 한 번만 평가.
+# version.txt 가 안 바뀐 채로 git pull 만 한 경우 (예: bugfix 인데 버전 bump 안 함) 에도
+# 백엔드가 재시작되면 이 값이 바뀌므로 프론트가 그걸로 reload 트리거.
+import time as _time
+import uuid as _uuid
+_BOOT_ID = f"{int(_time.time())}-{_uuid.uuid4().hex[:8]}"
+
+
 @router.get("/version")
 async def get_version():
-    """프로젝트 버전 조회 (version.txt). 빌드된 배포본에서는 dist 루트에 위치."""
+    """프로젝트 버전 + 백엔드 프로세스 boot_id 조회.
+
+    프론트는 두 값 모두 감시:
+      - version 바뀌면 → 빌드 변경됨 → reload
+      - boot_id 바뀌면 → 서버 재시작됨 → reload (version 변경 없는 패치도 커버)
+    """
     candidates = [
         _PROJECT_ROOT / "version.txt",
         Path(__file__).resolve().parent.parent.parent.parent / "version.txt",
     ]
+    version = ""
     for vf in candidates:
         if vf.exists():
             try:
-                return {"version": vf.read_text(encoding="utf-8").strip()}
+                version = vf.read_text(encoding="utf-8").strip()
+                break
             except Exception:
                 pass
-    return {"version": ""}
+    return {"version": version, "boot_id": _BOOT_ID}
