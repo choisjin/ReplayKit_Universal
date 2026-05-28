@@ -93,16 +93,26 @@ if [ "$OFFLINE_MODE" = "1" ]; then
     echo "      [OFFLINE] PyPI install skipped."
 else
     "$PY" -m pip install --upgrade pip -q
+    # 이전 install 의 stale lge.auto 가 numpy (<1.25) 를 pin 해서 requirements.txt
+    # 의 numpy==2.2.6 (opencv-python 요구) 으로 못 올라가는 케이스 방지. 아래에서
+    # --no-deps 로 재설치하므로 의존성 누락 없음.
+    "$PY" -m pip uninstall -y lge.auto 2>/dev/null || true
     "$PY" -m pip install -r requirements.txt -q
 fi
 
 # lge.auto 로컬 wheel (Linux 휠만 — win_amd64 휠이 함께 있어도 거름).
 # 아키텍처별 wheel 파일명: lge.auto-<ver>-cp310-cp310-linux_x86_64.whl 또는 linux_aarch64.
+#
+# --no-deps 사용 이유:
+#   Linux wheel METADATA 가 numpy (<1.25,>=1.21) 로 numpy 1.x 만 허용 — 그러나 우리
+#   requirements.txt 는 numpy 2.2.6 (opencv-python 4.13 의 numpy>=2 요구 충족). wheel 의
+#   declared deps 를 그대로 따르면 numpy 가 1.24.4 로 다운그레이드되어 opencv 와 충돌.
+#   wheel 의 의존 패키지는 모두 requirements.txt 에 이미 정의되어 있어 --no-deps 안전.
 shopt -s nullglob
 whl_files=(lge.auto-*-linux_*.whl)
 if [ ${#whl_files[@]} -gt 0 ]; then
-    "$PY" -m pip install "${whl_files[0]}"
-    echo "      lge.auto installed: ${whl_files[0]}"
+    "$PY" -m pip install --no-deps "${whl_files[0]}"
+    echo "      lge.auto installed: ${whl_files[0]} (--no-deps)"
 else
     echo "      [Note] lge.auto linux wheel not found"
 fi

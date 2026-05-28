@@ -165,14 +165,22 @@ fi
 # ---- [3/7] Python 패키지 설치 (embedded Python 안에) ----
 echo "[3/7] pip install -r requirements.txt → python/..."
 ./python/bin/python3 -m pip install --upgrade pip -q
+
+# 이전 빌드 잔재 정리 — 옛 lge.auto 가 numpy (<1.25) 를 pin 하고 있으면 requirements.txt
+# 의 numpy==2.2.6 (opencv-python numpy>=2 요구 충족용) 으로 못 올라감. 미리 제거 후
+# 아래에서 --no-deps 로 재설치하므로 의존성 누락 없음.
+./python/bin/python3 -m pip uninstall -y lge.auto 2>/dev/null || true
+
 ./python/bin/python3 -m pip install -r requirements.txt -q
 
 shopt -s nullglob
-# Linux 휠만 (win_amd64 휠이 함께 있어도 거름) — 아키텍처별: linux_x86_64 또는 linux_aarch64
+# Linux 휠만 (win_amd64 휠이 함께 있어도 거름) — 아키텍처별: linux_x86_64 또는 linux_aarch64.
+# --no-deps: wheel METADATA 의 numpy (<1.25,>=1.21) pin 이 opencv-python numpy>=2 와 충돌하므로
+# declared deps 무시. wheel 의 모든 deps 는 requirements.txt 에 이미 있음 (numpy 만 wheel 이 과도 제약).
 whl_files=(lge.auto-*-linux_*.whl)
 if [ ${#whl_files[@]} -gt 0 ]; then
-    ./python/bin/python3 -m pip install "${whl_files[0]}" -q
-    echo "      lge.auto installed: ${whl_files[0]}"
+    ./python/bin/python3 -m pip install --no-deps "${whl_files[0]}" -q
+    echo "      lge.auto installed: ${whl_files[0]} (--no-deps)"
 else
     echo "      [Note] lge.auto linux wheel not found — Linux 전용 모듈 (CANAT 등) 사용 불가"
 fi
