@@ -505,9 +505,11 @@ export default function ScenarioPage() {
     } catch { /* ignore */ }
   };
 
-  const fetchScenarioStepsCache = async (names: string[]) => {
+  const fetchScenarioStepsCache = async (names: string[], force = false) => {
+    // force=true: 캐시 키 존재 여부와 무관하게 서버에서 다시 받아와 덮어씀.
+    // 그룹 관리 모달 열림처럼 "지금 즉시 최신 상태가 필요한" 진입점에서 사용.
     const cache: Record<string, any[]> = { ...scenarioStepsCache };
-    const toFetch = names.filter((n) => !(n in cache));
+    const toFetch = force ? names : names.filter((n) => !(n in cache));
     await Promise.all(toFetch.map(async (name) => {
       try {
         const res = await scenarioApi.get(name);
@@ -1579,8 +1581,10 @@ export default function ScenarioPage() {
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 3, padding: '4px 0', flexShrink: 0 }}>
         <Button icon={<FolderOutlined />} size="small" onClick={() => {
           setGroupModalVisible(true);
-          const allNames = Object.values(groups).flatMap((ms) => ms.map((m) => m.name));
-          if (allNames.length > 0) fetchScenarioStepsCache(allNames);
+          // 모달 open 시 멤버 시나리오 스텝을 강제 refetch — 다른 경로(RecordPage 녹화, 외부 편집)로
+          // 변경된 내용까지 즉시 반영. 캐시에 이미 있어도 덮어씀.
+          const allNames = Array.from(new Set(Object.values(groups).flatMap((ms) => ms.map((m) => m.name))));
+          if (allNames.length > 0) fetchScenarioStepsCache(allNames, true);
         }}>{t('scenario.groupManage')}</Button>
         <Button icon={<ExportOutlined />} size="small" onClick={() => { setExportSelectedScenarios([]); setExportSelectedGroups([]); setExportAll(false); setExportModalVisible(true); }}>{t('scenario.exportTitle')}</Button>
         <Button icon={<ImportOutlined />} size="small" onClick={() => { setImportFile(null); setImportPreviewData(null); setImportModalVisible(true); }}>{t('scenario.importTitle')}</Button>
