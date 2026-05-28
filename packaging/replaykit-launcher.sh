@@ -249,6 +249,20 @@ elif [ -f "$APP_VERSION_FILE" ] && [ ! -f "$INSTALLED_VERSION_FILE" ]; then
     NEEDS_SYNC=1
 fi
 
+# mtime 기반 추가 검사 — version.txt 가 같아도 .deb 가 재빌드/재설치되면 mtime 갱신.
+# version bump 없이 dev 가 .deb 를 재배포하는 경우에도 user dir 의 backend 가 따라서 갱신됨.
+# (NEEDS_SYNC=0 인 경우에만 검사 — 위 분기가 1로 만들면 그대로 통과.)
+if [ "$NEEDS_SYNC" = "0" ] && [ -d "$USER_DATA/backend" ]; then
+    APP_BACKEND_MAIN="$APP_DIR/backend/app/main.py"
+    USER_BACKEND_MAIN="$USER_DATA/backend/app/main.py"
+    if [ -f "$APP_BACKEND_MAIN" ] && [ -f "$USER_BACKEND_MAIN" ]; then
+        if [ "$APP_BACKEND_MAIN" -nt "$USER_BACKEND_MAIN" ]; then
+            NEEDS_SYNC=1
+            echo "[SYNC] /opt backend 가 user dir 보다 새로움 (mtime) — backend 재복사."
+        fi
+    fi
+fi
+
 if [ "$NEEDS_SYNC" = "1" ]; then
     echo "[INIT] backend 코드를 $USER_DATA 에 복사 중 (최초/업그레이드)..."
 
