@@ -245,6 +245,7 @@ for item in \
     backend \
     scripts \
     tools \
+    docs \
     server.py \
     _launcher.py \
     requirements.txt \

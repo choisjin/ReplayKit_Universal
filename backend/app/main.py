@@ -389,10 +389,19 @@ results_dir = Path(__file__).resolve().parent.parent / "results"
 results_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/results-files", StaticFiles(directory=str(results_dir)), name="results-files")
 
-# Serve docs (user guide)
+# Serve docs (user guide / module guide).
+# _PROJECT_ROOT/docs 가 1순위, /opt/ReplayKit/docs 가 fallback (.deb 환경에서 symlink 가
+# 깨졌거나 user_data 로 sync 안 된 케이스 방어).
 _docs_dir = Path(__file__).resolve().parent.parent.parent / "docs"
+if not _docs_dir.is_dir():
+    _opt_docs = Path("/opt/ReplayKit/docs")
+    if _opt_docs.is_dir():
+        _docs_dir = _opt_docs
 if _docs_dir.is_dir():
     app.mount("/docs", StaticFiles(directory=str(_docs_dir), html=True), name="docs")
+    logger.info("Docs mounted from %s", _docs_dir)
+else:
+    logger.warning("Docs directory not found — /docs requests will fall through to SPA")
 
 @app.get("/api/health")
 async def health_check():
@@ -428,6 +437,20 @@ if _frontend_dist.is_dir():
 
     @app.get("/{path:path}")
     async def _serve_frontend(path: str):
+        # /docs/* 는 mount 가 실패한 케이스 (예: .deb staging 에 docs 누락) 라도 가능한 대안
+        # 경로 (/opt/ReplayKit/docs) 에서 직접 서빙. 안 그러면 SPA index.html 이 떠서 사용자
+        # 가이드 버튼이 동작 안 함.
+        if path.startswith("docs/"):
+            rel = path[len("docs/"):]
+            for base in (_docs_dir, Path("/opt/ReplayKit/docs")):
+                if base and base.is_dir():
+                    cand = base / rel
+                    if cand.is_file():
+                        return _FR(str(cand))
+            # docs 파일 못 찾으면 404 — SPA fallback 으로 흘려보내지 않음
+            from fastapi.responses import Response as _Resp
+            return _Resp(content=f"Docs file not found: {rel}", status_code=404)
+
         file = _frontend_dist / path
         if file.is_file():
             return _FR(str(file), headers=_frontend_cache_headers(file))
