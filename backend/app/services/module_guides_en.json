@@ -1217,5 +1217,65 @@
         "params": {}
       }
     }
+  },
+  "SHELL": {
+    "_description": "Shell Command Execution — Executes Linux/macOS bash commands. Linux counterpart of CMD. Used for running external programs or system commands.",
+    "functions": {
+      "Run": {
+        "description": "Executes a bash command and waits for completion (blocking). Returns the result.",
+        "params": {
+          "command": "bash command to execute. e.g. 'ls -la /tmp', 'ps -ef | grep python'",
+          "timeout": "Max wait time in seconds. Default: 30"
+        }
+      },
+      "Check": {
+        "description": "Executes a bash command and verifies the output against an expected string (blocking). Returns a 'FAIL:' prefix on mismatch, which causes the step to be marked as fail.",
+        "params": {
+          "command": "bash command to execute",
+          "expected": "Expected substring or full-match value. Empty = pass only when output is empty (no-output check)",
+          "match_mode": "Comparison mode: 'contains' (substring) or 'exact' (full match). Default: contains",
+          "timeout": "Max wait time in seconds. Default: 30"
+        }
+      },
+      "Check_Logic": {
+        "description": "Executes a bash command and verifies the output against multiple keywords using and/or logic (blocking). Returns a 'FAIL:' prefix on mismatch.",
+        "params": {
+          "command": "bash command to execute",
+          "keywords": "Comma-separated keyword list. e.g. 'OK,ready,done'",
+          "logic": "'and' (all keywords required) or 'or' (any one). Default: and",
+          "timeout": "Max wait time in seconds. Default: 30"
+        }
+      },
+      "RunCapture": {
+        "description": "Executes a command in the background and immediately returns a '[BG_TASK:bg_x]' placeholder (non-blocking).",
+        "params": {
+          "command": "Command to execute"
+        }
+      },
+      "CheckCapture": {
+        "description": "Executes a command in the background and returns a '[BG_TASK:bg_x]' placeholder. On completion, the server evaluates expected/match_mode for final pass/fail.",
+        "params": {
+          "command": "Command to execute",
+          "expected": "Expected string",
+          "match_mode": "'contains' or 'exact'. Default: contains"
+        }
+      },
+      "RunBackground": {
+        "description": "Spawns a bash subprocess fire-and-forget. Detaches via setsid so it survives caller termination. Returns the PID but output cannot be retrieved.",
+        "params": {
+          "command": "bash command to execute. e.g. 'sleep 60', 'python3 script.py'"
+        }
+      },
+      "Kill": {
+        "description": "Terminates a background process (SIGKILL).",
+        "params": {
+          "pid": "PID of the process to terminate"
+        }
+      },
+      "ListBackground": {
+        "description": "Returns the list of running background processes.",
+        "params": {}
+      }
+    }
   }
 }

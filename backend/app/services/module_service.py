@@ -634,6 +634,8 @@ def get_module_functions(module_name: str) -> list[dict]:
     per_module_excluded: dict[str, set[str]] = {
         "SerialLogging": {"Connect", "Disconnect", "IsConnected"},
         "CMD": {"CheckCapture", "RunCapture", "RunBackground", "ListBackground"},
+        # SHELL 은 CMD 의 Linux/macOS 대응 모듈 — 노출 정책 동일
+        "SHELL": {"CheckCapture", "RunCapture", "RunBackground", "ListBackground"},
     }
     excluded = per_module_excluded.get(module_name, set())
 
