@@ -223,6 +223,7 @@ const GroupIcon = ({ color }: { color?: string }) => (
 export default function ScenarioPage() {
   const { t, lang } = useTranslation();
   const { settings, saveExportZipToDir } = useSettings();
+  const isDark = settings.theme === 'dark';
   const dltSessionHook = useDLTSessions();
   const serialSessionHook = useSerialSessions();
   const [scenarioLogTab, setScenarioLogTab] = useState<'dlt' | 'serial'>('dlt');
@@ -2387,18 +2388,18 @@ export default function ScenarioPage() {
                         >
                           {/* 헤더 — 클릭 시 시나리오로 이동하지 않고 펼침/접힘 */}
                           <div
-                            style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', color: '#000' }}
+                            style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}
                             onClick={() => {
                               toggleExpandEntry(entryKey);
                               if (!isExpanded && steps.length === 0) fetchScenarioStepsCache([entry.name]);
                             }}
                           >
                             <Tag color={isPlayingNow ? 'processing' : 'blue'} style={{ margin: 0, minWidth: 24, textAlign: 'center' }}>{idx + 1}</Tag>
-                            <Button size="small" type="text" style={{ padding: '0 2px', fontSize: 10, color: '#000' }}
+                            <Button size="small" type="text" style={{ padding: '0 2px', fontSize: 10 }}
                               icon={isExpanded ? <DownOutlined /> : <RightOutlined />}
                             />
                             <GroupIcon />
-                            <span style={{ flex: 1, fontWeight: 500, color: isPlayingNow ? '#1677ff' : '#000' }}>{entry.name}</span>
+                            <span style={{ flex: 1, fontWeight: 500, color: isPlayingNow ? '#1677ff' : undefined }}>{entry.name}</span>
                             {!scenarios.includes(entry.name) && <Tag color="red">{t('scenario.missing')}</Tag>}
                             {hasAnyJump && <BranchesOutlined style={{ color: '#722ed1', fontSize: 11 }} />}
                             {isPlayingNow && <Tag color="blue" style={{ margin: 0, fontSize: 10 }}>▶</Tag>}
@@ -2419,9 +2420,9 @@ export default function ScenarioPage() {
                                   disabled={playing}
                                 />
                               </Tooltip>
-                              <span style={{ color: '#000', fontSize: 10 }}>{t('scenario.times')}</span>
+                              <span style={{ fontSize: 10 }}>{t('scenario.times')}</span>
                             </span>
-                            <span style={{ color: '#000', fontSize: 10 }}>{steps.length} {t('scenario.steps')}</span>
+                            <span style={{ fontSize: 10 }}>{steps.length} {t('scenario.steps')}</span>
                             <Button size="small" type="text" danger icon={<DeleteOutlined />}
                               onClick={(e) => { e.stopPropagation(); removeFromGroup(gName, idx); }}
                             />
@@ -2429,9 +2430,9 @@ export default function ScenarioPage() {
 
                           {/* 펼친 스텝 목록 — 조건부 이동 */}
                           {isExpanded && (
-                            <div style={{ paddingLeft: 29, marginTop: 5, borderLeft: '2px solid #d9d9d9', marginLeft: 14 }}>
-                              <div style={{ fontSize: 10, color: '#000', marginBottom: 3, fontWeight: 600 }}>{t('scenario.stepConditionalJump')}:</div>
-                              {steps.length === 0 && <div style={{ color: '#000', fontSize: 11, padding: 3 }}>{t('scenario.stepsLoading')}</div>}
+                            <div style={{ paddingLeft: 29, marginTop: 5, borderLeft: `2px solid ${isDark ? '#424242' : '#d9d9d9'}`, marginLeft: 14 }}>
+                              <div style={{ fontSize: 10, marginBottom: 3, fontWeight: 600 }}>{t('scenario.stepConditionalJump')}:</div>
+                              {steps.length === 0 && <div style={{ fontSize: 11, padding: 3 }}>{t('scenario.stepsLoading')}</div>}
                               {steps.map((step: any, si: number) => {
                                 const sid = step.id;
                                 const sj = stepJumps[String(sid)] || { on_pass_goto: null, on_fail_goto: null };
@@ -2439,12 +2440,12 @@ export default function ScenarioPage() {
                                 return (
                                   <div
                                     key={si}
-                                    style={{ marginBottom: 3, padding: '4px 0', borderBottom: '1px solid #d9d9d9', fontSize: 11 }}
+                                    style={{ marginBottom: 3, padding: '4px 0', borderBottom: `1px solid ${isDark ? '#424242' : '#d9d9d9'}`, fontSize: 11 }}
                                   >
                                     {/* 1행: 스텝 정보 */}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                       <Tag style={{ fontSize: 10, margin: 0, minWidth: 20, textAlign: 'center' }}>{sid}</Tag>
-                                      <span style={{ flex: 1, color: hasSJ ? '#d89614' : '#000' }}>{step.description || `(${step.type || 'step'})`}</span>
+                                      <span style={{ flex: 1, color: hasSJ ? '#d89614' : undefined }}>{step.description || `(${step.type || 'step'})`}</span>
                                       {hasSJ && <BranchesOutlined style={{ color: '#d89614', fontSize: 10 }} />}
                                     </div>
                                     {/* 2행: P/F/Reset */}
@@ -3188,13 +3189,13 @@ export default function ScenarioPage() {
                         onDragEnd={() => setGroupDrag(null)}
                       >
                         {/* 시나리오 헤더 */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'grab', color: '#000' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'grab' }}>
                           <Tag color="blue" style={{ minWidth: 24, textAlign: 'center' }}>{idx + 1}</Tag>
-                          <Button size="small" type="text" style={{ padding: '0 2px', fontSize: 10, color: '#000' }}
+                          <Button size="small" type="text" style={{ padding: '0 2px', fontSize: 10 }}
                             icon={isExpanded ? <DownOutlined /> : <RightOutlined />}
                             onClick={() => { toggleExpandEntry(entryKey); if (!isExpanded && steps.length === 0) fetchScenarioStepsCache([entry.name]); }}
                           />
-                          <span style={{ flex: 1, fontWeight: 500, color: '#000' }}>{entry.name}</span>
+                          <span style={{ flex: 1, fontWeight: 500 }}>{entry.name}</span>
                           {!scenarios.includes(entry.name) && <Tag color="red">{t('scenario.missing')}</Tag>}
                           {hasAnyJump && <BranchesOutlined style={{ color: '#722ed1', fontSize: 11 }} />}
                           <span
@@ -3214,9 +3215,9 @@ export default function ScenarioPage() {
                                 disabled={playing}
                               />
                             </Tooltip>
-                            <span style={{ color: '#000', fontSize: 10 }}>{t('scenario.times')}</span>
+                            <span style={{ fontSize: 10 }}>{t('scenario.times')}</span>
                           </span>
-                          <span style={{ color: '#000', fontSize: 10 }}>{steps.length} {t('scenario.steps')}</span>
+                          <span style={{ fontSize: 10 }}>{steps.length} {t('scenario.steps')}</span>
                           <Button size="small" type="text" danger icon={<DeleteOutlined />}
                             onClick={() => removeFromGroup(gName, idx)}
                           />
@@ -3224,9 +3225,9 @@ export default function ScenarioPage() {
 
                         {/* 펼쳐진 스텝 목록 */}
                         {isExpanded && (
-                          <div style={{ paddingLeft: 29, marginTop: 5, borderLeft: '2px solid #d9d9d9', marginLeft: 14 }}>
-                            <div style={{ fontSize: 10, color: '#000', marginBottom: 3, fontWeight: 600 }}>{t('scenario.stepConditionalJump')}:</div>
-                            {steps.length === 0 && <div style={{ color: '#000', fontSize: 11, padding: 3 }}>{t('scenario.stepsLoading')}</div>}
+                          <div style={{ paddingLeft: 29, marginTop: 5, borderLeft: `2px solid ${isDark ? '#424242' : '#d9d9d9'}`, marginLeft: 14 }}>
+                            <div style={{ fontSize: 10, marginBottom: 3, fontWeight: 600 }}>{t('scenario.stepConditionalJump')}:</div>
+                            {steps.length === 0 && <div style={{ fontSize: 11, padding: 3 }}>{t('scenario.stepsLoading')}</div>}
                             {steps.map((step: any, si: number) => {
                               const sid = step.id;
                               const sj = stepJumps[String(sid)] || { on_pass_goto: null, on_fail_goto: null };
@@ -3237,14 +3238,14 @@ export default function ScenarioPage() {
                                   style={{
                                     marginBottom: 3,
                                     padding: '4px 0',
-                                    borderBottom: '1px solid #d9d9d9',
+                                    borderBottom: `1px solid ${isDark ? '#424242' : '#d9d9d9'}`,
                                     fontSize: 11,
                                   }}
                                 >
                                   {/* 1행: 스텝 정보 */}
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                     <Tag style={{ fontSize: 10, margin: 0, minWidth: 20, textAlign: 'center' }}>{sid}</Tag>
-                                    <span style={{ flex: 1, color: hasSJ ? '#d89614' : '#000' }}>{step.description || `(${step.type || 'step'})`}</span>
+                                    <span style={{ flex: 1, color: hasSJ ? '#d89614' : undefined }}>{step.description || `(${step.type || 'step'})`}</span>
                                     {hasSJ && <BranchesOutlined style={{ color: '#d89614', fontSize: 10 }} />}
                                   </div>
                                   {/* 2행: P / F / Reset */}
