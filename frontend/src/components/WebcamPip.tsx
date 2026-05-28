@@ -106,11 +106,11 @@ export default function WebcamPip({ webcam, onClose, isDark, onOpenCompositor }:
   const bg = isDark ? '#1f1f1f' : '#fff';
   const headerBg = isDark ? '#141414' : '#f0f0f0';
   const border = isDark ? '#404040' : '#d0d0d0';
-  const titleColor = isDark ? '#d9d9d9' : '#333';
-  const btnColor = isDark ? '#aaa' : '#666';
+  const titleColor = isDark ? '#e8e8e8' : '#333';
+  const btnColor = isDark ? '#cacaca' : '#666';
   const settingsBg = isDark ? '#141414' : '#f5f5f5';
-  const labelColor = isDark ? '#ccc' : '#555';
-  const subColor = isDark ? '#888' : '#999';
+  const labelColor = isDark ? '#dcdcdc' : '#555';
+  const subColor = isDark ? '#bababa' : '#999';
 
   return (
     <ConfigProvider theme={{ algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm }}>

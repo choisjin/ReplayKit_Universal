@@ -254,6 +254,13 @@ function AppContent() {
   const contentBg = isDark ? '#1f1f1f' : '#e8e8e8';
   const layoutBg = isDark ? undefined : '#d0d0d0';
 
+  // 다크 모드에서 body 에 클래스 부여 — 인라인 hardcoded gray (예: '#888') 들을
+  // 글로벌 CSS 로 일괄 밝게 보정 (아래 <style> block 참조).
+  useEffect(() => {
+    document.body.classList.toggle('dark-theme', isDark);
+    document.body.classList.toggle('light-theme', !isDark);
+  }, [isDark]);
+
   return (
     <WebcamProvider webcam={webcam} webcamVisible={webcamVisible} ensureWebcamOpen={ensureWebcamOpen}>
     <ConfigProvider theme={{
@@ -555,7 +562,29 @@ function AppContent() {
         </div>
       </Modal>
 
-      <style>{`@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
+      <style>{`
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+        /* ─── 다크 모드 회색 폰트 가시성 보정 ───────────────────────────────
+           인라인 style 의 hardcoded 회색 (color: #888, #999, #666 등) 을 글로벌하게
+           밝게 끌어올림. attribute selector + !important 로 inline style 우선순위 극복.
+           각 컴포넌트마다 isDark 분기 다시 쓰지 않고 일괄 적용. 라이트 모드에선 적용 안 됨.
+        */
+        body.dark-theme [style*="color: #666"],
+        body.dark-theme [style*="color:#666"] { color: #a8a8a8 !important; }
+        body.dark-theme [style*="color: #777"],
+        body.dark-theme [style*="color:#777"] { color: #b0b0b0 !important; }
+        body.dark-theme [style*="color: #888"],
+        body.dark-theme [style*="color:#888"] { color: #bababa !important; }
+        body.dark-theme [style*="color: #999"],
+        body.dark-theme [style*="color:#999"] { color: #c2c2c2 !important; }
+        body.dark-theme [style*="color: #aaa"],
+        body.dark-theme [style*="color:#aaa"] { color: #cacaca !important; }
+        body.dark-theme [style*="color: #bbb"],
+        body.dark-theme [style*="color:#bbb"] { color: #d0d0d0 !important; }
+        body.dark-theme [style*="color: #ccc"],
+        body.dark-theme [style*="color:#ccc"] { color: #d6d6d6 !important; }
+      `}</style>
     </ConfigProvider>
     </WebcamProvider>
   );

@@ -68,7 +68,7 @@ RESTART_FLAG = USER_DATA / ".restart"
 def _read_theme() -> str:
     try:
         with open(USER_DATA / "backend" / "settings.json", encoding="utf-8") as f:
-            return json.load(f).get("theme", "dark")
+            return json.load(f).get("theme", "light")
     except Exception:
         return "dark"
 

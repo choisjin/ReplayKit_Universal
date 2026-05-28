@@ -32,7 +32,7 @@ interface SettingsContextType {
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
-  theme: 'dark',
+  theme: 'light',
   webcam_save_dir: '',
   excel_export_dir: '',
   scenario_export_dir: '',

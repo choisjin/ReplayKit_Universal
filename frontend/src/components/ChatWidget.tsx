@@ -236,12 +236,12 @@ export default function ChatWidget({ open, onClose }: ChatWidgetProps) {
                     color: msg.from === 'me' ? '#fff' : undefined,
                   }}>
                     {msg.from === 'admin' && (
-                      <div style={{ fontSize: 10, color: isDark ? '#888' : '#666', marginBottom: 2 }}>{t('chat.admin')}</div>
+                      <div style={{ fontSize: 10, color: isDark ? '#bababa' : '#666', marginBottom: 2 }}>{t('chat.admin')}</div>
                     )}
                     <div style={{ fontSize: 11 }}>{msg.content}</div>
                     <div style={{
                       fontSize: 9,
-                      color: msg.from === 'me' ? 'rgba(255,255,255,0.5)' : isDark ? '#666' : '#999',
+                      color: msg.from === 'me' ? 'rgba(255,255,255,0.5)' : isDark ? '#a8a8a8' : '#999',
                       marginTop: 2,
                       textAlign: 'right',
                     }}>

@@ -65,13 +65,13 @@ _SETTINGS_FILE = os.path.join(PROJECT_ROOT, "backend", "settings.json")
 
 
 def _read_theme() -> str:
-    """backend/settings.json에서 theme 읽기. 기본값 dark."""
+    """backend/settings.json에서 theme 읽기. 기본값 light."""
     try:
         import json
         with open(_SETTINGS_FILE, encoding="utf-8") as f:
-            return json.load(f).get("theme", "dark")
+            return json.load(f).get("theme", "light")
     except Exception:
-        return "dark"
+        return "light"
 
 
 _THEME = _read_theme()

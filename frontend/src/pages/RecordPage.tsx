@@ -334,8 +334,8 @@ export default function RecordPage() {
   // Settings
   const { settings } = useSettings();
   const isDark = settings.theme === 'dark';
-  const subTextColor = isDark ? '#aaa' : '#888';
-  const mutedTextColor = isDark ? '#999' : '#666';
+  const subTextColor = isDark ? '#cacaca' : '#888';
+  const mutedTextColor = isDark ? '#bababa' : '#666';
 
   // DLT/Serial 뷰어 — 세션 시작 시 자동 오픈, 모달 안에서 탭으로 구분
   const dltSessionHook = useDLTSessions();

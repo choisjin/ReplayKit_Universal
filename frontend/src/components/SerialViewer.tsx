@@ -115,7 +115,7 @@ const SerialViewer: React.FC<SerialViewerProps> = ({ sessions, onClose, mode = '
   const isDark = theme === 'dark';
   const bg = isDark ? '#111' : '#fff';
   const logBg = isDark ? '#000' : '#fafafa';
-  const logColor = isDark ? '#ddd' : '#333';
+  const logColor = isDark ? '#e8e8e8' : '#333';
   const borderColor = isDark ? '#333' : '#e0e0e0';
 
   if (sessions.length === 0) {

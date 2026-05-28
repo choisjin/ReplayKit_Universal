@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 _SETTINGS_FILE = Path(__file__).resolve().parent.parent.parent / "settings.json"
 
 _DEFAULTS = {
-    "theme": "dark",
+    "theme": "light",
     "webcam_save_dir": "",
     "excel_export_dir": "",
     "scenario_export_dir": "",
