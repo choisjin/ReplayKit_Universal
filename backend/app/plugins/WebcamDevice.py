@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import io
 import logging
+import sys
 import tempfile
 import threading
 from datetime import datetime
@@ -23,6 +24,15 @@ from pathlib import Path
 from typing import Optional
 
 import cv2
+
+# OS 별 OpenCV VideoCapture 백엔드.
+# Windows DirectShow / Linux V4L2 / 기타 CAP_ANY. 잘못된 backend 면 isOpened()=False.
+if sys.platform == "win32":
+    _CV_CAM_BACKEND = cv2.CAP_DSHOW
+elif sys.platform.startswith("linux"):
+    _CV_CAM_BACKEND = cv2.CAP_V4L2
+else:
+    _CV_CAM_BACKEND = cv2.CAP_ANY
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -49,7 +59,7 @@ class WebcamDevice:
         if self._is_connected and self._cap is not None:
             return "Already connected"
 
-        cap = cv2.VideoCapture(self._device_index, cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(self._device_index, _CV_CAM_BACKEND)
         if not cap.isOpened():
             cap.release()
             raise RuntimeError(f"Webcam open failed: device {self._device_index}")
@@ -225,7 +235,7 @@ class WebcamDevice:
         found: list[dict] = []
         consecutive_fail = 0
         for idx in range(max_index):
-            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+            cap = cv2.VideoCapture(idx, _CV_CAM_BACKEND)
             try:
                 if cap.isOpened():
                     consecutive_fail = 0

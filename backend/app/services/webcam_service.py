@@ -128,6 +128,20 @@ def _spawn_ffmpeg_writer(output_path: Path, width: int, height: int, fps: float)
         return None
 
 
+# OS 별 OpenCV VideoCapture 백엔드.
+#   Windows: DirectShow (CAP_DSHOW) — USB 카메라 매끄럽게 열거/오픈.
+#   Linux:   V4L2 (CAP_V4L2)        — /dev/video* 직접 접근. CAP_DSHOW 는 미지원.
+#   macOS:   AVFoundation 또는 CAP_ANY (자동).
+# 잘못된 backend (예: Linux 에서 CAP_DSHOW) 를 쓰면 cap.isOpened() 가 항상 False 가 되어
+# list_devices() 가 빈 배열 반환 — 사용자 입장에선 "USB 웹캠을 못 찾음".
+if sys.platform == "win32":
+    _CV_CAM_BACKEND = cv2.CAP_DSHOW
+elif sys.platform.startswith("linux"):
+    _CV_CAM_BACKEND = cv2.CAP_V4L2
+else:
+    _CV_CAM_BACKEND = cv2.CAP_ANY
+
+
 class WebcamService:
     """OpenCV 기반 webcam 캡처/녹화 싱글톤."""
 
@@ -180,7 +194,7 @@ class WebcamService:
                     "label": f"Camera {idx} ({self._width}x{self._height})",
                 })
                 continue
-            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+            cap = cv2.VideoCapture(idx, _CV_CAM_BACKEND)
             if cap.isOpened():
                 w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
                 h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
@@ -197,7 +211,7 @@ class WebcamService:
             (1280, 720), (960, 540), (640, 480), (320, 240),
         ]
         supported: list[str] = []
-        cap = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(device_index, _CV_CAM_BACKEND)
         if not cap.isOpened():
             return []
         try:
@@ -221,7 +235,7 @@ class WebcamService:
     def open(self, device_index: int = 0, width: int = 640, height: int = 480) -> bool:
         """카메라 오픈 + 캡처 스레드 시작. 이미 열려 있으면 close 후 재오픈."""
         self.close()
-        cap = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(device_index, _CV_CAM_BACKEND)
         if not cap.isOpened():
             logger.warning("Webcam open failed: device %d", device_index)
             return False

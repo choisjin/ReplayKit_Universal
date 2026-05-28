@@ -375,62 +375,114 @@ async def disk_usage():
     return drives
 
 
+def _find_git_root() -> Optional[Path]:
+    """git working tree 위치 탐색.
+
+    탐색 순서:
+      1) _PROJECT_ROOT/.git           — 기본 (Mode A / Windows 원본)
+      2) REPLAYKIT_APP_DIR/.git       — .deb 설치본 launcher 가 설정 (보통 /opt/ReplayKit)
+      3) /opt/ReplayKit/.git          — Linux 하드코딩 폴백
+    .git 이 없는 경우(예: .deb 만 설치 후 git_init 안 됨) None 반환.
+    """
+    candidates = [_PROJECT_ROOT]
+    app_dir = os.environ.get("REPLAYKIT_APP_DIR")
+    if app_dir:
+        candidates.append(Path(app_dir))
+    candidates.append(Path("/opt/ReplayKit"))
+    for c in candidates:
+        if (c / ".git").exists():
+            return c
+    return None
+
+
 @router.get("/git-log")
 async def git_log(limit: int = 100, fetch: bool = False):
-    """Git 커밋 내역 조회. fetch=true면 원격에서 최신 커밋 가져온 후 조회."""
+    """Git 커밋 내역 조회. fetch=true면 원격에서 최신 커밋 가져온 후 조회.
+
+    회복력 있게 처리:
+      - .git 디렉토리가 없으면 빈 commits 반환 + branch="(no git)" — 200 OK 로 응답해
+        프론트가 "loadFailed" toast 가 아닌 "git 미설정" 안내를 표시 가능.
+      - fetch 실패해도 로컬 git log 는 계속 시도 (오프라인 환경 대응).
+      - origin/main 이 없으면 HEAD / main 순서로 폴백.
+    """
+    no_window = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    git_root = _find_git_root()
+    if git_root is None:
+        # .git 없음 — Mode B (.deb 설치, 첫 실행 전) 등. 에러가 아닌 정상 빈 응답.
+        return {
+            "branch": "(no git)",
+            "tags": [],
+            "commits": [],
+            "note": "git 트래킹이 설정되지 않았습니다 (.deb 설치본은 apt upgrade 로 업데이트).",
+        }
+
+    cwd = str(git_root)
+    fetch_error: Optional[str] = None
+
     try:
-        no_window = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         if fetch:
             fetch_r = subprocess.run(
                 ["git", "fetch", "origin", "main"],
-                cwd=str(_PROJECT_ROOT), capture_output=True, timeout=15,
+                cwd=cwd, capture_output=True, timeout=15,
                 encoding="utf-8", errors="replace", creationflags=no_window,
             )
             if fetch_r.returncode != 0:
-                raise HTTPException(status_code=502, detail=f"원격 저장소 연결 실패: {fetch_r.stderr.strip()}")
+                fetch_error = fetch_r.stderr.strip()
+                # 에러로 끝내지 않고 로컬 log 는 계속 시도
 
-        # origin/main 커밋 조회 (setup.bat이 git_remote.txt URL을 origin으로 등록)
-        r = subprocess.run(
-            ["git", "log", "origin/main", f"-{limit}", "--pretty=format:%H||%h||%an||%ae||%aI||%s"],
-            cwd=str(_PROJECT_ROOT),
-            capture_output=True, timeout=10, encoding="utf-8", errors="replace",
-            creationflags=no_window,
-        )
-        if r.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"git log failed: {r.stderr.strip()}")
-
-        commits = []
-        for line in r.stdout.strip().split("\n"):
-            if not line:
-                continue
-            parts = line.split("||", 5)
-            if len(parts) < 6:
-                continue
-            commits.append({
-                "hash": parts[0],
-                "short_hash": parts[1],
-                "author": parts[2],
-                "email": parts[3],
-                "date": parts[4],
-                "message": parts[5],
-            })
+        # origin/main → main → HEAD 순서로 시도 — origin 미설정 환경 (clone 직후, .deb 후 git_init 전) 대응.
+        commits: list[dict] = []
+        used_ref = ""
+        for ref in ("origin/main", "main", "HEAD"):
+            r = subprocess.run(
+                ["git", "log", ref, f"-{limit}", "--pretty=format:%H||%h||%an||%ae||%aI||%s"],
+                cwd=cwd,
+                capture_output=True, timeout=10, encoding="utf-8", errors="replace",
+                creationflags=no_window,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                used_ref = ref
+                for line in r.stdout.strip().split("\n"):
+                    parts = line.split("||", 5)
+                    if len(parts) < 6:
+                        continue
+                    commits.append({
+                        "hash": parts[0],
+                        "short_hash": parts[1],
+                        "author": parts[2],
+                        "email": parts[3],
+                        "date": parts[4],
+                        "message": parts[5],
+                    })
+                break  # 첫 성공 ref 사용
 
         # 현재 브랜치, 태그 정보
         branch_r = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=str(_PROJECT_ROOT), capture_output=True, timeout=5, encoding="utf-8", errors="replace",
+            cwd=cwd, capture_output=True, timeout=5, encoding="utf-8", errors="replace",
             creationflags=no_window,
         )
         branch = branch_r.stdout.strip() if branch_r.returncode == 0 else "unknown"
 
         tag_r = subprocess.run(
             ["git", "tag", "--sort=-creatordate"],
-            cwd=str(_PROJECT_ROOT), capture_output=True, timeout=5, encoding="utf-8", errors="replace",
+            cwd=cwd, capture_output=True, timeout=5, encoding="utf-8", errors="replace",
             creationflags=no_window,
         )
         tags = [t for t in tag_r.stdout.strip().split("\n") if t] if tag_r.returncode == 0 else []
 
-        return {"branch": branch, "tags": tags, "commits": commits}
+        result: dict = {
+            "branch": branch,
+            "tags": tags,
+            "commits": commits,
+            "git_root": cwd,
+            "ref": used_ref,
+        }
+        if fetch_error:
+            result["fetch_warning"] = fetch_error
+        if not commits:
+            result["note"] = "git log 결과 없음 (origin/main / main / HEAD 모두 빈 상태)."
+        return result
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=500, detail="git command timed out")
     except FileNotFoundError:

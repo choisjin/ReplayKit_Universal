@@ -193,19 +193,32 @@ fi
 shopt -u nullglob
 
 # ---- [3.5/7] PySide6 명시 설치 + 검증 ----
+# .deb launcher (/usr/bin/ReplayKit gui) 가 PySide6 로 GUI 띄움. embedded Python 에 PySide6
+# 가 없으면 GUI launcher 가 headless 모드로만 떨어져 사용자가 "GUI 가 안 뜸" 으로 인지.
+# requirements.txt 의 PySide6-Essentials pin 이 어떤 이유든 install 안 됐을 때를 대비해
+# 매 빌드마다 명시적 설치 시도 (이미 있으면 -q 로 조용히 통과).
 echo "      Verifying PySide6 (GUI launcher dependency)..."
-if ! ./python/bin/python3 -c "import PySide6" >/dev/null 2>/dev/null; then
-    echo "      PySide6 not present after requirements.txt — installing explicitly..."
-    if ./python/bin/python3 -m pip install --upgrade "PySide6-Essentials"; then
-        :
-    else
-        echo "      [WARN] PySide6-Essentials 실패 → PySide6 (meta) 로 재시도..."
-        ./python/bin/python3 -m pip install --upgrade "PySide6" || true
-    fi
+# 항상 install 시도 — 이미 설치돼 있으면 pip 가 'already satisfied' 로 빠르게 통과.
+if ! ./python/bin/python3 -m pip install --upgrade "PySide6-Essentials" -q; then
+    echo "      [WARN] PySide6-Essentials 실패 → PySide6 (meta) 로 재시도..."
+    ./python/bin/python3 -m pip install --upgrade "PySide6" -q || true
 fi
 if ! ./python/bin/python3 -c "import PySide6, PySide6.QtCore; print('      OK: PySide6', PySide6.__version__)" ; then
     echo ""
-    echo "[ERROR] PySide6 미설치 또는 import 실패."
+    echo "[ERROR] PySide6 미설치 또는 import 실패. .deb 산출물의 GUI launcher 가 동작 안 함."
+    echo "        진단:"
+    echo "          ./python/bin/python3 -m pip list | grep -i pyside"
+    exit 1
+fi
+# site-packages 에 실제로 파일이 있는지 fs 레벨 검증 — pip install 이 성공해도 다른 site
+# 경로(예: user site) 로 들어가는 케이스 방어. 없으면 build 중단.
+if ! ./python/bin/python3 -c "
+import PySide6, pathlib
+p = pathlib.Path(PySide6.__file__).parent
+assert p.is_relative_to(pathlib.Path('./python').resolve()), f'PySide6 at {p} 가 embedded python/ 외부 — .deb 에 포함 안 됨'
+print(f'      PySide6 path: {p}')
+" 2>&1; then
+    echo "[ERROR] PySide6 가 embedded python/ 외부에 설치됨 — .deb 페이로드에 포함되지 않음."
     exit 1
 fi
 
@@ -291,6 +304,18 @@ else
         cp -a "$DIST_REPLAYKIT/." "$OPT_DIR/"
         rm -rf "$OPT_DIR/.git" "$OPT_DIR/.gitignore" 2>/dev/null || true
     fi
+
+    # PySide6 가 staging 에 실제로 들어왔는지 fs 검증 — .deb 사용자 GUI launcher 미동작 사고 방지.
+    if [ ! -d "$OPT_DIR/python/lib/python3.10/site-packages/PySide6" ] && \
+       [ ! -d "$OPT_DIR/python/lib/python3.10/site-packages/PySide6_Essentials" ]; then
+        echo "[ERROR] PySide6 가 $OPT_DIR/python/lib/python3.10/site-packages/ 에 없음."
+        echo "        rsync 단계에서 누락된 것으로 보입니다 (권한/링크/심볼릭링크 등 의심)."
+        echo "        진단:"
+        echo "          ls -la $DIST_REPLAYKIT/python/lib/python3.10/site-packages/ | grep -i pyside"
+        echo "          ls -la $OPT_DIR/python/lib/python3.10/site-packages/ | grep -i pyside"
+        exit 1
+    fi
+    echo "      PySide6 fs-check OK (in $OPT_DIR/python/...)"
 
     # ---- [6/7] Launcher / Desktop / Icon / GUI ----
     echo "[6/7] Launcher + desktop entry + icon..."

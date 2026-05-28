@@ -164,13 +164,22 @@ def _list_plugin_modules() -> list[dict]:
     plugins = []
     if not _PLUGINS_DIR.is_dir():
         return plugins
+    # OS 별 모듈 가시성 정책 — 사용자 혼동 방지.
+    #   Windows: CMD 만 노출, SHELL 숨김
+    #   Linux/macOS: SHELL 만 노출, CMD 숨김
+    # 둘 다 시나리오 호환을 위해 클래스 자체는 import 가능 (시나리오 파일에 다른 OS 의 모듈명이
+    # 박혀 있어도 _import_module_class 로 로드는 됨). UI 드롭다운에서만 제거.
+    if sys.platform == "win32":
+        _hidden_modules = {"SHELL"}
+    else:
+        _hidden_modules = {"CMD"}
     seen = set()
     for py_file in list(_PLUGINS_DIR.glob("*.py")) + list(_PLUGINS_DIR.glob("*.pyd")):
         if py_file.name.startswith("_"):
             continue
         # .pyd: "CCIC_BENCH.cp310-win_amd64.pyd" → stem "CCIC_BENCH.cp310-win_amd64" → 첫 점 앞
         module_name = py_file.stem.split(".")[0] if py_file.suffix == ".pyd" else py_file.stem
-        if module_name in seen:
+        if module_name in seen or module_name in _hidden_modules:
             continue
         seen.add(module_name)
         try:

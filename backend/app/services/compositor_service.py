@@ -158,8 +158,19 @@ class _SourceBase:
             self._latest = frame
 
 
+# OS 별 OpenCV VideoCapture 백엔드 — Windows DirectShow / Linux V4L2 / 기타 CAP_ANY.
+# webcam_service.py 의 _CV_CAM_BACKEND 와 동일 규약. compositor 가 webcam_service 의 모듈
+# 내부 상수를 직접 의존하지 않도록 여기서 재선언.
+if sys.platform == "win32":
+    _CV_CAM_BACKEND = cv2.CAP_DSHOW
+elif sys.platform.startswith("linux"):
+    _CV_CAM_BACKEND = cv2.CAP_V4L2
+else:
+    _CV_CAM_BACKEND = cv2.CAP_ANY
+
+
 class WebcamCapture(_SourceBase):
-    """cv2.VideoCapture(DSHOW) 기반 백그라운드 캡처."""
+    """cv2.VideoCapture 기반 백그라운드 캡처 (OS 별 backend 자동 선택)."""
     def __init__(self, src_id: str, device_index: int, capture_w: int = 0, capture_h: int = 0,
                  label: str = ""):
         super().__init__(src_id, label or f"Webcam {device_index}")
@@ -170,7 +181,7 @@ class WebcamCapture(_SourceBase):
         self._actual_fps: float = 30.0
 
     def start(self) -> bool:
-        cap = cv2.VideoCapture(self.device_index, cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(self.device_index, _CV_CAM_BACKEND)
         if not cap.isOpened():
             logger.warning("Compositor: webcam %d open failed", self.device_index)
             return False
