@@ -28,7 +28,7 @@ from .lincontrol_service import LinControlService
 # 라우터/메인 캡처 루프는 단일 get_wincontrol_service() 호출만으로 OS 호환.
 _WIN_CTRL_IS_LINUX = sys.platform.startswith("linux")
 _WindowControlService = LinControlService if _WIN_CTRL_IS_LINUX else WinControlService
-_WIN_CTRL_DISPLAY_NAME = "LinControl" if _WIN_CTRL_IS_LINUX else "WinControl"
+_WIN_CTRL_DISPLAY_NAME = "LinuxControl" if _WIN_CTRL_IS_LINUX else "WinControl"
 
 logger = logging.getLogger(__name__)
 
