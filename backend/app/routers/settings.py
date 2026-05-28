@@ -409,10 +409,31 @@ async def update_and_restart():
 
 
 def _linux_post_pull_restart() -> None:
-    """Linux 재시작 전용 — pull 은 endpoint 에서 이미 끝났으므로 sleep 후 os.execv 만."""
+    """Linux 재시작 — backend 가 직접 os.execv 하지 않고 자식 정리 후 SIGTERM.
+
+    os.execv 는 uvicorn 의 listening socket FD 가 자동으로 닫히지 않아 새 프로세스가
+    EADDRINUSE 로 bind 실패. 대신 .restart 플래그를 유지한 채 SIGTERM 으로 자기 종료 →
+    부모 (replaykit-gui.py) 의 _check_restart_flag 가 감지해서 새 자식 spawn.
+
+    REPLAYKIT_INSTALLED=1 (= .deb GUI launcher 환경) 만 이 경로. 그 외 (헤드리스/서비스/
+    server.py 런처) 는 기존대로 os.execv 시도.
+    """
     import time as _t
     _t.sleep(1)
     try:
+        if os.environ.get("REPLAYKIT_INSTALLED") == "1":
+            # .restart 플래그는 유지 — 부모 launcher 가 이 플래그를 보고 재시작 트리거.
+            logger.info("[update-restart] (.deb) sending SIGTERM to self for parent to respawn (pid=%d)", os.getpid())
+            try:
+                import signal as _sig
+                os.kill(os.getpid(), _sig.SIGTERM)
+            except Exception:
+                # SIGTERM 실패 시 직접 종료 — 부모가 자식 사망 감지
+                os._exit(0)
+            return
+
+        # 그 외 환경 (예: 시스템 서비스, server.py 런처) — 기존 os.execv 사용.
+        # 단 .restart 플래그는 처리됐다는 표시로 제거.
         try:
             _RESTART_FLAG.unlink(missing_ok=True)
         except Exception:
@@ -515,11 +536,17 @@ def _deb_self_update(user_data: Path) -> tuple[bool, str]:
         except Exception as e:
             logger.warning("[update-restart] %s copy 실패: %s", f, e)
 
+    # backend/ 디렉토리는 절대 rmtree 하면 안 됨 — 안에 사용자 데이터 (scenarios/, results/,
+    # settings.json, scan_settings.json 등) 가 있음. 대신 cache 의 파일을 dst 로 overlay 복사.
+    # 이미 있는 사용자 데이터는 건드리지 않음. 새/변경된 코드 파일만 덮어쓰여짐.
+    # frontend/dist 는 빌드 산출물 전체가 git 트래킹 → rmtree+copytree 안전.
+    _OVERLAY_DIRS = {"backend"}  # 안에 사용자 데이터가 섞임 — 파일 단위 overlay
     for d in _DEB_USER_SYNC_DIRS:
         src = cache / d
         if not src.is_dir():
             continue
         dst = user_data / d
+
         # 부모 경로가 user_data 외부 (예: /opt/ReplayKit) 의 symlink 인 경우 그 부모를
         # 먼저 실제 디렉토리로 교체해야 함. 예: $USER_DATA/frontend 가 /opt/ReplayKit/frontend
         # symlink → $USER_DATA/frontend/dist 쓰기 시 /opt 로 가서 권한 거부.
@@ -529,7 +556,6 @@ def _deb_self_update(user_data: Path) -> tuple[bool, str]:
                 target = parent_path.resolve()
                 parent_path.unlink()
                 parent_path.mkdir(parents=True, exist_ok=True)
-                # 원래 symlink 가 가리키던 디렉토리의 내용을 user_data 로 복사 (다른 항목 보존)
                 if target.is_dir():
                     for child in target.iterdir():
                         cp_dst = parent_path / child.name
@@ -545,19 +571,54 @@ def _deb_self_update(user_data: Path) -> tuple[bool, str]:
                 logger.info("[update-restart] %s symlink → 실제 디렉토리로 교체", parent_path)
             except Exception as e:
                 logger.warning("[update-restart] %s 부모 symlink 교체 실패: %s", parent_path, e)
-        try:
-            if dst.is_symlink():
-                dst.unlink()
-            elif dst.exists():
-                _sh.rmtree(dst)
-        except Exception as e:
-            logger.warning("[update-restart] %s 제거 실패: %s", dst, e)
-        try:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            _sh.copytree(src, dst, symlinks=True)
-            synced.append(d + "/")
-        except Exception as e:
-            return False, f"{d}/ copy 실패: {e}"
+
+        if d in _OVERLAY_DIRS:
+            # 파일 단위 overlay: src 트리를 walk 하면서 각 파일을 dst 에 복사.
+            # dst 에만 있는 파일 (= 사용자 데이터) 은 그대로 보존.
+            try:
+                if dst.is_symlink():
+                    dst.unlink()
+                dst.mkdir(parents=True, exist_ok=True)
+                file_count = 0
+                for src_path in src.rglob("*"):
+                    rel = src_path.relative_to(src)
+                    dst_path = dst / rel
+                    if src_path.is_dir():
+                        dst_path.mkdir(parents=True, exist_ok=True)
+                        continue
+                    if src_path.is_file() or src_path.is_symlink():
+                        dst_path.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            if dst_path.is_symlink() or dst_path.exists():
+                                dst_path.unlink()
+                        except Exception:
+                            pass
+                        try:
+                            if src_path.is_symlink():
+                                _sh.copy(src_path, dst_path, follow_symlinks=False)
+                            else:
+                                _sh.copy2(src_path, dst_path)
+                            file_count += 1
+                        except Exception as e:
+                            logger.debug("[update-restart] %s copy 실패: %s", rel, e)
+                synced.append(f"{d}/ (overlay {file_count} files)")
+            except Exception as e:
+                return False, f"{d}/ overlay 실패: {e}"
+        else:
+            # 사용자 데이터가 없는 디렉토리 — 전체 교체 안전.
+            try:
+                if dst.is_symlink():
+                    dst.unlink()
+                elif dst.exists():
+                    _sh.rmtree(dst)
+            except Exception as e:
+                logger.warning("[update-restart] %s 제거 실패: %s", dst, e)
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                _sh.copytree(src, dst, symlinks=True)
+                synced.append(d + "/")
+            except Exception as e:
+                return False, f"{d}/ copy 실패: {e}"
 
     if not synced:
         return False, "동기화할 파일이 없음 (cache 가 비었거나 build 산출물 누락)"

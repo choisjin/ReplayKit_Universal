@@ -57,6 +57,11 @@ PY = APP_DIR / "python" / "bin" / "python3"
 PORT = int(os.environ.get("REPLAYKIT_PORT", "8000"))
 SERVER_URL = f"http://localhost:{PORT}"
 PID_FILE = USER_DATA / "replaykit.pid"
+# 백엔드가 자가 업데이트 후 작성하는 플래그. 본 launcher 가 2초 polling 으로 감지해서
+# 자식 (uvicorn) 을 죽이고 재시작 → 새로 동기화된 backend 코드를 로드.
+# uvicorn 자체적으로 os.execv 하면 listening socket EADDRINUSE 로 재바인드 실패하므로
+# 반드시 launcher 가 자식 교체 방식으로 재시작해야 함 (Windows server.py 와 동일 패턴).
+RESTART_FLAG = USER_DATA / ".restart"
 
 
 # ─── 테마 (Windows server.py 와 동일 팔레트) ──────────────
@@ -129,6 +134,13 @@ class Launcher(QWidget):
         self.timer.timeout.connect(self._poll_status)
         self.timer.start(1000)
         self._poll_status()
+
+        # 재시작 플래그 감시 타이머 — backend 가 .restart 플래그 작성 시 자식 재시작.
+        # Windows server.py 의 _check_restart_flag 와 동일 역할.
+        self._restart_in_progress = False
+        self.restart_timer = QTimer(self)
+        self.restart_timer.timeout.connect(self._check_restart_flag)
+        self.restart_timer.start(2000)
 
         # 자동 시작 (REPLAYKIT_NO_AUTOSTART=1 로 비활성화 가능).
         # 윈도우가 화면에 그려진 후 시작하도록 500ms 지연 — UX 향상.
@@ -395,6 +407,38 @@ class Launcher(QWidget):
             QTimer.singleShot(2500, self._start)
         else:
             self._start()
+
+    def _check_restart_flag(self) -> None:
+        """backend 가 자가 업데이트 후 .restart 플래그 작성 시 호출됨.
+
+        flag 를 제거하고 자식 (uvicorn) 을 죽인 후 재시작 → 새 코드 로드.
+        _restart 와 거의 동일하지만 사용자 트리거가 아닌 backend 트리거이므로 별도 함수.
+        """
+        try:
+            if not RESTART_FLAG.exists():
+                return
+        except OSError:
+            return
+        if self._restart_in_progress:
+            return  # 이미 처리 중 — 중복 호출 방지
+        self._restart_in_progress = True
+        try:
+            RESTART_FLAG.unlink(missing_ok=True)
+        except Exception:
+            pass
+        self.status_lbl.setText("업데이트 적용 중...")
+        self.status_lbl.setStyleSheet(f"color: {_C['YELLOW']}; background: transparent;")
+        # 자식 종료 후 약간 기다린 다음 새로 시작 (포트 해제 대기)
+        if get_running_pid():
+            self._stop()
+            QTimer.singleShot(3000, self._post_restart_start)
+        else:
+            QTimer.singleShot(500, self._post_restart_start)
+
+    def _post_restart_start(self) -> None:
+        """_check_restart_flag 에서 stop 후 호출 — 재시작 + 플래그 해제."""
+        self._start()
+        self._restart_in_progress = False
 
     def _open_web(self) -> None:
         try:
