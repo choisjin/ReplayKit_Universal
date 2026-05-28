@@ -397,6 +397,15 @@ export default function ScenarioPage() {
   const [groupModalVisible, setGroupModalVisible] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [scenarioStepsCache, setScenarioStepsCache] = useState<Record<string, any[]>>({});
+  // 편집 중 시나리오의 스텝을 그룹 디테일 캐시에 즉시 미러링.
+  // 그룹은 멤버 시나리오를 이름으로만 참조하고, 그룹 뷰가 표시하는 스텝은
+  // scenarioStepsCache[멤버이름] 에서 읽어옴. previewSteps(편집 대상의 단일 진실
+  // 공급원) 가 바뀔 때마다 같은 키를 덮어쓰면 그룹 뷰에 즉시 반영되어, 사용자가
+  // 그룹 디테일을 닫지 않고 시나리오 수정 → 그룹 펼침 토글로 변경 확인 가능.
+  useEffect(() => {
+    if (!selectedName) return;
+    setScenarioStepsCache((prev) => ({ ...prev, [selectedName]: previewSteps }));
+  }, [previewSteps, selectedName]);
   const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set());
   const [groupDrag, setGroupDrag] = useState<{ gName: string; from: number; over: number | null } | null>(null);
   // 그룹 모달 좌측 트리에서 다중 선택된 시나리오들 (드래그 시 일괄 추가)
