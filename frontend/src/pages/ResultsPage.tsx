@@ -296,7 +296,19 @@ export default function ResultsPage() {
       // 완전히 보이기 전 시점에 첫 로드가 시작될 수 있어 충분한 여유 필요.
       const attempts = (pending as any)._attempts || 0;
       if (attempts >= 100) {
-        console.log('[seek-debug] EXHAUSTED — retry limit reached');
+        // 10초 동안 readyState가 안 올라온 케이스 — 디코드 실패가 onError 전에 갇혔거나,
+        // 코덱 미지원으로 브라우저가 조용히 포기한 상황. video.error 가 있으면 그 사유를,
+        // 없으면 일반 메시지를 사용자에게 노출.
+        const v = detailVideoRef.current;
+        const code = v?.error?.code;
+        const codeLabel = code === 1 ? 'ABORTED' : code === 2 ? 'NETWORK'
+          : code === 3 ? 'DECODE' : code === 4 ? 'SRC_NOT_SUPPORTED'
+          : code != null ? `unknown(${code})` : 'timeout';
+        console.log('[seek-debug] EXHAUSTED — retry limit reached', {
+          readyState: v?.readyState, networkState: v?.networkState, errorCode: code,
+        });
+        message.error(`녹화 영상을 로드하지 못했습니다 (${codeLabel}). 파일이 손상되었거나 브라우저가 지원하지 않는 코덱일 수 있습니다 — 재녹화 후 다시 시도하세요.`);
+        pendingSeekRef.current = null;
         return;  // 100 * 100ms = 10s
       }
       (pending as any)._attempts = attempts + 1;
@@ -454,10 +466,18 @@ export default function ResultsPage() {
     fetch(activeRecUrl)
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.blob();
+        return r.blob().then(b => ({ blob: b, contentType: r.headers.get('content-type') || '' }));
       })
-      .then(blob => {
+      .then(({ blob, contentType }) => {
         if (cancelled) return;
+        // 빈 파일/0바이트 응답은 디코드 불가 — 명시적으로 에러 처리해서 readyState<1 무한 폴링 방지.
+        if (blob.size === 0) {
+          console.error('[video] blob empty — recording file likely missing or zero bytes', { url: activeRecUrl });
+          message.error(t('webcam.emptyFile') || '녹화 파일이 비어 있습니다');
+          setActiveRecBlobUrl('');
+          return;
+        }
+        console.log('[video] blob loaded', { url: activeRecUrl, size: blob.size, contentType });
         const blobUrl = URL.createObjectURL(blob);
         blobUrlMapRef.current.set(activeRecUrl, blobUrl);
         setActiveRecBlobUrl(blobUrl);
@@ -469,7 +489,7 @@ export default function ResultsPage() {
         setActiveRecBlobUrl(activeRecUrl);
       });
     return () => { cancelled = true; };
-  }, [activeRecUrl]);
+  }, [activeRecUrl, t]);
 
   // 컴포넌트 unmount 시 blob URL 해제 (메모리 leak 방지).
   useEffect(() => {
@@ -490,6 +510,29 @@ export default function ResultsPage() {
   const handleVideoCanPlay = useCallback(() => {
     tryApplyPendingSeek();
   }, [tryApplyPendingSeek]);
+
+  // <video onError> — 디코드 실패(예: 코덱 미지원, 파일 손상) 시 호출.
+  // pendingSeekRef를 비우고 재시도 타이머도 취소하여 [seek-debug] WAIT readyState<1 무한 폴링을 막는다.
+  // 사용자에겐 메시지로 원인 노출 (mp4v fourcc → libx264 미적용 또는 파일 손상 의심).
+  const handleVideoError = useCallback((e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const v = e.currentTarget;
+    const code = v.error?.code;
+    const msg = v.error?.message || '';
+    // MediaError codes: 1=ABORTED, 2=NETWORK, 3=DECODE, 4=SRC_NOT_SUPPORTED
+    const codeLabel = code === 1 ? 'ABORTED' : code === 2 ? 'NETWORK' : code === 3 ? 'DECODE' : code === 4 ? 'SRC_NOT_SUPPORTED' : `unknown(${code})`;
+    console.error('[video] decode/load error', { code, codeLabel, message: msg, src: v.currentSrc || v.src });
+    if (code === 3 || code === 4) {
+      message.error(`녹화 파일을 재생할 수 없습니다 (${codeLabel}) — ffmpeg 인코딩 없이 저장된 mp4v 파일이거나 손상된 파일일 수 있습니다.`);
+    } else {
+      message.error(`녹화 파일 로드 실패 (${codeLabel})`);
+    }
+    // 진행 중인 seek 시도 중단
+    pendingSeekRef.current = null;
+    if (seekRetryTimerRef.current != null) {
+      window.clearTimeout(seekRetryTimerRef.current);
+      seekRetryTimerRef.current = null;
+    }
+  }, []);
 
   // 비디오 재생 시 현재 스텝 실시간 하이라이트.
   // started_at 사이드카가 있으면 video time → wall-clock으로 직접 변환하여 정확히 매칭.
@@ -1260,7 +1303,7 @@ export default function ResultsPage() {
                             );
                           })}
                         </Space>
-                        {activeRecBlobUrl && <video key={activeRecBlobUrl} ref={detailVideoRef} src={activeRecBlobUrl} controls preload="auto" onLoadedMetadata={handleVideoCanPlay} onCanPlay={handleVideoCanPlay} onTimeUpdate={handleVideoTimeUpdate} onPause={handleVideoPauseOrEnd} onEnded={handleVideoPauseOrEnd} style={{ width: '100%', maxHeight: 400 }} />}
+                        {activeRecBlobUrl && <video key={activeRecBlobUrl} ref={detailVideoRef} src={activeRecBlobUrl} controls preload="auto" onLoadedMetadata={handleVideoCanPlay} onCanPlay={handleVideoCanPlay} onTimeUpdate={handleVideoTimeUpdate} onPause={handleVideoPauseOrEnd} onEnded={handleVideoPauseOrEnd} onError={handleVideoError} style={{ width: '100%', maxHeight: 400 }} />}
                       </div>
                     ),
                   }]}
@@ -1350,6 +1393,7 @@ export default function ResultsPage() {
                         onTimeUpdate={handleVideoTimeUpdate}
                         onPause={handleVideoPauseOrEnd}
                         onEnded={handleVideoPauseOrEnd}
+                        onError={handleVideoError}
                         style={{ width: '100%', borderRadius: 4, background: '#000', display: 'block', marginBottom: 5 }}
                       />
                       {recordings.length > 1 && (
