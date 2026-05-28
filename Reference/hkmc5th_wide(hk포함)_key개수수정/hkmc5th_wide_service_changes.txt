@@ -1,0 +1,104 @@
+================================================================================
+hkmc5th_wide_service.py 수정사항
+수정일: 2026-05-27
+================================================================================
+
+1. 수정 범위
+--------------------------------------------------------------------------------
+  파일: hkmc5th_wide_service.py
+  섹션: HKMC5TH_WIDE_KEYS 딕셔너리 (Key definitions)
+  send_key_by_name() 메서드 내 키 처리 로직
+
+================================================================================
+
+2. HKMC5TH_WIDE_KEYS 변경 내용
+--------------------------------------------------------------------------------
+
+[변경 전]
+  기존 키 목록 (49개):
+    - 개별 메시지 키 19개 (DAYNIGHT, RADIO, MAP, NAVI, SETTING, INFO, PHONE,
+      POWER_ON, POWER_OFF, TUNE_NEXT, TUNE_BEFORE, TUNE_PRESS, DMB, MEDIA,
+      SEEK, TRACK, CALL, CALL_LONG, CALL_END)
+    - HKEY 키 15개 (HKEY_FMAM, HKEY_MEDIA, HKEY_SEEK, HKEY_TRACK, HKEY_MAPVOICE,
+      HKEY_NAV, HKEY_EJECT, HKEY_SETUP, HKEY_TUNE_CENTER, HKEY_TUNE_CLOCK,
+      HKEY_TUNE_ANTI, HKEY_VOLUME_CENTER, HKEY_VOLUME_CLOCK, HKEY_VOLUME_ANTI,
+      HKEY_TUNE_DIAL alias들)
+    - SWC 키 11개 (SWC_PHONE_SEND, SWC_PHONE_END, SWC_PTT, SWC_VOLUME_DOWN,
+      SWC_VOLUME_UP, SWC_MUTE, SWC_MODE, SWC_SEEK_DOWN, SWC_SEEK_UP,
+      SWC_VOL_SCROLL_DOWN, SWC_VOL_SCROLL_UP)
+    - CCP 키 10개 (CCP_JOGDIAL_CLOCK, CCP_JOGDIAL_ANTI, CCP_VOLUME_UP,
+      CCP_VOLUME_DOWN, CCP_TUNE_UP, CCP_TUNE_DOWN, CCP_BACK, CCP_HOME,
+      CCP_MENU, CCP_JOG_PRESS)
+    - RRC 키 7개 (RRC_ENTER, RRC_UP, RRC_DOWN, RRC_LEFT, RRC_RIGHT,
+      RRC_BACK, RRC_HOME)
+
+[변경 후]
+  nHK 사용 키 목록으로 축소 (17개):
+
+  키 이름         CMD          Key 값  (hex)   비고
+  ─────────────────────────────────────────────────────────────────
+  RADIO_K       CMD_HKEY(60)  MKBD_RADIO=0x12   (구 HKEY_MEDIA)
+  MEDIA_K       CMD_HKEY(60)  MKBD_MEDIA=0x14   (구 HKEY_TRACK)
+  MEDIA_PRE_K   CMD_HKEY(60)  MKBD_MEDIA=0x14   LONG_KEY 변형
+  CUSTOM_K      CMD_HKEY(60)  MKBD_CUSTOM=0x16  (구 HKEY_NAV)
+  CUSTOM_PRE_K  CMD_HKEY(60)  MKBD_CUSTOM=0x16  LONG_KEY 변형
+  SEEK_UP_K     CMD_SWC(70)   SWC_SEEK_UP=0x09
+  SEEK_DN_K     CMD_SWC(70)   SWC_SEEK_DOWN=0x08
+  MAP_K         CMD_HKEY(60)  MKBD_MAP=0x11     (구 HKEY_FMAM)
+  NAVI_K        CMD_NAVI_KEY(63)  —             msg 방식
+  SETUP_K       CMD_HKEY(60)  MKBD_SETUP=0x18
+  SETUP_PRE_K   CMD_HKEY(60)  MKBD_SETUP=0x18   LONG_KEY 변형
+  TUNE_UP_K     CMD_HKEY(60)  0xA0 dial CLOCK
+  TUNE_DN_K     CMD_HKEY(60)  0xA0 dial ANTI_CLOCK
+  TUNE_PRE_K    CMD_HKEY(60)  MKBD_TUNE_PRESS=0x1C
+  VOL_UP_K      CMD_HKEY(60)  0xF1 dial CLOCK
+  VOL_DN_K      CMD_HKEY(60)  0xF1 dial ANTI_CLOCK
+  POWER_K       CMD_HKEY(60)  MKBD_POWER_VOLUME_PRESS=0xF0
+
+================================================================================
+
+3. send_key_by_name() 변경 내용
+--------------------------------------------------------------------------------
+
+[변경 전]
+  is_msg / is_dial 두 가지 플래그만 처리.
+  *_PRE_K 별도 처리 없음.
+
+[변경 후]
+  is_long 플래그 추가:
+    - 키 정의에 "long": True 가 있고 호출자가 sub_cmd=SHORT_KEY인 경우
+      자동으로 LONG_KEY(0x44)로 전환하여 송신.
+    - 호출자가 명시적으로 LONG_KEY를 전달한 경우에도 동일하게 동작.
+
+  처리 우선순위:
+    1. msg  → send_key_message(cmd, sub_cmd)
+    2. dial → send_key(cmd, DIAL_ACTION, key_data, direction)
+    3. long + SHORT_KEY 호출 → send_key(cmd, LONG_KEY, key_data)
+    4. SHORT_KEY → send_key(cmd, SHORT_KEY, key_data)   [단일 패킷]
+    5. LONG_KEY  → send_key(cmd, LONG_KEY, key_data)    [단일 패킷]
+    6. 기타 sub_cmd → 호출자 지정 그대로 송신
+
+================================================================================
+
+4. Key 값 비교 — 라이브러리(MKBD_*) vs 기존 Wide Service(HKEY_*)
+--------------------------------------------------------------------------------
+
+  두 네이밍 체계의 hex 값은 완전히 동일.
+  차이는 이름뿐 (MKBD_*: 미디어 키보드 보드 관점 / HKEY_*: 범용 하드키 관점).
+
+  라이브러리(MKBD)      값     Wide Service(HKEY)    값   일치
+  ─────────────────────────────────────────────────────────────
+  MKBD_MAP            0x11   HKEY_FMAM             0x11  ✅
+  MKBD_RADIO          0x12   HKEY_MEDIA            0x12  ✅ (이름 불일치)
+  MKBD_NAV            0x13   HKEY_SEEK             0x13  ✅ (이름 불일치)
+  MKBD_MEDIA          0x14   HKEY_TRACK            0x14  ✅ (이름 불일치)
+  MKBD_CUSTOM         0x16   HKEY_NAV              0x16  ✅ (이름 불일치)
+  MKBD_SETUP          0x18   HKEY_SETUP            0x18  ✅
+  MKBD_POWER_VOLUME_PRESS   0xF0  HKEY_VOLUME_CENTER  0xF0  ✅
+  MKBD_POWER_VOLUME_CLOCK   0xF1  HKEY_VOLUME_DIAL    0xF1  ✅
+  MKBD_TUNE_PRESS     0x1C   HKEY_TUNE_CENTER      0x1C  ✅
+  MKBD_TUNE_CLOCK     0xA0   HKEY_TUNE_DIAL        0xA0  ✅
+
+  ※ 모든 값 일치. 라이브러리 기준 MKBD_* 이름으로 통일함.
+
+================================================================================
