@@ -873,9 +873,12 @@ def _validate_offline_prereqs() -> bool:
         else:
             print(f"    MISS {rel} ({desc})")
             (missing_critical if critical else missing_optional).append((rel, desc))
-    # 루트 wheel/installer는 선택적 — 없어도 빌드는 통과
+    # 루트 wheel/installer는 선택적 — 없어도 빌드는 통과.
+    # lge.auto wheel 은 host OS 별 휠만 검사 (양쪽 휠이 함께 있어도 다른 OS 휠은 무시).
+    host = _host_os()
+    lge_whl_pattern = "lge.auto-*-win_amd64.whl" if host == "win" else "lge.auto-*-linux_*.whl"
     optional_root_globs = [
-        ("lge.auto-*.whl", "lge.auto Python wheel"),
+        (lge_whl_pattern, f"lge.auto Python wheel ({host})"),
         ("Git-*.exe", "Git for Windows 인스톨러"),
         ("vcredist_x64.exe", "VC++ Redistributable"),
         ("python-3.10.4-amd64.exe", "시스템 Python 3.10 인스톨러(폴백용)"),
@@ -917,7 +920,19 @@ def step_package(force=False, offline=False) -> bool:
     DIST_DIR.mkdir(parents=True, exist_ok=True)
 
     # 빌드가 관리하는 디렉토리만 삭제 (python은 캐시되므로 제외)
+    # 단, host OS 와 맞지 않는 lge.auto wheel 은 push 잔재 방지를 위해 제거.
+    host = _host_os()
     for item in list(DIST_DIR.iterdir()):
+        # OS-cross lge.auto wheel 정리 — Windows 빌드 중 Linux wheel 잔재 (반대도 동일) 제거.
+        if item.is_file() and item.name.startswith("lge.auto-") and item.suffix == ".whl":
+            if host == "win" and "linux_" in item.name:
+                item.unlink()
+                print(f"  cross-OS wheel 제거: {item.name}")
+                continue
+            if host == "linux" and "win_" in item.name:
+                item.unlink()
+                print(f"  cross-OS wheel 제거: {item.name}")
+                continue
         if item.name in _PRESERVE_NAMES or item.suffix in _PRESERVE_EXTS:
             continue
         if item.is_dir():
@@ -1016,8 +1031,10 @@ def _copy_root_installers():
     (step_package 첫머리의 보존 규칙(_PRESERVE_EXTS)이 .whl/.exe/.msi/.zip을 유지하므로
      이미 dist에 들어 있던 파일은 덮어쓰기만 됨.)
     """
+    # Windows 빌드 — Windows 호환 wheel 만 (Linux 휠이 함께 있어도 거름).
+    # lge.auto-*-win_amd64.whl 매칭. Linux 빌드 (build_deb.sh) 는 자체 staging 으로 처리.
     patterns = [
-        "lge.auto-*.whl",
+        "lge.auto-*-win_amd64.whl",
         "Git-*.exe",
         "vcredist_x64.exe",
         "python-3.10.4-amd64.exe",
@@ -1286,6 +1303,9 @@ logs/
 *.msi
 *.zip
 *.whl
+# lge.auto wheel 만 추적 허용 — setup.bat/setup.sh 가 embedded Python 에 설치.
+# 양 OS wheel (lge.auto-*-win_amd64.whl, lge.auto-*-linux_*.whl) 모두 포함.
+!lge.auto-*.whl
 get-pip.py
 DltViewerSDK_21.1.3_ver/
 # tools/ 폴더 — 기본 ignore. 단, webcam 녹화/미러링에 필수인 binary 는 추적 허용.

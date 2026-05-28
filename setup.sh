@@ -96,14 +96,15 @@ else
     "$PY" -m pip install -r requirements.txt -q
 fi
 
-# lge.auto 로컬 wheel (있으면 설치)
+# lge.auto 로컬 wheel (Linux 휠만 — win_amd64 휠이 함께 있어도 거름).
+# 아키텍처별 wheel 파일명: lge.auto-<ver>-cp310-cp310-linux_x86_64.whl 또는 linux_aarch64.
 shopt -s nullglob
-whl_files=(lge.auto-*.whl)
+whl_files=(lge.auto-*-linux_*.whl)
 if [ ${#whl_files[@]} -gt 0 ]; then
     "$PY" -m pip install "${whl_files[0]}"
-    echo "      lge.auto installed"
+    echo "      lge.auto installed: ${whl_files[0]}"
 else
-    echo "      [Note] lge.auto .whl not found"
+    echo "      [Note] lge.auto linux wheel not found"
 fi
 shopt -u nullglob
 

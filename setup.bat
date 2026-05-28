@@ -153,12 +153,15 @@ if exist "python\python.exe" (
         %PIP% install -r requirements.txt -q --no-warn-script-location
     )
 )
-:: lge.auto는 로컬 .whl — 오프라인 설치 가능 (PyPI 접근 불필요)
-if exist "lge.auto-*.whl" (
-    for %%f in (lge.auto-*.whl) do %PIP% install "%%f"
-    echo       lge.auto installed
+:: lge.auto는 로컬 .whl — 오프라인 설치 가능 (PyPI 접근 불필요).
+:: Windows 호스트는 win_amd64 휠만 설치 (Linux 휠이 PROJECT_ROOT 에 함께 있어도 거름).
+set "LGE_WHL="
+for %%f in (lge.auto-*-win_amd64.whl) do set "LGE_WHL=%%f"
+if defined LGE_WHL (
+    %PIP% install "%LGE_WHL%"
+    echo       lge.auto installed: %LGE_WHL%
 ) else (
-    echo       [Note] lge.auto .whl not found
+    echo       [Note] lge.auto win_amd64 wheel not found
 )
 :: vmbpy (Vimba X Python API) - install from SDK if available (로컬 .whl이라 오프라인 OK)
 set "VMBPY_WHL="

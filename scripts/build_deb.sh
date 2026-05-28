@@ -168,10 +168,13 @@ echo "[3/7] pip install -r requirements.txt → python/..."
 ./python/bin/python3 -m pip install -r requirements.txt -q
 
 shopt -s nullglob
-whl_files=(lge.auto-*.whl)
+# Linux 휠만 (win_amd64 휠이 함께 있어도 거름) — 아키텍처별: linux_x86_64 또는 linux_aarch64
+whl_files=(lge.auto-*-linux_*.whl)
 if [ ${#whl_files[@]} -gt 0 ]; then
     ./python/bin/python3 -m pip install "${whl_files[0]}" -q
-    echo "      lge.auto installed"
+    echo "      lge.auto installed: ${whl_files[0]}"
+else
+    echo "      [Note] lge.auto linux wheel not found — Linux 전용 모듈 (CANAT 등) 사용 불가"
 fi
 shopt -u nullglob
 
@@ -230,9 +233,9 @@ for item in \
     stage_to "$item" "$DIST_REPLAYKIT"
 done
 
-# lge.auto wheel — setup 단계에서 embedded Python 에 설치.
+# lge.auto wheel — setup 단계에서 embedded Python 에 설치. Linux 휠만 dist 에 포함.
 shopt -s nullglob
-for f in lge.auto-*.whl; do
+for f in lge.auto-*-linux_*.whl; do
     cp -a "$PROJECT_ROOT/$f" "$DIST_REPLAYKIT/"
 done
 shopt -u nullglob
