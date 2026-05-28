@@ -167,11 +167,17 @@ echo "[3/7] pip install -r requirements.txt → python/..."
 ./python/bin/python3 -m pip install --upgrade pip -q
 
 # 이전 빌드 잔재 정리 — 옛 lge.auto 가 numpy (<1.25) 를 pin 하고 있으면 requirements.txt
-# 의 numpy==2.2.6 (opencv-python numpy>=2 요구 충족용) 으로 못 올라감. 미리 제거 후
-# 아래에서 --no-deps 로 재설치하므로 의존성 누락 없음.
-./python/bin/python3 -m pip uninstall -y lge.auto 2>/dev/null || true
+# 의 numpy==2.2.6 (opencv-python numpy>=2 요구 충족용) 으로 못 올라감.
+# pip uninstall 만으론 일부 케이스에서 site-packages 의 namespace package (lge/) 일부 파일이
+# 남아 resolver 가 여전히 메타데이터를 읽는 현상이 있어 파일시스템 레벨에서 강제 제거.
+SITE_PACKAGES=$(./python/bin/python3 -c "import site; print(site.getsitepackages()[0])")
+echo "      site-packages: $SITE_PACKAGES"
+./python/bin/python3 -m pip uninstall -y lge.auto lge-auto || true
+rm -rf "$SITE_PACKAGES/lge" "$SITE_PACKAGES"/lge.auto-*.dist-info "$SITE_PACKAGES"/lge_auto-*.dist-info 2>/dev/null || true
 
-./python/bin/python3 -m pip install -r requirements.txt -q
+# --upgrade-strategy eager — stale numpy 1.24.4 등이 박혀 있는 dirty env 에서도 requirements
+# 의 핀 (numpy==2.2.6) 으로 강제 갱신. 첫 빌드엔 영향 없고 재빌드 안정성만 향상.
+./python/bin/python3 -m pip install -r requirements.txt --upgrade --upgrade-strategy eager -q
 
 shopt -s nullglob
 # Linux 휠만 (win_amd64 휠이 함께 있어도 거름) — 아키텍처별: linux_x86_64 또는 linux_aarch64.

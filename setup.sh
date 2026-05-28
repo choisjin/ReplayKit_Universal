@@ -94,10 +94,13 @@ if [ "$OFFLINE_MODE" = "1" ]; then
 else
     "$PY" -m pip install --upgrade pip -q
     # 이전 install 의 stale lge.auto 가 numpy (<1.25) 를 pin 해서 requirements.txt
-    # 의 numpy==2.2.6 (opencv-python 요구) 으로 못 올라가는 케이스 방지. 아래에서
-    # --no-deps 로 재설치하므로 의존성 누락 없음.
-    "$PY" -m pip uninstall -y lge.auto 2>/dev/null || true
-    "$PY" -m pip install -r requirements.txt -q
+    # 의 numpy==2.2.6 (opencv-python 요구) 으로 못 올라가는 케이스 방지.
+    # pip uninstall + 파일시스템 강제 제거 — pip 가 못 잡는 잔재까지 정리.
+    SITE_PACKAGES=$("$PY" -c "import site; print(site.getsitepackages()[0])")
+    "$PY" -m pip uninstall -y lge.auto lge-auto || true
+    rm -rf "$SITE_PACKAGES/lge" "$SITE_PACKAGES"/lge.auto-*.dist-info "$SITE_PACKAGES"/lge_auto-*.dist-info 2>/dev/null || true
+    # --upgrade-strategy eager — dirty env 의 stale numpy 등을 강제 갱신.
+    "$PY" -m pip install -r requirements.txt --upgrade --upgrade-strategy eager -q
 fi
 
 # lge.auto 로컬 wheel (Linux 휠만 — win_amd64 휠이 함께 있어도 거름).
