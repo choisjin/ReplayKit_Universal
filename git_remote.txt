@@ -1,1 +1,1 @@
-http://mod.lge.com/hub/dqa_dcv_auto/rnavn_project.git
+http://mod.lge.com/hub/dqa_replay_kit/replay_kit_linux.git

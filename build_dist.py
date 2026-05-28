@@ -124,20 +124,15 @@ def _bump(current: str, kind: str) -> str:
 # 하나의 다이얼로그로 통합. Linux 에서도 동일 GUI 사용 (PySide6 LGPL).
 
 # dist/ReplayKit (빌드 산출물) push 대상.
-# 회사 PC 빌드 시 두 곳 모두에 동일한 dist 내용을 force push:
-#   - github : 홈/외부 사용자가 ReplayKit.bat --home 으로 git_remote_home.txt 보고 pull
-#   - lge    : 사내 사용자가 ReplayKit.bat 으로 git_remote.txt 보고 pull (ReplayKit.bat
-#              의 CANONICAL_REMOTE 와 일치 — 사내 환경에서 origin URL 자동 교정 대상)
+# 사내 LGE git 으로만 force push — 외부(GitHub) 배포 채널은 제거됨.
 # 소스코드 sync (개인PC ↔ 회사PC) 는 PROJECT_ROOT/.git 의 origin (ReplayKit_Universal)
 # 가 별도로 담당 — build_dist.py 와 무관.
 DIST_PUSH_REMOTES = {
     "win": [
-        ("github", "https://github.com/choisjin/ReplayKit.git"),
         ("lge",    "http://mod.lge.com/hub/dqa_replay_kit/replay_kit.git"),
     ],
     "linux": [
-        ("lge",    "http://mod.lge.com/hub/dqa_dcv_auto/rnavn_project.git"),
-        # linux 의 GitHub 배포는 현재 미정 — 필요 시 ("github", "...") 추가.
+        ("lge",    "http://mod.lge.com/hub/dqa_replay_kit/replay_kit_linux.git"),
     ],
 }
 OS_LABELS = {"win": "Windows", "linux": "Linux"}
@@ -574,6 +569,17 @@ def _ensure_dist_git(target: str) -> bool:
         elif r.stdout.strip() != url:
             subprocess.run(["git", "remote", "set-url", name, url], cwd=DIST_DIR, check=True)
             print(f"  remote '{name}' URL 갱신: {url}")
+
+    # DIST_PUSH_REMOTES 에 없는 stale remote (예: 과거 'github') 정리.
+    # 이름만 매칭 — 의도하지 않은 remote 가 남아 다음 사용자가 수동 push 했을 때
+    # 잘못된 위치로 가는 사고 방지.
+    wanted = {name for name, _ in remotes}
+    r = subprocess.run(["git", "remote"], cwd=DIST_DIR, capture_output=True, text=True)
+    if r.returncode == 0:
+        for existing in r.stdout.split():
+            if existing and existing not in wanted:
+                subprocess.run(["git", "remote", "remove", existing], cwd=DIST_DIR, check=False)
+                print(f"  stale remote '{existing}' 제거")
     return True
 
 
@@ -944,20 +950,22 @@ def step_package(force=False, offline=False) -> bool:
     _copy_root_installers()
 
     # ── git_remote.txt / git_remote_home.txt / .offline_mode ──
-    # 두 파일의 역할 (ReplayKit.bat 분석 결과):
-    #   git_remote.txt       → 사내 사용자 (기본 모드)         → LG GitLab URL
-    #   git_remote_home.txt  → 홈/외부 사용자 (--home 모드)    → GitHub URL
-    # ReplayKit.bat 의 CANONICAL_REMOTE 도 LG URL 이므로 사내 모드에서 origin 자동 교정 일관됨.
+    # git_remote.txt: 사내 사용자 자동 pull URL (LG GitLab).
+    # git_remote_home.txt: 과거 외부(GitHub) 배포용. GitHub 푸시 제거 이후로는 항상 정리.
+    #   ReplayKit.bat --home 모드는 파일 부재 시 기본(git_remote.txt) 로 폴백.
     git_remote_file = DIST_DIR / "git_remote.txt"
     git_remote_home_file = DIST_DIR / "git_remote_home.txt"
     offline_marker = DIST_DIR / ".offline_mode"
     host = _host_os()
+    # GitHub 배포 채널 제거됨 — home remote 파일은 어떤 모드에서든 항상 정리.
+    if git_remote_home_file.exists():
+        git_remote_home_file.unlink()
+        print(f"  git_remote_home.txt 제거 (GitHub 배포 없음)")
     if offline:
         # 오프라인 모드: 자동 git pull 차단, 마커 파일 생성
-        for f in (git_remote_file, git_remote_home_file):
-            if f.exists():
-                f.unlink()
-                print(f"  오프라인 모드: {f.name} 제거")
+        if git_remote_file.exists():
+            git_remote_file.unlink()
+            print(f"  오프라인 모드: git_remote.txt 제거")
         offline_marker.write_text(
             "# 이 파일이 있으면 ReplayKit.bat / setup.bat이 네트워크 액세스를\n"
             "# 시도하지 않습니다. 삭제하면 온라인 모드로 동작합니다.\n",
@@ -965,21 +973,15 @@ def step_package(force=False, offline=False) -> bool:
         )
         print("  오프라인 모드: .offline_mode 마커 생성")
     else:
-        # 온라인 모드: 마커 제거 + DIST_PUSH_REMOTES 기반 자동 채움
+        # 온라인 모드: 마커 제거 + DIST_PUSH_REMOTES 기반 자동 채움 (LGE 만)
         if offline_marker.exists():
             offline_marker.unlink()
         lge_url = _remote_url(host, "lge")
-        github_url = _remote_url(host, "github")
         if lge_url:
             git_remote_file.write_text(lge_url, encoding="utf-8")
             print(f"  git_remote.txt → {lge_url}")
         elif git_remote_file.exists():
             git_remote_file.unlink()
-        if github_url:
-            git_remote_home_file.write_text(github_url, encoding="utf-8")
-            print(f"  git_remote_home.txt → {github_url}")
-        elif git_remote_home_file.exists():
-            git_remote_home_file.unlink()
 
     # 통계
     total = sum(1 for _ in DIST_DIR.rglob("*") if _.is_file())
@@ -1488,8 +1490,8 @@ def main():
     else:
         print("[BUILD] skipped")
 
-    # 배포 push — DIST_PUSH_REMOTES 의 모든 remote (github + lge) 에 dist 산출물 force push.
-    # legacy --deploy 도 신규 흐름으로 흡수 (별도 deploy() 호출 불필요 — dist/.git 자동 init + multi-remote 처리됨).
+    # 배포 push — DIST_PUSH_REMOTES 의 remote (LGE) 로 dist 산출물 force push.
+    # legacy --deploy 도 신규 흐름으로 흡수 (별도 deploy() 호출 불필요 — dist/.git 자동 init 처리됨).
     if do_push or legacy_deploy:
         rc = _deploy_force_push(target, version)
         if rc != 0:
