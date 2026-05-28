@@ -638,17 +638,26 @@ def _deploy_force_push(target: str, version: str | None = None) -> int:
     # 브랜치 main 고정 (init 직후 HEAD 가 분리되어 있거나 master 인 경우 보정)
     subprocess.run(["git", "branch", "-M", "main"], cwd=DIST_DIR, check=False)
 
+    # Push subprocess 환경 정리 — VS Code / GUI askpass helper 가 prompt 를 띄우려다
+    # 터미널에 보이지 않아 영구 hang 되는 사고 방지. credential.helper (store/cache) 가
+    # 캐시한 자격증명을 사용하거나, 터미널에서 직접 prompt 받게 함.
+    push_env = os.environ.copy()
+    push_env.pop("GIT_ASKPASS", None)
+    push_env.pop("SSH_ASKPASS", None)
+    push_env["GIT_TERMINAL_PROMPT"] = "1"
+
     failed: list[str] = []
     for name, url in remotes:
         print(f"\n[PUSH] {OS_LABELS[target]} dist → {name} ({url})")
         rc = subprocess.run(
-            ["git", "push", "--force", name, "main"],
-            cwd=DIST_DIR,
+            ["git", "-c", "core.askPass=", "push", "--force", "--progress", name, "main"],
+            cwd=DIST_DIR, env=push_env,
         ).returncode
         if rc == 0:
             print(f"[PUSH] OK — {name}")
         else:
             print(f"[PUSH] FAIL — {name}  (수동: cd {DIST_DIR} && git push --force {name} main)", file=sys.stderr)
+            print(f"        인증 실패 시: git config --global credential.helper store  실행 후 한 번 수동 push 로 자격증명 캐시", file=sys.stderr)
             failed.append(name)
 
     if failed:
