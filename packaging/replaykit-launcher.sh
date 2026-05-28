@@ -278,7 +278,9 @@ if [ "$NEEDS_SYNC" = "1" ]; then
     fi
 
     # 단일 파일들도 복사 (server.py 가 PROJECT_ROOT 를 자기 위치 기준으로 잡음)
-    for f in server.py _launcher.py requirements.txt version.txt; do
+    # changelog.json: 빌드 시점 git log 스냅샷 — backend/git_log() 가 mod.lge.com 접근 불가
+    # 환경에서 fallback 으로 사용. /opt 에 빌드된 스냅샷을 user dir 로 미러.
+    for f in server.py _launcher.py requirements.txt version.txt changelog.json; do
         if [ -e "$APP_DIR/$f" ]; then
             rm -f "$USER_DATA/$f"
             cp -p "$APP_DIR/$f" "$USER_DATA/$f"

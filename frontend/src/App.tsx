@@ -331,8 +331,13 @@ function AppContent() {
                     onOk: async () => {
                       message.loading({ content: t('server.updating'), key: 'update', duration: 0 });
                       try {
-                        await serverApi.updateAndRestart();
+                        const updRes = await serverApi.updateAndRestart();
                         message.destroy('update');
+                        // 백엔드의 pull 결과 — 사용자가 "업데이트 됨 / 변경 없음 / 실패" 를
+                        // 명확히 인지하도록 콘솔과 화면에 표시.
+                        const pull = (updRes?.data as any)?.pull || {};
+                        console.log('[update] pull result:', pull);
+
                         // 업데이트 대기 화면 표시
                         const wrap = document.createElement('div');
                         wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap: 13px;font-family:sans-serif';
@@ -342,8 +347,18 @@ function AppContent() {
                         const status = document.createElement('div');
                         status.style.color = '#888';
                         status.textContent = '서버 종료 대기 중';
+                        const pullInfo = document.createElement('div');
+                        pullInfo.style.cssText = 'font-size:12px;color:#666;max-width:560px;text-align:center;font-family:monospace;white-space:pre-wrap';
+                        if (pull.performed) {
+                          pullInfo.textContent = `✓ git pull 성공 (mode: ${pull.mode}${pull.detail ? ' — ' + pull.detail : ''})`;
+                          pullInfo.style.color = '#52c41a';
+                        } else if (pull.mode && pull.mode !== 'none') {
+                          pullInfo.textContent = `⚠ git pull 실패 (mode: ${pull.mode})\n${pull.error || pull.detail || '원인 불명'}\n→ 서버는 그대로 재시작됩니다 (코드 변경 없음)`;
+                          pullInfo.style.color = '#fa8c16';
+                        }
                         wrap.appendChild(title);
                         wrap.appendChild(status);
+                        if (pullInfo.textContent) wrap.appendChild(pullInfo);
                         document.body.innerHTML = '';
                         document.body.appendChild(wrap);
                         // 서버가 다시 응답할 때까지 폴링

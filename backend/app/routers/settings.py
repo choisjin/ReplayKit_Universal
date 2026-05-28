@@ -334,94 +334,236 @@ async def get_launcher_log(lines: int = 200, date: str = "", source: str = ""):
 
 @router.post("/update-and-restart")
 async def update_and_restart():
-    """업데이트 버튼: 서버 종료 → git pull → 서버 재시작.
+    """업데이트 버튼: git pull → 서버 재시작.
 
-    Windows: .restart 플래그를 server.py(Tkinter 런처)가 watch 해서 처리.
-    Linux: 백엔드 프로세스 자체가 git pull 후 os.execv 로 자기 재시작 (런처 watcher 없음).
-        외부에서 보면 동일 — 잠시 다운 후 새 boot_id 로 부활. 프론트엔드는 boot_id 변경을
-        감지해 자동 reload (App.tsx 의 useEffect).
+    Windows: .restart 플래그를 server.py(Tkinter 런처)가 watch 해서 처리. git pull 자체는
+        런처가 ReplayKit.bat 의 git pull 단계에서 수행.
+    Linux:
+      - 소스 clone (.git 존재): in-place fetch + reset.
+      - .deb 설치본 (.git 없음, REPLAYKIT_INSTALLED=1): cache repo 에 pull → $USER_DATA 로 sync.
+        프론트엔드 boot_id 감지로 자동 reload.
+
+    Linux 의 git pull 결과를 응답에 포함시켜 UI 가 "updated/no-change/fetch-failed" 를 구분.
+    응답을 보낸 직후 별도 스레드에서 os.execv 로 재시작.
     """
     logger.info("Update requested")
-    _RESTART_FLAG.write_text("restart", encoding="utf-8")
+
+    pull_result: dict = {"performed": False, "mode": "none"}
 
     if sys.platform != "win32":
-        # Linux: HTTP 응답 보낸 직후 자가 재시작 시퀀스 시작.
+        # 1) 동기 git pull — 결과를 응답에 포함하기 위해 background 가 아닌 인라인 수행.
+        # subprocess 가 blocking 이므로 to_thread 로 감싸 event loop 미차단.
+        def _do_pull() -> dict:
+            candidates = [_PROJECT_ROOT]
+            app_dir = os.environ.get("REPLAYKIT_APP_DIR")
+            if app_dir:
+                candidates.append(Path(app_dir))
+            candidates.append(Path("/opt/ReplayKit"))
+            git_root: Optional[Path] = None
+            for c in candidates:
+                if (c / ".git").exists():
+                    git_root = c
+                    break
+
+            if git_root is not None:
+                env = os.environ.copy()
+                env.pop("GIT_ASKPASS", None)
+                env.pop("SSH_ASKPASS", None)
+                env["GIT_TERMINAL_PROMPT"] = "0"
+                _run(["git", "config", "--global", "--add", "safe.directory", str(git_root)])
+                rc, _, err = _run(
+                    ["git", "-c", "core.askPass=", "fetch", "origin", "main"],
+                    cwd=str(git_root), timeout=60, env=env,
+                )
+                if rc == 0:
+                    rc2, _, err2 = _run(["git", "reset", "--hard", "origin/main"],
+                                        cwd=str(git_root), timeout=30)
+                    return {
+                        "performed": rc2 == 0,
+                        "mode": "in-place",
+                        "git_root": str(git_root),
+                        "error": err2.strip()[:300] if rc2 != 0 else None,
+                    }
+                return {"performed": False, "mode": "in-place", "error": f"fetch: {err.strip()[:300]}"}
+            elif os.environ.get("REPLAYKIT_INSTALLED") == "1":
+                ok, msg = _deb_self_update(_PROJECT_ROOT)
+                return {"performed": ok, "mode": "deb-sync", "detail": msg}
+            else:
+                return {"performed": False, "mode": "no-git", "detail": ".git 없음 + .deb 아님"}
+
+        try:
+            pull_result = await asyncio.to_thread(_do_pull)
+        except Exception as e:
+            logger.exception("[update-restart] inline pull 실패")
+            pull_result = {"performed": False, "mode": "error", "error": f"{type(e).__name__}: {e}"}
+
+        # 2) 재시작 트리거 — pull 성공/실패 무관하게 (사용자가 다시 시도 가능하도록).
+        _RESTART_FLAG.write_text("restart", encoding="utf-8")
         import threading
-        threading.Thread(target=_linux_self_update_restart, daemon=True).start()
+        threading.Thread(target=_linux_post_pull_restart, daemon=True).start()
+    else:
+        # Windows: 기존 동작 유지 — 플래그 작성 후 런처가 처리.
+        _RESTART_FLAG.write_text("restart", encoding="utf-8")
 
-    return {"status": "restarting"}
+    return {"status": "restarting", "pull": pull_result}
 
 
-def _linux_self_update_restart() -> None:
-    """Linux 백엔드 자가 git pull + os.execv 재시작.
-
-    동작 순서:
-      1) HTTP 응답이 클라이언트에 도착하도록 1초 sleep
-      2) git pull (= fetch + reset --hard origin/main) — working tree 가 git 트래킹 되는 경우만
-      3) os.execv 로 동일 인자로 자기 자신 재시작 — 새 .py 로딩됨
-
-    실패해도 프로세스는 살아 있어 사용자가 다시 시도 가능.
-    """
+def _linux_post_pull_restart() -> None:
+    """Linux 재시작 전용 — pull 은 endpoint 에서 이미 끝났으므로 sleep 후 os.execv 만."""
     import time as _t
     _t.sleep(1)
-    no_window = 0  # Linux 는 항상 0
     try:
-        # 1) git pull — _PROJECT_ROOT 가 git 트래킹된 경우만. RECORDING_PROJECT_ROOT 가 user dir
-        # 인 .deb 환경에선 .git 없을 수 있어 /opt/ReplayKit 도 후보.
-        candidates = [_PROJECT_ROOT]
-        app_dir = os.environ.get("REPLAYKIT_APP_DIR")
-        if app_dir:
-            candidates.append(Path(app_dir))
-        candidates.append(Path("/opt/ReplayKit"))
-        git_root: Optional[Path] = None
-        for c in candidates:
-            if (c / ".git").exists():
-                git_root = c
-                break
-
-        if git_root is not None:
-            logger.info("[update-restart] git pull in %s", git_root)
-            env = os.environ.copy()
-            env.pop("GIT_ASKPASS", None)
-            env.pop("SSH_ASKPASS", None)
-            env["GIT_TERMINAL_PROMPT"] = "0"
-            # safe.directory 등록 (권한 이슈 회피)
-            subprocess.run(
-                ["git", "config", "--global", "--add", "safe.directory", str(git_root)],
-                capture_output=True, timeout=10,
-            )
-            fetch_r = subprocess.run(
-                ["git", "-c", "core.askPass=", "fetch", "origin", "main"],
-                cwd=str(git_root), capture_output=True, timeout=60,
-                encoding="utf-8", errors="replace", env=env,
-            )
-            if fetch_r.returncode == 0:
-                reset_r = subprocess.run(
-                    ["git", "reset", "--hard", "origin/main"],
-                    cwd=str(git_root), capture_output=True, timeout=30,
-                    encoding="utf-8", errors="replace",
-                )
-                if reset_r.returncode == 0:
-                    logger.info("[update-restart] git pull OK")
-                else:
-                    logger.warning("[update-restart] git reset 실패: %s", (reset_r.stderr or "").strip()[:300])
-            else:
-                logger.warning("[update-restart] git fetch 실패: %s", (fetch_r.stderr or "").strip()[:300])
-        else:
-            logger.info("[update-restart] git root 없음 — git pull 스킵, 재시작만 수행")
-
-        # 2) .restart 플래그 정리 (자가 처리이므로)
         try:
             _RESTART_FLAG.unlink(missing_ok=True)
         except Exception:
             pass
-
-        # 3) os.execv 로 자기 자신 재시작 — argv 그대로
         logger.info("[update-restart] os.execv → new process (sys.executable=%s argv=%s)",
                     sys.executable, sys.argv)
         os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception as e:
-        logger.exception("[update-restart] 자가 재시작 실패: %s", e)
+        logger.exception("[update-restart] 재시작 실패: %s", e)
+
+
+def _run(cmd: list[str], cwd: Optional[str] = None, timeout: int = 30,
+         env: Optional[dict] = None) -> tuple[int, str, str]:
+    """subprocess.run 짧은 wrapper — Linux update flow 에서 반복 사용."""
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, timeout=timeout,
+                       encoding="utf-8", errors="replace", env=env)
+    return r.returncode, r.stdout or "", r.stderr or ""
+
+
+# .deb 환경에서 git pull 시 LGE 내부 원격 (배포본 트리). source clone 환경에선
+# 기존 origin 을 그대로 쓰므로 이 상수는 .deb 자가 업데이트용.
+_DEPLOY_REMOTE_URL = "http://mod.lge.com/hub/dqa_replay_kit/replay_kit_linux.git"
+
+# .deb 자가 업데이트가 git pull 한 결과물을 staging 하는 사용자 캐시 경로.
+# $USER_DATA 자체에 git init 하면 launcher 가 만들어둔 symlink (python/, frontend/, tools/)
+# 를 통해 /opt/ReplayKit (root-owned, read-only) 에 쓰려다 실패하므로 분리된 cache 에 받음.
+def _update_cache_dir() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME")
+    if base:
+        return Path(base) / "replaykit-update"
+    return Path.home() / ".cache" / "replaykit-update"
+
+
+# launcher (replaykit-launcher.sh) 가 /opt/ReplayKit → $USER_DATA 로 복사하는 파일 set 과
+# 일치해야 함. 업데이트 시 .update-cache 의 새 버전으로 동일 set 을 덮어쓴다.
+# Note: python/, tools/ 등은 symlink 로 유지되어 .deb (apt) 가 관리.
+# frontend/dist 는 자가 업데이트로 갱신 가능 — symlink 인 경우 처음 한 번 풀어서 실제
+# 디렉토리로 교체. 그 이후엔 .deb apt upgrade 가 더 새로운 frontend 를 가져와도 user 의
+# frontend/dist 가 우선 (자가 업데이트가 새 release 추적).
+_DEB_USER_SYNC_FILES = ("server.py", "_launcher.py", "requirements.txt", "version.txt", "changelog.json")
+_DEB_USER_SYNC_DIRS = ("backend", "frontend/dist")
+
+
+def _deb_self_update(user_data: Path) -> tuple[bool, str]:
+    """.deb 환경 전용 자가 업데이트: cache 에 git pull → user_data 로 sync.
+
+    Returns: (success, message). success=False 면 호출자가 로그를 보고 재시작 여부 판단.
+    """
+    cache = _update_cache_dir()
+    cache.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env.pop("GIT_ASKPASS", None)
+    env.pop("SSH_ASKPASS", None)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+
+    # cache 초기화 (첫 호출) 또는 remote URL 보정
+    if not (cache / ".git").exists():
+        logger.info("[update-restart] init cache repo at %s", cache)
+        rc, _, err = _run(["git", "init", "-b", "main"], cwd=str(cache))
+        if rc != 0:
+            return False, f"git init 실패: {err.strip()[:200]}"
+        _run(["git", "remote", "add", "origin", _DEPLOY_REMOTE_URL], cwd=str(cache))
+        _run(["git", "config", "--global", "--add", "safe.directory", str(cache)])
+    else:
+        _run(["git", "remote", "set-url", "origin", _DEPLOY_REMOTE_URL], cwd=str(cache))
+
+    # fetch + reset
+    rc, _, err = _run(
+        ["git", "-c", "core.askPass=", "fetch", "--depth=1", "origin", "main"],
+        cwd=str(cache), timeout=120, env=env,
+    )
+    if rc != 0:
+        return False, f"git fetch 실패: {err.strip()[:300]}"
+
+    rc, _, err = _run(
+        ["git", "reset", "--hard", "origin/main"],
+        cwd=str(cache), timeout=60,
+    )
+    if rc != 0:
+        return False, f"git reset 실패: {err.strip()[:300]}"
+
+    # 새 파일을 user_data 로 sync. 파일/디렉토리 모두 dest 가 symlink 였을 수 있으니
+    # 먼저 제거 후 복사 (symlink target 인 /opt/ReplayKit 에 쓰기 금지).
+    import shutil as _sh
+    synced: list[str] = []
+    for f in _DEB_USER_SYNC_FILES:
+        src = cache / f
+        if not src.exists():
+            continue
+        dst = user_data / f
+        try:
+            if dst.is_symlink() or dst.exists():
+                dst.unlink()
+        except Exception as e:
+            logger.warning("[update-restart] %s unlink 실패: %s", dst, e)
+        try:
+            _sh.copy2(src, dst)
+            synced.append(f)
+        except Exception as e:
+            logger.warning("[update-restart] %s copy 실패: %s", f, e)
+
+    for d in _DEB_USER_SYNC_DIRS:
+        src = cache / d
+        if not src.is_dir():
+            continue
+        dst = user_data / d
+        # 부모 경로가 user_data 외부 (예: /opt/ReplayKit) 의 symlink 인 경우 그 부모를
+        # 먼저 실제 디렉토리로 교체해야 함. 예: $USER_DATA/frontend 가 /opt/ReplayKit/frontend
+        # symlink → $USER_DATA/frontend/dist 쓰기 시 /opt 로 가서 권한 거부.
+        parent_path = dst.parent
+        if parent_path != user_data and parent_path.is_symlink():
+            try:
+                target = parent_path.resolve()
+                parent_path.unlink()
+                parent_path.mkdir(parents=True, exist_ok=True)
+                # 원래 symlink 가 가리키던 디렉토리의 내용을 user_data 로 복사 (다른 항목 보존)
+                if target.is_dir():
+                    for child in target.iterdir():
+                        cp_dst = parent_path / child.name
+                        if cp_dst.exists():
+                            continue
+                        try:
+                            if child.is_dir():
+                                _sh.copytree(child, cp_dst, symlinks=True)
+                            else:
+                                _sh.copy2(child, cp_dst)
+                        except Exception as e:
+                            logger.debug("[update-restart] %s 부모 backfill 실패: %s", child, e)
+                logger.info("[update-restart] %s symlink → 실제 디렉토리로 교체", parent_path)
+            except Exception as e:
+                logger.warning("[update-restart] %s 부모 symlink 교체 실패: %s", parent_path, e)
+        try:
+            if dst.is_symlink():
+                dst.unlink()
+            elif dst.exists():
+                _sh.rmtree(dst)
+        except Exception as e:
+            logger.warning("[update-restart] %s 제거 실패: %s", dst, e)
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            _sh.copytree(src, dst, symlinks=True)
+            synced.append(d + "/")
+        except Exception as e:
+            return False, f"{d}/ copy 실패: {e}"
+
+    if not synced:
+        return False, "동기화할 파일이 없음 (cache 가 비었거나 build 산출물 누락)"
+
+    logger.info("[update-restart] synced from cache → %s: %s", user_data, synced)
+    return True, f"updated: {', '.join(synced)}"
 
 
 @router.get("/disk-usage")
