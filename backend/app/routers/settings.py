@@ -477,6 +477,41 @@ _DEB_USER_SYNC_FILES = ("server.py", "_launcher.py", "requirements.txt", "versio
 _DEB_USER_SYNC_DIRS = ("backend", "frontend/dist")
 
 
+def _clean_git_locks(repo_dir: Path) -> None:
+    """git fetch 가 중단돼서 남은 lock 파일들을 정리.
+
+    shallow.lock, index.lock, refs/heads/*.lock, refs/remotes/origin/*.lock 등.
+    fetch 가 SIGKILL/프로세스 종료/네트워크 단절로 비정상 종료하면 lock 이 남아
+    다음 fetch 가 "다른 git 프로세스가 실행 중" 에러로 실패.
+    """
+    git_dir = repo_dir / ".git"
+    if not git_dir.is_dir():
+        return
+    candidates = [
+        git_dir / "shallow.lock",
+        git_dir / "index.lock",
+        git_dir / "HEAD.lock",
+        git_dir / "config.lock",
+        git_dir / "packed-refs.lock",
+    ]
+    for c in candidates:
+        if c.exists():
+            try:
+                c.unlink()
+                logger.info("[git-lock-cleanup] removed %s", c)
+            except Exception as e:
+                logger.warning("[git-lock-cleanup] %s 제거 실패: %s", c, e)
+    # refs/ 하위의 *.lock 도 정리
+    refs_dir = git_dir / "refs"
+    if refs_dir.is_dir():
+        for lock in refs_dir.rglob("*.lock"):
+            try:
+                lock.unlink()
+                logger.info("[git-lock-cleanup] removed %s", lock)
+            except Exception as e:
+                logger.warning("[git-lock-cleanup] %s 제거 실패: %s", lock, e)
+
+
 def _deb_self_update(user_data: Path) -> tuple[bool, str]:
     """.deb 환경 전용 자가 업데이트: cache 에 git pull → user_data 로 sync.
 
@@ -500,6 +535,9 @@ def _deb_self_update(user_data: Path) -> tuple[bool, str]:
         _run(["git", "config", "--global", "--add", "safe.directory", str(cache)])
     else:
         _run(["git", "remote", "set-url", "origin", _DEPLOY_REMOTE_URL], cwd=str(cache))
+
+    # 이전 fetch 가 중단돼서 남은 lock 정리 (안 하면 "다른 git 프로세스 실행 중" 에러)
+    _clean_git_locks(cache)
 
     # fetch + reset
     rc, _, err = _run(
@@ -825,6 +863,8 @@ async def git_log(limit: int = 100, fetch: bool = False):
 
         cache_empty = not (cache / ".git" / "refs" / "remotes" / "origin").exists()
         if fetch or cache_empty:
+            # 이전 fetch 가 중단돼 남은 lock 정리 (shallow.lock 등) — 안 하면 영구 실패.
+            _clean_git_locks(cache)
             fetch_r = subprocess.run(
                 ["git", "-c", "core.askPass=", "fetch", "--depth=300", "origin", "main"],
                 cwd=cwd, capture_output=True, timeout=30,

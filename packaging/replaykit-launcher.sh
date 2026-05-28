@@ -264,31 +264,59 @@ if [ "$NEEDS_SYNC" = "0" ] && [ -d "$USER_DATA/backend" ]; then
 fi
 
 if [ "$NEEDS_SYNC" = "1" ]; then
-    echo "[INIT] backend 코드를 $USER_DATA 에 복사 중 (최초/업그레이드)..."
+    echo "[INIT] backend 코드를 $USER_DATA 에 overlay 복사 중 (최초/업그레이드)..."
 
-    # 기존 symlink 또는 사용자 수정사항 정리 (단, settings.json 같은 사용자 데이터는 보존)
-    BACKUP_DIR=""
-    if [ -d "$USER_DATA/backend" ] && [ ! -L "$USER_DATA/backend" ]; then
-        # 사용자가 만들었을 수 있는 데이터 파일 백업
-        BACKUP_DIR=$(mktemp -d -t replaykit-backup.XXXXXX)
-        for keep in settings.json auxiliary_devices.json compositor_presets.json scan_settings.json device_catalog.json; do
-            if [ -f "$USER_DATA/backend/$keep" ]; then
-                cp -p "$USER_DATA/backend/$keep" "$BACKUP_DIR/$keep" || true
-            fi
-        done
+    # 이전 launcher 가 symlink 로 만들어둔 경우 — 안전하게 unlink 후 디렉토리 생성.
+    if [ -L "$USER_DATA/backend" ]; then
+        rm -f "$USER_DATA/backend"
     fi
 
-    rm -rf "$USER_DATA/backend"
-    cp -r "$APP_DIR/backend" "$USER_DATA/backend"
-
-    # 백업된 사용자 데이터 복원 (apt 가 새로 제공한 것보다 우선)
-    if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
-        for keep in settings.json auxiliary_devices.json compositor_presets.json scan_settings.json device_catalog.json; do
-            if [ -f "$BACKUP_DIR/$keep" ]; then
-                cp -p "$BACKUP_DIR/$keep" "$USER_DATA/backend/$keep"
+    # ⚠️ rm -rf 금지 — backend/ 안에 사용자 데이터가 섞여 있음:
+    #   - backend/scenarios/        시나리오 JSON 들
+    #   - backend/results/          녹화/결과 폴더들
+    #   - backend/recordings/       (있다면) 녹화 파일
+    #   - backend/settings.json     사용자 설정
+    #   - backend/scan_settings.json
+    #   - backend/auxiliary_devices.json
+    #   - backend/compositor_presets.json
+    # rsync 로 /opt 의 코드 파일만 overlay → 위 사용자 데이터는 그대로 보존.
+    # device_catalog.json 은 git 트래킹이라 /opt 에서 새 버전이 들어와 덮어쓰여짐 (의도된 동작).
+    # settings.json 등 .deb staging 에 포함된 default 가 user 의 것을 덮어쓰지 않도록
+    # --ignore-existing 으로 보호. 단 git 트래킹된 device_catalog.json 은 갱신해야 하므로
+    # 따로 처리.
+    mkdir -p "$USER_DATA/backend"
+    if command -v rsync >/dev/null 2>&1; then
+        # rsync: 기본 동작은 src → dst 동기화. --delete 안 줬으니 dst-only 파일은 보존됨.
+        # --ignore-existing 로 사용자가 customize 한 settings.json 등은 건드리지 않음.
+        # 단 device_catalog.json 은 강제 갱신 (git 트래킹 → release 마다 새 버전).
+        USER_PROTECTED="settings.json auxiliary_devices.json compositor_presets.json scan_settings.json"
+        EXCLUDES=""
+        for f in $USER_PROTECTED; do
+            EXCLUDES="$EXCLUDES --exclude=$f"
+        done
+        rsync -a $EXCLUDES "$APP_DIR/backend/" "$USER_DATA/backend/"
+        # 사용자 설정 파일들 — 없을 때만 default 복사.
+        for f in $USER_PROTECTED; do
+            if [ ! -f "$USER_DATA/backend/$f" ] && [ -f "$APP_DIR/backend/$f" ]; then
+                cp -p "$APP_DIR/backend/$f" "$USER_DATA/backend/$f"
             fi
         done
-        rm -rf "$BACKUP_DIR"
+    else
+        # rsync 없을 때 — find 로 파일 단위 overlay.
+        (
+            cd "$APP_DIR/backend" && find . -type f -print0
+        ) | while IFS= read -r -d '' f; do
+            rel="${f#./}"
+            dst="$USER_DATA/backend/$rel"
+            # 사용자 보호 파일 — 없을 때만 복사
+            case "$rel" in
+                settings.json|auxiliary_devices.json|compositor_presets.json|scan_settings.json)
+                    [ -f "$dst" ] && continue
+                    ;;
+            esac
+            mkdir -p "$(dirname "$dst")"
+            cp -p "$APP_DIR/backend/$rel" "$dst"
+        done
     fi
 
     # 단일 파일들도 복사 (server.py 가 PROJECT_ROOT 를 자기 위치 기준으로 잡음)
