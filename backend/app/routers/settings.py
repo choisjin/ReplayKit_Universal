@@ -334,10 +334,94 @@ async def get_launcher_log(lines: int = 200, date: str = "", source: str = ""):
 
 @router.post("/update-and-restart")
 async def update_and_restart():
-    """서버 종료 → ReplayKit.bat이 git pull + 서버 재시작."""
-    logger.info("Update requested — writing .restart flag")
+    """업데이트 버튼: 서버 종료 → git pull → 서버 재시작.
+
+    Windows: .restart 플래그를 server.py(Tkinter 런처)가 watch 해서 처리.
+    Linux: 백엔드 프로세스 자체가 git pull 후 os.execv 로 자기 재시작 (런처 watcher 없음).
+        외부에서 보면 동일 — 잠시 다운 후 새 boot_id 로 부활. 프론트엔드는 boot_id 변경을
+        감지해 자동 reload (App.tsx 의 useEffect).
+    """
+    logger.info("Update requested")
     _RESTART_FLAG.write_text("restart", encoding="utf-8")
+
+    if sys.platform != "win32":
+        # Linux: HTTP 응답 보낸 직후 자가 재시작 시퀀스 시작.
+        import threading
+        threading.Thread(target=_linux_self_update_restart, daemon=True).start()
+
     return {"status": "restarting"}
+
+
+def _linux_self_update_restart() -> None:
+    """Linux 백엔드 자가 git pull + os.execv 재시작.
+
+    동작 순서:
+      1) HTTP 응답이 클라이언트에 도착하도록 1초 sleep
+      2) git pull (= fetch + reset --hard origin/main) — working tree 가 git 트래킹 되는 경우만
+      3) os.execv 로 동일 인자로 자기 자신 재시작 — 새 .py 로딩됨
+
+    실패해도 프로세스는 살아 있어 사용자가 다시 시도 가능.
+    """
+    import time as _t
+    _t.sleep(1)
+    no_window = 0  # Linux 는 항상 0
+    try:
+        # 1) git pull — _PROJECT_ROOT 가 git 트래킹된 경우만. RECORDING_PROJECT_ROOT 가 user dir
+        # 인 .deb 환경에선 .git 없을 수 있어 /opt/ReplayKit 도 후보.
+        candidates = [_PROJECT_ROOT]
+        app_dir = os.environ.get("REPLAYKIT_APP_DIR")
+        if app_dir:
+            candidates.append(Path(app_dir))
+        candidates.append(Path("/opt/ReplayKit"))
+        git_root: Optional[Path] = None
+        for c in candidates:
+            if (c / ".git").exists():
+                git_root = c
+                break
+
+        if git_root is not None:
+            logger.info("[update-restart] git pull in %s", git_root)
+            env = os.environ.copy()
+            env.pop("GIT_ASKPASS", None)
+            env.pop("SSH_ASKPASS", None)
+            env["GIT_TERMINAL_PROMPT"] = "0"
+            # safe.directory 등록 (권한 이슈 회피)
+            subprocess.run(
+                ["git", "config", "--global", "--add", "safe.directory", str(git_root)],
+                capture_output=True, timeout=10,
+            )
+            fetch_r = subprocess.run(
+                ["git", "-c", "core.askPass=", "fetch", "origin", "main"],
+                cwd=str(git_root), capture_output=True, timeout=60,
+                encoding="utf-8", errors="replace", env=env,
+            )
+            if fetch_r.returncode == 0:
+                reset_r = subprocess.run(
+                    ["git", "reset", "--hard", "origin/main"],
+                    cwd=str(git_root), capture_output=True, timeout=30,
+                    encoding="utf-8", errors="replace",
+                )
+                if reset_r.returncode == 0:
+                    logger.info("[update-restart] git pull OK")
+                else:
+                    logger.warning("[update-restart] git reset 실패: %s", (reset_r.stderr or "").strip()[:300])
+            else:
+                logger.warning("[update-restart] git fetch 실패: %s", (fetch_r.stderr or "").strip()[:300])
+        else:
+            logger.info("[update-restart] git root 없음 — git pull 스킵, 재시작만 수행")
+
+        # 2) .restart 플래그 정리 (자가 처리이므로)
+        try:
+            _RESTART_FLAG.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        # 3) os.execv 로 자기 자신 재시작 — argv 그대로
+        logger.info("[update-restart] os.execv → new process (sys.executable=%s argv=%s)",
+                    sys.executable, sys.argv)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as e:
+        logger.exception("[update-restart] 자가 재시작 실패: %s", e)
 
 
 @router.get("/disk-usage")
