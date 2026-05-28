@@ -1281,12 +1281,15 @@ logs/
 *.whl
 get-pip.py
 DltViewerSDK_21.1.3_ver/
-# tools/ 폴더의 binary들(ffmpeg.exe 100MB 등)은 deploy push 제외하되,
-# scrcpy-server.jar는 60KB로 작고 H.264 미러링 백엔드의 필수 자원이므로
-# negative pattern으로 추적 허용. "tools/"가 아닌 "tools/*"로 디렉토리
-# 내용만 ignore해야 negative pattern이 적용된다는 git 동작에 주의.
+# tools/ 폴더 — 기본 ignore. 단, webcam 녹화/미러링에 필수인 binary 는 추적 허용.
+# 이전엔 ffmpeg.exe(97MB)를 제외했으나 사용자가 git pull 로 dist 받는 경우 ffmpeg.exe 가
+# 없어 webcam 녹화가 cv2.VideoWriter(mp4v) fallback → 브라우저(SRC_NOT_SUPPORTED) 디코드
+# 실패가 발생. negative pattern 으로 git 에 포함시킴.
+# "tools/" 가 아닌 "tools/*" 로 디렉토리 내용만 ignore 해야 negative 패턴이 적용된다는 git 동작에 주의.
 tools/*
 !tools/scrcpy-server.jar
+!tools/ffmpeg.exe
+!tools/ffmpeg
 
 # 사용자 데이터
 backend/screenshots/
