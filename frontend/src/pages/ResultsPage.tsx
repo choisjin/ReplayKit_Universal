@@ -348,7 +348,17 @@ export default function ResultsPage() {
       return;
     }
     if (video.readyState < 1) {
-      console.log('[seek-debug] WAIT readyState<1', { readyState: video.readyState, networkState: video.networkState });
+      // 처음 10회만 자세히 로깅 — 그 후에는 1초당 1회만 출력하여 콘솔 잠식 방지.
+      // networkState 의미: 0=EMPTY 1=IDLE 2=LOADING 3=NO_SOURCE. 3 이 보이면 브라우저가 디코드 불가로 판단한 상태.
+      const attempts = (pending as any)._attempts || 0;
+      if (attempts < 10 || attempts % 10 === 0) {
+        const errCode = video.error?.code;
+        console.log('[seek-debug] WAIT readyState<1',
+          'rs=' + video.readyState,
+          'ns=' + video.networkState,
+          'err=' + (errCode != null ? errCode : 'none'),
+          'src=' + (video.currentSrc ? video.currentSrc.slice(0, 60) : '(empty)'));
+      }
       scheduleRetry();
       return;
     }
@@ -473,7 +483,7 @@ export default function ResultsPage() {
         // 빈 파일/0바이트 응답은 디코드 불가 — 명시적으로 에러 처리해서 readyState<1 무한 폴링 방지.
         if (blob.size === 0) {
           console.error('[video] blob empty — recording file likely missing or zero bytes', { url: activeRecUrl });
-          message.error(t('webcam.emptyFile') || '녹화 파일이 비어 있습니다');
+          message.error('녹화 파일이 비어 있습니다 (0 bytes)');
           setActiveRecBlobUrl('');
           return;
         }
@@ -489,7 +499,7 @@ export default function ResultsPage() {
         setActiveRecBlobUrl(activeRecUrl);
       });
     return () => { cancelled = true; };
-  }, [activeRecUrl, t]);
+  }, [activeRecUrl]);
 
   // 컴포넌트 unmount 시 blob URL 해제 (메모리 leak 방지).
   useEffect(() => {
