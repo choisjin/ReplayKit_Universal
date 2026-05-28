@@ -138,7 +138,9 @@ pywin32-ctypes==0.2.3 ; sys_platform == "win32"
 pywinauto==0.6.9 ; sys_platform == "win32"
 comtypes==1.4.16 ; sys_platform == "win32"
 pyreadline3==3.5.6 ; sys_platform == "win32"
-# py-canoe 는 Vector CANoe (Windows COM 기반) - Linux 에서 미사용
+# py-canoe: Vector CANoe (Windows COM 기반) — CANoe_Ctrl/CANoe_RBS 플러그인 필수.
+# Linux 에선 Vector CANoe 자체가 없어 자동 스킵.
+py-canoe==26.1.3 ; sys_platform == "win32"
 
 # ---- Linux 전용 (LinControl: X11 윈도우 컨트롤) ----
 # WinControl 의 Linux 등가물. python-xlib 는 순수 Python — C 확장 없음.

@@ -88,6 +88,11 @@ _PLUGINS_DIR = Path(__file__).resolve().parent.parent / "plugins"
 # Modules directory (DLL 등 모듈 런타임 파일)
 _MODULES_DIR = Path(__file__).resolve().parent.parent / "modules"
 
+# 모듈별 마지막 import 실패 사유 — _get_instance 에서 ValueError 메시지에 포함시켜
+# UI(디바이스 연결 실패 메시지) 에 실제 원인 노출. e.g. lge.auto 미설치 시
+# "Module 'CANAT' not found" 만 보이던 것을 "... — lge.auto import 실패: No module ..." 로 보강.
+_last_import_error: dict[str, str] = {}
+
 # 모듈 가이드 JSON (함수/파라미터 설명)
 _GUIDES_FILE = Path(__file__).resolve().parent / "module_guides.json"
 _guides_cache: dict | None = None
@@ -368,6 +373,11 @@ def _ensure_module_deps(module_name: str, module_dir: Path) -> None:
 
 def _import_module_class(module_name: str):
     """Import and return the class for a given module name (lge.auto or plugin)."""
+    # 이전 실패 사유 초기화 — 이번 호출이 성공해도 잔재가 남지 않도록
+    _last_import_error.pop(module_name, None)
+    plugin_err: Optional[str] = None
+    lge_err: Optional[str] = None
+
     # Try local plugin first (file-based loading to avoid package path issues)
     # .py 우선, 없으면 .pyd (배포 환경)
     py_file = _PLUGINS_DIR / f"{module_name}.py"
@@ -383,8 +393,12 @@ def _import_module_class(module_name: str):
                 cls = getattr(mod, module_name, None)
                 if cls is not None:
                     return cls
+                plugin_err = f"plugin module loaded but class '{module_name}' not found"
+            else:
+                plugin_err = "plugin module returned None"
         except Exception as e:
             logger.warning("Cannot load plugin %s from file: %s", module_name, e)
+            plugin_err = f"plugin load failed: {e}"
 
     # Try lge.auto
     try:
@@ -396,8 +410,14 @@ def _import_module_class(module_name: str):
         cls = getattr(mod, module_name, None)
         if cls is not None:
             return cls
+        lge_err = f"lge.auto.{module_name} loaded but class '{module_name}' missing"
     except Exception as e:
         logger.warning("Cannot import module %s: %s", module_name, e)
+        lge_err = f"lge.auto.{module_name} import failed: {e}"
+
+    # 두 경로 모두 실패 → 사용자에게 노출할 수 있도록 기록
+    parts = [p for p in (plugin_err, lge_err) if p]
+    _last_import_error[module_name] = " | ".join(parts) if parts else "no plugin file and lge.auto import not attempted"
     return None
 
 
@@ -758,6 +778,11 @@ def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
     if module_name not in _instances:
         cls = _import_module_class(module_name)
         if cls is None:
+            # 진단 정보 포함 — lge.auto 미설치 / DLL 로드 실패 등 실제 원인을
+            # UI(디바이스 연결 실패 토스트) 까지 노출시켜 사용자가 즉시 원인 파악.
+            reason = _last_import_error.get(module_name)
+            if reason:
+                raise ValueError(f"Module '{module_name}' not found ({reason})")
             raise ValueError(f"Module '{module_name}' not found")
         # Try to pass constructor kwargs (e.g. port, bps) if the class needs them
         if constructor_kwargs:
