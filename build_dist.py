@@ -369,7 +369,12 @@ def _show_release_dialog():
     cb_push.setChecked(True)
     opt_layout.addWidget(cb_frontend)
     opt_layout.addWidget(cb_push)
-    hint = QLabel("• frontend 변경이 없으면 체크 해제로 빌드 시간 단축\n• git push 해제 시 .deb / .exe 생성만 하고 배포 git 갱신은 건너뜀")
+    # Linux 만 .deb 인스톨러 생성 옵션 노출 (Windows 는 installer.iss 가 별도 단계).
+    cb_deb = QCheckBox(".deb 인스톨러 생성  (최초 설치/배포용, dist/replaykit_*.deb)")
+    cb_deb.setChecked(True)
+    if target == "linux":
+        opt_layout.addWidget(cb_deb)
+    hint = QLabel("• frontend 변경이 없으면 체크 해제로 빌드 시간 단축\n• git push 해제 시 빌드만 하고 배포 git 갱신은 건너뜀\n• .deb 해제 시 dist/ReplayKit/ 만 생성 (Mode A · git clone 사용자만 업데이트)")
     hint.setObjectName("hint")
     hint.setWordWrap(True)
     opt_layout.addWidget(hint)
@@ -442,16 +447,19 @@ def _show_release_dialog():
 
     if dlg.exec() != QDialog.Accepted:
         return None
-    return (target, result["version"], cb_frontend.isChecked(), cb_push.isChecked())
+    # Linux 만 .deb 옵션 의미 있음. Windows 는 항상 True 로 무시됨 (호출처에서 target 검사).
+    return (target, result["version"], cb_frontend.isChecked(), cb_push.isChecked(), cb_deb.isChecked())
 
 
 # ── release.py 에서 이식: build dispatch + deploy push ──
-def _run_target_build(target: str, version: str, do_frontend: bool = True) -> int:
+def _run_target_build(target: str, version: str, do_frontend: bool = True, make_deb: bool = True) -> int:
     """대상 OS 의 빌드 본체 호출. exit code 반환.
 
     do_frontend=False 면:
       - Windows: step_build_frontend 스킵, 기존 frontend/dist 그대로 패키징
       - Linux:   build_deb.sh 에 --no-frontend 인자 전달
+    make_deb=False (Linux 만 의미):
+      - build_deb.sh 에 --no-deb 전달 → dist/ReplayKit/ 만 스테이징, .deb 안 만듦.
     """
     host = _host_os()
     if target == "win":
@@ -467,14 +475,13 @@ def _run_target_build(target: str, version: str, do_frontend: bool = True) -> in
         if not sh.is_file():
             print(f"[ERROR] {sh} not found", file=sys.stderr)
             return 1
-        # SKIP_LGE_PUSH=1 — push 는 이쪽 release flow 가 통합 관리.
-        env = os.environ.copy()
-        env["SKIP_LGE_PUSH"] = "1"
         cmd = ["bash", str(sh)]
         if not do_frontend:
             cmd.append("--no-frontend")
-        print(f"\n[BUILD] $ SKIP_LGE_PUSH=1 {' '.join(cmd)}\n")
-        return subprocess.call(cmd, cwd=PROJECT_ROOT, env=env)
+        if not make_deb:
+            cmd.append("--no-deb")
+        print(f"\n[BUILD] $ {' '.join(cmd)}\n")
+        return subprocess.call(cmd, cwd=PROJECT_ROOT)
     print(f"[ERROR] unknown OS target: {target}", file=sys.stderr)
     return 1
 
@@ -1422,6 +1429,7 @@ def main():
     do_skip_build = "--skip-build" in args
     do_skip_push = "--skip-push" in args
     do_skip_frontend = "--skip-frontend" in args
+    do_skip_deb = "--no-deb" in args  # Linux 만 의미 — dist/ReplayKit/ 만 만들고 .deb 생략
     legacy_deploy = "--deploy" in args
 
     # ── 레거시 명령 (Windows 호스트 전용 — 기존 build_dist.py 호환) ──
@@ -1466,14 +1474,15 @@ def main():
         do_build = not do_skip_build
         do_frontend = not do_skip_frontend
         do_push = not do_skip_push
-        print(f"[CLI] OS={OS_LABELS[target]}, version={version}, build={do_build}, frontend={do_frontend}, push={do_push}")
+        make_deb = not do_skip_deb
+        print(f"[CLI] OS={OS_LABELS[target]}, version={version}, build={do_build}, frontend={do_frontend}, push={do_push}, make_deb={make_deb}")
     else:
         # GUI dialog — 버전 클릭 = 즉시 빌드 시작. 빌드는 항상 실행 (불필요한 토글 제거).
         out = _show_release_dialog()
         if out is None:
             print("\n[ABORT] 사용자 취소")
             return
-        target, version, do_frontend, do_push = out
+        target, version, do_frontend, do_push, make_deb = out
         do_build = True
 
     # version.txt 갱신
@@ -1486,10 +1495,14 @@ def main():
 
     # 빌드
     if do_build:
-        rc = _run_target_build(target, version, do_frontend=do_frontend)
+        rc = _run_target_build(target, version, do_frontend=do_frontend, make_deb=make_deb)
         if rc != 0:
             print(f"\n[ABORT] 빌드 실패 (exit {rc}) — push 건너뜀.", file=sys.stderr)
             sys.exit(rc)
+        # dist/ReplayKit/ 가 채워진 후 .gitignore 작성. Windows native build 는 step_package_dist 가
+        # 이미 호출하지만 Linux build_deb.sh 는 안 하므로 여기서 일괄 보장.
+        if target == "linux":
+            _write_dist_gitignore()
     else:
         print("[BUILD] skipped")
 
