@@ -405,13 +405,35 @@ _frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "d
 if _frontend_dist.is_dir():
     from starlette.responses import FileResponse as _FR
 
+    # 캐시 정책:
+    #   - index.html / 루트  → no-cache (매번 서버 확인). git pull 후 사용자가 새 asset
+    #     해시 참조하는 새 index.html 을 받도록.
+    #   - assets/* (vite 가 content-hash 붙임) → immutable 1년. 파일명이 바뀌면 자연 무효화.
+    #   - 기타 정적 → 짧은 no-cache (안전).
+    _ASSETS_DIR_NAMES = {"assets"}  # Vite 기본. 다른 자산은 hash 없을 수 있어 no-cache 가 안전.
+
+    def _frontend_cache_headers(file: Path) -> dict[str, str]:
+        # 부모 디렉토리가 assets/ 이면 immutable. 그 외 (index.html, *.png 루트 등) 는 no-cache.
+        try:
+            rel = file.relative_to(_frontend_dist)
+        except ValueError:
+            return {"Cache-Control": "no-cache, no-store, must-revalidate"}
+        if rel.parts and rel.parts[0] in _ASSETS_DIR_NAMES:
+            return {"Cache-Control": "public, max-age=31536000, immutable"}
+        return {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+
     @app.get("/{path:path}")
     async def _serve_frontend(path: str):
         file = _frontend_dist / path
         if file.is_file():
-            return _FR(str(file))
-        # SPA fallback: index.html
-        return _FR(str(_frontend_dist / "index.html"))
+            return _FR(str(file), headers=_frontend_cache_headers(file))
+        # SPA fallback: index.html — 항상 no-cache.
+        idx = _frontend_dist / "index.html"
+        return _FR(str(idx), headers=_frontend_cache_headers(idx))
 
 
 @app.get("/")

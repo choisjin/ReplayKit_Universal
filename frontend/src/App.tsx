@@ -79,8 +79,36 @@ function AppContent() {
   const [chatOpen, setChatOpen] = useState(false);
   const [diskInfoList, setDiskInfoList] = useState<{ drive: string; free_gb: number; total_gb: number; used_percent: number }[]>([]);
   const [appVersion, setAppVersion] = useState<string>('');
+  // 페이지 로드 시점의 버전 — 이후 폴링으로 다른 값이 오면 백엔드가 업데이트된 것으로 판단하고
+  // 브라우저를 강제 reload (캐시된 stale frontend 자산 폐기).
+  const initialVersionRef = useRef<string>('');
+  const reloadingRef = useRef<boolean>(false);
   const { settings, uploadWebcamRecording, fetchSettings } = useSettings();
   const { t } = useTranslation();
+
+  // 백엔드 버전이 페이지 로드 후 바뀌면 (= git pull / apt upgrade 직후) 강제 새로고침.
+  // index.html 은 no-cache 로 서빙되지만, 이미 메모리에 있는 SPA 는 자동 갱신되지 않아
+  // 명시적 location.reload 가 필요. 사용자에겐 1회 안내 후 reload — 무한 reload 방지를
+  // 위해 reloadingRef 로 guard.
+  useEffect(() => {
+    if (!appVersion) return;
+    if (!initialVersionRef.current) {
+      initialVersionRef.current = appVersion;
+      return;
+    }
+    if (appVersion !== initialVersionRef.current && !reloadingRef.current) {
+      reloadingRef.current = true;
+      console.log('[update] backend version changed', initialVersionRef.current, '→', appVersion, '· reloading');
+      // 캐시 무효화를 위한 query string + location.reload(true) (deprecated 하지만 일부 브라우저는 hint 사용)
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('_v', appVersion);
+        window.location.replace(url.toString());
+      } catch {
+        window.location.reload();
+      }
+    }
+  }, [appVersion]);
 
   // ── 로고 5연타 → 런처 로그 ──
   const logoClickRef = useRef<number[]>([]);
