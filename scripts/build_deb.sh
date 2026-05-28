@@ -271,6 +271,42 @@ shopt -u nullglob
 mkdir -p "$DIST_REPLAYKIT/frontend"
 cp -a "$PROJECT_ROOT/frontend/dist" "$DIST_REPLAYKIT/frontend/dist"
 
+# changelog.json — 빌드 시점의 git log 스냅샷. .deb 는 .git 을 포함하지 않으므로 (아래
+# rsync --exclude='.git'), 사용자 머신이 LGE 내부 git (mod.lge.com) 에 접근 불가하면
+# 업데이트 내역 페이지가 항상 빈 결과가 됨. 빌드 시점에 200개 commit 을 JSON 으로 떠두면
+# 적어도 설치된 버전 기준의 changelog 는 항상 표시 가능. backend settings.py:git_log() 가
+# 원격 fetch 실패 시 이 파일을 fallback 으로 읽음.
+# Python 으로 JSON 생성 — awk 의 backslash 이스케이프가 busybox/gawk 간 비호환.
+if [ -d "$PROJECT_ROOT/.git" ]; then
+    SEP=$'\x1f'  # ASCII Unit Separator — commit 메시지에 등장할 가능성 없는 구분자
+    CHANGELOG_OUT="$DIST_REPLAYKIT/changelog.json"
+    export CHANGELOG_OUT
+    # 시스템 python3 사용 (embedded python 보다 빌드 단계상 더 일찍 가용).
+    PY_BIN="python3"
+    command -v "$PY_BIN" >/dev/null 2>/dev/null || PY_BIN="python"
+    if command -v "$PY_BIN" >/dev/null 2>/dev/null; then
+        git -C "$PROJECT_ROOT" log -200 --pretty=format:"%H${SEP}%h${SEP}%an${SEP}%ae${SEP}%aI${SEP}%s" main 2>/dev/null \
+            | "$PY_BIN" -c '
+import json, sys, os
+SEP = "\x1f"
+out = []
+for line in sys.stdin.read().split("\n"):
+    parts = line.split(SEP, 5)
+    if len(parts) < 6:
+        continue
+    out.append({
+        "hash": parts[0], "short_hash": parts[1],
+        "author": parts[2], "email": parts[3],
+        "date": parts[4], "message": parts[5],
+    })
+target = os.environ["CHANGELOG_OUT"]
+with open(target, "w", encoding="utf-8") as f:
+    json.dump(out, f, ensure_ascii=False, indent=0)
+print(f"      changelog.json bundled ({len(out)} commits)")
+' || echo "      [Note] changelog.json generation failed (non-fatal)"
+    fi
+fi
+
 # embedded python 도 dist/ReplayKit/ 에 두지만 .gitignore 로 push 제외.
 # 로컬에선 .deb 가 이 트리에서 직접 copy 하므로 필요.
 if [ -d "$PROJECT_ROOT/python" ]; then

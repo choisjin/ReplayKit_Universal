@@ -128,18 +128,50 @@ def _spawn_ffmpeg_writer(output_path: Path, width: int, height: int, fps: float)
         return None
 
 
-# OS 별 OpenCV VideoCapture 백엔드.
+# OS 별 OpenCV VideoCapture 백엔드 후보 — 앞에서부터 순차 시도.
 #   Windows: DirectShow (CAP_DSHOW) — USB 카메라 매끄럽게 열거/오픈.
-#   Linux:   V4L2 (CAP_V4L2)        — /dev/video* 직접 접근. CAP_DSHOW 는 미지원.
-#   macOS:   AVFoundation 또는 CAP_ANY (자동).
-# 잘못된 backend (예: Linux 에서 CAP_DSHOW) 를 쓰면 cap.isOpened() 가 항상 False 가 되어
-# list_devices() 가 빈 배열 반환 — 사용자 입장에선 "USB 웹캠을 못 찾음".
+#   Linux:   V4L2 (CAP_V4L2) → CAP_ANY 폴백.
+#            opencv-python 일부 빌드/배포 환경에서 CAP_V4L2 가 거부되거나, 노트북 처럼
+#            카메라 1개당 /dev/videoN 노드가 여러 개(capture/metadata/IR) 인 경우
+#            특정 index 에서 V4L2 strict 가 isOpened()=False 로 떨어진다. CAP_ANY 가
+#            autodetect 로 V4L/V4L2/FFmpeg 중 하나를 골라 잡아주는 것을 폴백으로 둠.
+#   macOS:   AVFoundation/CAP_ANY (자동).
+# 잘못된 backend 만 쓰면 list_devices() 가 빈 배열 반환 — "USB 웹캠을 못 찾음" 증상.
 if sys.platform == "win32":
-    _CV_CAM_BACKEND = cv2.CAP_DSHOW
+    _CV_CAM_BACKENDS: tuple[int, ...] = (cv2.CAP_DSHOW,)
 elif sys.platform.startswith("linux"):
-    _CV_CAM_BACKEND = cv2.CAP_V4L2
+    _CV_CAM_BACKENDS = (cv2.CAP_V4L2, cv2.CAP_ANY)
 else:
-    _CV_CAM_BACKEND = cv2.CAP_ANY
+    _CV_CAM_BACKENDS = (cv2.CAP_ANY,)
+
+# 단일 backend 가 필요한 위치 (기록 호환용) — 첫 번째 후보.
+_CV_CAM_BACKEND = _CV_CAM_BACKENDS[0]
+
+
+def _open_capture(index: int) -> Optional[cv2.VideoCapture]:
+    """후보 backend 들을 순회하며 첫 번째 isOpened()=True 캡처를 반환.
+
+    각 시도의 실패 사유를 debug 로그로 남겨, 빈 list_devices() 원인 진단 가능.
+    """
+    last_backend = None
+    for backend in _CV_CAM_BACKENDS:
+        last_backend = backend
+        try:
+            cap = cv2.VideoCapture(index, backend)
+        except Exception as e:
+            logger.debug("VideoCapture(%d, backend=%d) raised: %s", index, backend, e)
+            continue
+        if cap.isOpened():
+            if backend != _CV_CAM_BACKENDS[0]:
+                logger.info("Webcam index %d opened via fallback backend %d", index, backend)
+            return cap
+        logger.debug("VideoCapture(%d, backend=%d) isOpened=False", index, backend)
+        try:
+            cap.release()
+        except Exception:
+            pass
+    logger.debug("Webcam index %d failed on all backends (last=%s)", index, last_backend)
+    return None
 
 
 class WebcamService:
@@ -176,14 +208,33 @@ class WebcamService:
     # ------------------------------------------------------------
     # Device enumeration / probe
     # ------------------------------------------------------------
-    def list_devices(self, max_index: int = 5, exclude: Optional[set[int]] = None) -> list[dict]:
-        """장착된 카메라 index 탐지 (간이 — DSHOW로 0..N을 순회).
+    def list_devices(self, max_index: int = 10, exclude: Optional[set[int]] = None) -> list[dict]:
+        """장착된 카메라 index 탐지 (0..max_index 순회).
 
         exclude: 프로브를 건너뛸 인덱스 집합. 다른 곳에서 이미 점유 중인 인덱스를
-        DirectShow로 재오픈하면 기존 점유자의 캡처가 끊어질 수 있으므로 반드시 전달할 것.
+        재오픈하면 기존 점유자의 캡처가 끊어질 수 있으므로 반드시 전달할 것.
+
+        Linux 노트북은 카메라 1개당 /dev/videoN 노드가 여러 개(capture/metadata) 인 경우가
+        많아 max_index 를 5→10 으로 상향 (예: 내장 + USB 가 video0,1,2,3 + video4,5 인 경우).
+        Linux 한정으로 /dev/video* 가 하나도 없으면 빈 목록을 빠르게 반환.
         """
         exclude = exclude or set()
-        found = []
+
+        # Linux: /dev/video* 존재 확인 — 노드 자체가 없으면 즉시 빈 결과.
+        # 노드는 있는데 모두 열기 실패하면 권한/backend 문제이므로 경고 로그를 남긴다.
+        if sys.platform.startswith("linux"):
+            try:
+                import os
+                video_nodes = sorted([n for n in os.listdir("/dev") if n.startswith("video") and n[5:].isdigit()])
+                if not video_nodes:
+                    logger.warning("Webcam list_devices: no /dev/video* nodes detected on this host.")
+                    return []
+                logger.debug("Webcam list_devices: /dev video nodes = %s", video_nodes)
+            except Exception as e:
+                logger.debug("Webcam list_devices: /dev scan failed: %s", e)
+
+        found: list[dict] = []
+        failed_indices: list[int] = []
         for idx in range(max_index):
             if idx in exclude:
                 continue
@@ -194,14 +245,25 @@ class WebcamService:
                     "label": f"Camera {idx} ({self._width}x{self._height})",
                 })
                 continue
-            cap = cv2.VideoCapture(idx, _CV_CAM_BACKEND)
-            if cap.isOpened():
+            cap = _open_capture(idx)
+            if cap is None:
+                failed_indices.append(idx)
+                continue
+            try:
                 w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
                 h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
                 found.append({"index": idx, "label": f"Camera {idx} ({w}x{h})"})
-                cap.release()
-            else:
-                cap.release()
+            finally:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+        if not found:
+            logger.warning(
+                "Webcam list_devices: 0 cameras found (tried indices 0..%d, exclude=%s, failed=%s, backends=%s). "
+                "Linux 일 경우 사용자가 'video' 그룹에 속해 있는지 / opencv 가 V4L2 지원으로 빌드되었는지 확인.",
+                max_index - 1, sorted(exclude), failed_indices, _CV_CAM_BACKENDS,
+            )
         return found
 
     def probe_resolutions(self, device_index: int) -> list[str]:
@@ -211,8 +273,8 @@ class WebcamService:
             (1280, 720), (960, 540), (640, 480), (320, 240),
         ]
         supported: list[str] = []
-        cap = cv2.VideoCapture(device_index, _CV_CAM_BACKEND)
-        if not cap.isOpened():
+        cap = _open_capture(device_index)
+        if cap is None:
             return []
         try:
             for w, h in candidates:
@@ -235,9 +297,9 @@ class WebcamService:
     def open(self, device_index: int = 0, width: int = 640, height: int = 480) -> bool:
         """카메라 오픈 + 캡처 스레드 시작. 이미 열려 있으면 close 후 재오픈."""
         self.close()
-        cap = cv2.VideoCapture(device_index, _CV_CAM_BACKEND)
-        if not cap.isOpened():
-            logger.warning("Webcam open failed: device %d", device_index)
+        cap = _open_capture(device_index)
+        if cap is None:
+            logger.warning("Webcam open failed: device %d (all backends rejected)", device_index)
             return False
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)

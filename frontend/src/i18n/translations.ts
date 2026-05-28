@@ -96,6 +96,8 @@ const translations = {
     'changelog.noCommits': '커밋 내역이 없습니다',
     'changelog.search': '커밋 메시지 검색...',
     'changelog.tags': '태그',
+    'changelog.offlineSnapshot': '오프라인 changelog (빌드 시점 스냅샷)',
+    'changelog.fetchIssue': '원격 changelog 가져오기 문제',
 
     // === Device Page ===
     'device.title': '디바이스',
@@ -960,6 +962,8 @@ const translations = {
     'changelog.noCommits': 'No commits found',
     'changelog.search': 'Search commits...',
     'changelog.tags': 'Tags',
+    'changelog.offlineSnapshot': 'Offline changelog (build-time snapshot)',
+    'changelog.fetchIssue': 'Remote changelog fetch issue',
 
     // === Device Page ===
     'device.title': 'Devices',

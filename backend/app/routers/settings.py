@@ -475,6 +475,25 @@ def _changelog_cache_dir() -> Path:
     return Path.home() / ".cache" / "replaykit-changelog"
 
 
+def _load_bundled_changelog() -> list[dict]:
+    """빌드 시점에 생성된 changelog.json 을 읽어 반환.
+
+    경로 후보: _PROJECT_ROOT/changelog.json (.deb 의 /opt/ReplayKit/changelog.json 도 동일 경로).
+    파일이 없거나 형식 오류면 빈 리스트.
+    """
+    path = _PROJECT_ROOT / "changelog.json"
+    if not path.exists():
+        return []
+    try:
+        import json
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return [c for c in data if isinstance(c, dict) and "hash" in c]
+    except Exception as e:
+        logger.warning("[git-log] bundled changelog.json parse failed: %s", e)
+    return []
+
+
 def _ensure_changelog_cache() -> Path:
     """캐시 디렉토리를 git 트래킹 가능한 상태로 보장. 없으면 init + remote 추가."""
     cache = _changelog_cache_dir()
@@ -636,16 +655,37 @@ async def git_log(limit: int = 100, fetch: bool = False):
         )
         tags = [t for t in tag_r.stdout.strip().split("\n") if t] if tag_r.returncode == 0 else []
 
+        # 원격 fetch/log 가 실패해서 commits 가 비었을 때 — 빌드 시점에 번들된
+        # changelog.json 으로 폴백. .deb 사용자가 LGE 내부 git (mod.lge.com) 에
+        # 접근 불가한 환경에서도 적어도 설치 시점의 changelog 는 보이게.
+        source = "remote"
+        if not commits:
+            bundled = _load_bundled_changelog()
+            if bundled:
+                commits = bundled[:limit]
+                source = "bundled"
+                logger.info("[git-log] using bundled changelog.json (%d commits)", len(commits))
+
         result = {
             "branch": "main",
             "tags": tags,
             "commits": commits,
             "remote_url": _CHANGELOG_REMOTE_URL,
+            "source": source,
         }
         if fetch_error:
             result["fetch_warning"] = fetch_error
         if not commits:
-            result["note"] = "원격에서 commit 을 가져오지 못했습니다. 네트워크/인증 확인 필요."
+            result["note"] = (
+                "원격에서 commit 을 가져오지 못했고 번들된 changelog.json 도 없습니다. "
+                "네트워크/인증 확인 필요 (mod.lge.com 접근 가능 여부)."
+            )
+        elif source == "bundled":
+            # 사용자에게 "오프라인 스냅샷을 보고 있음" 안내. 짧지만 정보성.
+            result["note"] = (
+                "오프라인 changelog (빌드 시점 스냅샷) 를 표시 중입니다. "
+                "최신 commit 을 보려면 mod.lge.com 접근이 필요합니다."
+            )
         return result
 
     except subprocess.TimeoutExpired:

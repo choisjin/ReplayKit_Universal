@@ -25,14 +25,37 @@ from typing import Optional
 
 import cv2
 
-# OS 별 OpenCV VideoCapture 백엔드.
-# Windows DirectShow / Linux V4L2 / 기타 CAP_ANY. 잘못된 backend 면 isOpened()=False.
+# OS 별 OpenCV VideoCapture 백엔드 후보 — 앞에서부터 순차 시도.
+# Linux 에서 CAP_V4L2 가 거부되는 빌드/환경 대비로 CAP_ANY 를 폴백으로 둠.
+# (webcam_service._open_capture 와 동일 정책 — 분리되어 있는 모듈이지만 동일 카메라
+#  하드웨어를 다루므로 동일 backend 후보를 사용해야 일관된 동작.)
 if sys.platform == "win32":
-    _CV_CAM_BACKEND = cv2.CAP_DSHOW
+    _CV_CAM_BACKENDS: tuple[int, ...] = (cv2.CAP_DSHOW,)
 elif sys.platform.startswith("linux"):
-    _CV_CAM_BACKEND = cv2.CAP_V4L2
+    _CV_CAM_BACKENDS = (cv2.CAP_V4L2, cv2.CAP_ANY)
 else:
-    _CV_CAM_BACKEND = cv2.CAP_ANY
+    _CV_CAM_BACKENDS = (cv2.CAP_ANY,)
+
+_CV_CAM_BACKEND = _CV_CAM_BACKENDS[0]
+
+
+def _open_capture(index: int):
+    """후보 backend 들을 순회하며 첫 번째 isOpened()=True 캡처를 반환."""
+    for backend in _CV_CAM_BACKENDS:
+        try:
+            cap = cv2.VideoCapture(index, backend)
+        except Exception as e:
+            logger.debug("VideoCapture(%d, backend=%d) raised: %s", index, backend, e)
+            continue
+        if cap.isOpened():
+            if backend != _CV_CAM_BACKENDS[0]:
+                logger.info("Webcam index %d opened via fallback backend %d", index, backend)
+            return cap
+        try:
+            cap.release()
+        except Exception:
+            pass
+    return None
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -59,10 +82,12 @@ class WebcamDevice:
         if self._is_connected and self._cap is not None:
             return "Already connected"
 
-        cap = cv2.VideoCapture(self._device_index, _CV_CAM_BACKEND)
-        if not cap.isOpened():
-            cap.release()
-            raise RuntimeError(f"Webcam open failed: device {self._device_index}")
+        cap = _open_capture(self._device_index)
+        if cap is None:
+            raise RuntimeError(
+                f"Webcam open failed: device {self._device_index} "
+                f"(tried backends {_CV_CAM_BACKENDS})"
+            )
 
         # 해상도 설정 (실패해도 무시 — driver가 지원하는 범위로 고정됨)
         if self._width > 0 and self._height > 0:

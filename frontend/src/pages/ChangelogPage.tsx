@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Card, Input, Space, Spin, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Input, Space, Spin, Table, Tag, Typography, message } from 'antd';
 import { BranchesOutlined, ReloadOutlined, TagOutlined } from '@ant-design/icons';
 import { serverApi } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
@@ -25,21 +25,25 @@ export default function ChangelogPage() {
   const [tags, setTags] = useState<string[]>([]);
   const [search, setSearch] = useState('');
 
+  const [serverNote, setServerNote] = useState<string>('');
+  const [fetchWarning, setFetchWarning] = useState<string>('');
+  const [source, setSource] = useState<string>('');
+
   const load = async (fetch = false) => {
     setLoading(true);
     try {
       const res = await serverApi.gitLog(200, fetch);
-      setCommits(res.data.commits || []);
-      setBranch(res.data.branch || '');
-      setTags(res.data.tags || []);
-      // 백엔드가 200 OK 로 응답했지만 commits 가 비고 note/fetch_warning 이 있으면
-      // 정보성 메시지로 표시 (loadFailed popup 은 진짜 네트워크 에러일 때만).
       const data: any = res.data || {};
-      if ((!data.commits || data.commits.length === 0) && (data.note || data.fetch_warning)) {
-        const detail = data.fetch_warning || data.note;
-        console.warn('[changelog]', detail);
-        message.info(detail, 4);
-      }
+      setCommits(data.commits || []);
+      setBranch(data.branch || '');
+      setTags(data.tags || []);
+      setServerNote(data.note || '');
+      setFetchWarning(data.fetch_warning || '');
+      setSource(data.source || '');
+      // 진단 정보를 console 에 항상 남김 — 4초 info popup 은 놓치기 쉽다.
+      if (data.note) console.warn('[changelog] note:', data.note);
+      if (data.fetch_warning) console.warn('[changelog] fetch_warning:', data.fetch_warning);
+      if (data.source) console.log('[changelog] source:', data.source);
     } catch (e) {
       // axios HTTP 에러 (서버 5xx / 네트워크 단절) — 진짜 실패 케이스
       console.error('[changelog] load failed', e);
@@ -148,6 +152,22 @@ export default function ChangelogPage() {
           </>
         )}
       </Space>
+
+      {(serverNote || fetchWarning) && (
+        <Alert
+          type={commits.length === 0 ? 'warning' : 'info'}
+          showIcon
+          closable
+          style={{ marginBottom: 13 }}
+          message={t(source === 'bundled' ? 'changelog.offlineSnapshot' : 'changelog.fetchIssue')}
+          description={
+            <div style={{ fontSize: 11 }}>
+              {serverNote && <div>{serverNote}</div>}
+              {fetchWarning && <div style={{ color: '#888', marginTop: 4, fontFamily: 'monospace' }}>fetch: {fetchWarning}</div>}
+            </div>
+          }
+        />
+      )}
 
       <Card size="small" style={{ marginBottom: 13 }}>
         <Input.Search
