@@ -614,7 +614,29 @@ def _deploy_force_push(target: str, version: str | None = None) -> int:
         cwd=DIST_DIR, capture_output=True, text=True,
     )
     if r.stdout.strip():
-        msg = f"Release {version}" if version else "Update build"
+        # 개발 git (PROJECT_ROOT/.git) 의 HEAD commit subject 를 가져와서 dist commit 메시지에
+        # 그대로 사용. 사용자가 dist push 로그를 봤을 때 "어떤 변경이 배포된 건지" 알 수 있게.
+        # 버전만 표기하면 동일 버전 내 여러 빌드가 모두 "Release v1.1.0" 으로만 보여서 구분 불가.
+        dev_subject = ""
+        try:
+            log_r = subprocess.run(
+                ["git", "log", "-1", "--pretty=format:%s"],
+                cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=10,
+            )
+            if log_r.returncode == 0:
+                dev_subject = (log_r.stdout or "").strip()
+        except Exception:
+            pass
+
+        if dev_subject and version:
+            msg = f"Release {version}: {dev_subject}"
+        elif dev_subject:
+            msg = dev_subject
+        elif version:
+            msg = f"Release {version}"
+        else:
+            msg = "Update build"
+
         # 첫 commit 시 user.name/email 누락으로 실패할 수 있어 fallback config 적용.
         commit_r = subprocess.run(
             ["git", "commit", "-m", msg],
