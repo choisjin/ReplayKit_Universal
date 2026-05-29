@@ -422,6 +422,78 @@ def _probe_smartbench_sync(ip: str, port: int, timeout: float) -> dict | None:
                 pass
 
 
+# ── radmoon (USB Ethernet 어댑터) 자동 탐지 ──
+# TH 모듈은 호스트 PC 가 HU 와 USB Ethernet 어댑터(통칭 "radmoon")로 연결되어야 동작한다.
+# /sys/class/net/ 를 순회해서 USB 디바이스 symlink 또는 enx<mac> 명명 규칙으로 후보 식별.
+async def _scan_radmoon() -> list[dict]:
+    if not sys.platform.startswith("linux"):
+        logger.debug("radmoon scan skipped: not Linux (%s)", sys.platform)
+        return []
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _scan_radmoon_sync)
+
+
+def _scan_radmoon_sync() -> list[dict]:
+    sysnet = Path("/sys/class/net")
+    if not sysnet.is_dir():
+        return []
+
+    # 가상/브리지 인터페이스는 제외 — physical USB ethernet 후보만.
+    SKIP_PREFIX = ("lo", "veth", "docker", "br-", "vmnet", "tun", "tap", "wg", "virbr")
+    SKIP_NAMES = {"cvd-ebr"}  # connect_th.sh 가 만드는 bridge
+
+    results: list[dict] = []
+    for iface_path in sorted(sysnet.iterdir()):
+        iface = iface_path.name
+        if iface in SKIP_NAMES:
+            continue
+        if any(iface.startswith(p) for p in SKIP_PREFIX):
+            continue
+        # VLAN 서브 인터페이스(veth-obs.2120 등)도 제외
+        if "." in iface:
+            continue
+
+        try:
+            mac = (iface_path / "address").read_text().strip()
+        except OSError:
+            mac = ""
+        try:
+            operstate = (iface_path / "operstate").read_text().strip()
+        except OSError:
+            operstate = "unknown"
+
+        # USB 여부: /sys/class/net/<iface>/device symlink 가 /sys/devices/.../usb*/... 안에 있으면 USB.
+        is_usb = False
+        try:
+            dev_link = iface_path / "device"
+            if dev_link.exists():
+                real = os.path.realpath(str(dev_link))
+                if "/usb" in real:
+                    is_usb = True
+        except OSError:
+            pass
+
+        # enx<mac> 명명도 USB 가능성 큼 (systemd-udev 의 MAC 기반 명명).
+        likely = is_usb or iface.startswith("enx")
+
+        if not likely:
+            continue
+
+        results.append({
+            "interface": iface,
+            "mac": mac,
+            "operstate": operstate,
+            "is_usb": is_usb,
+            "label": "radmoon",
+            "module": "TH",
+        })
+
+    if results:
+        logger.info("radmoon scan: found %d USB ethernet candidate(s)", len(results))
+    return results
+
+
 # ── SCAR 자동 탐지 (Linux 전용 플러그인) ──
 # REST API (http://<host>:<port>/) 와 docker container 두 가지를 병렬로 프로브.
 # 한쪽이라도 살아있으면 후보 1행 반환 — SCAR 플러그인이 매 호출마다 Ready() 로 모드 자동 판별.
@@ -1669,6 +1741,10 @@ class DeviceManager:
     ) -> list[dict]:
         """SCAR (Linux 전용) 자동 탐지 — REST API + docker container 양쪽 프로브."""
         return await _scan_scar(host=host, port=port, container=container)
+
+    async def scan_radmoon(self) -> list[dict]:
+        """radmoon (USB Ethernet 어댑터, Linux 전용) 자동 탐지 — TH 모듈용 보조 디바이스."""
+        return await _scan_radmoon()
 
     async def scan_dlt(self, ports: list[int] | None = None) -> list[dict]:
         """TCP 포트 스캔으로 LAN(192.168.*) 상의 DLT 데몬 탐지."""

@@ -40,21 +40,41 @@ ReplayKit 의 다른 플러그인과 동일한 패턴을 따른다. 코드를 �
 > Linux 에서 ReplayKit 을 띄우면 `module_service` 가 `plugins/linux/` 서브폴더를 자동 스캔해서
 > 디바이스 추가 폼의 모듈 드롭다운에 **TH**, **SCAR** 가 노출된다.
 
-**TH 디바이스 추가**
+**TH 디바이스 추가 — radmoon 스캔 경로 (권장)**
 
-| 폼 필드 | 입력값 예시 | 비고 |
+`Reference/TH/connect_th.sh` 기준의 셋업을 ReplayKit 폼에 옮긴 형태. 호스트 PC 에 USB Ethernet 어댑터
+(통칭 *radmoon*) 가 꽂혀 있으면 자동 발견된다.
+
+1. 보조 디바이스 추가 → **스캔** 실행
+2. 결과에서 `radmoon (TH)` 탭 선택 — `enx<mac>` 형태의 USB Ethernet 어댑터들이 나열됨
+3. 사용할 어댑터의 **연결** 버튼 → TH 모듈 폼으로 자동 전환되고 아래 필드가 채워진 상태로 열림
+
+| 필드 | 자동 채움 값 | 비고 |
 |---|---|---|
-| Module | `TH (Test Harness, Linux)` | 드롭다운 선택 |
-| client.py 디렉터리 | `/home/cdc/0.scripts/th_client` | 필수 — `client.py` 가 들어있는 디렉터리 절대경로 |
-| TH 브로커 IP | `192.168.1.50` | 필수 |
-| Python 인터프리터 | `python3` 또는 `/usr/bin/python3.10` | 기본값 `python3` |
-| PySide6 시각화 패널 | `True` | False 면 패널 미사용 |
-| 패널 점등 트리거 토큰 | `GEAR_LEVER_ACCEPTED_T_REVERSE` | 빈 칸이면 기본값 사용 |
+| eth_if | (스캔 결과 인터페이스, 예: `enx00e04c68b2c8`) | radmoon 행에서 결정 |
+| host_ip | `192.168.1.152/24` | `connect_th.sh` 기본값 |
+| cvd_br | `cvd-ebr` | bridge 이름 |
+| rbvm_ip | `192.168.140.1:5555` | RBVM ADB target |
+| th_adb | `0.0.0.0:6520` | CVD ADB host:port |
+| grpc_ip | `192.168.1.99:50051` | gRPC broker, client.py `--ip_address` |
+| python_bin | `python3` | client.py 실행 인터프리터 |
+| panel | `True` | PySide6 시각화 패널 사용 |
+| panel_trigger | `GEAR_LEVER_ACCEPTED_T_REVERSE` | 패널 점등 토큰 |
 
-저장하면 디바이스 ID 가 부여되고, 시나리오에서 `TH.Send(...)` / `TH.SendAndUpdate(...)` 등을 호출할 때 이
-디바이스 설정이 자동으로 생성자에 전달된다.
+4. **th_home 만 수동 입력** — `connect_th.sh` 의 `select_th_gui.py` 가 하던 역할. TH 버전별 압축을 푼 디렉터리
+   절대경로 (예: `/home/cdc/Desktop/TH/TH_0.60.12`). `<th_home>/bin/launch_cvd` 와
+   `<th_home>/harness/harness/grpc_client/src/client.py` 가 존재해야 한다.
+5. 디바이스 이름 (예: `TH_main`) → **연결**
+
+> 등록 시점에 네트워크 셋업 / launch_cvd / microservice 실행은 일어나지 않는다. 그건 여전히
+> `Reference/TH/connect_th.sh` 의 수동 실행 영역. ReplayKit TH 모듈은 그 환경이 준비된 뒤
+> `client.py` 호출 + 패널 점등만 담당한다.
 
 **SCAR 디바이스 추가**
+
+SCAR 도 스캔 가능 (`docker inspect scar` + `GET http://localhost:8081/`). 결과 행의 **연결** 버튼이면 충분.
+
+스캔이 후보를 못 찾는 경우 수동 추가:
 
 | 폼 필드 | 입력값 예시 | 비고 |
 |---|---|---|
@@ -92,12 +112,18 @@ args:
 python -c "
 import sys; sys.path.insert(0, '.')
 from backend.app.plugins.linux.TH import TH
-th = TH(client_dir='/home/cdc/0.scripts/th_client', th_addr='192.168.1.50', panel=False)
+th = TH(
+    eth_if='enx00e04c68b2c8',
+    th_home='/home/cdc/Desktop/TH/TH_0.60.12',
+    panel=False,
+)
+print(th.Info())                                    # 현재 설정 + client.py 존재여부 요약
 print(th.Send('topic_name_here', '/path/to/payload.json', timeout=5))
 "
 ```
 
 `panel=False` 로 두면 PySide6 호스트가 spawn 되지 않아 headless 환경에서도 동작한다.
+나머지 네트워크 디폴트(`host_ip`/`grpc_ip` 등) 는 `connect_th.sh` 와 동일 값이 자동 적용.
 
 ---
 
@@ -109,13 +135,25 @@ print(th.Send('topic_name_here', '/path/to/payload.json', timeout=5))
 from backend.app.plugins.linux.TH import TH
 
 th = TH(
-    client_dir="/home/cdc/0.scripts/th_client",        # client.py 위치
-    th_addr="192.168.1.50",                             # TH 브로커 IP
-    python_bin="python3",                               # client.py 인터프리터
-    panel=True,                                         # PySide6 패널 사용 여부
-    panel_trigger="GEAR_LEVER_ACCEPTED_T_REVERSE",      # stdout 에서 찾을 토큰
+    # ── 필수 (radmoon scan + 수동 선택) ──
+    eth_if="enx00e04c68b2c8",                                  # USB Ethernet (radmoon)
+    th_home="/home/cdc/Desktop/TH/TH_0.60.12",                 # 압축 푼 TH 버전 디렉터리
+    # ── connect_th.sh USER CONFIG 디폴트 (override 가능) ──
+    host_ip="192.168.1.152/24",
+    cvd_br="cvd-ebr",
+    rbvm_ip="192.168.140.1:5555",
+    th_adb="0.0.0.0:6520",
+    grpc_ip="192.168.1.99:50051",                              # client.py --ip_address
+    # ── 플러그인 동작 ──
+    python_bin="python3",
+    panel=True,
+    panel_trigger="GEAR_LEVER_ACCEPTED_T_REVERSE",
 )
 ```
+
+내부 도출:
+- `self.client_dir = <th_home>/harness/harness/grpc_client/src`
+- `self.th_addr   = grpc_ip`
 
 ### 2.2 메서드
 
@@ -126,6 +164,7 @@ th = TH(
 | `PanelShow()` | 빈 검정 패널만 띄움 (원본 `Show TK Panel` 등가). | `"ok"` |
 | `PanelReset()` | 노란색 → 검정. 라벨 숨김. | `"ok"` |
 | `PanelClose()` | 패널 호스트 프로세스 종료. | `"ok"` |
+| `Info()` | 현재 설정 + `client.py` 존재여부 요약. 디버그용. | 여러 줄 텍스트 |
 
 ### 2.3 시나리오 예시
 
@@ -292,6 +331,22 @@ pytest test/plugins/linux -v
 2. **UI 드롭다운 확인** — ReplayKit GUI 의 디바이스 추가 모달에서 모듈 드롭다운에 `TH (Test Harness, Linux)`,
    `SCAR (SDV Control, Linux)` 가 나오는지 + 각각의 입력 폼 필드가 README 1.2 표와 같은지.
 
+2-b. **radmoon 스캔 확인** — TH 디바이스를 스캔으로 추가하는 경로 검증
+   - 보조 디바이스 추가 → **스캔** → 결과 탭에 `radmoon (TH)` 가 노출되는지
+   - USB Ethernet 어댑터가 보이는지 (예: `enx00e04c68b2c8` + MAC + `up` 태그)
+   - 어댑터 행의 **연결** 버튼 → TH 폼이 자동 열리고 `eth_if` 가 채워졌는지
+   - 검증용 backend 호출:
+     ```bash
+     python -c "
+     from backend.app.services.device_manager import DeviceManager
+     import asyncio
+     async def main():
+         dm = DeviceManager()
+         print(await dm.scan_radmoon())
+     asyncio.run(main())
+     "
+     ```
+
 3. **TH 패널만 단독 띄우기** (PySide6 / X11 환경 검증)
    ```bash
    python -m backend.app.plugins.linux.common.th_panel_host --socket /tmp/th-test.sock --width 300 --height 300
@@ -308,11 +363,12 @@ pytest test/plugins/linux -v
    ```
    기대: 좌하단 300x300 frameless 패널 → 노란색 점등 + 타임스탬프 라벨 → 검정 → 종료.
 
-4. **TH 시나리오 1step 시뮬레이션**
+4. **TH 패널 라이프사이클**
    ```bash
    python - <<'PY'
    from backend.app.plugins.linux.TH import TH
-   th = TH(client_dir="/tmp", th_addr="127.0.0.1", panel=True)
+   # eth_if/th_home 은 더미값 — 패널 메서드는 client.py 호출이 없어서 무관
+   th = TH(eth_if="lo", th_home="/tmp", panel=True)
    print(th.PanelShow())          # 좌하단 검정 패널 등장
    print(th.PanelReset())
    print(th.PanelClose())
@@ -320,24 +376,28 @@ pytest test/plugins/linux -v
    ```
    기대: 모두 `ok`. Wayland 세션이면 `XDG_SESSION_TYPE=x11 GDK_BACKEND=x11 python -m ...` 형태로 강제.
 
-5. **TH 패널 점등 latency 측정** — 실제 측정
+5. **TH 패널 점등 latency 측정** — 실제 측정 (더미 client.py 사용)
    ```bash
-   mkdir -p /tmp/dummy_th && cat > /tmp/dummy_th/client.py <<'PY'
+   # th_home 구조 흉내 — <th_home>/harness/harness/grpc_client/src/client.py
+   DUMMY=/tmp/dummy_th_home
+   mkdir -p "$DUMMY/harness/harness/grpc_client/src"
+   cat > "$DUMMY/harness/harness/grpc_client/src/client.py" <<'PY'
    import sys, time
    for a in sys.argv: print('arg:', a)
    time.sleep(0.5)
    sys.stdout.write('XXX GEAR_LEVER_ACCEPTED_T_REVERSE YYY\n'); sys.stdout.flush()
    time.sleep(0.1)
    PY
-   python - <<'PY'
+   python - <<PY
    from backend.app.plugins.linux.TH import TH
-   th = TH(client_dir="/tmp/dummy_th", th_addr="127.0.0.1", panel=True)
+   th = TH(eth_if="lo", th_home="$DUMMY", panel=True)
+   print(th.Info())
    print(th.SendAndUpdate("dummy_topic", "/dev/null", timeout=3))
    th.PanelClose()
    PY
    ```
-   기대: 반환 1줄 `rc=0 trigger_hit=GEAR_LEVER_ACCEPTED_T_REVERSE e2e_ms=<숫자>` — e2e_ms 가
-   약 500ms (sleep 0.5) + 50ms 오버헤드 이내인지 확인.
+   기대: `Info()` 가 `client.py exists = True` 출력 → 반환 1줄 `rc=0 trigger_hit=GEAR_LEVER_ACCEPTED_T_REVERSE e2e_ms=<숫자>`.
+   e2e_ms 가 약 500ms (sleep 0.5) + 50ms 오버헤드 이내인지 확인.
 
 6. **SCAR API 경로**
    - `scar` 컨테이너 떠있고 `http://localhost:8081/` 가 응답하는 상태
@@ -381,8 +441,13 @@ Windows 빌드는 이 패키지를 import 하면 즉시 ImportError. 회귀 가�
 ### `ImportError: backend.app.plugins.linux is Linux-only (current platform: win32)`
 정상 동작. Windows 에서는 패키지 자체가 비활성. 시나리오에 TH/SCAR 가 박혀 있다면 Linux PC 에서 재생해야 한다.
 
+### `FAIL: th_home not configured ...` / `FAIL: client.py not found at ...`
+TH 디바이스 등록 시 `th_home` 비워둠 또는 잘못된 경로. `<th_home>/harness/harness/grpc_client/src/client.py`
+가 존재해야 한다. `python -c "from backend.app.plugins.linux.TH import TH; print(TH(eth_if='', th_home='/your/path').Info())"`
+로 확인.
+
 ### `FAIL: TH client spawn error: ...`
-`client_dir` 에 `client.py` 가 없거나 실행 권한 문제. 더 흔한 케이스는 `python_bin` 이 올바른 venv 의 인터프리터가 아닌 것.
+경로는 맞는데 실행 권한 문제 또는 `python_bin` 이 올바른 venv 의 인터프리터가 아님.
 
 ### `FAIL: trigger '...' not detected (timeout=10s) rc=0`
 - client.py 가 trigger 토큰을 stdout 에 찍지 않음. `--log_level DEBUG` 로 출력이 충분한지 client.py 측에서 확인.

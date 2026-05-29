@@ -349,10 +349,18 @@ def list_available_modules() -> list[dict]:
          ]},
         # Linux 전용 플러그인 — plugins/linux/ 서브폴더에 위치. connect_type="none" 이지만
         # constructor 인자가 많아서 UI 입력 폼이 필요하다.
+        # TH 의 필드는 Reference/TH/connect_th.sh 의 USER CONFIG 블록과 1:1 대응.
+        # eth_if 는 radmoon(USB Ethernet) 스캔 결과에서 자동 채워짐. th_home 은 수동 선택.
         {"name": "TH", "label": "TH (Test Harness, Linux)", "connect_type": "none",
          "connect_fields": [
-             {"name": "client_dir", "label": "client.py 디렉터리", "type": "text", "default": ""},
-             {"name": "th_addr", "label": "TH 브로커 IP", "type": "text", "default": ""},
+             {"name": "eth_if", "label": "USB Ethernet 인터페이스 (radmoon)", "type": "text", "default": ""},
+             {"name": "th_home", "label": "TH 버전 디렉터리 (선택 필요)", "type": "text", "default": ""},
+             {"name": "host_ip", "label": "Host IP / mask", "type": "text", "default": "192.168.1.152/24"},
+             {"name": "cvd_br", "label": "CVD bridge 이름", "type": "text", "default": "cvd-ebr"},
+             {"name": "rbvm_ip", "label": "RBVM ADB", "type": "text", "default": "192.168.140.1:5555"},
+             {"name": "th_adb", "label": "CVD ADB host:port", "type": "text", "default": "0.0.0.0:6520"},
+             {"name": "grpc_ip", "label": "gRPC broker (client.py --ip_address)", "type": "text",
+              "default": "192.168.1.99:50051"},
              {"name": "python_bin", "label": "Python 인터프리터", "type": "text", "default": "python3"},
              {"name": "panel", "label": "PySide6 시각화 패널", "type": "select", "default": "True",
               "options": ["True", "False"]},

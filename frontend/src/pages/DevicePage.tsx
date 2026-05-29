@@ -233,6 +233,7 @@ export default function DevicePage() {
   const [scannedDlt, setScannedDlt] = useState<{ ip: string; port: number }[]>([]);
   const [scannedSmartbench, setScannedSmartbench] = useState<{ ip: string; port: number; label: string; module: string }[]>([]);
   const [scannedScar, setScannedScar] = useState<{ ip: string; port: number; container: string; api_alive: boolean; docker_running: boolean; label: string; module: string }[]>([]);
+  const [scannedRadmoon, setScannedRadmoon] = useState<{ interface: string; mac: string; operstate: string; is_usb: boolean; label: string; module: string }[]>([]);
   const [scannedSsh, setScannedSsh] = useState<{ ip: string; port: number }[]>([]);
   const [scannedCustom, setScannedCustom] = useState<{ label: string; hosts: { ip: string; port: number }[] }[]>([]);
   const [pcInterfaces, setPcInterfaces] = useState<{ name: string; ip: string; prefix: number }[]>([]);
@@ -405,6 +406,7 @@ export default function DevicePage() {
     ssh: { enabled: true, module: 'SSHManager', port: 22, category: 'auxiliary' },
     smartbench: { enabled: true, module: 'SmartBench', host: '192.167.0.5', port: 8000, category: 'auxiliary' },
     scar: { enabled: true, module: 'SCAR', host: 'localhost', port: 8081, category: 'auxiliary' },
+    radmoon: { enabled: true, module: 'TH', category: 'auxiliary' },
   });
   const [scanCustom, setScanCustom] = useState<{ label: string; type: string; port: number; module: string; enabled: boolean; category?: ScanCategory }[]>([]);
 
@@ -537,6 +539,7 @@ export default function DevicePage() {
     setScannedDlt([]);
     setScannedSmartbench([]);
     setScannedScar([]);
+    setScannedRadmoon([]);
     setScannedSsh([]);
     setScannedCustom([]);
     setHasScanned(false);
@@ -561,6 +564,7 @@ export default function DevicePage() {
       setScannedDlt(res.data.dlt_devices || []);
       setScannedSmartbench(res.data.smartbench_devices || []);
       setScannedScar(res.data.scar_devices || []);
+      setScannedRadmoon(res.data.radmoon_devices || []);
       setScannedSsh(res.data.ssh_hosts || []);
       setScannedCustom(res.data.custom_results || []);
       setPcInterfaces(ifRes.data.interfaces || []);
@@ -2039,6 +2043,53 @@ export default function DevicePage() {
                       });
                     }
 
+                    if (scanItemCategory('radmoon') === modalCategory && scannedRadmoon.length > 0) {
+                      scanTabs.push({
+                        key: 'radmoon',
+                        label: <span>radmoon (TH) <Tag style={{ marginLeft: 3 }}>{scannedRadmoon.length}</Tag></span>,
+                        children: (
+                          <List
+                            size="small"
+                            bordered
+                            dataSource={scannedRadmoon}
+                            pagination={scannedRadmoon.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
+                            renderItem={(h) => {
+                              const existing = findExisting(x => x.type === 'module' && x.info?.module === 'TH' && x.info?.eth_if === h.interface);
+                              const doAdd = () => {
+                                // TH 모듈 폼으로 전환 + scan 결과로 eth_if 자동 채움 + 나머지 connect_th.sh 디폴트 자동 채움.
+                                const thInfo = modules.find(m => m.name === 'TH');
+                                const defaults: Record<string, any> = {};
+                                if (thInfo?.connect_fields) {
+                                  for (const f of thInfo.connect_fields) {
+                                    defaults[f.name] = f.default ?? '';
+                                  }
+                                }
+                                defaults.eth_if = h.interface;          // 스캔으로 얻은 USB ethernet
+                                setConnectType('module');
+                                setSelectedModule('TH');
+                                setConnectAddress(h.interface);          // module 등록 시 address 자리에 interface 표시
+                                setExtraFieldValues(defaults);
+                                setModalTabKey('manual');
+                              };
+                              return (
+                                <List.Item actions={[renderScanAction(existing, t('common.connect'), doAdd)]}>
+                                  <div>
+                                    <Tag color="geekblue">radmoon</Tag>
+                                    <strong>{h.interface}</strong>
+                                    <span style={{ marginLeft: 8, color: '#888' }}>{h.mac}</span>
+                                    {h.is_usb && <Tag color="cyan" style={{ marginLeft: 6 }}>USB</Tag>}
+                                    <Tag color={h.operstate === 'up' ? 'green' : 'default'} style={{ marginLeft: 4 }}>
+                                      {h.operstate}
+                                    </Tag>
+                                  </div>
+                                </List.Item>
+                              );
+                            }}
+                          />
+                        ),
+                      });
+                    }
+
                     if (scanItemCategory('ssh') === modalCategory && scannedSsh.length > 0) {
                       scanTabs.push({
                         key: 'ssh',
@@ -2721,6 +2772,7 @@ export default function DevicePage() {
             { key: 'ssh',            label: 'SSH',            proto: 'TCP',      editablePorts: false },
             { key: 'smartbench',     label: 'SmartBench',     proto: 'TCP',      editablePorts: false },
             { key: 'scar',           label: 'SCAR',           proto: 'HTTP',     editablePorts: false },
+            { key: 'radmoon',        label: 'radmoon (TH)',   proto: 'USB',      editablePorts: false },
           ];
           type BuiltinItem = typeof builtinItems[number];
           type CustomItem = { label: string; type: string; port: number; module?: string; enabled?: boolean; category?: ScanCategory; __idx: number; __kind: 'custom' };

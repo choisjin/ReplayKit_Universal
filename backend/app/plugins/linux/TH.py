@@ -3,10 +3,22 @@
 원본:
   Reference/Renault_CDC_Plugin/TH_Lib.py (tkinter)
   Reference/Renault_CDC_Plugin/RVC_Performance.txt (Robot 키워드)
+  Reference/TH/connect_th.sh, host_ends_setup.sh, ensure-adb.sh (네트워크/ADB/launch 절차)
 
 차이:
   - tkinter 대신 PySide6 패널을 별도 프로세스로 호스팅 (충돌 회피)
   - subprocess line-buffering 대신 raw fd byte scanner → trigger 즉시 인식
+
+생성자 인자 매핑 (connect_th.sh 의 USER CONFIG ↔):
+  eth_if    ← ETH_IF      USB Ethernet 어댑터 (radmoon 장비, enx<mac> 형태)
+  th_home   ← TH_HOME     선택된 TH 버전 디렉터리 (예: /home/cdc/Desktop/TH/TH_0.60.12)
+  host_ip   ← HOST_IP     호스트 측 cvd-ebr 대역 IP (기본 192.168.1.152/24)
+  cvd_br    ← CVD_BR      bridge 이름 (기본 cvd-ebr)
+  rbvm_ip   ← RBVM_IP     ADB target (기본 192.168.140.1:5555)
+  th_adb    ← TH_ADB      CVD ADB host:port (기본 0.0.0.0:6520)
+  grpc_ip   ← GRPC_IP     SOME/IP gRPC broker (기본 192.168.1.99:50051) — client.py --ip_address
+
+  client.py 위치는 <th_home>/harness/harness/grpc_client/src 로 자동 도출.
 
 시나리오 노출 메서드 (SHELL.py 반환 규약과 동일: "FAIL: ..." 접두사로 자동 실패 처리):
   - Send(topic_name, json_path, timeout=10)              fire-and-forget
@@ -14,47 +26,96 @@
   - PanelShow()                                          빈 패널만 띄움
   - PanelReset()                                         패널 검정으로 리셋
   - PanelClose()                                         패널 호스트 종료
+  - Info()                                               현재 설정 요약 (디버그용)
 """
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from .common.th_panel_client import PanelClient
 from .common.th_signal import THSignal
 
 
-class TH:
-    """Linux Test Harness 플러그인.
+# connect_th.sh 의 USER CONFIG 디폴트 — 변경 시 README/connect_fields 와 함께 갱신.
+DEFAULT_HOST_IP = "192.168.1.152/24"
+DEFAULT_CVD_BR = "cvd-ebr"
+DEFAULT_RBVM_IP = "192.168.140.1:5555"
+DEFAULT_TH_ADB = "0.0.0.0:6520"
+DEFAULT_GRPC_IP = "192.168.1.99:50051"
+DEFAULT_PANEL_TRIGGER = "GEAR_LEVER_ACCEPTED_T_REVERSE"
 
-    인스턴스 생성 인자:
-      client_dir:    client.py 가 있는 디렉터리
-      th_addr:       --ip_address 로 전달할 TH 브로커 IP
-      python_bin:    client.py 실행 인터프리터 (기본 python3)
-      panel:         시각화 패널 사용 여부 (기본 True)
-      panel_trigger: 패널 점등을 트리거할 stdout 토큰 (기본 GEAR_LEVER_ACCEPTED_T_REVERSE)
-    """
+
+def _derive_client_dir(th_home: str) -> str:
+    """<th_home>/harness/harness/grpc_client/src — connect_th.sh step 6 의 cwd."""
+    return os.path.join(th_home.rstrip("/"), "harness", "harness", "grpc_client", "src")
+
+
+class TH:
+    """Linux Test Harness 플러그인."""
 
     def __init__(
         self,
-        client_dir: str,
-        th_addr: str,
+        # ── 필수 (scan + 사용자 선택) ─────────────────────────
+        eth_if: str = "",                                 # USB Ethernet 인터페이스 (radmoon)
+        th_home: str = "",                                # TH 버전 디렉터리
+        # ── 네트워크 디폴트 (connect_th.sh) ─────────────────
+        host_ip: str = DEFAULT_HOST_IP,
+        cvd_br: str = DEFAULT_CVD_BR,
+        rbvm_ip: str = DEFAULT_RBVM_IP,
+        th_adb: str = DEFAULT_TH_ADB,
+        grpc_ip: str = DEFAULT_GRPC_IP,
+        # ── 플러그인 동작 ─────────────────────────────────
         python_bin: str = "python3",
         panel: bool = True,
-        panel_trigger: str = "GEAR_LEVER_ACCEPTED_T_REVERSE",
+        panel_trigger: str = DEFAULT_PANEL_TRIGGER,
     ):
-        self._signal = THSignal(client_dir=client_dir, th_addr=th_addr, python_bin=python_bin)
+        # 원본 USER CONFIG 보관 — 향후 네트워크 셋업/launch_cvd 자동화 시 사용.
+        self.eth_if = eth_if
+        self.th_home = th_home
+        self.host_ip = host_ip
+        self.cvd_br = cvd_br
+        self.rbvm_ip = rbvm_ip
+        self.th_adb = th_adb
+        self.grpc_ip = grpc_ip
+        self.python_bin = python_bin
+        self.panel_enabled = panel
+        self.panel_trigger = panel_trigger
+
+        # client.py 위치는 th_home 로부터 자동 도출.
+        # th_home 이 비어있으면 self.client_dir 도 빈 문자열에 가까운 잘못된 경로가 되고,
+        # Send/SendAndUpdate 호출 시 "FAIL: TH client spawn error" 로 떨어진다.
+        self.client_dir = _derive_client_dir(th_home) if th_home else ""
+        self.th_addr = grpc_ip
+
+        self._signal = THSignal(
+            client_dir=self.client_dir,
+            th_addr=self.th_addr,
+            python_bin=python_bin,
+        )
         self._panel: Optional[PanelClient] = PanelClient() if panel else None
         self._trigger_bytes = panel_trigger.encode("utf-8")
 
     # ── 시나리오 노출 ─────────────────────────────────
+    def _precheck(self) -> Optional[str]:
+        """client.py 호출 전 필수 설정 확인. 문제 있으면 'FAIL: ...' 메시지 반환."""
+        if not self.th_home:
+            return "FAIL: th_home not configured — set the TH version directory"
+        if not os.path.isfile(os.path.join(self.client_dir, "client.py")):
+            return f"FAIL: client.py not found at {self.client_dir} — check th_home"
+        return None
+
     def Send(self, topic_name: str, json_path: str, timeout: int = 10) -> str:
         """패널 갱신 없이 신호만 전송.
 
         Returns:
-          정상: "rc=<n> elapsed_ms=<x.x>\\n<stdout 마지막 1KB>"
+          정상: "rc=<n>\\n<stdout 마지막 1KB>"
           실패: "FAIL: ..."
         """
+        pre = self._precheck()
+        if pre is not None:
+            return pre
         try:
             sr = self._signal.send(
                 topic_name=topic_name,
@@ -86,6 +147,9 @@ class TH:
           매치: "rc=<n> trigger_hit=<tok> e2e_ms=<x.x>"
           미매치: "FAIL: trigger '<tok>' not detected (timeout=<n>s) rc=<rc>"
         """
+        pre = self._precheck()
+        if pre is not None:
+            return pre
         trig_bytes = trigger.encode("utf-8") if trigger else self._trigger_bytes
 
         def _on_trig(_ts: float) -> None:
@@ -108,6 +172,25 @@ class TH:
             return f"FAIL: trigger '{tok}' not detected (timeout={timeout}s) rc={sr.rc}"
 
         return _format_result(sr.rc, sr.e2e_ms, sr.stdout, trigger_hit=sr.trigger_hit)
+
+    def Info(self) -> str:
+        """현재 인스턴스의 설정 요약 (디버그/검증용)."""
+        lines = [
+            f"eth_if   = {self.eth_if or '(unset)'}",
+            f"th_home  = {self.th_home or '(unset)'}",
+            f"client   = {self.client_dir or '(unset)'}",
+            f"host_ip  = {self.host_ip}",
+            f"cvd_br   = {self.cvd_br}",
+            f"rbvm_ip  = {self.rbvm_ip}",
+            f"th_adb   = {self.th_adb}",
+            f"grpc_ip  = {self.grpc_ip}",
+            f"python   = {self.python_bin}",
+            f"panel    = {self.panel_enabled} (trigger='{self.panel_trigger}')",
+        ]
+        if self.th_home:
+            client_py = os.path.join(self.client_dir, "client.py")
+            lines.append(f"client.py exists = {os.path.isfile(client_py)}")
+        return "\n".join(lines)
 
     def PanelShow(self) -> str:
         if self._panel is None:

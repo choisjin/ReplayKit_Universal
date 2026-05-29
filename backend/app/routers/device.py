@@ -48,6 +48,9 @@ _DEFAULT_SCAN_SETTINGS = {
         # SCAR: Linux 전용. localhost:8081 REST API 와 docker 컨테이너 'scar' 양쪽 모두 프로브.
         # 양쪽 다 죽어 있으면 결과 0건, 한쪽이라도 살아있으면 1행 반환.
         "scar":           {"enabled": True,  "module": "SCAR",         "category": "auxiliary", "host": "localhost",   "port": 8081, "container": "scar"},
+        # radmoon: TH 모듈용 USB Ethernet 어댑터. /sys/class/net/ 에서 USB 디바이스 후보 나열.
+        # 호스트/포트가 없는 'enumeration' 형 스캔이라 별도 설정 필드 없음.
+        "radmoon":        {"enabled": True,  "module": "TH",           "category": "auxiliary"},
     },
     # type: "tcp" | "udp", category: "primary" | "auxiliary"
     # [{"label": "MLP", "type": "tcp", "port": 5001, "module": "MLP", "enabled": true, "category": "auxiliary"}, ...]
@@ -398,6 +401,9 @@ async def scan_ports():
         tasks["scar_devices"] = asyncio.ensure_future(
             dm.scan_scar(host=sc_host, port=sc_port, container=sc_container)
         )
+    if _enabled("radmoon"):
+        # radmoon (Linux 전용): USB Ethernet 어댑터 enumeration. 설정 인자 없음.
+        tasks["radmoon_devices"] = asyncio.ensure_future(dm.scan_radmoon())
     if _enabled("ssh"):
         ssh_entry = builtin.get("ssh", {}) if isinstance(builtin.get("ssh"), dict) else {}
         ssh_port = int(ssh_entry.get("port", 22))
@@ -453,6 +459,7 @@ async def scan_ports():
         "dlt_devices": [],
         "smartbench_devices": [],
         "scar_devices": [],
+        "radmoon_devices": [],
         "ssh_hosts": [],
         "custom_results": [],
     }
