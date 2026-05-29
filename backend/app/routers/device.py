@@ -228,6 +228,11 @@ def _build_constructor_kwargs(dev) -> dict | None:
     elif connect_type == "vision_camera":
         # VisionCamera: MAC, model, serial, ip, subnetmask
         return {k: v for k, v in dev.info.items() if k not in ("module", "connect_type")}
+    elif connect_type == "none":
+        # connect_type="none" 모듈 (TH, SCAR 등) — 추가 connect_fields 가 있으면
+        # 그대로 생성자 인자로 전달. 그래야 _get_instance 가 Connect()/IsConnected()
+        # 를 자동 호출하는 경로로 들어간다 (else 분기는 cls() 만 만들고 끝).
+        return {k: v for k, v in dev.info.items() if k not in ("module", "connect_type")}
     return None
 
 
