@@ -116,16 +116,35 @@ class BrowseFolderRequest(BaseModel):
 
 
 def _open_folder_dialog(initial_dir: str = "") -> str:
-    """Open a native folder picker dialog using tkinter (runs in main thread)."""
+    """Open a native folder picker dialog using tkinter (runs in main thread).
+
+    initial_dir 결정 우선순위:
+      1) 호출자가 명시한 initial_dir (있고 실제 디렉터리일 때)
+      2) ~/Desktop  — TH/SCAR 등 보조 디바이스 폴더가 보통 여기에 있음
+      3) ~          — 홈 디렉터리 (Desktop 없는 환경 폴백)
+    """
     import tkinter as tk
     from tkinter import filedialog
 
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
+
+    candidates = []
+    if initial_dir:
+        candidates.append(Path(initial_dir))
+    candidates.append(Path.home() / "Desktop")
+    candidates.append(Path.home())
+
     kwargs = {}
-    if initial_dir and Path(initial_dir).is_dir():
-        kwargs["initialdir"] = initial_dir
+    for c in candidates:
+        try:
+            if c.is_dir():
+                kwargs["initialdir"] = str(c)
+                break
+        except OSError:
+            continue
+
     folder = filedialog.askdirectory(**kwargs)
     root.destroy()
     return folder or ""
