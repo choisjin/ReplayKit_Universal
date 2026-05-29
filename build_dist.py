@@ -568,7 +568,7 @@ def _ensure_dist_git(target: str) -> bool:
     for name, url in remotes:
         r = subprocess.run(
             ["git", "remote", "get-url", name],
-            cwd=DIST_DIR, capture_output=True, text=True,
+            cwd=DIST_DIR, capture_output=True, encoding="utf-8", errors="replace",
         )
         if r.returncode != 0:
             subprocess.run(["git", "remote", "add", name, url], cwd=DIST_DIR, check=True)
@@ -581,7 +581,7 @@ def _ensure_dist_git(target: str) -> bool:
     # 이름만 매칭 — 의도하지 않은 remote 가 남아 다음 사용자가 수동 push 했을 때
     # 잘못된 위치로 가는 사고 방지.
     wanted = {name for name, _ in remotes}
-    r = subprocess.run(["git", "remote"], cwd=DIST_DIR, capture_output=True, text=True)
+    r = subprocess.run(["git", "remote"], cwd=DIST_DIR, capture_output=True, encoding="utf-8", errors="replace")
     if r.returncode == 0:
         for existing in r.stdout.split():
             if existing and existing not in wanted:
@@ -611,7 +611,7 @@ def _deploy_force_push(target: str, version: str | None = None) -> int:
     # 변경 있을 때만 commit (없으면 기존 HEAD 그대로 push)
     r = subprocess.run(
         ["git", "status", "--porcelain"],
-        cwd=DIST_DIR, capture_output=True, text=True,
+        cwd=DIST_DIR, capture_output=True, encoding="utf-8", errors="replace",
     )
     if r.stdout.strip():
         # 개발 git (PROJECT_ROOT/.git) 의 HEAD commit subject 를 가져와서 dist commit 메시지에
@@ -621,7 +621,8 @@ def _deploy_force_push(target: str, version: str | None = None) -> int:
         try:
             log_r = subprocess.run(
                 ["git", "log", "-1", "--pretty=format:%s"],
-                cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=10,
+                cwd=PROJECT_ROOT, capture_output=True,
+                encoding="utf-8", errors="replace", timeout=10,
             )
             if log_r.returncode == 0:
                 dev_subject = (log_r.stdout or "").strip()
@@ -640,7 +641,7 @@ def _deploy_force_push(target: str, version: str | None = None) -> int:
         # 첫 commit 시 user.name/email 누락으로 실패할 수 있어 fallback config 적용.
         commit_r = subprocess.run(
             ["git", "commit", "-m", msg],
-            cwd=DIST_DIR, capture_output=True, text=True,
+            cwd=DIST_DIR, capture_output=True, encoding="utf-8", errors="replace",
         )
         if commit_r.returncode != 0 and "Please tell me who you are" in (commit_r.stderr or ""):
             print("  dist git user 미설정 — 로컬 fallback (ReplayKit Build / build@local) 적용")
@@ -648,7 +649,7 @@ def _deploy_force_push(target: str, version: str | None = None) -> int:
             subprocess.run(["git", "config", "user.email", "build@local"], cwd=DIST_DIR, check=False)
             commit_r = subprocess.run(
                 ["git", "commit", "-m", msg],
-                cwd=DIST_DIR, capture_output=True, text=True,
+                cwd=DIST_DIR, capture_output=True, encoding="utf-8", errors="replace",
             )
         if commit_r.returncode == 0:
             print(f"  dist commit: {msg}")
