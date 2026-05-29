@@ -21,6 +21,9 @@ interface ConnectField {
   item_fields?: ConnectField[];
   // object_list 전용: 기본 row 데이터 (편집 시 최초 항목 추가용)
   default_items?: Record<string, any>[];
+  // true 면 폼에서 숨김. extra_fields 에는 default 값이 그대로 들어가서 백엔드에 전달됨.
+  // 사용자 편집 UI 가 필요 없는 고급 설정 필드용.
+  hidden?: boolean;
 }
 
 interface ModuleInfo {
@@ -1276,9 +1279,9 @@ export default function DevicePage() {
     );
   };
 
-  // Render dynamic connect_fields inputs
+  // Render dynamic connect_fields inputs — hidden=true 인 필드는 폼에서 제외 (extra_fields 에는 default 가 들어감).
   const renderConnectFields = (fields: ConnectField[], values: Record<string, any>, onChange: (vals: Record<string, any>) => void) => {
-    return fields.map(f => (
+    return fields.filter(f => !f.hidden).map(f => (
       <div key={f.name} style={{ marginBottom: 3 }}>
         <span style={{ fontSize: 11, color: '#888', marginRight: 6 }}>{f.label}:</span>
         {f.type === 'object_list' ? (
@@ -2083,7 +2086,7 @@ export default function DevicePage() {
                     if (scanItemCategory('radmoon') === modalCategory && scannedRadmoon.length > 0) {
                       scanTabs.push({
                         key: 'radmoon',
-                        label: <span>radmoon (TH) <Tag style={{ marginLeft: 3 }}>{scannedRadmoon.length}</Tag></span>,
+                        label: <span>RAD_Moon (TH) <Tag style={{ marginLeft: 3 }}>{scannedRadmoon.length}</Tag></span>,
                         children: (
                           <List
                             size="small"
@@ -2114,7 +2117,7 @@ export default function DevicePage() {
                               return (
                                 <List.Item actions={[renderScanAction(existing, t('common.connect'), doAdd)]}>
                                   <div>
-                                    <Tag color="geekblue">radmoon</Tag>
+                                    <Tag color="geekblue">RAD_Moon</Tag>
                                     <strong>bridge:{h.bridge}</strong>
                                     <Tag color={h.bridge_operstate === 'up' ? 'green' : 'default'} style={{ marginLeft: 6 }}>
                                       {h.bridge_operstate}
@@ -2294,7 +2297,17 @@ export default function DevicePage() {
                         value={selectedModule}
                         onChange={(v) => {
                           setSelectedModule(v);
-                          setExtraFieldValues({});
+                          // hidden 필드도 backend 에 보내려면 default 를 미리 seed 해야 함.
+                          // 사용자가 보이는 필드만 편집하고 connect 누르면 hidden 필드는
+                          // default 그대로 전송됨.
+                          const modInfo = modules.find(m => m.name === v);
+                          const seed: Record<string, any> = {};
+                          if (modInfo?.connect_fields) {
+                            for (const f of modInfo.connect_fields) {
+                              seed[f.name] = f.default ?? '';
+                            }
+                          }
+                          setExtraFieldValues(seed);
                           const ct = getModuleConnectType(v);
                           if (ct === 'serial') setConnectType('serial');
                           else if (ct === 'socket' || ct === 'none' || ct === 'can') setConnectType('module');
@@ -2828,7 +2841,7 @@ export default function DevicePage() {
             { key: 'ssh',            label: 'SSH',            proto: 'TCP',      editablePorts: false },
             { key: 'smartbench',     label: 'SmartBench',     proto: 'TCP',      editablePorts: false },
             { key: 'scar',           label: 'SCAR',           proto: 'HTTP',     editablePorts: false },
-            { key: 'radmoon',        label: 'radmoon (TH)',   proto: 'USB',      editablePorts: false },
+            { key: 'radmoon',        label: 'RAD_Moon (TH)',  proto: 'USB',      editablePorts: false },
           ];
           type BuiltinItem = typeof builtinItems[number];
           type CustomItem = { label: string; type: string; port: number; module?: string; enabled?: boolean; category?: ScanCategory; __idx: number; __kind: 'custom' };

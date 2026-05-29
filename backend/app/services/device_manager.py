@@ -517,7 +517,7 @@ def _scan_radmoon_sync(bridge_name: str) -> list[dict]:
         "bridge_operstate": bridge_operstate,
         "current_ips": current_ips,
         "members": members,
-        "label": "radmoon (cvd-ebr)",
+        "label": "RAD_Moon (cvd-ebr)",
         "module": "TH",
     }]
 
