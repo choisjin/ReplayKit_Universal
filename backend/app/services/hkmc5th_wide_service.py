@@ -21,6 +21,7 @@ import queue
 import socket
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -370,6 +371,9 @@ class HKMC5thWideService:
         self._exit_flag = False
         self._send_lock = threading.Lock()
         self._capture_lock = threading.Lock()
+        # 입력(키/탭/스와이프) 진행 카운터 — screencap이 이 동안 lock 획득을 양보.
+        # GIL 보장으로 int read/write 는 atomic 이라 별도 lock 불필요.
+        self._input_pending = 0
 
         # Receive state
         self._recv_queue: queue.Queue = queue.Queue()
@@ -926,9 +930,28 @@ class HKMC5thWideService:
             raise FileNotFoundError(f"HKMC5thWide screenshot file not created: {output_path}")
         return output_path
 
+    @contextmanager
+    def _input_priority(self):
+        """입력(키/탭/스와이프) 진행 표시 컨텍스트.
+
+        이 컨텍스트가 활성화된 동안 `screencap_bytes` 는 새 캡처 lock 획득을
+        잠시 양보(최대 0.5초)하여 입력 요청이 빠르게 lock 을 잡도록 한다.
+        """
+        self._input_pending += 1
+        try:
+            yield
+        finally:
+            if self._input_pending > 0:
+                self._input_pending -= 1
+
     def screencap_bytes(self, screen_type: str = "front_center",
                         fmt: str = "png", timeout: float = 10.0) -> bytes:
         """Capture screenshot and return as PNG/JPEG bytes (BMP → convert)."""
+        # 입력 진행 중이면 캡처 우선순위 양보 (최대 0.5초).
+        _yield_deadline = time.monotonic() + 0.5
+        while self._input_pending > 0 and time.monotonic() < _yield_deadline:
+            time.sleep(0.02)
+
         with self._capture_lock:
             w, h = self.get_screen_size(screen_type)
             self._img_buffer = b""
@@ -955,7 +978,7 @@ class HKMC5thWideService:
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if img is not None:
                 if fmt == "jpeg":
-                    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 30])
                 else:
                     _, buf = cv2.imencode(".png", img)
                 return buf.tobytes()
@@ -966,7 +989,7 @@ class HKMC5thWideService:
             from PIL import Image
             pil_img = Image.open(io.BytesIO(bmp_bytes))
             bio = io.BytesIO()
-            pil_img.save(bio, format="PNG" if fmt == "png" else "JPEG", quality=60)
+            pil_img.save(bio, format="PNG" if fmt == "png" else "JPEG", quality=30)
             return bio.getvalue()
         except Exception:
             pass
@@ -980,7 +1003,9 @@ class HKMC5thWideService:
     def tap(self, x: int, y: int, screen_type: str = "front_center") -> None:
         """Tap at (x, y)."""
         x, y = int(x), int(y)
-        with self._capture_lock:
+        # _input_priority: 라이브 미러링이 _capture_lock 을 점유 중일 때 다음 캡처를
+        # 양보시켜 입력 응답 지연(2~3초)을 1초 이하로 줄임.
+        with self._input_priority(), self._capture_lock:
             time.sleep(0.3)
             with self._send_lock:
                 self._lcd_touch(x, y)
@@ -991,7 +1016,7 @@ class HKMC5thWideService:
                    screen_type: str = "front_center") -> None:
         x, y = int(x), int(y)
         interval_sec = interval_ms / 1000.0
-        with self._capture_lock:
+        with self._input_priority(), self._capture_lock:
             with self._send_lock:
                 for i in range(count):
                     self._lcd_touch(x, y)
@@ -1005,7 +1030,7 @@ class HKMC5thWideService:
         """Long press using PRESS_KEY + delay + RELEASE_KEY sub_cmd."""
         x, y = int(x), int(y)
         data = [(x >> 8) & 0xFF, x & 0xFF, (y >> 8) & 0xFF, y & 0xFF]
-        with self._capture_lock:
+        with self._input_priority(), self._capture_lock:
             time.sleep(0.3)
             with self._send_lock:
                 self._make_send_packet(CMD_LCDTOUCH, PRESS_KEY, 0, list(data))
@@ -1019,7 +1044,7 @@ class HKMC5thWideService:
               screen_type: str = "front_center", duration_ms: int = 0) -> None:
         """Swipe (drag) from (x1, y1) to (x2, y2)."""
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-        with self._capture_lock:
+        with self._input_priority(), self._capture_lock:
             time.sleep(0.3)
             with self._send_lock:
                 self._lcd_drag(x1, y1, x2, y2)
@@ -1160,7 +1185,7 @@ class HKMC5thWideService:
         is_msg = bool(key_info.get("msg"))
         is_dial = bool(key_info.get("dial"))
 
-        with self._capture_lock:
+        with self._input_priority(), self._capture_lock:
             if is_msg:
                 # 메시지 키: 데이터 없이 cmd+subCmd만 전송
                 self.send_key_message(cmd, sub_cmd)

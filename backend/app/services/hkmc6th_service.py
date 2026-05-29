@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import queue
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -399,6 +400,9 @@ class HKMC6thService:
         self._exit_flag = False
         self._send_lock = threading.Lock()  # 송신 시퀀스 보호 (press-release 등)
         self._capture_lock = threading.Lock()  # 스크린샷 캡처 직렬화
+        # 입력(키/탭/스와이프) 진행 카운터 — screencap이 이 동안 lock 획득을 양보.
+        # GIL 보장으로 int read/write 는 atomic 이라 별도 lock 불필요.
+        self._input_pending = 0
 
         # Receive state
         self._recv_queue: queue.Queue = queue.Queue()
@@ -549,6 +553,22 @@ class HKMC6thService:
     # ------------------------------------------------------------------
     # Packet send
     # ------------------------------------------------------------------
+
+    @contextmanager
+    def _input_priority(self):
+        """입력(키/탭/스와이프) 진행 표시 컨텍스트.
+
+        이 컨텍스트가 활성화된 동안 `screencap_bytes` 는 새 캡처 lock 획득을
+        잠시 양보(최대 0.5초)하여 입력 요청이 빠르게 lock 을 잡도록 한다.
+        라이브 미러링이 _capture_lock 을 점유한 상태에서 키/탭이 2~3초씩
+        지연되던 문제 완화용.
+        """
+        self._input_pending += 1
+        try:
+            yield
+        finally:
+            if self._input_pending > 0:
+                self._input_pending -= 1
 
     def _send_raw(self, packet: list[int]) -> None:
         """Send raw packet bytes to socket."""
@@ -830,6 +850,14 @@ class HKMC6thService:
         The agent sends BMP format. We convert to the requested format.
         _capture_lock으로 동시 호출을 직렬화하여 _img_event 경쟁 방지.
         """
+        # 입력 진행 중이면 캡처 우선순위 양보 (최대 0.5초).
+        # 라이브 미러링이 매 프레임 _capture_lock 을 점유하므로 키/탭이 lock 을
+        # 기다리며 2~3초 지연되는 회귀를 완화한다. cluster SSH 경로도 동일하게
+        # 입력을 양보하도록 cluster 분기 앞에 둔다.
+        _yield_deadline = time.monotonic() + 0.5
+        while self._input_pending > 0 and time.monotonic() < _yield_deadline:
+            time.sleep(0.02)
+
         if screen_type == "cluster" and self.ssh_username:
             try:
                 return self._screencap_cluster_via_ssh(fmt=fmt, timeout=timeout)
@@ -872,7 +900,7 @@ class HKMC6thService:
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if img is not None:
                 if fmt == "jpeg":
-                    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 30])
                 else:
                     _, buf = cv2.imencode(".png", img)
                 return buf.tobytes()
@@ -883,7 +911,7 @@ class HKMC6thService:
             from PIL import Image
             pil_img = Image.open(io.BytesIO(bmp_bytes))
             bio = io.BytesIO()
-            pil_img.save(bio, format="PNG" if fmt == "png" else "JPEG", quality=60)
+            pil_img.save(bio, format="PNG" if fmt == "png" else "JPEG", quality=30)
             return bio.getvalue()
         except Exception:
             pass
@@ -1056,8 +1084,10 @@ class HKMC6thService:
         """Tap at (x, y) using lcdTouch."""
         x, y = int(x), int(y)
         st = self._touch_screen_bits(screen_type)
-        # _capture_lock: 탭 동안 스크린샷 CMD_GETIMG 차단
-        with self._capture_lock:
+        # _capture_lock: 탭 동안 스크린샷 CMD_GETIMG 차단.
+        # _input_priority: 라이브 미러링이 lock 점유 중일 때 다음 캡처를 양보시켜
+        # 입력 응답 지연(2~3초)을 1초 이하로 줄임.
+        with self._input_priority(), self._capture_lock:
             time.sleep(0.3)
             with self._send_lock:
                 self._lcd_touch(x, y, st)
@@ -1070,7 +1100,7 @@ class HKMC6thService:
         x, y = int(x), int(y)
         st = self._touch_screen_bits(screen_type)
         interval_sec = interval_ms / 1000.0
-        with self._capture_lock:
+        with self._input_priority(), self._capture_lock:
             with self._send_lock:
                 for i in range(count):
                     self._lcd_touch(x, y, st)
@@ -1102,7 +1132,7 @@ class HKMC6thService:
         if st is not None:
             data.append((st >> 8) & 0xFF)
             data.append(st & 0xFF)
-        with self._capture_lock:
+        with self._input_priority(), self._capture_lock:
             time.sleep(0.3)
             with self._send_lock:
                 # 1) PRESS only
@@ -1124,7 +1154,7 @@ class HKMC6thService:
         """
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
         st = self._touch_screen_bits(screen_type)
-        with self._capture_lock:
+        with self._input_priority(), self._capture_lock:
             time.sleep(0.3)
             with self._send_lock:
                 self._lcd_drag(x1, y1, x2, y2, st)
@@ -1296,7 +1326,8 @@ class HKMC6thService:
                 monitor = CCRC_MONITOR_LEFT if self._is_ccrc_legacy_monitor else CCRC_MONITOR_RIGHT
 
         # _capture_lock: 키 시퀀스 중 스크린샷 CMD_GETIMG 차단
-        with self._capture_lock:
+        # _input_priority: 미러링이 lock 점유 중일 때 다음 캡처를 양보시켜 키 입력 응답 지연 완화
+        with self._input_priority(), self._capture_lock:
             # Agent가 이전 이미지 응답 전송을 마칠 시간 확보
             time.sleep(0.3)
             if is_ccrc:
