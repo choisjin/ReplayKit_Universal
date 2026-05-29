@@ -355,6 +355,8 @@ def list_available_modules() -> list[dict]:
          "connect_fields": [
              {"name": "eth_if", "label": "USB Ethernet 인터페이스 (radmoon)", "type": "text", "default": ""},
              {"name": "th_home", "label": "TH 버전 디렉터리 (선택 필요)", "type": "text", "default": ""},
+             {"name": "th_root", "label": "TH root (host_ends_setup.sh / ensure-adb.sh 위치)",
+              "type": "text", "default": "/home/cdc/Desktop/TH"},
              {"name": "host_ip", "label": "Host IP / mask", "type": "text", "default": "192.168.1.152/24"},
              {"name": "cvd_br", "label": "CVD bridge 이름", "type": "text", "default": "cvd-ebr"},
              {"name": "rbvm_ip", "label": "RBVM ADB", "type": "text", "default": "192.168.140.1:5555"},
@@ -366,6 +368,8 @@ def list_available_modules() -> list[dict]:
               "options": ["True", "False"]},
              {"name": "panel_trigger", "label": "패널 점등 트리거 토큰", "type": "text",
               "default": "GEAR_LEVER_ACCEPTED_T_REVERSE"},
+             {"name": "auto_setup", "label": "등록 시 자동 Setup 실행", "type": "select", "default": "True",
+              "options": ["True", "False"]},
          ]},
         {"name": "SCAR", "label": "SCAR (SDV Control, Linux)", "connect_type": "none",
          "connect_fields": [

@@ -52,6 +52,7 @@ ReplayKit 의 다른 플러그인과 동일한 패턴을 따른다. 코드를 �
 | 필드 | 자동 채움 값 | 비고 |
 |---|---|---|
 | eth_if | (스캔 결과 인터페이스, 예: `enx00e04c68b2c8`) | radmoon 행에서 결정 |
+| th_root | `/home/cdc/Desktop/TH` | `host_ends_setup.sh` / `ensure-adb.sh` 가 있는 폴더 |
 | host_ip | `192.168.1.152/24` | `connect_th.sh` 기본값 |
 | cvd_br | `cvd-ebr` | bridge 이름 |
 | rbvm_ip | `192.168.140.1:5555` | RBVM ADB target |
@@ -60,15 +61,50 @@ ReplayKit 의 다른 플러그인과 동일한 패턴을 따른다. 코드를 �
 | python_bin | `python3` | client.py 실행 인터프리터 |
 | panel | `True` | PySide6 시각화 패널 사용 |
 | panel_trigger | `GEAR_LEVER_ACCEPTED_T_REVERSE` | 패널 점등 토큰 |
+| auto_setup | `True` | 등록 시 자동으로 `Setup()` 실행 |
 
 4. **th_home 만 수동 입력** — `connect_th.sh` 의 `select_th_gui.py` 가 하던 역할. TH 버전별 압축을 푼 디렉터리
    절대경로 (예: `/home/cdc/Desktop/TH/TH_0.60.12`). `<th_home>/bin/launch_cvd` 와
    `<th_home>/harness/harness/grpc_client/src/client.py` 가 존재해야 한다.
 5. 디바이스 이름 (예: `TH_main`) → **연결**
+6. **연결 직후 자동 Setup 실행** (`auto_setup=True` 일 때).
 
-> 등록 시점에 네트워크 셋업 / launch_cvd / microservice 실행은 일어나지 않는다. 그건 여전히
-> `Reference/TH/connect_th.sh` 의 수동 실행 영역. ReplayKit TH 모듈은 그 환경이 준비된 뒤
-> `client.py` 호출 + 패널 점등만 담당한다.
+   `connect_th.sh` step 1-3 (네트워크 셋업 + ADB ensure) 와 동일한 순서로 진행:
+
+   ```
+   [1] bridge network    sudo ip addr del <old> dev cvd-ebr (있을 때)
+                         sudo ip addr add 192.168.1.152/24 dev cvd-ebr
+                         sudo ip link set enx... master cvd-ebr
+   [2] host_ends_setup.sh <eth_if>     (th_root 에 있을 때만)
+   [3] ensure-adb.sh <eth_if>          (th_root 에 있을 때만)
+   [4] adb devices                     RBVM 확인 + 디바이스 ≥ 2 검증
+   ```
+
+   결과는 등록 응답 메시지에 그대로 노출되어 GUI 토스트에 표시된다:
+   - 성공: `Module device TH added (ID: TH_main) — ok\n[1] bridge network: ...`
+   - 실패: `Module device TH added (ID: TH_main) — FAIL: bridge network setup\n[1] bridge network:\n  add 192.168.1.152/24 failed: sudo: a password is required`
+
+   `IsConnected()` 가 True 가 되어 디바이스 상태 "connected" 로 표시된다.
+   실패하면 디바이스는 등록되지만 상태는 disconnected — `Setup()` 메서드를 수동 재호출하거나 설정을
+   수정 후 재연결.
+
+   **sudo 요구**: `_setup_bridge_network` 와 `host_ends_setup.sh` / `ensure-adb.sh` 가 모두 `sudo -n`
+   (비대화형) 으로 호출되므로, ReplayKit 백엔드를 실행하는 계정이 `ip` 와 두 스크립트에 대해
+   **passwordless sudo** 권한을 가져야 한다. 예시 `/etc/sudoers.d/replaykit-th`:
+   ```
+   cdc ALL=(root) NOPASSWD: /usr/sbin/ip
+   cdc ALL=(root) NOPASSWD: /home/cdc/Desktop/TH/host_ends_setup.sh
+   cdc ALL=(root) NOPASSWD: /home/cdc/Desktop/TH/ensure-adb.sh
+   ```
+   설정 안 되어 있으면 step 1 에서 `sudo: a password is required` 로 즉시 FAIL.
+
+7. **자동 Setup 비활성화** — `auto_setup=False` 로 등록하면 연결 시 setup 을 건너뛴다.
+   네트워크/ADB 가 이미 다른 방식으로 준비된 경우, 또는 수동으로 시나리오에서 `TH.Setup()` 노드를
+   호출하고 싶을 때 사용.
+
+> 등록 시점에 실행되는 건 step 1-3 까지. **launch_cvd / microservice run** (`connect_th.sh` step 4-5)
+> 은 ReplayKit 이 자동화하지 않는다 — 별도 터미널에서 직접 실행하거나, 후속 단계에서 `Launch()` 메서드를
+> 추가할 계획.
 
 **SCAR 디바이스 추가**
 
@@ -164,7 +200,10 @@ th = TH(
 | `PanelShow()` | 빈 검정 패널만 띄움 (원본 `Show TK Panel` 등가). | `"ok"` |
 | `PanelReset()` | 노란색 → 검정. 라벨 숨김. | `"ok"` |
 | `PanelClose()` | 패널 호스트 프로세스 종료. | `"ok"` |
-| `Info()` | 현재 설정 + `client.py` 존재여부 요약. 디버그용. | 여러 줄 텍스트 |
+| `Setup()` | `connect_th.sh` step 1-3 (네트워크 + ADB) 수동 재실행. 등록 시 자동 호출되는 것과 동일. | `"ok\n<log>"` 또는 `"FAIL: ...\n<log>"` |
+| `Connect()` | device_manager 가 자동 호출. `auto_setup=True` 면 `Setup()` 위임. | Setup 결과 |
+| `IsConnected()` | device_manager 가 상태 확인용으로 호출. Setup 한 번 성공이면 True. | bool |
+| `Info()` | 현재 설정 + Setup 상태 + 스크립트 존재여부 요약. 디버그용. | 여러 줄 텍스트 |
 
 ### 2.3 시나리오 예시
 
@@ -445,6 +484,19 @@ Windows 빌드는 이 패키지를 import 하면 즉시 ImportError. 회귀 가�
 TH 디바이스 등록 시 `th_home` 비워둠 또는 잘못된 경로. `<th_home>/harness/harness/grpc_client/src/client.py`
 가 존재해야 한다. `python -c "from backend.app.plugins.linux.TH import TH; print(TH(eth_if='', th_home='/your/path').Info())"`
 로 확인.
+
+### `FAIL: bridge network setup` + `add 192.168.1.152/24 failed: sudo: a password is required`
+백엔드 실행 계정이 `/usr/sbin/ip` (또는 `/sbin/ip`) 에 대해 passwordless sudo 권한이 없음. §1.2 step 6 의
+`/etc/sudoers.d/replaykit-th` 예시 참고. 또는 임시로 `auto_setup=False` 로 등록하고 별도 터미널에서
+`connect_th.sh` 를 sudo 로 직접 실행한 뒤 시나리오로 진입.
+
+### `FAIL: ensure-adb.sh` + `exit 1` + `RBVM (192.168.140.1:5555) not connected`
+ensure-adb.sh 가 ADB 인터페이스를 못 찾은 것. eth_if 가 실제 HU 연결된 어댑터인지, HU 가 부팅 완료됐는지
+확인. `adb devices` 직접 실행해서 상태 검사.
+
+### `FAIL: interface 'enxXX...' not found in /sys/class/net/`
+어댑터가 분리됨 또는 재부팅 후 다른 이름으로 잡힘. radmoon 스캔 다시 실행해서 현재 이름 확인하고
+디바이스 설정 업데이트.
 
 ### `FAIL: TH client spawn error: ...`
 경로는 맞는데 실행 권한 문제 또는 `python_bin` 이 올바른 venv 의 인터프리터가 아님.
