@@ -99,8 +99,9 @@ humanfriendly==10.0
 flatbuffers==25.12.19
 protobuf==7.34.1
 # TH 플러그인 — Renault CDC TH 의 grpc client.py 가 사용. 임베드 Python 에 자동 설치.
-grpcio==1.68.1
-grpcio-tools==1.68.1
+# 버전 핀 안 함: protobuf 7.x / onnxruntime 등과 호환 가능한 버전을 pip 가 알아서 선택.
+# grpcio-tools 는 proto 컴파일 build-time 용이라 runtime client.py 만 띄울 땐 불필요.
+grpcio
 sympy==1.14.0
 mpmath==1.3.0
 requests==2.32.5
