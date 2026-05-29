@@ -35,6 +35,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 from typing import Optional
 
 from .common.th_panel_client import PanelClient
@@ -99,7 +100,7 @@ class TH:
         # ── 권한 ─────────────────────────────────────────
         sudo_password: str = "",                          # 비어있으면 sudo -n (passwordless 필요)
         # ── 플러그인 동작 ─────────────────────────────────
-        python_bin: str = "python3",
+        python_bin: str = "",                             # 빈 값이면 sys.executable (임베드 Python)
         panel = True,                                     # bool 또는 'True'/'False' (UI select)
         panel_trigger: str = DEFAULT_PANEL_TRIGGER,
         auto_setup = True,                                # 등록 시 자동으로 Setup() 호출
@@ -117,7 +118,10 @@ class TH:
         # sudo password — 메모리에만 보관. Info() / 로그에 절대 노출되지 않도록.
         # 입력이 비어 있으면 -n 으로 동작 → passwordless sudo 가 사전에 설정되어 있어야 함.
         self.sudo_password = sudo_password
-        self.python_bin = python_bin
+        # python_bin 이 비어 있으면 sys.executable (현재 ReplayKit 실행 중인 임베드 Python).
+        # 임베드 Python 의 site-packages 에 grpc/protobuf 등 client.py 의존성이 사전 설치되어
+        # 있으므로 사용자가 시스템 python3 에 별도 설치할 필요 없음.
+        self.python_bin = python_bin or sys.executable
         self.panel_enabled = _as_bool(panel)
         self.panel_trigger = panel_trigger
         self.auto_setup = _as_bool(auto_setup)
@@ -136,7 +140,7 @@ class TH:
         self._signal = THSignal(
             client_dir=self.client_dir,
             th_addr=self.th_addr,
-            python_bin=python_bin,
+            python_bin=self.python_bin,
         )
         self._panel: Optional[PanelClient] = PanelClient() if self.panel_enabled else None
         self._trigger_bytes = panel_trigger.encode("utf-8")

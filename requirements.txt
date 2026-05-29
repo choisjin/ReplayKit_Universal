@@ -98,6 +98,9 @@ coloredlogs==15.0.1
 humanfriendly==10.0
 flatbuffers==25.12.19
 protobuf==7.34.1
+# TH 플러그인 — Renault CDC TH 의 grpc client.py 가 사용. 임베드 Python 에 자동 설치.
+grpcio==1.68.1
+grpcio-tools==1.68.1
 sympy==1.14.0
 mpmath==1.3.0
 requests==2.32.5
