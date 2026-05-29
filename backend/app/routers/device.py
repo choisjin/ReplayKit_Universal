@@ -48,9 +48,9 @@ _DEFAULT_SCAN_SETTINGS = {
         # SCAR: Linux 전용. localhost:8081 REST API 와 docker 컨테이너 'scar' 양쪽 모두 프로브.
         # 양쪽 다 죽어 있으면 결과 0건, 한쪽이라도 살아있으면 1행 반환.
         "scar":           {"enabled": True,  "module": "SCAR",         "category": "auxiliary", "host": "localhost",   "port": 8081, "container": "scar"},
-        # radmoon: TH 모듈용 USB Ethernet 어댑터. /sys/class/net/ 에서 USB 디바이스 후보 나열.
-        # 호스트/포트가 없는 'enumeration' 형 스캔이라 별도 설정 필드 없음.
-        "radmoon":        {"enabled": True,  "module": "TH",           "category": "auxiliary"},
+        # radmoon: TH 모듈용. connect_th.sh 가 만드는 cvd-ebr bridge 존재 여부로 후보 판정.
+        # bridge 가 발견되면 현재 IP/member 정보까지 함께 보고 → 등록 폼이 자동 채워진다.
+        "radmoon":        {"enabled": True,  "module": "TH",           "category": "auxiliary", "bridge": "cvd-ebr"},
     },
     # type: "tcp" | "udp", category: "primary" | "auxiliary"
     # [{"label": "MLP", "type": "tcp", "port": 5001, "module": "MLP", "enabled": true, "category": "auxiliary"}, ...]
@@ -402,8 +402,10 @@ async def scan_ports():
             dm.scan_scar(host=sc_host, port=sc_port, container=sc_container)
         )
     if _enabled("radmoon"):
-        # radmoon (Linux 전용): USB Ethernet 어댑터 enumeration. 설정 인자 없음.
-        tasks["radmoon_devices"] = asyncio.ensure_future(dm.scan_radmoon())
+        # radmoon (Linux 전용): cvd-ebr bridge 존재 확인. bridge 이름은 설정에서 변경 가능.
+        rd_entry = builtin.get("radmoon", {}) if isinstance(builtin.get("radmoon"), dict) else {}
+        rd_bridge = str(rd_entry.get("bridge") or "").strip() or None
+        tasks["radmoon_devices"] = asyncio.ensure_future(dm.scan_radmoon(bridge=rd_bridge))
     if _enabled("ssh"):
         ssh_entry = builtin.get("ssh", {}) if isinstance(builtin.get("ssh"), dict) else {}
         ssh_port = int(ssh_entry.get("port", 22))

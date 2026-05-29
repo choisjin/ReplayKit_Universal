@@ -233,7 +233,14 @@ export default function DevicePage() {
   const [scannedDlt, setScannedDlt] = useState<{ ip: string; port: number }[]>([]);
   const [scannedSmartbench, setScannedSmartbench] = useState<{ ip: string; port: number; label: string; module: string }[]>([]);
   const [scannedScar, setScannedScar] = useState<{ ip: string; port: number; container: string; api_alive: boolean; docker_running: boolean; label: string; module: string }[]>([]);
-  const [scannedRadmoon, setScannedRadmoon] = useState<{ interface: string; mac: string; operstate: string; is_usb: boolean; label: string; module: string }[]>([]);
+  const [scannedRadmoon, setScannedRadmoon] = useState<{
+    bridge: string;
+    bridge_operstate: string;
+    current_ips: string[];
+    members: { interface: string; mac: string; operstate: string }[];
+    label: string;
+    module: string;
+  }[]>([]);
   const [scannedSsh, setScannedSsh] = useState<{ ip: string; port: number }[]>([]);
   const [scannedCustom, setScannedCustom] = useState<{ label: string; hosts: { ip: string; port: number }[] }[]>([]);
   const [pcInterfaces, setPcInterfaces] = useState<{ name: string; ip: string; prefix: number }[]>([]);
@@ -2054,9 +2061,11 @@ export default function DevicePage() {
                             dataSource={scannedRadmoon}
                             pagination={scannedRadmoon.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
                             renderItem={(h) => {
-                              const existing = findExisting(x => x.type === 'module' && x.info?.module === 'TH' && x.info?.eth_if === h.interface);
+                              const firstMember = h.members && h.members[0];
+                              const memberIface = firstMember?.interface || '';
+                              const existing = findExisting(x => x.type === 'module' && x.info?.module === 'TH' && x.info?.cvd_br === h.bridge);
                               const doAdd = () => {
-                                // TH 모듈 폼으로 전환 + scan 결과로 eth_if 자동 채움 + 나머지 connect_th.sh 디폴트 자동 채움.
+                                // TH 모듈 폼으로 전환. cvd_br + (있으면) eth_if + 나머지 connect_th.sh 디폴트 자동 채움.
                                 const thInfo = modules.find(m => m.name === 'TH');
                                 const defaults: Record<string, any> = {};
                                 if (thInfo?.connect_fields) {
@@ -2064,10 +2073,11 @@ export default function DevicePage() {
                                     defaults[f.name] = f.default ?? '';
                                   }
                                 }
-                                defaults.eth_if = h.interface;          // 스캔으로 얻은 USB ethernet
+                                defaults.cvd_br = h.bridge;                     // 스캔한 bridge 이름
+                                if (memberIface) defaults.eth_if = memberIface; // 이미 attach 되어 있으면 자동
                                 setConnectType('module');
                                 setSelectedModule('TH');
-                                setConnectAddress(h.interface);          // module 등록 시 address 자리에 interface 표시
+                                setConnectAddress(memberIface || h.bridge);     // 표시용
                                 setExtraFieldValues(defaults);
                                 setModalTabKey('manual');
                               };
@@ -2075,12 +2085,22 @@ export default function DevicePage() {
                                 <List.Item actions={[renderScanAction(existing, t('common.connect'), doAdd)]}>
                                   <div>
                                     <Tag color="geekblue">radmoon</Tag>
-                                    <strong>{h.interface}</strong>
-                                    <span style={{ marginLeft: 8, color: '#888' }}>{h.mac}</span>
-                                    {h.is_usb && <Tag color="cyan" style={{ marginLeft: 6 }}>USB</Tag>}
-                                    <Tag color={h.operstate === 'up' ? 'green' : 'default'} style={{ marginLeft: 4 }}>
-                                      {h.operstate}
+                                    <strong>bridge:{h.bridge}</strong>
+                                    <Tag color={h.bridge_operstate === 'up' ? 'green' : 'default'} style={{ marginLeft: 6 }}>
+                                      {h.bridge_operstate}
                                     </Tag>
+                                    {h.current_ips && h.current_ips.length > 0 && (
+                                      <span style={{ marginLeft: 8, color: '#888' }}>
+                                        ip={h.current_ips.join(',')}
+                                      </span>
+                                    )}
+                                    {h.members && h.members.length > 0 ? (
+                                      <span style={{ marginLeft: 8, color: '#888' }}>
+                                        eth_if={h.members.map(m => m.interface).join(',')}
+                                      </span>
+                                    ) : (
+                                      <Tag color="orange" style={{ marginLeft: 8 }}>no member — eth_if 수동 입력 필요</Tag>
+                                    )}
                                   </div>
                                 </List.Item>
                               );

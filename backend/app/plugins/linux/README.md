@@ -42,16 +42,22 @@ ReplayKit 의 다른 플러그인과 동일한 패턴을 따른다. 코드를 �
 
 **TH 디바이스 추가 — radmoon 스캔 경로 (권장)**
 
-`Reference/TH/connect_th.sh` 기준의 셋업을 ReplayKit 폼에 옮긴 형태. 호스트 PC 에 USB Ethernet 어댑터
-(통칭 *radmoon*) 가 꽂혀 있으면 자동 발견된다.
+`Reference/TH/connect_th.sh` 기준의 셋업을 ReplayKit 폼에 옮긴 형태. 호스트 PC 에 TH bridge
+(`cvd-ebr`) 가 만들어져 있으면 자동 발견된다 (`connect_th.sh` 가 한 번이라도 돈 호스트면 존재).
+USB 어댑터 enumeration 이 아니라 **bridge 가 존재하는지** 로 판정하므로 어댑터 이름이 어떻게 잡혔든
+탐지된다.
 
 1. 보조 디바이스 추가 → **스캔** 실행
-2. 결과에서 `radmoon (TH)` 탭 선택 — `enx<mac>` 형태의 USB Ethernet 어댑터들이 나열됨
-3. 사용할 어댑터의 **연결** 버튼 → TH 모듈 폼으로 자동 전환되고 아래 필드가 채워진 상태로 열림
+2. 결과에서 `radmoon (TH)` 탭 선택 — `bridge:cvd-ebr` 한 행이 보임. 표시 정보:
+   - `bridge:cvd-ebr` 와 `up`/`down` 상태 태그
+   - 현재 IP (`ip=192.168.1.152/24`)
+   - 이미 attach 되어 있는 인터페이스 (`eth_if=enx00e04c68b2c8`) — 없으면 주황 태그로 "eth_if 수동 입력 필요" 표시
+3. **연결** 버튼 → TH 모듈 폼이 아래 필드가 채워진 상태로 열림
 
 | 필드 | 자동 채움 값 | 비고 |
 |---|---|---|
-| eth_if | (스캔 결과 인터페이스, 예: `enx00e04c68b2c8`) | radmoon 행에서 결정 |
+| cvd_br | (스캔한 bridge 이름, 예: `cvd-ebr`) | radmoon 행에서 결정 |
+| eth_if | 첫 bridge member 인터페이스 (예: `enx00e04c68b2c8`) | 멤버 없으면 빈 칸 — 수동 입력 |
 | th_root | `/home/cdc/Desktop/TH` | `host_ends_setup.sh` / `ensure-adb.sh` 가 있는 폴더 |
 | host_ip | `192.168.1.152/24` | `connect_th.sh` 기본값 |
 | cvd_br | `cvd-ebr` | bridge 이름 |
@@ -72,13 +78,17 @@ ReplayKit 의 다른 플러그인과 동일한 패턴을 따른다. 코드를 �
    `connect_th.sh` step 1-3 (네트워크 셋업 + ADB ensure) 와 동일한 순서로 진행:
 
    ```
-   [1] bridge network    sudo ip addr del <old> dev cvd-ebr (있을 때)
-                         sudo ip addr add 192.168.1.152/24 dev cvd-ebr
-                         sudo ip link set enx... master cvd-ebr
-   [2] host_ends_setup.sh <eth_if>     (th_root 에 있을 때만)
-   [3] ensure-adb.sh <eth_if>          (th_root 에 있을 때만)
-   [4] adb devices                     RBVM 확인 + 디바이스 ≥ 2 검증
+   [1] bridge network    sudo -n ip addr del <old> dev cvd-ebr (있을 때)
+                         sudo -n ip addr add 192.168.1.152/24 dev cvd-ebr
+                         sudo -n ip link set enx... master cvd-ebr
+   [2] host_ends_setup.sh <eth_if>     (th_root 에 있을 때만, 없으면 skip)
+   [3] adb devices 사전체크 → RBVM 이 이미 보이면 ensure-adb.sh 스킵 (hang 회피)
+       사전체크 실패 시: ensure-adb.sh <eth_if>  (th_root 에 있을 때만)
+   [4] adb devices 재검증 (스크립트 실제로 돌았을 때만)
    ```
+
+   step 3 의 사전 체크는 사용자 환경에서 `adb` 가 이미 RBVM 에 붙어있는데도
+   `ensure-adb.sh` 내부의 `adb connect localhost` 폴백이 hang 한 사례를 회피하기 위함.
 
    결과는 등록 응답 메시지에 그대로 노출되어 GUI 토스트에 표시된다:
    - 성공: `Module device TH added (ID: TH_main) — ok\n[1] bridge network: ...`

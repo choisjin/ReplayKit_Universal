@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import socket
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -422,76 +423,88 @@ def _probe_smartbench_sync(ip: str, port: int, timeout: float) -> dict | None:
                 pass
 
 
-# ── radmoon (USB Ethernet 어댑터) 자동 탐지 ──
-# TH 모듈은 호스트 PC 가 HU 와 USB Ethernet 어댑터(통칭 "radmoon")로 연결되어야 동작한다.
-# /sys/class/net/ 를 순회해서 USB 디바이스 symlink 또는 enx<mac> 명명 규칙으로 후보 식별.
-async def _scan_radmoon() -> list[dict]:
+# ── radmoon (TH host bridge cvd-ebr) 자동 탐지 ──
+# 사용자 환경에서 TH 셋업은 `connect_th.sh` 가 만드는 bridge cvd-ebr 가 이미 존재하는 형태로 시작한다.
+# 따라서 "radmoon 스캔" 은 USB 어댑터 enumeration 이 아니라 **cvd-ebr bridge 가 있는지** 확인 +
+# 현재 IP, 현재 bridge member(잠재 eth_if) 까지 함께 보고.
+async def _scan_radmoon(bridge: str | None = None) -> list[dict]:
     if not sys.platform.startswith("linux"):
         logger.debug("radmoon scan skipped: not Linux (%s)", sys.platform)
         return []
 
+    bridge_name = (bridge or "cvd-ebr").strip() or "cvd-ebr"
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _scan_radmoon_sync)
+    return await loop.run_in_executor(None, _scan_radmoon_sync, bridge_name)
 
 
-def _scan_radmoon_sync() -> list[dict]:
+def _scan_radmoon_sync(bridge_name: str) -> list[dict]:
     sysnet = Path("/sys/class/net")
     if not sysnet.is_dir():
         return []
 
-    # 가상/브리지 인터페이스는 제외 — physical USB ethernet 후보만.
-    SKIP_PREFIX = ("lo", "veth", "docker", "br-", "vmnet", "tun", "tap", "wg", "virbr")
-    SKIP_NAMES = {"cvd-ebr"}  # connect_th.sh 가 만드는 bridge
+    bridge_path = sysnet / bridge_name
+    if not bridge_path.is_dir():
+        logger.debug("radmoon scan: bridge '%s' not present", bridge_name)
+        return []
 
-    results: list[dict] = []
+    # 현재 bridge 의 IPv4 — `ip -4 addr show dev <bridge>`
+    current_ips: list[str] = []
+    try:
+        res = subprocess.run(
+            ["ip", "-4", "addr", "show", "dev", bridge_name],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in res.stdout.splitlines():
+            m = re.search(r"\binet\s+(\d+\.\d+\.\d+\.\d+/\d+)\b", line)
+            if m:
+                current_ips.append(m.group(1))
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    # 현재 bridge member — /sys/class/net/<iface>/master symlink 가 <bridge> 를 가리키는 인터페이스
+    members: list[dict] = []
     for iface_path in sorted(sysnet.iterdir()):
         iface = iface_path.name
-        if iface in SKIP_NAMES:
+        if iface == bridge_name:
             continue
-        if any(iface.startswith(p) for p in SKIP_PREFIX):
-            continue
-        # VLAN 서브 인터페이스(veth-obs.2120 등)도 제외
-        if "." in iface:
-            continue
-
+        master_link = iface_path / "master"
         try:
-            mac = (iface_path / "address").read_text().strip()
+            if master_link.exists():
+                target = os.path.realpath(str(master_link))
+                if os.path.basename(target) == bridge_name:
+                    try:
+                        mac = (iface_path / "address").read_text().strip()
+                    except OSError:
+                        mac = ""
+                    try:
+                        operstate = (iface_path / "operstate").read_text().strip()
+                    except OSError:
+                        operstate = "unknown"
+                    members.append({
+                        "interface": iface,
+                        "mac": mac,
+                        "operstate": operstate,
+                    })
         except OSError:
-            mac = ""
-        try:
-            operstate = (iface_path / "operstate").read_text().strip()
-        except OSError:
-            operstate = "unknown"
-
-        # USB 여부: /sys/class/net/<iface>/device symlink 가 /sys/devices/.../usb*/... 안에 있으면 USB.
-        is_usb = False
-        try:
-            dev_link = iface_path / "device"
-            if dev_link.exists():
-                real = os.path.realpath(str(dev_link))
-                if "/usb" in real:
-                    is_usb = True
-        except OSError:
-            pass
-
-        # enx<mac> 명명도 USB 가능성 큼 (systemd-udev 의 MAC 기반 명명).
-        likely = is_usb or iface.startswith("enx")
-
-        if not likely:
             continue
 
-        results.append({
-            "interface": iface,
-            "mac": mac,
-            "operstate": operstate,
-            "is_usb": is_usb,
-            "label": "radmoon",
-            "module": "TH",
-        })
+    try:
+        bridge_operstate = (bridge_path / "operstate").read_text().strip()
+    except OSError:
+        bridge_operstate = "unknown"
 
-    if results:
-        logger.info("radmoon scan: found %d USB ethernet candidate(s)", len(results))
-    return results
+    logger.info(
+        "radmoon scan: bridge=%s state=%s ips=%s members=%d",
+        bridge_name, bridge_operstate, current_ips, len(members),
+    )
+    return [{
+        "bridge": bridge_name,
+        "bridge_operstate": bridge_operstate,
+        "current_ips": current_ips,
+        "members": members,
+        "label": "radmoon (cvd-ebr)",
+        "module": "TH",
+    }]
 
 
 # ── SCAR 자동 탐지 (Linux 전용 플러그인) ──
@@ -1742,9 +1755,13 @@ class DeviceManager:
         """SCAR (Linux 전용) 자동 탐지 — REST API + docker container 양쪽 프로브."""
         return await _scan_scar(host=host, port=port, container=container)
 
-    async def scan_radmoon(self) -> list[dict]:
-        """radmoon (USB Ethernet 어댑터, Linux 전용) 자동 탐지 — TH 모듈용 보조 디바이스."""
-        return await _scan_radmoon()
+    async def scan_radmoon(self, bridge: str | None = None) -> list[dict]:
+        """radmoon (TH host의 cvd-ebr bridge, Linux 전용) 탐지.
+
+        bridge 인자가 주어지면 그 이름의 bridge 를 찾고, 없으면 'cvd-ebr' 기본.
+        결과는 bridge 가 존재할 때 1행, 현재 IP / member 인터페이스 정보 포함.
+        """
+        return await _scan_radmoon(bridge=bridge)
 
     async def scan_dlt(self, ports: list[int] | None = None) -> list[dict]:
         """TCP 포트 스캔으로 LAN(192.168.*) 상의 DLT 데몬 탐지."""

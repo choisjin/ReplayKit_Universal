@@ -184,18 +184,25 @@ class TH:
             return self._mark_fail("host_ends_setup.sh", log)
 
         # ── [3] ensure-adb.sh ────────────────────────────
-        rc, msg = self._run_setup_script(
-            os.path.join(self.th_root, "ensure-adb.sh"), [self.eth_if]
-        )
-        log.append(f"[3] ensure-adb.sh:\n{msg}")
-        if rc != 0:
-            return self._mark_fail("ensure-adb.sh", log)
+        # 사용자 환경 사례: adb 가 이미 RBVM 에 붙어있는데도 ensure-adb.sh 의
+        # `adb connect localhost` 폴백이 hang 한 적 있음. 그래서 먼저 한 번 verify 해서
+        # 이미 OK 면 스크립트 자체를 건너뛴다.
+        adb_rc, adb_msg = self._verify_adb()
+        if adb_rc == 0:
+            log.append("[3] ensure-adb.sh:\n  skipped — adb already connected to RBVM\n" + adb_msg)
+        else:
+            rc, msg = self._run_setup_script(
+                os.path.join(self.th_root, "ensure-adb.sh"), [self.eth_if]
+            )
+            log.append(f"[3] ensure-adb.sh:\n{msg}")
+            if rc != 0:
+                return self._mark_fail("ensure-adb.sh", log)
 
-        # ── [4] ADB 검증 ─────────────────────────────────
-        rc, msg = self._verify_adb()
-        log.append(f"[4] adb verify:\n{msg}")
-        if rc != 0:
-            return self._mark_fail("adb verification", log)
+            # ── [4] ADB 재검증 ───────────────────────────
+            rc, msg = self._verify_adb()
+            log.append(f"[4] adb verify:\n{msg}")
+            if rc != 0:
+                return self._mark_fail("adb verification", log)
 
         self._setup_done = True
         self._setup_last_msg = "ok\n" + "\n".join(log)
