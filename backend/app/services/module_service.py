@@ -129,10 +129,20 @@ def _load_plugin_from_file(py_file: Path):
       2) 없으면 ``importlib.import_module``로 정식 패키지 경로 import 시도
       3) 그래도 안 되면(파일이 패키지 외부 등) 마지막 수단으로 file-based 로드
     또한 file-based 로드 결과는 sys.modules에 등록해 두 번 이상 생성되는 것을 막는다.
+
+    플랫폼 서브폴더(plugins/linux/, plugins/windows/ 등) 도 지원 — 파일이
+    _PLUGINS_DIR 의 한 단계 하위 디렉터리에 있으면 그 디렉터리 이름을 패키지 경로에 포함시킨다.
     """
     # .pyd: "CCIC_BENCH.cp310-win_amd64.pyd" → module_name "CCIC_BENCH"
     module_name = py_file.stem.split(".")[0] if py_file.suffix == ".pyd" else py_file.stem
-    full_name = f"backend.app.plugins.{module_name}"
+
+    # 서브폴더 감지 — plugins/<subpkg>/<file>.py 형태면 subpkg 를 패키지 경로에 끼워넣는다.
+    parent = py_file.parent
+    if parent != _PLUGINS_DIR and parent.parent == _PLUGINS_DIR:
+        subpkg = parent.name
+        full_name = f"backend.app.plugins.{subpkg}.{module_name}"
+    else:
+        full_name = f"backend.app.plugins.{module_name}"
 
     # 1) 이미 정식 패키지 경로로 import된 모듈이 있으면 재사용 (싱글톤 보존의 핵심)
     cached = sys.modules.get(full_name)
@@ -173,8 +183,19 @@ def _list_plugin_modules() -> list[dict]:
         _hidden_modules = {"SHELL"}
     else:
         _hidden_modules = {"CMD"}
+    # 플랫폼 전용 서브폴더 — 현재 OS 와 매칭되는 것만 탐색에 포함.
+    # plugins/linux/*.py 는 Linux 에서만, plugins/windows/*.py 는 Windows 에서만 노출.
+    _plat_subdirs: list[Path] = []
+    if sys.platform.startswith("linux"):
+        _plat_subdirs.append(_PLUGINS_DIR / "linux")
+    elif sys.platform == "win32":
+        _plat_subdirs.append(_PLUGINS_DIR / "windows")
     seen = set()
-    for py_file in list(_PLUGINS_DIR.glob("*.py")) + list(_PLUGINS_DIR.glob("*.pyd")):
+    py_files = list(_PLUGINS_DIR.glob("*.py")) + list(_PLUGINS_DIR.glob("*.pyd"))
+    for sub in _plat_subdirs:
+        if sub.is_dir():
+            py_files += list(sub.glob("*.py")) + list(sub.glob("*.pyd"))
+    for py_file in py_files:
         if py_file.name.startswith("_"):
             continue
         # .pyd: "CCIC_BENCH.cp310-win_amd64.pyd" → stem "CCIC_BENCH.cp310-win_amd64" → 첫 점 앞
@@ -380,6 +401,28 @@ def _ensure_module_deps(module_name: str, module_dir: Path) -> None:
                 logger.info("Copied %s → %s", lib.name, dest)
 
 
+def _candidate_plugin_dirs() -> list[Path]:
+    """플러그인 파일 후보 디렉터리. 루트 + 현재 OS 의 전용 서브폴더."""
+    dirs = [_PLUGINS_DIR]
+    if sys.platform.startswith("linux"):
+        dirs.append(_PLUGINS_DIR / "linux")
+    elif sys.platform == "win32":
+        dirs.append(_PLUGINS_DIR / "windows")
+    return dirs
+
+
+def _find_plugin_file(module_name: str) -> Optional[Path]:
+    """module_name 에 해당하는 .py(없으면 .pyd) 파일을 후보 디렉터리에서 찾는다."""
+    for d in _candidate_plugin_dirs():
+        py_file = d / f"{module_name}.py"
+        if py_file.is_file():
+            return py_file
+        pyd_files = list(d.glob(f"{module_name}.*.pyd"))
+        if pyd_files:
+            return pyd_files[0]
+    return None
+
+
 def _import_module_class(module_name: str):
     """Import and return the class for a given module name (lge.auto or plugin)."""
     # 이전 실패 사유 초기화 — 이번 호출이 성공해도 잔재가 남지 않도록
@@ -388,15 +431,13 @@ def _import_module_class(module_name: str):
     lge_err: Optional[str] = None
 
     # Try local plugin first (file-based loading to avoid package path issues)
-    # .py 우선, 없으면 .pyd (배포 환경)
-    py_file = _PLUGINS_DIR / f"{module_name}.py"
-    if not py_file.is_file():
-        pyd_files = list(_PLUGINS_DIR.glob(f"{module_name}.*.pyd"))
-        if pyd_files:
-            py_file = pyd_files[0]
+    # .py 우선, 없으면 .pyd (배포 환경). 루트 폴더 → OS 전용 서브폴더 순.
+    py_file = _find_plugin_file(module_name)
+    if py_file is None:
+        py_file = _PLUGINS_DIR / f"{module_name}.py"  # 존재하지 않지만 아래 is_file() 가 False 로 폴스루
     if py_file.is_file():
         try:
-            _ensure_module_deps(module_name, _PLUGINS_DIR)
+            _ensure_module_deps(module_name, py_file.parent)
             mod = _load_plugin_from_file(py_file)
             if mod is not None:
                 cls = getattr(mod, module_name, None)
@@ -431,19 +472,14 @@ def _import_module_class(module_name: str):
 
 
 def _plugin_file_mtime(module_name: str) -> float:
-    """플러그인 .py(없으면 .pyd)의 mtime. 찾지 못하면 0."""
-    py_file = _PLUGINS_DIR / f"{module_name}.py"
-    if py_file.is_file():
-        try:
-            return py_file.stat().st_mtime
-        except OSError:
-            return 0.0
-    for pyd in _PLUGINS_DIR.glob(f"{module_name}.*.pyd"):
-        try:
-            return pyd.stat().st_mtime
-        except OSError:
-            return 0.0
-    return 0.0
+    """플러그인 .py(없으면 .pyd)의 mtime. 찾지 못하면 0. OS 전용 서브폴더 포함."""
+    py_file = _find_plugin_file(module_name)
+    if py_file is None:
+        return 0.0
+    try:
+        return py_file.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def get_module_functions(module_name: str) -> list[dict]:

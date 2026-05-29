@@ -1,0 +1,147 @@
+Exec In SCAR Container
+    [Arguments]    ${cmd}    ${timeout}=300s
+    ${res}=    Run Process
+    ...    docker
+    ...    exec
+    ...    scar
+    ...    bash
+    ...    -c
+    ...    ${cmd}
+    ...    stdout=YES
+    ...    stderr=YES
+    ...    timeout=${timeout}
+
+    Log    STDOUT:\n${res.stdout}
+    Log    STDERR:\n${res.stderr}
+    Return From Keyword    ${res}
+
+Send request in SCAR by using API
+    [Documentation]     Call Local API with POST method (safe, non-blocking)
+    [Arguments]    ${URL}    ${HEADERS}    ${DATA}
+    ${headers}=    Evaluate    json.loads('''${HEADERS}''')    json
+    ${data}=       Evaluate    json.loads('''${DATA}''')       json
+
+    ${status}    ${ret}=    Run Keyword And Ignore Error
+    ...    Create Session    api    ${URL}    verify=False
+
+    ${status}    ${response}=    Run Keyword And Ignore Error
+    ...    Post On Session    api    ${URL}    json=${data}    headers=${headers}
+
+    Run Keyword If    '${status}' != 'PASS'
+    ...    Log    SCAR API POST request failed.    WARN
+
+    Log With Time    Status code: ${response.status_code}
+    Log With Time    Response body: ${response.content}
+
+    Run Keyword If    ${response.status_code} != 200
+    ...    Log    SCAR API returned non-200 status: ${response.status_code}    WARN
+
+Ensure SCAR Is Ready
+    [Arguments]    ${max_retry}=3
+    ${retry}=    Set Variable    0
+    WHILE    ${retry} < ${max_retry}
+        Log With Time    SCAR readiness check (attempt ${retry}/${max_retry})
+        Log With Time    ${FORCE_DOCKER_MODE}
+
+        IF    ${FORCE_DOCKER_MODE}
+            Log With Time    Force DOCKER mode (reconnect already happened)
+            RETURN    DOCKER
+        END
+
+        ${status}    ${api_tmp}=    Run Keyword And Ignore Error    Check SCAR API Is Alive
+        ${api_alive}=    Set Variable If    '${status}'=='PASS'    ${api_tmp}    ${False}
+
+        IF    ${api_alive}
+            Log With Time    SCAR API is alive
+            RETURN    API
+        END
+
+        Log    SCAR API is not alive. Check docker...    WARN
+
+        ${status}    ${docker_tmp}=    Run Keyword And Ignore Error
+        ...    Check SCAR Container By Inspect
+        ${docker_alive}=    Set Variable If    '${status}'=='PASS'    ${docker_tmp}    ${False}
+
+        IF    ${docker_alive}
+            Log With Time    SCAR container is running (API not ready)
+            RETURN    DOCKER
+        END
+        Log    SCAR API and docker are both down. Try reconnect...    WARN
+        Run Keyword And Ignore Error    Reconnect SCAR
+        ${retry}=    Evaluate    ${retry} + 1
+    END
+
+    Log    SCAR is not ready after ${max_retry} retries. Continue without SCAR.    WARN
+    RETURN    NONE
+
+Check SCAR API Is Alive
+    [Documentation]    Check if SCAR API is reachable
+    Run Keyword And Ignore Error
+    ...    Create Session    check    http://localhost:8081    verify=False
+
+    ${status}    ${resp}=    Run Keyword And Ignore Error
+    ...    GET On Session    check    /
+
+    Run Keyword If    '${status}' != 'PASS'
+    ...    Return From Keyword    False
+
+    Run Keyword If    ${resp.status_code} < 200 or ${resp.status_code} >= 400
+    ...    Return From Keyword    False
+
+    Return From Keyword    True
+
+Check SCAR Container By Inspect
+    ${res}=    Run Process
+    ...    docker
+    ...    inspect
+    ...    -f
+    ...    {{.State.Running}}
+    ...    scar
+    ...    stdout=YES
+    ...    stderr=YES
+    ...    timeout=5s
+    Log With Time    ${res.stdout.strip()}
+    IF    "${res.stdout.strip()}" == "true"
+        RETURN    Ture
+    ELSE
+        Log    docker is Not Running    WARN
+        RETURN    False
+    END
+
+Reconnect SCAR
+    [Documentation]    Reconnect / recover SCAR environment
+    Log    Try to reconnect SCAR environment...    WARN
+
+    ${result}=    Run Keyword And Ignore Error
+    ...    Start Process
+    ...    sh
+    ...    -c
+    ...    setsid ./scar.sh -t 2.2.0 --ui --arti tls </dev/null >/dev/null 2>&1
+    ...    cwd=${SCAR_SCRIPT_DIR}
+
+    Set Suite Variable    ${FORCE_DOCKER_MODE}    True
+    Log With Time    ${FORCE_DOCKER_MODE}
+    Log    SCAR start result: ${result}    INFO
+    Wait    20
+
+Send Signal To Test Harness
+    [Arguments]    ${TH_CLIENT_DIR}    ${TOPIC_NAME}	${JSON_FILE}
+    [Documentation]    Send Signal To Test Harness to control cluster part
+    Log With Time    Send Signal To Test Harness ${JSON_FILE}
+    ${res}=    Run Process
+    ...    ${PYTHON_BIN}
+    ...    client.py
+    ...    --pub_topic_name    ${TOPIC_NAME}
+    ...    --json_path         ${JSON_FILE}
+    ...    --ip_address        ${TH_ADDR}
+    ...    --log_level         DEBUG
+    ...    cwd=${TH_CLIENT_DIR}
+    ...    stdout=STDOUT
+    ...    stderr=STDERR
+    ...    timeout=10s
+
+    Log With Time    rc=${res.rc}
+    Log With Time   --- stdout ---
+    Log With Time    ${res.stdout}
+    Log With Time    --- stderr ---
+    Log With Time    ${res.stderr}
