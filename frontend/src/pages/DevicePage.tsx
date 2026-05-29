@@ -1,10 +1,11 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Button, Card, Checkbox, Input, InputNumber, List, Modal, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd';
-import { ReloadOutlined, PlusOutlined, DisconnectOutlined, DeleteOutlined, WifiOutlined, SearchOutlined, EditOutlined, ApiOutlined, LinkOutlined, SettingOutlined, HolderOutlined } from '@ant-design/icons';
+import { ReloadOutlined, PlusOutlined, DisconnectOutlined, DeleteOutlined, WifiOutlined, SearchOutlined, EditOutlined, ApiOutlined, LinkOutlined, SettingOutlined, HolderOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useDevice, ManagedDevice } from '../context/DeviceContext';
+import { useSettings } from '../context/SettingsContext';
 import { deviceApi } from '../services/api';
 import { useTranslation } from '../i18n';
 
@@ -13,7 +14,7 @@ const { Option } = Select;
 interface ConnectField {
   name: string;
   label: string;
-  type: 'text' | 'number' | 'select' | 'object_list' | 'password';
+  type: 'text' | 'number' | 'select' | 'object_list' | 'password' | 'folder';
   default?: string;
   options?: string[];
   // object_list 전용: 각 row의 sub-field 정의
@@ -89,6 +90,7 @@ function SortableDeviceRow({ device, children }: { device: ManagedDevice; childr
 export default function DevicePage() {
   const { t } = useTranslation();
   const { primaryDevices, auxiliaryDevices, loading, fetchDevices, connectDevice, disconnectDevice, updateDeviceLists, pauseDevicePolling, resumeDevicePolling } = useDevice();
+  const { browseFolder } = useSettings();
 
   // ADB reconnect state
   const [reconnecting, setReconnecting] = useState(false);
@@ -1301,6 +1303,28 @@ export default function DevicePage() {
             onChange={(e) => onChange({ ...values, [f.name]: e.target.value })}
             autoComplete="new-password"
           />
+        ) : f.type === 'folder' ? (
+          <Space.Compact style={{ width: '100%' }}>
+            <Input
+              value={values[f.name] ?? f.default ?? ''}
+              onChange={(e) => onChange({ ...values, [f.name]: e.target.value })}
+              placeholder="폴더 경로 (또는 찾아보기로 선택)"
+            />
+            <Button
+              icon={<FolderOpenOutlined />}
+              onClick={async () => {
+                try {
+                  const initial = values[f.name] || f.default || '';
+                  const picked = await browseFolder(initial);
+                  if (picked) onChange({ ...values, [f.name]: picked });
+                } catch (e: any) {
+                  message.error(e?.response?.data?.detail || '폴더 선택 실패');
+                }
+              }}
+            >
+              찾아보기
+            </Button>
+          </Space.Compact>
         ) : (
           <Input
             value={values[f.name] ?? f.default ?? ''}

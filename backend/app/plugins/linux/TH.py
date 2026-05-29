@@ -57,6 +57,14 @@ DEFAULT_PANEL_TRIGGER = "GEAR_LEVER_ACCEPTED_T_REVERSE"
 SETUP_IP_TIMEOUT_S = 10.0
 SETUP_SCRIPT_TIMEOUT_S = 120.0
 SETUP_ADB_TIMEOUT_S = 15.0
+# launch_cvd 띄운 후 즉시 죽지 않는지 확인하는 짧은 대기 — 5초 안에 살아있으면 OK 간주.
+# 원본 connect_th.sh 의 sleep 40 보다 짧음 — boot 완료는 백그라운드에서 진행되며
+# 실제 디바이스 사용 시점에는 이미 부팅 끝나 있을 거라는 전제.
+SETUP_CVD_VERIFY_S = 5.0
+
+# launch_cvd 백그라운드 프로세스 추적 파일
+LAUNCH_CVD_LOG = "/tmp/replaykit-launch_cvd.log"
+LAUNCH_CVD_PID_FILE = "/tmp/replaykit-launch_cvd.pid"
 
 
 def _derive_client_dir(th_home: str) -> str:
@@ -95,6 +103,7 @@ class TH:
         panel = True,                                     # bool 또는 'True'/'False' (UI select)
         panel_trigger: str = DEFAULT_PANEL_TRIGGER,
         auto_setup = True,                                # 등록 시 자동으로 Setup() 호출
+        launch_cvd = True,                                # Setup step 5: launch_cvd 자동 spawn
     ):
         # 원본 USER CONFIG 보관.
         self.eth_if = eth_if
@@ -112,6 +121,7 @@ class TH:
         self.panel_enabled = _as_bool(panel)
         self.panel_trigger = panel_trigger
         self.auto_setup = _as_bool(auto_setup)
+        self.launch_cvd = _as_bool(launch_cvd)
 
         # Setup 결과 추적 (IsConnected 반환에 사용)
         self._setup_done = False
@@ -208,6 +218,15 @@ class TH:
             log.append(f"[4] adb verify:\n{msg}")
             if rc != 0:
                 return self._mark_fail("adb verification", log)
+
+        # ── [5] launch_cvd (TH server) — 백그라운드 spawn ─
+        if self.launch_cvd:
+            rc, msg = self._launch_cvd_background()
+            log.append(f"[5] launch_cvd:\n{msg}")
+            if rc != 0:
+                return self._mark_fail("launch_cvd spawn", log)
+        else:
+            log.append("[5] launch_cvd: skipped (launch_cvd=False)")
 
         self._setup_done = True
         self._setup_last_msg = "ok\n" + "\n".join(log)
@@ -344,6 +363,198 @@ class TH:
             return 1, f"  RBVM ({self.rbvm_ip}) not in adb devices\n" + diag
         return 0, diag
 
+    # ── launch_cvd 백그라운드 ─────────────────────────────
+    def _launch_cvd_background(self) -> tuple[int, str]:
+        """connect_th.sh [4] 등가. <th_home>/bin/launch_cvd 를 sudo + setsid 로 spawn.
+
+        - 이미 떠 있으면 skip (PID 파일 + /proc cmdline 확인)
+        - start_new_session=True 로 parent (uvicorn) 종료해도 살아있음
+        - 5초 안에 죽으면 (sudo 인증 실패 등) FAIL 로 보고
+        - 5초 살아있으면 OK — 실제 boot 은 백그라운드에서 진행
+        """
+        launch_bin = os.path.join(self.th_home, "bin", "launch_cvd")
+        if not os.path.isfile(launch_bin):
+            return 1, f"  launch_cvd not found at {launch_bin}"
+
+        existing = self._cvd_running_pid()
+        if existing is not None:
+            return 0, f"  launch_cvd already running (pid={existing})"
+
+        # 원본 명령:
+        #   sudo HOME=$PWD ANDROID_HOST_OUT=$PWD ./bin/launch_cvd \
+        #     -report_anonymous_usage_stats=n -guest-enforce-security=false \
+        #     --extra_bootconfig_args="androidboot.selinux=permissive androidboot.sdv.authz.enable=false"
+        # sudo -E 로 env 보존 + 명시적 env 변수.
+        sudo_argv = [
+            *self._sudo_argv_prefix(),
+            "-E",
+            f"HOME={self.th_home}",
+            f"ANDROID_HOST_OUT={self.th_home}",
+            launch_bin,
+            "-report_anonymous_usage_stats=n",
+            "-guest-enforce-security=false",
+            "--extra_bootconfig_args=androidboot.selinux=permissive androidboot.sdv.authz.enable=false",
+        ]
+
+        try:
+            log_f = open(LAUNCH_CVD_LOG, "ab")
+        except OSError as e:
+            return 1, f"  cannot open log {LAUNCH_CVD_LOG}: {e}"
+
+        try:
+            proc = subprocess.Popen(
+                sudo_argv,
+                stdin=subprocess.PIPE,
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                cwd=self.th_home,
+                start_new_session=True,    # parent (uvicorn) 종료해도 살아있음
+            )
+        except (OSError, FileNotFoundError) as e:
+            log_f.close()
+            return 1, f"  launch_cvd spawn failed: {e}"
+        finally:
+            # log_f 의 close 는 Popen 이 fd 를 복제했으므로 OK.
+            try:
+                log_f.close()
+            except OSError:
+                pass
+
+        # password 전달 (있을 때만)
+        if self.sudo_password and proc.stdin is not None:
+            try:
+                proc.stdin.write((self.sudo_password + "\n").encode())
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass
+        try:
+            if proc.stdin is not None:
+                proc.stdin.close()
+        except OSError:
+            pass
+
+        # PID 저장 — sudo 의 PID 이지만 _cvd_running_pid 가 /proc cmdline 으로 launch_cvd 검증
+        try:
+            with open(LAUNCH_CVD_PID_FILE, "w") as pf:
+                pf.write(str(proc.pid))
+        except OSError:
+            pass
+
+        # 짧게 polling — 즉시 죽으면 (sudo 인증 실패 / 실행 권한 등) 즉시 FAIL
+        import time as _t
+        deadline = _t.monotonic() + SETUP_CVD_VERIFY_S
+        while _t.monotonic() < deadline:
+            _t.sleep(0.2)
+            if proc.poll() is not None:
+                tail = self._read_log_tail(LAUNCH_CVD_LOG, 800)
+                return proc.returncode or 1, (
+                    f"  launch_cvd died immediately (rc={proc.returncode})\n"
+                    f"  log tail:\n{tail}"
+                )
+
+        return 0, (
+            f"  launch_cvd spawned (pid={proc.pid}), booting in background\n"
+            f"  log: {LAUNCH_CVD_LOG}\n"
+            f"  CVD adb {self.th_adb} should become available in ~40s"
+        )
+
+    def _cvd_running_pid(self) -> Optional[int]:
+        """launch_cvd 가 살아있으면 그 PID, 아니면 None.
+
+        PID 파일이 있으면 그것부터 확인 (cmdline 으로 launch_cvd 인지 검증해서 PID 재사용 방어).
+        없으면 pgrep -f launch_cvd 폴백.
+        """
+        try:
+            with open(LAUNCH_CVD_PID_FILE) as f:
+                pid = int(f.read().strip())
+            os.kill(pid, 0)  # alive check (signal 0 = no-op, OSError 면 사망)
+            # 같은 pid 인지 cmdline 으로 검증 — PID 재사용 방지
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    cmdline = f.read()
+                if b"launch_cvd" in cmdline:
+                    return pid
+            except OSError:
+                pass
+        except (OSError, ValueError):
+            pass
+        # pgrep 폴백 — pid 파일이 없거나 stale 한 경우
+        try:
+            res = subprocess.run(
+                ["pgrep", "-f", "launch_cvd"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                return int(res.stdout.strip().split("\n")[0])
+        except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+            pass
+        return None
+
+    def _read_log_tail(self, path: str, n: int = 500) -> str:
+        try:
+            with open(path, "rb") as f:
+                return f.read()[-n:].decode("utf-8", "replace")
+        except OSError as e:
+            return f"(log read error: {e})"
+
+    # ── launch_cvd 시나리오 노출 메서드 ───────────────
+    def Launch(self) -> str:
+        """connect_th.sh [4] launch_cvd 만 수동 실행. Setup 의 step 5 와 동일.
+
+        Setup 전체를 다시 안 돌리고 cvd 서버만 띄우고 싶을 때 (또는 사망 후 재기동).
+        """
+        if not self.th_home:
+            return "FAIL: th_home not configured"
+        rc, msg = self._launch_cvd_background()
+        return msg if rc == 0 else "FAIL: launch_cvd\n" + msg
+
+    def StopCvd(self) -> str:
+        """현재 떠 있는 launch_cvd 를 종료. SIGTERM → 3초 → SIGKILL."""
+        pid = self._cvd_running_pid()
+        if pid is None:
+            return "ok (launch_cvd not running)"
+
+        # launch_cvd 는 sudo 로 띄워서 root 권한. kill 도 sudo 필요.
+        import signal as _sig
+        import time as _t
+        try:
+            rc, msg = self._sudo_run(
+                ["kill", "-TERM", str(pid)],
+                timeout=5.0,
+            )
+        except Exception as e:
+            return f"FAIL: kill TERM failed: {e}"
+        if rc != 0:
+            return f"FAIL: kill TERM rc={rc}\n{msg}"
+
+        # 3초 대기 후 alive 면 SIGKILL
+        for _ in range(15):  # 3초 / 0.2초
+            _t.sleep(0.2)
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                # 죽었음
+                self._cleanup_cvd_pid_file()
+                return f"ok (terminated pid={pid})"
+        # 아직 살아있음 → SIGKILL
+        self._sudo_run(["kill", "-KILL", str(pid)], timeout=5.0)
+        self._cleanup_cvd_pid_file()
+        return f"ok (killed pid={pid} after grace)"
+
+    def CvdStatus(self) -> str:
+        """launch_cvd 가 떠 있는지 + 로그 마지막 몇 줄."""
+        pid = self._cvd_running_pid()
+        tail = self._read_log_tail(LAUNCH_CVD_LOG, 400) if os.path.isfile(LAUNCH_CVD_LOG) else "(no log)"
+        if pid is None:
+            return f"not running\nlog tail:\n{tail}"
+        return f"running pid={pid}\nlog tail:\n{tail}"
+
+    def _cleanup_cvd_pid_file(self) -> None:
+        try:
+            os.unlink(LAUNCH_CVD_PID_FILE)
+        except OSError:
+            pass
+
     # ── 시나리오 노출 ─────────────────────────────────
     def _precheck(self) -> Optional[str]:
         """client.py 호출 전 필수 설정 확인. 문제 있으면 'FAIL: ...' 메시지 반환."""
@@ -436,8 +647,10 @@ class TH:
             f"python    = {self.python_bin}",
             f"panel     = {self.panel_enabled} (trigger='{self.panel_trigger}')",
             f"auto_setup= {self.auto_setup}",
+            f"launch_cvd= {self.launch_cvd}",
             f"sudo_pw   = {sudo_state}",
             f"setup_ok  = {self._setup_done}",
+            f"cvd_pid   = {self._cvd_running_pid() or '(not running)'}",
         ]
         if self.th_home:
             client_py = os.path.join(self.client_dir, "client.py")
