@@ -351,6 +351,15 @@ async def update_and_restart():
     pull_result: dict = {"performed": False, "mode": "none"}
 
     if sys.platform != "win32":
+        # ★ pull 전에 먼저 .restart 플래그 작성 — pull 이 어떤 이유로든 (네트워크 끊김, 인터프리터
+        # 죽음 등) 실패하더라도 launcher 가 재시작을 시도하도록. 사용자가 update 버튼 누른 시점부터
+        # 이 백엔드 프로세스는 반드시 죽고 다시 떠야 한다는 의도.
+        try:
+            _RESTART_FLAG.write_text("restart", encoding="utf-8")
+            logger.info("[update-restart] wrote .restart flag (pre-pull): %s", _RESTART_FLAG)
+        except Exception as e:
+            logger.warning("[update-restart] failed to write .restart flag early: %s", e)
+
         # 1) 동기 git pull — 결과를 응답에 포함하기 위해 background 가 아닌 인라인 수행.
         # subprocess 가 blocking 이므로 to_thread 로 감싸 event loop 미차단.
         def _do_pull() -> dict:
@@ -397,8 +406,11 @@ async def update_and_restart():
             logger.exception("[update-restart] inline pull 실패")
             pull_result = {"performed": False, "mode": "error", "error": f"{type(e).__name__}: {e}"}
 
-        # 2) 재시작 트리거 — pull 성공/실패 무관하게 (사용자가 다시 시도 가능하도록).
-        _RESTART_FLAG.write_text("restart", encoding="utf-8")
+        # 2) 재시작 트리거 — pull 결과 무관. 위에서 미리 쓴 플래그를 다시 한 번 확정.
+        try:
+            _RESTART_FLAG.write_text("restart", encoding="utf-8")
+        except Exception as e:
+            logger.warning("[update-restart] failed to (re)write .restart flag: %s", e)
         import threading
         threading.Thread(target=_linux_post_pull_restart, daemon=True).start()
     else:
@@ -417,18 +429,58 @@ def _linux_post_pull_restart() -> None:
 
     REPLAYKIT_INSTALLED=1 (= .deb GUI launcher 환경) 만 이 경로. 그 외 (헤드리스/서비스/
     server.py 런처) 는 기존대로 os.execv 시도.
+
+    SIGTERM → 3초 대기 → SIGKILL escalation 으로 uvicorn 이 in-flight 요청에 막혀
+    안 죽는 경우 대비.
     """
     import time as _t
+    import signal as _sig
+
+    # 1초 대기 — 응답이 클라이언트까지 도달할 시간 확보.
     _t.sleep(1)
+
+    # 죽기 직전에 backend/ 의 __pycache__ 를 정리 — 새 .py 보다 오래된 .pyc 가
+    # 다음 프로세스의 import 시 우선 적용되어 stale code 로 돌아가는 사고 방지.
+    try:
+        import shutil as _sh
+        user_data = Path(os.environ.get("REPLAYKIT_USER_DATA", str(Path.home() / ".local/share/ReplayKit")))
+        backend_dir = user_data / "backend"
+        if backend_dir.is_dir():
+            cleared = 0
+            for pyc in backend_dir.rglob("__pycache__"):
+                try:
+                    _sh.rmtree(pyc)
+                    cleared += 1
+                except Exception:
+                    pass
+            if cleared:
+                logger.info("[update-restart] cleared %d __pycache__ dirs under %s", cleared, backend_dir)
+    except Exception as e:
+        logger.warning("[update-restart] __pycache__ cleanup failed: %s", e)
+
     try:
         if os.environ.get("REPLAYKIT_INSTALLED") == "1":
             # .restart 플래그는 유지 — 부모 launcher 가 이 플래그를 보고 재시작 트리거.
-            logger.info("[update-restart] (.deb) sending SIGTERM to self for parent to respawn (pid=%d)", os.getpid())
+            pid = os.getpid()
+            logger.info("[update-restart] (.deb) SIGTERM → self (pid=%d)", pid)
             try:
-                import signal as _sig
-                os.kill(os.getpid(), _sig.SIGTERM)
-            except Exception:
-                # SIGTERM 실패 시 직접 종료 — 부모가 자식 사망 감지
+                os.kill(pid, _sig.SIGTERM)
+            except Exception as e:
+                logger.warning("[update-restart] SIGTERM failed: %s", e)
+
+            # SIGTERM 후 최대 3초 대기. uvicorn 이 in-flight request graceful shutdown 처리.
+            _t.sleep(3)
+
+            # 아직 살아있으면 SIGKILL — 우리는 무조건 죽어야 부모가 새 코드로 재spawn.
+            try:
+                os.kill(pid, 0)  # 살아있는지 확인
+                logger.warning("[update-restart] still alive after SIGTERM → SIGKILL")
+                os.kill(pid, _sig.SIGKILL)
+            except OSError:
+                # 이미 죽었음 — 정상 경로
+                return
+            except Exception as e:
+                logger.warning("[update-restart] SIGKILL failed: %s — _exit fallback", e)
                 os._exit(0)
             return
 
@@ -443,6 +495,9 @@ def _linux_post_pull_restart() -> None:
         os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception as e:
         logger.exception("[update-restart] 재시작 실패: %s", e)
+        # 마지막 안전망 — 어떻게든 죽어서 launcher 가 respawn 하도록.
+        if os.environ.get("REPLAYKIT_INSTALLED") == "1":
+            os._exit(1)
 
 
 def _run(cmd: list[str], cwd: Optional[str] = None, timeout: int = 30,

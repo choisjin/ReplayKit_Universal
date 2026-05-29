@@ -136,11 +136,15 @@ class Launcher(QWidget):
         self._poll_status()
 
         # 재시작 플래그 감시 타이머 — backend 가 .restart 플래그 작성 시 자식 재시작.
-        # Windows server.py 의 _check_restart_flag 와 동일 역할.
+        # 사용자가 update 버튼 누르면 1~2초 내에 화면이 반응해야 답답하지 않다.
+        # 500ms 폴링 = CPU 비용 무시할 정도 + 체감 즉시.
         self._restart_in_progress = False
+        # 자식 사망 감지용 — 직전 폴에서 보였던 PID 기록. .restart 플래그가 있고 PID 가
+        # 사라진 게 감지되면 (= backend 가 SIGTERM 으로 죽었음) 즉시 새 자식 spawn.
+        self._last_seen_pid: int | None = None
         self.restart_timer = QTimer(self)
         self.restart_timer.timeout.connect(self._check_restart_flag)
-        self.restart_timer.start(2000)
+        self.restart_timer.start(500)
 
         # 자동 시작 (REPLAYKIT_NO_AUTOSTART=1 로 비활성화 가능).
         # 윈도우가 화면에 그려진 후 시작하도록 500ms 지연 — UX 향상.
@@ -409,36 +413,73 @@ class Launcher(QWidget):
             self._start()
 
     def _check_restart_flag(self) -> None:
-        """backend 가 자가 업데이트 후 .restart 플래그 작성 시 호출됨.
+        """backend 가 자가 업데이트 후 .restart 플래그 작성 시 호출됨 (500ms 주기).
 
-        flag 를 제거하고 자식 (uvicorn) 을 죽인 후 재시작 → 새 코드 로드.
-        _restart 와 거의 동일하지만 사용자 트리거가 아닌 backend 트리거이므로 별도 함수.
+        두 가지 트리거 모두 처리:
+          A) .restart 플래그 발견 → 자식 종료 (살아있다면) → 새로 spawn
+          B) .restart 플래그 있는 채로 자식이 사라짐 → 즉시 spawn (backend 가 자기 죽음으로 사망)
+
+        _restart_in_progress 가 어떤 예외로 True 로 굳어도 try/finally 가 풀어준다.
         """
         try:
-            if not RESTART_FLAG.exists():
-                return
+            flag_exists = RESTART_FLAG.exists()
         except OSError:
+            flag_exists = False
+
+        current_pid = get_running_pid()
+
+        # 트리거 B: 직전 폴에서 backend 가 살아있었는데 지금 죽어있고 .restart 플래그가 있다.
+        # = backend 가 자기 SIGTERM 으로 죽었음. 다음 폴 기다리지 말고 바로 진행.
+        triggered_by_child_death = (
+            flag_exists and self._last_seen_pid is not None
+            and current_pid is None
+        )
+
+        # 다음 비교를 위해 현재 PID 기록
+        self._last_seen_pid = current_pid
+
+        if not flag_exists:
             return
+
         if self._restart_in_progress:
-            return  # 이미 처리 중 — 중복 호출 방지
+            return  # 이미 처리 중
+
         self._restart_in_progress = True
         try:
-            RESTART_FLAG.unlink(missing_ok=True)
-        except Exception:
-            pass
-        self.status_lbl.setText("업데이트 적용 중...")
-        self.status_lbl.setStyleSheet(f"color: {_C['YELLOW']}; background: transparent;")
-        # 자식 종료 후 약간 기다린 다음 새로 시작 (포트 해제 대기)
-        if get_running_pid():
-            self._stop()
-            QTimer.singleShot(3000, self._post_restart_start)
-        else:
-            QTimer.singleShot(500, self._post_restart_start)
+            try:
+                RESTART_FLAG.unlink(missing_ok=True)
+            except Exception:
+                pass
+            self.status_lbl.setText("업데이트 적용 중...")
+            self.status_lbl.setStyleSheet(f"color: {_C['YELLOW']}; background: transparent;")
+
+            if current_pid is not None:
+                # 자식 살아있음 → 죽이고 3초 후 spawn (포트 해제 + graceful shutdown 여유)
+                self._stop()
+                QTimer.singleShot(3000, self._post_restart_start)
+            else:
+                # 자식 이미 죽었음 (트리거 B) → 빠르게 spawn
+                delay = 500 if triggered_by_child_death else 500
+                QTimer.singleShot(delay, self._post_restart_start)
+        except Exception as e:
+            # _stop / setText / singleShot 등에서 예외 나도 상태는 풀린다.
+            self._restart_in_progress = False
+            self.status_lbl.setText(f"재시작 오류: {e}"[:40])
+            self.status_lbl.setStyleSheet(f"color: {_C['RED']}; background: transparent;")
 
     def _post_restart_start(self) -> None:
-        """_check_restart_flag 에서 stop 후 호출 — 재시작 + 플래그 해제."""
-        self._start()
-        self._restart_in_progress = False
+        """_check_restart_flag 에서 stop 후 호출 — 재시작 + 플래그 해제.
+
+        _start 가 어떤 이유로 예외를 던지든 _restart_in_progress 는 반드시 False 로 풀어야
+        다음 update 시 다시 시도 가능. finally 로 보장.
+        """
+        try:
+            self._start()
+        except Exception as e:
+            self.status_lbl.setText(f"start 오류: {e}"[:40])
+            self.status_lbl.setStyleSheet(f"color: {_C['RED']}; background: transparent;")
+        finally:
+            self._restart_in_progress = False
 
     def _open_web(self) -> None:
         try:
