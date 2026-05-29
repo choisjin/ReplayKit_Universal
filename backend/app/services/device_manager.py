@@ -493,9 +493,24 @@ def _scan_radmoon_sync(bridge_name: str) -> list[dict]:
     except OSError:
         bridge_operstate = "unknown"
 
+    # 멤버 우선순위 정렬 — 자동 채움 (frontend 가 members[0] 을 선택) 시 의미 있는 어댑터가
+    # 첫 자리에 오도록.
+    #   1) enx* 명명 (radmoon 실 어댑터) + up
+    #   2) enx* + 그 외
+    #   3) up 상태이지만 enx* 아님 (v-IVC 등 가상)
+    #   4) 나머지 (cvd-etap-* 가상 down 등)
+    def _member_priority(m: dict) -> tuple:
+        iface = m.get("interface", "")
+        is_enx = iface.startswith("enx")
+        is_up = m.get("operstate") == "up"
+        return (0 if is_enx else 1, 0 if is_up else 1, iface)
+
+    members.sort(key=_member_priority)
+
     logger.info(
-        "radmoon scan: bridge=%s state=%s ips=%s members=%d",
+        "radmoon scan: bridge=%s state=%s ips=%s members=%d (first=%s)",
         bridge_name, bridge_operstate, current_ips, len(members),
+        members[0]["interface"] if members else "(none)",
     )
     return [{
         "bridge": bridge_name,

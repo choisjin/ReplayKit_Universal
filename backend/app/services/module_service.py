@@ -363,6 +363,8 @@ def list_available_modules() -> list[dict]:
              {"name": "th_adb", "label": "CVD ADB host:port", "type": "text", "default": "0.0.0.0:6520"},
              {"name": "grpc_ip", "label": "gRPC broker (client.py --ip_address)", "type": "text",
               "default": "192.168.1.99:50051"},
+             {"name": "sudo_password", "label": "sudo 비밀번호 (passwordless 미설정 시 필수)",
+              "type": "password", "default": ""},
              {"name": "python_bin", "label": "Python 인터프리터", "type": "text", "default": "python3"},
              {"name": "panel", "label": "PySide6 시각화 패널", "type": "select", "default": "True",
               "options": ["True", "False"]},

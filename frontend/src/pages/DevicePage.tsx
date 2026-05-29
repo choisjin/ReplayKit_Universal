@@ -13,7 +13,7 @@ const { Option } = Select;
 interface ConnectField {
   name: string;
   label: string;
-  type: 'text' | 'number' | 'select' | 'object_list';
+  type: 'text' | 'number' | 'select' | 'object_list' | 'password';
   default?: string;
   options?: string[];
   // object_list 전용: 각 row의 sub-field 정의
@@ -1294,6 +1294,12 @@ export default function DevicePage() {
             style={{ width: '100%' }}
             value={values[f.name] ?? (f.default ? Number(f.default) : undefined)}
             onChange={(v) => onChange({ ...values, [f.name]: v })}
+          />
+        ) : f.type === 'password' ? (
+          <Input.Password
+            value={values[f.name] ?? f.default ?? ''}
+            onChange={(e) => onChange({ ...values, [f.name]: e.target.value })}
+            autoComplete="new-password"
           />
         ) : (
           <Input

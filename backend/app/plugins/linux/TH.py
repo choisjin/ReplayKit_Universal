@@ -88,6 +88,8 @@ class TH:
         rbvm_ip: str = DEFAULT_RBVM_IP,
         th_adb: str = DEFAULT_TH_ADB,
         grpc_ip: str = DEFAULT_GRPC_IP,
+        # ── 권한 ─────────────────────────────────────────
+        sudo_password: str = "",                          # 비어있으면 sudo -n (passwordless 필요)
         # ── 플러그인 동작 ─────────────────────────────────
         python_bin: str = "python3",
         panel = True,                                     # bool 또는 'True'/'False' (UI select)
@@ -103,6 +105,9 @@ class TH:
         self.rbvm_ip = rbvm_ip
         self.th_adb = th_adb
         self.grpc_ip = grpc_ip
+        # sudo password — 메모리에만 보관. Info() / 로그에 절대 노출되지 않도록.
+        # 입력이 비어 있으면 -n 으로 동작 → passwordless sudo 가 사전에 설정되어 있어야 함.
+        self.sudo_password = sudo_password
         self.python_bin = python_bin
         self.panel_enabled = _as_bool(panel)
         self.panel_trigger = panel_trigger
@@ -264,38 +269,55 @@ class TH:
 
         return 0, "\n".join(msgs)
 
-    def _sudo_ip(self, ip_args: list[str]) -> tuple[int, str]:
-        """sudo -n ip <args>. 결과 stdout+stderr 마지막 300자 반환."""
+    def _sudo_argv_prefix(self) -> list[str]:
+        """sudo 호출 prefix. password 있으면 -S (stdin 으로 비번 전달), 없으면 -n (passwordless)."""
+        if self.sudo_password:
+            # -p "" → 프롬프트 텍스트 억제 (stderr 에 안 섞이게)
+            return ["sudo", "-S", "-p", ""]
+        return ["sudo", "-n"]
+
+    def _sudo_stdin(self) -> Optional[str]:
+        """sudo 에 흘릴 stdin. password 있을 때만."""
+        return (self.sudo_password + "\n") if self.sudo_password else None
+
+    def _sudo_run(self, cmd: list[str], timeout: float, indent: str = "") -> tuple[int, str]:
+        """sudo + cmd 실행. 결과 stdout+stderr 마지막 500자 반환. password 절대 출력 안 함."""
+        argv = [*self._sudo_argv_prefix(), *cmd]
         try:
             res = subprocess.run(
-                ["sudo", "-n", "ip", *ip_args],
-                capture_output=True, text=True, timeout=SETUP_IP_TIMEOUT_S,
+                argv,
+                input=self._sudo_stdin(),
+                capture_output=True, text=True, timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            return 1, f"timeout running: sudo -n ip {' '.join(ip_args)}"
+            return 1, f"{indent}timeout: sudo {' '.join(cmd[:2])}"
         except FileNotFoundError:
-            return 1, "sudo or ip command not found"
+            return 1, f"{indent}sudo or '{cmd[0]}' command not found"
         out = ((res.stdout or "") + (res.stderr or "")).strip()
-        return res.returncode, out[-300:] if out else ""
+        # sudo 인증 실패 시 ("Sorry, try again." 또는 "a password is required") 명확한 에러로
+        if res.returncode != 0 and any(
+            s in out for s in ("a password is required", "Sorry, try again",
+                               "incorrect password attempts")
+        ):
+            return res.returncode, f"{indent}sudo 인증 실패 — 비밀번호 확인 또는 passwordless sudo 설정 필요"
+        return res.returncode, out[-500:] if out else ""
+
+    def _sudo_ip(self, ip_args: list[str]) -> tuple[int, str]:
+        """sudo ip <args>."""
+        return self._sudo_run(["ip", *ip_args], timeout=SETUP_IP_TIMEOUT_S)
 
     def _run_setup_script(self, script_path: str, args: list[str]) -> tuple[int, str]:
-        """sudo -n bash <script> <args>. 스크립트가 없으면 skip 으로 처리(rc=0)."""
+        """sudo bash <script> <args>. 스크립트가 없으면 skip 으로 처리(rc=0)."""
         if not os.path.isfile(script_path):
             return 0, f"  skipped (not found: {script_path})"
-        try:
-            res = subprocess.run(
-                ["sudo", "-n", "bash", script_path, *args],
-                capture_output=True, text=True, timeout=SETUP_SCRIPT_TIMEOUT_S,
-            )
-        except subprocess.TimeoutExpired:
-            return 1, f"  timeout (>{int(SETUP_SCRIPT_TIMEOUT_S)}s): {script_path}"
-        except FileNotFoundError:
-            return 1, "  sudo or bash command not found"
-        out = ((res.stdout or "") + (res.stderr or "")).strip()
-        tail = out[-500:] if out else ""
-        if res.returncode != 0:
-            return res.returncode, f"  exit {res.returncode}\n{tail}"
-        return 0, f"  ok\n{tail}" if tail else "  ok"
+        rc, out = self._sudo_run(
+            ["bash", script_path, *args],
+            timeout=SETUP_SCRIPT_TIMEOUT_S,
+            indent="  ",
+        )
+        if rc != 0:
+            return rc, f"  exit {rc}\n{out}"
+        return 0, f"  ok\n{out}" if out else "  ok"
 
     def _verify_adb(self) -> tuple[int, str]:
         """adb devices 출력에서 디바이스 ≥ 2개 + RBVM 가 보이는지 확인."""
@@ -399,7 +421,8 @@ class TH:
         return _format_result(sr.rc, sr.e2e_ms, sr.stdout, trigger_hit=sr.trigger_hit)
 
     def Info(self) -> str:
-        """현재 인스턴스의 설정 요약 (디버그/검증용)."""
+        """현재 인스턴스의 설정 요약 (디버그/검증용). sudo 비밀번호는 *** 로 마스킹."""
+        sudo_state = f"(set, {len(self.sudo_password)} chars)" if self.sudo_password else "(unset → -n)"
         lines = [
             f"eth_if    = {self.eth_if or '(unset)'}",
             f"th_home   = {self.th_home or '(unset)'}",
@@ -413,6 +436,7 @@ class TH:
             f"python    = {self.python_bin}",
             f"panel     = {self.panel_enabled} (trigger='{self.panel_trigger}')",
             f"auto_setup= {self.auto_setup}",
+            f"sudo_pw   = {sudo_state}",
             f"setup_ok  = {self._setup_done}",
         ]
         if self.th_home:
