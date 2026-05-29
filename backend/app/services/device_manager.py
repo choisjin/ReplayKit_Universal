@@ -422,6 +422,86 @@ def _probe_smartbench_sync(ip: str, port: int, timeout: float) -> dict | None:
                 pass
 
 
+# ── SCAR 자동 탐지 (Linux 전용 플러그인) ──
+# REST API (http://<host>:<port>/) 와 docker container 두 가지를 병렬로 프로브.
+# 한쪽이라도 살아있으면 후보 1행 반환 — SCAR 플러그인이 매 호출마다 Ready() 로 모드 자동 판별.
+async def _scan_scar(host: str | None = None, port: int | None = None,
+                     container: str | None = None) -> list[dict]:
+    target_host = (host or "localhost").strip() or "localhost"
+    try:
+        target_port = int(port) if port else 8081
+    except (TypeError, ValueError):
+        target_port = 8081
+    target_container = (container or "scar").strip() or "scar"
+
+    # Linux 가 아니면 docker / SCAR 플러그인 자체가 사용 불가 — 즉시 빈 결과.
+    if not sys.platform.startswith("linux"):
+        logger.debug("SCAR scan skipped: not Linux (%s)", sys.platform)
+        return []
+
+    loop = asyncio.get_event_loop()
+    api_fut = loop.run_in_executor(None, _probe_scar_api_sync, target_host, target_port, 2.0)
+    docker_fut = loop.run_in_executor(None, _probe_scar_docker_sync, target_container, 3.0)
+    api_alive, docker_running = await asyncio.gather(api_fut, docker_fut)
+
+    if not api_alive and not docker_running:
+        logger.debug("SCAR scan: API %s:%d down, container '%s' not running",
+                     target_host, target_port, target_container)
+        return []
+
+    logger.info("SCAR scan: api_alive=%s docker_running=%s (%s:%d, container=%s)",
+                api_alive, docker_running, target_host, target_port, target_container)
+    return [{
+        "ip": target_host,
+        "port": target_port,
+        "container": target_container,
+        "api_alive": bool(api_alive),
+        "docker_running": bool(docker_running),
+        "label": "SCAR",
+        "module": "SCAR",
+    }]
+
+
+def _probe_scar_api_sync(host: str, port: int, timeout: float) -> bool:
+    """GET http://host:port/ — 2xx~3xx 면 True. requests 가 없으면 stdlib http.client 폴백."""
+    try:
+        import http.client
+        conn = http.client.HTTPConnection(host, port, timeout=timeout)
+        try:
+            conn.request("GET", "/")
+            resp = conn.getresponse()
+            return 200 <= resp.status < 400
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug("SCAR API probe %s:%d failed: %s", host, port, e)
+        return False
+
+
+def _probe_scar_docker_sync(container: str, timeout: float) -> bool:
+    """docker inspect -f {{.State.Running}} <container> — true 이면 True."""
+    import subprocess
+    try:
+        res = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", container],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        logger.debug("docker inspect timed out (container=%s)", container)
+        return False
+    except FileNotFoundError:
+        logger.debug("docker binary not found")
+        return False
+    if res.returncode != 0:
+        return False
+    return res.stdout.strip().lower() == "true"
+
+
 # ── WoohyunBench 자동 탐지 ──
 # SmartBench와 동일한 단일-프로브 방식: 설정에 명시된 host:port로 한 번만 UDP 프로브.
 # LAN 전체(ARP + ping + UDP 스윕)는 시간이 길고 다른 장비를 깨우는 부작용이 있어 제거.
@@ -1580,6 +1660,15 @@ class DeviceManager:
     async def scan_smartbench(self, host: str | None = None, port: int | None = None) -> list[dict]:
         """SmartBench 장비 탐지. host/port 미지정 시 기본값(192.167.0.5:8000) 사용."""
         return await _scan_smartbench(host=host, port=port)
+
+    async def scan_scar(
+        self,
+        host: str | None = None,
+        port: int | None = None,
+        container: str | None = None,
+    ) -> list[dict]:
+        """SCAR (Linux 전용) 자동 탐지 — REST API + docker container 양쪽 프로브."""
+        return await _scan_scar(host=host, port=port, container=container)
 
     async def scan_dlt(self, ports: list[int] | None = None) -> list[dict]:
         """TCP 포트 스캔으로 LAN(192.168.*) 상의 DLT 데몬 탐지."""

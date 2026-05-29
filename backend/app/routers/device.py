@@ -45,6 +45,9 @@ _DEFAULT_SCAN_SETTINGS = {
         "webcam":         {"enabled": True,  "module": "WebcamDevice", "category": "primary"},
         "ssh":            {"enabled": True,  "module": "SSHManager",   "category": "auxiliary", "port": 22},
         "smartbench":     {"enabled": True,  "module": "SmartBench",   "category": "auxiliary", "host": "192.167.0.5", "port": 8000},
+        # SCAR: Linux 전용. localhost:8081 REST API 와 docker 컨테이너 'scar' 양쪽 모두 프로브.
+        # 양쪽 다 죽어 있으면 결과 0건, 한쪽이라도 살아있으면 1행 반환.
+        "scar":           {"enabled": True,  "module": "SCAR",         "category": "auxiliary", "host": "localhost",   "port": 8081, "container": "scar"},
     },
     # type: "tcp" | "udp", category: "primary" | "auxiliary"
     # [{"label": "MLP", "type": "tcp", "port": 5001, "module": "MLP", "enabled": true, "category": "auxiliary"}, ...]
@@ -382,6 +385,19 @@ async def scan_ports():
         except (TypeError, ValueError):
             sb_port = None
         tasks["smartbench_devices"] = asyncio.ensure_future(dm.scan_smartbench(host=sb_host, port=sb_port))
+    if _enabled("scar"):
+        # SCAR (Linux 전용): host/port + container 셋 다 설정 필요.
+        sc_entry = builtin.get("scar", {}) if isinstance(builtin.get("scar"), dict) else {}
+        sc_host = str(sc_entry.get("host") or "").strip() or None
+        sc_port = sc_entry.get("port")
+        try:
+            sc_port = int(sc_port) if sc_port is not None else None
+        except (TypeError, ValueError):
+            sc_port = None
+        sc_container = str(sc_entry.get("container") or "").strip() or None
+        tasks["scar_devices"] = asyncio.ensure_future(
+            dm.scan_scar(host=sc_host, port=sc_port, container=sc_container)
+        )
     if _enabled("ssh"):
         ssh_entry = builtin.get("ssh", {}) if isinstance(builtin.get("ssh"), dict) else {}
         ssh_port = int(ssh_entry.get("port", 22))
@@ -436,6 +452,7 @@ async def scan_ports():
         "mib_hosts": [],
         "dlt_devices": [],
         "smartbench_devices": [],
+        "scar_devices": [],
         "ssh_hosts": [],
         "custom_results": [],
     }

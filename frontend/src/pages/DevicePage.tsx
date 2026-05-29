@@ -232,6 +232,7 @@ export default function DevicePage() {
   const [hasScanned, setHasScanned] = useState(false);
   const [scannedDlt, setScannedDlt] = useState<{ ip: string; port: number }[]>([]);
   const [scannedSmartbench, setScannedSmartbench] = useState<{ ip: string; port: number; label: string; module: string }[]>([]);
+  const [scannedScar, setScannedScar] = useState<{ ip: string; port: number; container: string; api_alive: boolean; docker_running: boolean; label: string; module: string }[]>([]);
   const [scannedSsh, setScannedSsh] = useState<{ ip: string; port: number }[]>([]);
   const [scannedCustom, setScannedCustom] = useState<{ label: string; hosts: { ip: string; port: number }[] }[]>([]);
   const [pcInterfaces, setPcInterfaces] = useState<{ name: string; ip: string; prefix: number }[]>([]);
@@ -392,7 +393,7 @@ export default function DevicePage() {
     };
     return result;
   };
-  const [scanBuiltin, setScanBuiltin] = useState<Record<string, { enabled: boolean; module: string; port?: number; ports?: number[]; host?: string; category?: ScanCategory }>>({
+  const [scanBuiltin, setScanBuiltin] = useState<Record<string, { enabled: boolean; module: string; port?: number; ports?: number[]; host?: string; container?: string; category?: ScanCategory }>>({
     adb: { enabled: true, module: '', category: 'primary' },
     serial: { enabled: true, module: 'SerialLogging', category: 'auxiliary' },
     hkmc: { enabled: true, module: '', ports: [6655, 5000], category: 'primary' },
@@ -403,6 +404,7 @@ export default function DevicePage() {
     webcam: { enabled: true, module: 'WebcamDevice', category: 'primary' },
     ssh: { enabled: true, module: 'SSHManager', port: 22, category: 'auxiliary' },
     smartbench: { enabled: true, module: 'SmartBench', host: '192.167.0.5', port: 8000, category: 'auxiliary' },
+    scar: { enabled: true, module: 'SCAR', host: 'localhost', port: 8081, category: 'auxiliary' },
   });
   const [scanCustom, setScanCustom] = useState<{ label: string; type: string; port: number; module: string; enabled: boolean; category?: ScanCategory }[]>([]);
 
@@ -534,6 +536,7 @@ export default function DevicePage() {
     setScannedWebcams([]);
     setScannedDlt([]);
     setScannedSmartbench([]);
+    setScannedScar([]);
     setScannedSsh([]);
     setScannedCustom([]);
     setHasScanned(false);
@@ -557,6 +560,7 @@ export default function DevicePage() {
       setScannedWebcams(res.data.webcams || []);
       setScannedDlt(res.data.dlt_devices || []);
       setScannedSmartbench(res.data.smartbench_devices || []);
+      setScannedScar(res.data.scar_devices || []);
       setScannedSsh(res.data.ssh_hosts || []);
       setScannedCustom(res.data.custom_results || []);
       setPcInterfaces(ifRes.data.interfaces || []);
@@ -1992,6 +1996,49 @@ export default function DevicePage() {
                       });
                     }
 
+                    if (scanItemCategory('scar') === modalCategory && scannedScar.length > 0) {
+                      scanTabs.push({
+                        key: 'scar',
+                        label: <span>SCAR <Tag style={{ marginLeft: 3 }}>{scannedScar.length}</Tag></span>,
+                        children: (
+                          <List
+                            size="small"
+                            bordered
+                            dataSource={scannedScar}
+                            pagination={scannedScar.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
+                            renderItem={(h) => {
+                              const existing = findExisting(x => x.type === 'module' && x.info?.module === 'SCAR' && x.address === h.ip);
+                              const doAdd = async () => {
+                                try {
+                                  const devId = `SCAR_${h.ip}`;
+                                  const apiBase = `http://${h.ip}:${h.port}`;
+                                  await connectDevice('module', h.ip, undefined, devId, 'auxiliary', 'SCAR', 'none', {
+                                    api_base: apiBase,
+                                    container: h.container,
+                                  });
+                                  message.success(`SCAR ${h.ip}:${h.port} ${t('common.connect')}`);
+                                  closeAddModal();
+                                } catch (e: any) {
+                                  message.error(e.response?.data?.detail || 'Connect failed');
+                                }
+                              };
+                              return (
+                                <List.Item actions={[renderScanAction(existing, t('common.connect'), doAdd)]}>
+                                  <div>
+                                    <Tag color="purple">SCAR</Tag>
+                                    <strong>{h.ip}</strong>:{h.port}
+                                    <span style={{ marginLeft: 8, color: '#888' }}>container={h.container}</span>
+                                    {h.api_alive && <Tag color="green" style={{ marginLeft: 6 }}>API</Tag>}
+                                    {h.docker_running && <Tag color="blue" style={{ marginLeft: 4 }}>DOCKER</Tag>}
+                                  </div>
+                                </List.Item>
+                              );
+                            }}
+                          />
+                        ),
+                      });
+                    }
+
                     if (scanItemCategory('ssh') === modalCategory && scannedSsh.length > 0) {
                       scanTabs.push({
                         key: 'ssh',
@@ -2673,6 +2720,7 @@ export default function DevicePage() {
             { key: 'webcam',         label: 'Webcam',         proto: 'USB',      editablePorts: false },
             { key: 'ssh',            label: 'SSH',            proto: 'TCP',      editablePorts: false },
             { key: 'smartbench',     label: 'SmartBench',     proto: 'TCP',      editablePorts: false },
+            { key: 'scar',           label: 'SCAR',           proto: 'HTTP',     editablePorts: false },
           ];
           type BuiltinItem = typeof builtinItems[number];
           type CustomItem = { label: string; type: string; port: number; module?: string; enabled?: boolean; category?: ScanCategory; __idx: number; __kind: 'custom' };
@@ -2744,12 +2792,12 @@ export default function DevicePage() {
                         setScanBuiltin({ ...scanBuiltin, [item.key]: { ...v, ports } });
                       }}
                     />
-                  ) : (item.key === 'smartbench' || item.key === 'bench') ? (
+                  ) : (item.key === 'smartbench' || item.key === 'bench' || item.key === 'scar') ? (
                     <Space.Compact size="small" style={{ width: '100%' }}>
                       <Input
                         size="small"
                         disabled
-                        value={v.host ?? (item.key === 'bench' ? '192.168.1.101' : '192.167.0.5')}
+                        value={v.host ?? (item.key === 'bench' ? '192.168.1.101' : item.key === 'scar' ? 'localhost' : '192.167.0.5')}
                         placeholder="host"
                         style={{ flex: 1 }}
                         onChange={e => setScanBuiltin({ ...scanBuiltin, [item.key]: { ...v, host: e.target.value } })}
@@ -2758,10 +2806,10 @@ export default function DevicePage() {
                         size="small"
                         disabled
                         min={1} max={65535}
-                        value={v.port ?? (item.key === 'bench' ? 25000 : 8000)}
+                        value={v.port ?? (item.key === 'bench' ? 25000 : item.key === 'scar' ? 8081 : 8000)}
                         placeholder="port"
                         style={{ width: 80 }}
-                        onChange={p => setScanBuiltin({ ...scanBuiltin, [item.key]: { ...v, port: p ?? (item.key === 'bench' ? 25000 : 8000) } })}
+                        onChange={p => setScanBuiltin({ ...scanBuiltin, [item.key]: { ...v, port: p ?? (item.key === 'bench' ? 25000 : item.key === 'scar' ? 8081 : 8000) } })}
                       />
                     </Space.Compact>
                   ) : (item.key === 'ssh' || item.key === 'icas' || item.key === 'mib') ? (
