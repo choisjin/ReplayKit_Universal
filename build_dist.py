@@ -848,31 +848,33 @@ if __name__ == '__main__':
 # ── Step 2: Frontend 빌드 ──
 
 def step_build_frontend(force=False) -> bool:
+    """Frontend 무조건 빌드 (npm install + npm run build).
+
+    옛 dist 가 push 되어 사용자가 옛 UI 받는 사고를 막기 위해 hash-based skip 제거.
+    npm install 은 package.json/lock 해시로 스킵 가능 (의미 있는 시간 절약).
+    """
     print("\n=== [2/3] Frontend 빌드 ===")
     fe_dir = PROJECT_ROOT / "frontend"
     hashes = _load_hashes()
 
-    # npm install: package.json + lock 해시
+    # npm install: package.json + lock 해시 — 의존성 변경 없으면 스킵해도 안전.
     pkg_hash = _hash_file(fe_dir / "package.json") + _hash_file(fe_dir / "package-lock.json")
     if force or pkg_hash != hashes.get("fe_pkg") or not (fe_dir / "node_modules").exists():
         print("  npm install...")
         _run([NPM_CMD, "install"], cwd=fe_dir, check=False)
         hashes["fe_pkg"] = pkg_hash
     else:
-        print("  npm install — skipped")
+        print("  npm install — skipped (package.json 변경 없음)")
 
-    # npm run build: src 해시
-    src_hash = _hash_dir(fe_dir / "src", {".ts", ".tsx", ".css", ".html"})
-    if not force and src_hash == hashes.get("fe_src") and (fe_dir / "dist" / "index.html").exists():
-        print("  소스 변경 없음 — 빌드 건너뜀")
-        return True
-
+    # npm run build — 무조건 실행. src 해시 검사로 스킵하던 로직 제거.
+    print("  npm run build...")
     result = _run([NPM_CMD, "run", "build"], cwd=fe_dir, check=False)
     if result.returncode != 0:
         print(f"  빌드 에러:\n{result.stderr[:500]}")
         return False
 
-    hashes["fe_src"] = src_hash
+    # src 해시는 더 이상 skip 결정에 사용 안 하지만, 로그/디버깅용으로 계속 기록.
+    hashes["fe_src"] = _hash_dir(fe_dir / "src", {".ts", ".tsx", ".css", ".html"})
     _save_hashes(hashes)
     print("  빌드 완료")
     return True

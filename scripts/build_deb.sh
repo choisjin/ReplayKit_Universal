@@ -141,17 +141,21 @@ if [ "$NO_DEB" -ne 1 ]; then
 fi
 
 # ---- [1/7] Frontend 빌드 ----
+# 기본은 항상 빌드 — 옛 dist 가 push 되어 사용자가 옛 UI 받는 사고 방지.
+# 명시적으로 스킵하려면 --no-frontend.
 echo "[1/7] Frontend build..."
 if [ "$NO_FRONTEND" -eq 1 ]; then
-    echo "      Skipped (--no-frontend)"
-elif [ -d frontend/dist ]; then
-    echo "      Skipped (frontend/dist already exists — use --no-frontend to silence or rm to rebuild)"
+    echo "      Skipped (--no-frontend 명시)"
+    if [ ! -d frontend/dist ]; then
+        echo "[ERROR] --no-frontend 인데 frontend/dist 가 없음. 먼저 빌드 필요."
+        exit 1
+    fi
 else
     (cd frontend && npm install --no-audit --no-fund && npm run build)
-fi
-if [ ! -d frontend/dist ]; then
-    echo "[ERROR] frontend/dist 가 없습니다. 빌드 필요."
-    exit 1
+    if [ ! -d frontend/dist ]; then
+        echo "[ERROR] npm run build 후 frontend/dist 가 생성되지 않음. 빌드 로그 확인."
+        exit 1
+    fi
 fi
 
 # ---- [2/7] Embedded Python ----
