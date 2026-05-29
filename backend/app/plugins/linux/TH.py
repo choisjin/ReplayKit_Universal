@@ -258,7 +258,8 @@ class TH:
         if not self._iface_exists(self.cvd_br):
             msgs.append(f"  warn: bridge '{self.cvd_br}' not present yet; will be created by setup script")
 
-        # 기존 IP 조회 후, host_ip 와 다르면 삭제
+        # 기존 IP 조회 후, host_ip 와 다르면 삭제. 이미 있는지 플래그로 기록해서 add 스킵.
+        host_ip_already_present = False
         if self._iface_exists(self.cvd_br):
             res = subprocess.run(
                 ["ip", "-4", "addr", "show", "dev", self.cvd_br],
@@ -270,6 +271,7 @@ class TH:
                     continue
                 old = m.group(1)
                 if old == self.host_ip:
+                    host_ip_already_present = True
                     msgs.append(f"  {self.host_ip} already on {self.cvd_br}")
                     continue
                 rc, out = self._sudo_ip(["addr", "del", old, "dev", self.cvd_br])
@@ -277,14 +279,21 @@ class TH:
                     return rc, "\n".join(msgs + [f"  delete old IP {old} failed: {out}"])
                 msgs.append(f"  deleted {old} from {self.cvd_br}")
 
-        # host_ip 추가 (이미 있으면 RTNETLINK answers: File exists — 무시)
-        rc, out = self._sudo_ip(["addr", "add", self.host_ip, "dev", self.cvd_br])
-        if rc != 0 and "File exists" not in out:
-            return rc, "\n".join(msgs + [f"  add {self.host_ip} failed: {out}"])
-        msgs.append(f"  added {self.host_ip} to {self.cvd_br}"
-                    + (" (already present)" if rc != 0 else ""))
+        # host_ip 추가 — 이미 있으면 스킵. 없으면 ip addr add 호출.
+        # 커널 버전별로 중복 추가 에러 메시지가 다양함: "File exists",
+        # "Error: ipv4: Address already assigned.", "RTNETLINK answers" 등 모두 양성으로 처리.
+        if host_ip_already_present:
+            msgs.append(f"  skip add (already present)")
+        else:
+            rc, out = self._sudo_ip(["addr", "add", self.host_ip, "dev", self.cvd_br])
+            already_msgs = ("File exists", "already assigned", "already exists")
+            already = any(s in out for s in already_msgs)
+            if rc != 0 and not already:
+                return rc, "\n".join(msgs + [f"  add {self.host_ip} failed: {out}"])
+            msgs.append(f"  added {self.host_ip} to {self.cvd_br}"
+                        + (" (race: already present)" if already else ""))
 
-        # eth_if 를 bridge 멤버로
+        # eth_if 를 bridge 멤버로 — 이미 멤버여도 ip link set 은 idempotent (exit 0).
         rc, out = self._sudo_ip(["link", "set", self.eth_if, "master", self.cvd_br])
         if rc != 0:
             return rc, "\n".join(msgs + [f"  set {self.eth_if} master {self.cvd_br} failed: {out}"])
