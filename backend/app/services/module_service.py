@@ -347,6 +347,29 @@ def list_available_modules() -> list[dict]:
              {"name": "ip", "label": "IP Address", "type": "text", "default": ""},
              {"name": "subnetmask", "label": "Subnet Mask", "type": "text", "default": "255.255.0.0"},
          ]},
+        # Linux 전용 플러그인 — plugins/linux/ 서브폴더에 위치. connect_type="none" 이지만
+        # constructor 인자가 많아서 UI 입력 폼이 필요하다.
+        {"name": "TH", "label": "TH (Test Harness, Linux)", "connect_type": "none",
+         "connect_fields": [
+             {"name": "client_dir", "label": "client.py 디렉터리", "type": "text", "default": ""},
+             {"name": "th_addr", "label": "TH 브로커 IP", "type": "text", "default": ""},
+             {"name": "python_bin", "label": "Python 인터프리터", "type": "text", "default": "python3"},
+             {"name": "panel", "label": "PySide6 시각화 패널", "type": "select", "default": "True",
+              "options": ["True", "False"]},
+             {"name": "panel_trigger", "label": "패널 점등 트리거 토큰", "type": "text",
+              "default": "GEAR_LEVER_ACCEPTED_T_REVERSE"},
+         ]},
+        {"name": "SCAR", "label": "SCAR (SDV Control, Linux)", "connect_type": "none",
+         "connect_fields": [
+             {"name": "api_base", "label": "SCAR REST URL", "type": "text",
+              "default": "http://localhost:8081"},
+             {"name": "container", "label": "Docker container 이름", "type": "text", "default": "scar"},
+             {"name": "reconnect_script", "label": "재기동 스크립트 (절대경로, 선택)", "type": "text", "default": ""},
+             {"name": "reconnect_args", "label": "재기동 스크립트 인자 (공백 구분, 선택)", "type": "text",
+              "default": "-t 2.2.0 --ui --arti tls"},
+             {"name": "reconnect_cwd", "label": "재기동 스크립트 cwd (선택)", "type": "text", "default": ""},
+             {"name": "reconnect_wait_s", "label": "재기동 후 대기 (초)", "type": "number", "default": "20"},
+         ]},
     ]
     available = []
     for m in modules:
@@ -365,8 +388,8 @@ def list_available_modules() -> list[dict]:
             m["_source"] = "lge.auto"
             available.append(m)
         except Exception:
-            # lge.auto에 없으면 플러그인 폴백
-            if (_PLUGINS_DIR / f"{m['name']}.py").is_file():
+            # lge.auto에 없으면 플러그인 폴백 — 루트와 OS 전용 서브폴더 모두 확인.
+            if _find_plugin_file(m["name"]) is not None:
                 m["_source"] = "plugin"
                 available.append(m)
 

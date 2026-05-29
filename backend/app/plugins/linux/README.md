@@ -19,9 +19,91 @@
 
 ---
 
-## 1. TH 플러그인 사용
+## 1. ReplayKit 모듈 연결 흐름 (사용자 관점)
 
-### 1.1 인스턴스 생성
+ReplayKit 의 다른 플러그인과 동일한 패턴을 따른다. 코드를 직접 import 해서 쓰는 게 아니라
+**디바이스로 등록** → 시나리오에서 **모듈 호출 노드**로 부른다.
+
+### 1.1 한 번만 — `requirements.txt` 설치 / 실행
+
+```bash
+./setup.sh                # venv + PySide6 + requests + robotframework 설치
+./ReplayKit.sh            # 백엔드 + 프론트엔드 기동
+# 또는 dev 모드
+./dev-run.sh
+```
+
+기동 후 브라우저로 `http://localhost:5173` (dev) 또는 `http://localhost:8000` (prod) 접속.
+
+### 1.2 디바이스 등록 (UI)
+
+> Linux 에서 ReplayKit 을 띄우면 `module_service` 가 `plugins/linux/` 서브폴더를 자동 스캔해서
+> 디바이스 추가 폼의 모듈 드롭다운에 **TH**, **SCAR** 가 노출된다.
+
+**TH 디바이스 추가**
+
+| 폼 필드 | 입력값 예시 | 비고 |
+|---|---|---|
+| Module | `TH (Test Harness, Linux)` | 드롭다운 선택 |
+| client.py 디렉터리 | `/home/cdc/0.scripts/th_client` | 필수 — `client.py` 가 들어있는 디렉터리 절대경로 |
+| TH 브로커 IP | `192.168.1.50` | 필수 |
+| Python 인터프리터 | `python3` 또는 `/usr/bin/python3.10` | 기본값 `python3` |
+| PySide6 시각화 패널 | `True` | False 면 패널 미사용 |
+| 패널 점등 트리거 토큰 | `GEAR_LEVER_ACCEPTED_T_REVERSE` | 빈 칸이면 기본값 사용 |
+
+저장하면 디바이스 ID 가 부여되고, 시나리오에서 `TH.Send(...)` / `TH.SendAndUpdate(...)` 등을 호출할 때 이
+디바이스 설정이 자동으로 생성자에 전달된다.
+
+**SCAR 디바이스 추가**
+
+| 폼 필드 | 입력값 예시 | 비고 |
+|---|---|---|
+| Module | `SCAR (SDV Control, Linux)` | 드롭다운 선택 |
+| SCAR REST URL | `http://localhost:8081` | 기본값 그대로 두면 됨 |
+| Docker container 이름 | `scar` | 기본값 |
+| 재기동 스크립트 (절대경로) | `/home/scar/scar.sh` | 빈 칸이면 `Reconnect()` 호출 시 FAIL |
+| 재기동 스크립트 인자 | `-t 2.2.0 --ui --arti tls` | 공백 구분 |
+| 재기동 스크립트 cwd | `/home/scar` | 스크립트 실행 working dir |
+| 재기동 후 대기 (초) | `20` | 원본 Robot `Wait 20` 보존 |
+
+### 1.3 시나리오에서 호출
+
+ReplayKit 시나리오 편집기의 "모듈 명령" 노드에서:
+
+```
+device: <위에서 등록한 TH 디바이스>
+module : TH
+function: SendAndUpdate
+args:
+  topic_name = some_ip_broker_com_sdv_ampere_common_fnd_sdv_powertrain_gear_lever_position_accepted_unique
+  json_path  = /home/cdc/0.scripts/runJSON/GearLeverPositionAccepted.json
+  timeout    = 10
+```
+
+반환문자열이 `"FAIL:"` 로 시작하면 ReplayKit 이 해당 step 을 자동으로 실패 처리하고,
+그렇지 않으면 통과로 기록한다 (SHELL/CMD 와 동일 규약).
+
+### 1.4 (디버깅용) 코드에서 직접 호출
+
+위 디바이스 등록 없이 단위 검증만 하고 싶을 때:
+
+```python
+# Linux 셸에서 ReplayKit venv 활성화 후
+python -c "
+import sys; sys.path.insert(0, '.')
+from backend.app.plugins.linux.TH import TH
+th = TH(client_dir='/home/cdc/0.scripts/th_client', th_addr='192.168.1.50', panel=False)
+print(th.Send('topic_name_here', '/path/to/payload.json', timeout=5))
+"
+```
+
+`panel=False` 로 두면 PySide6 호스트가 spawn 되지 않아 headless 환경에서도 동작한다.
+
+---
+
+## 2. TH 플러그인 메서드 상세
+
+### 2.1 인스턴스 생성 (코드 직접 호출 시)
 
 ```python
 from backend.app.plugins.linux.TH import TH
@@ -35,10 +117,7 @@ th = TH(
 )
 ```
 
-> ReplayKit 시나리오 편집기에서 디바이스로 등록하면 `connect_type="none"` 이라 호스트 입력란 없이
-> 위 생성자 인자들이 module config 에서 채워진다 (`module_service` 자동 인식).
-
-### 1.2 메서드
+### 2.2 메서드
 
 | 메서드 | 설명 | 반환 |
 |---|---|---|
@@ -48,7 +127,7 @@ th = TH(
 | `PanelReset()` | 노란색 → 검정. 라벨 숨김. | `"ok"` |
 | `PanelClose()` | 패널 호스트 프로세스 종료. | `"ok"` |
 
-### 1.3 시나리오 예시
+### 2.3 시나리오 예시
 
 ```python
 # RVC_Performance 의 한 사이클 핵심 부분
@@ -70,7 +149,7 @@ result = th.SendAndUpdate(
 # result 예: "rc=0 trigger_hit=GEAR_LEVER_ACCEPTED_T_REVERSE e2e_ms=23.41\n..."
 ```
 
-### 1.4 패널 동작 방식
+### 2.4 패널 동작 방식
 
 원본 `TH_Lib.py` 가 사용하던 tkinter 는 ReplayKit 메인 루프와 충돌하는 사례가 있어 **별도 프로세스**의 PySide6 위젯으로 격리한다.
 
@@ -82,7 +161,7 @@ result = th.SendAndUpdate(
 - 호스트 프로세스는 좌하단 (스크린 좌표 `(0, screen.height-300)`) 300x300, frameless, top-most, `WA_ShowWithoutActivating` (포커스 도둑 방지).
 - 호스트가 죽으면 다음 호출에서 자동 재시작 — 1분 윈도우 내 최대 3회까지 (`PanelClient._RESPAWN_MAX`).
 
-### 1.5 지연 경로 (`SendAndUpdate`)
+### 2.5 지연 경로 (`SendAndUpdate`)
 
 ```
 client.py stdout 1 byte 도착
@@ -97,9 +176,9 @@ client.py stdout 1 byte 도착
 
 ---
 
-## 2. SCAR 플러그인 사용
+## 3. SCAR 플러그인 메서드 상세
 
-### 2.1 인스턴스 생성
+### 3.1 인스턴스 생성 (코드 직접 호출 시)
 
 ```python
 from backend.app.plugins.linux.SCAR import SCAR
@@ -114,7 +193,7 @@ scar = SCAR(
 )
 ```
 
-### 2.2 메서드
+### 3.2 메서드
 
 | 메서드 | 설명 | 반환 |
 |---|---|---|
@@ -123,7 +202,7 @@ scar = SCAR(
 | `Exec(cmd, timeout=300, max_retry=3)` | `docker exec scar bash -c <cmd>`. | `"rc=<n>\n<stdout 2KB>"` 또는 `"FAIL: ..."` |
 | `Reconnect()` | `setsid <reconnect_script> ... &` + 대기. | `"DOCKER"` / `"FAIL: ..."` |
 
-### 2.3 자동 판별 동작
+### 3.3 자동 판별 동작
 
 `Ready()` 의 흐름은 원본 `Ensure SCAR Is Ready` 와 동일:
 
@@ -142,7 +221,7 @@ return "NONE"
 
 `SendApi` 는 모드가 `API` 가 아니면 명시적으로 `FAIL` — Docker 동등 동작이 필요한 호출은 `Exec()` 로 직접 부른다.
 
-### 2.4 시나리오 예시
+### 3.4 시나리오 예시
 
 ```python
 mode = scar.Ready()                       # "API" / "DOCKER" / "NONE"
@@ -161,13 +240,16 @@ elif mode == "DOCKER":
 # NONE 이면 SCAR 부분 건너뛰기
 ```
 
+ReplayKit 시나리오 편집기에서는 위 분기를 모듈 명령 노드 + 조건 분기 노드의 조합으로 만든다.
+`Ready` 함수의 반환값을 변수에 저장해두고 다음 노드에서 `== "API"` / `== "DOCKER"` 로 분기.
+
 ---
 
-## 3. 사전 점검 체크리스트
+## 4. 사전 점검 체크리스트
 
 배포 전에 한 번씩 확인해야 할 항목.
 
-### 3.1 환경 의존성
+### 4.1 환경 의존성
 
 - [ ] `python3 -c "from PySide6.QtWidgets import QApplication; print('ok')"` 이 OK 인지
 - [ ] `docker version` 이 정상 응답하는지 (SCAR 사용 시)
@@ -175,7 +257,7 @@ elif mode == "DOCKER":
 - [ ] TH `client.py` 가 있는 디렉터리 권한 + 실행 권한
 - [ ] Wayland 세션이면 `XDG_SESSION_TYPE=x11` 또는 `GDK_BACKEND=x11` 로 ReplayKit 실행 (PySide6 frameless top-most 동작 보장)
 
-### 3.2 자동 테스트 (pytest, Linux 머신에서)
+### 4.2 자동 테스트 (pytest, Linux 머신에서)
 
 ```bash
 cd /path/to/ReplayKit_Universal
@@ -191,62 +273,110 @@ pytest test/plugins/linux -v
 
 > `test_th_signal.py` 는 sub-shell 로 dummy client.py 를 실행하므로 SCAR/TH 실서버 없이도 통과.
 
-### 3.3 수동 통합 테스트
+### 4.3 수동 통합 테스트 (Linux PC 에서)
 
-순서대로 확인:
+순서대로 확인하면 발견하는 문제의 절반은 1~3 단계에서 잡힌다.
 
-1. **module 등록 확인**
-   ```python
+1. **module 등록 확인** — UI 디바이스 추가 폼에 TH/SCAR 가 노출되는지의 backend 측 검증
+   ```bash
+   cd /path/to/ReplayKit_Universal && . .venv/bin/activate
+   python -c "
    from backend.app.services import module_service
-   names = [m["name"] for m in module_service.list_available_modules()]
-   assert "TH" in names and "SCAR" in names
+   names = [m['name'] for m in module_service.list_available_modules()]
+   print('TH:', 'TH' in names, ' SCAR:', 'SCAR' in names)
+   "
    ```
+   기대: `TH: True  SCAR: True`. False 면 `plugins/linux/` 서브폴더 discovery 가 깨졌거나
+   `__init__.py` import 가 실패한 것 — `python -c "import backend.app.plugins.linux.TH"` 로 에러 메시지 확인.
 
-2. **TH 패널 띄우기만**
-   ```python
+2. **UI 드롭다운 확인** — ReplayKit GUI 의 디바이스 추가 모달에서 모듈 드롭다운에 `TH (Test Harness, Linux)`,
+   `SCAR (SDV Control, Linux)` 가 나오는지 + 각각의 입력 폼 필드가 README 1.2 표와 같은지.
+
+3. **TH 패널만 단독 띄우기** (PySide6 / X11 환경 검증)
+   ```bash
+   python -m backend.app.plugins.linux.common.th_panel_host --socket /tmp/th-test.sock --width 300 --height 300
+   ```
+   다른 터미널에서:
+   ```bash
+   python -c "
+   import socket
+   s = socket.socket(socket.AF_UNIX); s.connect('/tmp/th-test.sock')
+   s.sendall(b'\\x01'); import time; time.sleep(2)   # highlight
+   s.sendall(b'\\x02'); time.sleep(1)                # reset
+   s.sendall(b'\\x03')                                # shutdown
+   "
+   ```
+   기대: 좌하단 300x300 frameless 패널 → 노란색 점등 + 타임스탬프 라벨 → 검정 → 종료.
+
+4. **TH 시나리오 1step 시뮬레이션**
+   ```bash
+   python - <<'PY'
    from backend.app.plugins.linux.TH import TH
    th = TH(client_dir="/tmp", th_addr="127.0.0.1", panel=True)
-   th.PanelShow()                          # 좌하단 검정 300x300 패널 등장
-   th.PanelReset()
-   th.PanelClose()
+   print(th.PanelShow())          # 좌하단 검정 패널 등장
+   print(th.PanelReset())
+   print(th.PanelClose())
+   PY
    ```
-   기대: 패널이 떴다가 사라짐. 콘솔에 에러 없음. Wayland 면 X11 fallback 필요할 수 있음.
+   기대: 모두 `ok`. Wayland 세션이면 `XDG_SESSION_TYPE=x11 GDK_BACKEND=x11 python -m ...` 형태로 강제.
 
-3. **TH 패널 점등 latency 측정**
-   - dummy client.py 를 만들어 `sleep 0.5 && echo GEAR_LEVER_ACCEPTED_T_REVERSE` 만 출력하게 함
-   - `th.SendAndUpdate("dummy", "/dev/null", timeout=3)` 호출
-   - 기대: 패널이 노란색으로 점등 + 현재 시각 라벨. 반환 문자열의 `e2e_ms` 가 약 500ms 근처 + 작은 오버헤드 (가능하면 < 50ms 추가).
+5. **TH 패널 점등 latency 측정** — 실제 측정
+   ```bash
+   mkdir -p /tmp/dummy_th && cat > /tmp/dummy_th/client.py <<'PY'
+   import sys, time
+   for a in sys.argv: print('arg:', a)
+   time.sleep(0.5)
+   sys.stdout.write('XXX GEAR_LEVER_ACCEPTED_T_REVERSE YYY\n'); sys.stdout.flush()
+   time.sleep(0.1)
+   PY
+   python - <<'PY'
+   from backend.app.plugins.linux.TH import TH
+   th = TH(client_dir="/tmp/dummy_th", th_addr="127.0.0.1", panel=True)
+   print(th.SendAndUpdate("dummy_topic", "/dev/null", timeout=3))
+   th.PanelClose()
+   PY
+   ```
+   기대: 반환 1줄 `rc=0 trigger_hit=GEAR_LEVER_ACCEPTED_T_REVERSE e2e_ms=<숫자>` — e2e_ms 가
+   약 500ms (sleep 0.5) + 50ms 오버헤드 이내인지 확인.
 
-4. **SCAR API 경로**
-   - `scar` 컨테이너가 떠있고 `http://localhost:8081/` 가 응답하는 상태
-   - `scar.Ready()` → `"API"`
-   - `scar.SendApi("http://localhost:8081/<endpoint>", headers='{}', data='{}')` → `status=200` 또는 서버가 주는 코드
+6. **SCAR API 경로**
+   - `scar` 컨테이너 떠있고 `http://localhost:8081/` 가 응답하는 상태
+   - `python -c "from backend.app.plugins.linux.SCAR import SCAR; s=SCAR(); print(s.Ready())"` → `"API"`
+   - `s.SendApi("http://localhost:8081/<endpoint>", headers='{}', data='{}')` → `status=200` 또는 서버 코드
 
-5. **SCAR DOCKER 경로**
-   - REST 서버를 죽이거나 응답하지 않게 만들고 컨테이너만 살려둠
-   - `scar.Ready()` → `"DOCKER"`
-   - `scar.Exec("echo hello")` → `rc=0\nhello`
+7. **SCAR DOCKER 경로** — REST 서버만 죽이거나 응답 차단
+   - `s.Ready()` → `"DOCKER"`
+   - `s.Exec("echo hello")` → `rc=0\nhello`
 
-6. **SCAR reconnect 경로**
+8. **SCAR reconnect 경로**
    - 컨테이너 중지: `docker stop scar`
-   - `scar.Ready()` 호출 → reconnect_script 실행 시도, 20초 대기 후
-     - 스크립트가 정상 동작했으면 `"DOCKER"`
-     - 스크립트가 없거나 실패하면 force_docker_mode=True 상태로 `"DOCKER"` 반환되지만 실제 `Exec` 는 `FAIL: SCAR container not running` 으로 떨어짐
-   - 같은 인스턴스로 `scar.Ready()` 재호출 → 무조건 `"DOCKER"` (API 재시도 안 함)
+   - `s = SCAR(reconnect_script="/home/scar/scar.sh", reconnect_cwd="/home/scar")` 로 생성 후 `s.Ready()`
+   - 기대: reconnect_script 실행 + 20초 대기 후 `"DOCKER"` 또는 `"NONE"` (스크립트 없거나 실패 시)
+   - 같은 인스턴스로 `s.Ready()` 재호출 → API 재시도 없이 즉시 `"DOCKER"` (force_docker_mode 보존)
 
-7. **RVC_Performance 1사이클 재현**
-   - 원본 `Reference/Renault_CDC_Plugin/RVC_Performance.txt` 의 한 cycle 을 ReplayKit 시나리오로 작성
-   - 기대: MCU 시리얼에서 `PS:SHUTDOWN_DONE->OFF. ACT_Done:0x00000040` 수신, Arduino `RVC_START` 전송, 패널 점멸 발생
+9. **시나리오에서 호출 (end-to-end)**
+   - GUI 에서 등록한 TH 디바이스 + SCAR 디바이스를 사용하는 시나리오 1개 작성
+   - 노드 1: `SCAR.SendApi(...)` (UTC time event)
+   - 노드 2: `SCAR.SendApi(...)` (PnP off)
+   - 노드 3: `TH.SendAndUpdate(topic, json, timeout=10)`
+   - 시나리오 재생 → 패널이 점등되고 모든 step 이 pass 로 기록되는지
 
-### 3.4 회귀 점검 (Windows 빌드)
+10. **RVC_Performance 1사이클 재현**
+    - 원본 `Reference/Renault_CDC_Plugin/RVC_Performance.txt` 의 한 cycle 을 ReplayKit 시나리오로 옮김
+    - 기대: MCU 시리얼에서 `PS:SHUTDOWN_DONE->OFF. ACT_Done:0x00000040` 수신, Arduino `RVC_START` 전송,
+      `Send Signal And Update Panel` 시점에 패널이 노란색으로 깜빡
+
+### 4.4 회귀 점검 (Windows 빌드)
 
 Windows 빌드는 이 패키지를 import 하면 즉시 ImportError. 회귀 가능성이 있는 곳:
-- [ ] Windows 에서 `module_service.list_available_modules()` 호출 시 TH/SCAR 가 목록에 없는지 (있으면 안 됨)
+- [ ] Windows 에서 `module_service.list_available_modules()` 호출 시 TH/SCAR 가 목록에 없는지 (있으면 안 됨 —
+      hardcoded 리스트에 추가되어 있지만 `_find_plugin_file` 가 None 을 반환해 fallback 단계에서 걸러져야 함)
 - [ ] Windows 에서 시나리오 파일에 TH/SCAR 호출이 박혀 있어도 import 실패가 명확한 에러 메시지로 노출되는지
+      (`_last_import_error` 에 사유가 들어가야 UI 토스트에 보임)
 
 ---
 
-## 4. 트러블슈팅
+## 5. 트러블슈팅
 
 ### `ImportError: backend.app.plugins.linux is Linux-only (current platform: win32)`
 정상 동작. Windows 에서는 패키지 자체가 비활성. 시나리오에 TH/SCAR 가 박혀 있다면 Linux PC 에서 재생해야 한다.
@@ -273,7 +403,7 @@ Windows 빌드는 이 패키지를 import 하면 즉시 ImportError. 회귀 가�
 
 ---
 
-## 5. 파일 매핑 요약
+## 6. 파일 매핑 요약
 
 | 컴포넌트 | 파일 | 책임 |
 |---|---|---|
