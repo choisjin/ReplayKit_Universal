@@ -2355,9 +2355,15 @@ export default function DevicePage() {
                     )}
 
                     {moduleConnType === 'none' && (
-                      <div style={{ color: '#888', fontSize: 11, padding: '8px 0' }}>
-                        {t('device.noConnectionRequired')}
-                      </div>
+                      connectFields.length > 0 ? (
+                        // TH / SCAR 처럼 connect_type='none' 이지만 module-specific 설정 필드가
+                        // 있는 경우 — eth_if / th_home / sudo_password 등을 폼에 노출.
+                        renderConnectFields(connectFields, extraFieldValues, setExtraFieldValues)
+                      ) : (
+                        <div style={{ color: '#888', fontSize: 11, padding: '8px 0' }}>
+                          {t('device.noConnectionRequired')}
+                        </div>
+                      )
                     )}
 
                     {!selectedModule && connectType === 'hkmc_agent' && (
