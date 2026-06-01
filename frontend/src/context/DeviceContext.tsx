@@ -345,7 +345,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       closeWs(); // JMuxer, FPS 등 전체 상태 정리
       scheduleReconnect();
     };
-  }, [closeWs, markFrameAlive, startFpsCounter]);
+  }, [closeWs, markFrameAlive, startFpsCounter, releaseVideoBuffer]);
 
   // 최신 startWsStream 참조 유지
   startWsStreamRef.current = startWsStream;
