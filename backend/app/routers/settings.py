@@ -406,10 +406,14 @@ async def update_and_restart():
                 if rc == 0:
                     rc2, _, err2 = _run(["git", "reset", "--hard", "origin/main"],
                                         cwd=str(git_root), timeout=30)
+                    # reset 성공 시 의존성도 재설치 — 새 requirements.txt (grpcio 등) 가
+                    # 설치 안 되면 TH client.py 가 import 에서 죽는다. 재시작 전(여기서) 동기 수행.
+                    deps = _reinstall_deps(git_root) if rc2 == 0 else None
                     return {
                         "performed": rc2 == 0,
                         "mode": "in-place",
                         "git_root": str(git_root),
+                        "deps": deps,
                         "error": err2.strip()[:300] if rc2 != 0 else None,
                     }
                 return {"performed": False, "mode": "in-place", "error": f"fetch: {err.strip()[:300]}"}
@@ -525,6 +529,26 @@ def _run(cmd: list[str], cwd: Optional[str] = None, timeout: int = 30,
     r = subprocess.run(cmd, cwd=cwd, capture_output=True, timeout=timeout,
                        encoding="utf-8", errors="replace", env=env)
     return r.returncode, r.stdout or "", r.stderr or ""
+
+
+def _reinstall_deps(root: Path) -> dict:
+    """git pull 직후 requirements.txt 를 현재 인터프리터(sys.executable)에 재설치.
+
+    인앱 업데이트는 git pull 만 하고 deps 를 갱신하지 않아, 새로 추가된 의존성
+    (예: TH client.py 의 grpcio) 이 빠져 ModuleNotFoundError 가 났다.
+    pip 는 이미 충족되면 빠르게 끝나므로 매 업데이트마다 호출해도 안전하다.
+    """
+    req = root / "requirements.txt"
+    if not req.exists():
+        return {"installed": False, "reason": "no requirements.txt"}
+    try:
+        rc, _out, err = _run(
+            [sys.executable, "-m", "pip", "install", "-r", str(req), "-q"],
+            cwd=str(root), timeout=600,
+        )
+    except Exception as e:
+        return {"installed": False, "error": f"{type(e).__name__}: {e}"[:300]}
+    return {"installed": rc == 0, "error": err.strip()[:300] if rc != 0 else None}
 
 
 # .deb 환경에서 git pull 시 LGE 내부 원격 (배포본 트리). source clone 환경에선
