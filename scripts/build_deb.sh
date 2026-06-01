@@ -226,6 +226,31 @@ print(f'      PySide6 path: {p}')
     exit 1
 fi
 
+# ---- [3.6/7] grpcio 명시 설치 + 검증 (TH 플러그인 의존성) ----
+# TH 플러그인이 임베디드 Python 으로 Renault CDC TH 의 grpc client.py 를 실행한다
+# (TH.python_bin 기본 = sys.executable). grpcio 가 없으면 client.py 가
+# 'ModuleNotFoundError: No module named grpc' 로 죽어 TH 신호 전송이 전부 실패.
+# requirements.txt 의 grpcio pin 이 어떤 이유든 install 안 됐을 때를 대비해 매 빌드마다 명시 설치.
+echo "      Verifying grpcio (TH client.py dependency)..."
+./python/bin/python3 -m pip install --upgrade "grpcio" -q || true
+if ! ./python/bin/python3 -c "import grpc; print('      OK: grpcio', grpc.__version__)" ; then
+    echo ""
+    echo "[ERROR] grpcio 미설치 또는 import 실패. TH client.py (grpc) 가 동작 안 함."
+    echo "        진단:"
+    echo "          ./python/bin/python3 -m pip list | grep -i grpc"
+    exit 1
+fi
+# fs 레벨 검증 — embedded python/ 안에 실제로 들어갔는지 (user site 누수 방어).
+if ! ./python/bin/python3 -c "
+import grpc, pathlib
+p = pathlib.Path(grpc.__file__).parent
+assert p.is_relative_to(pathlib.Path('./python').resolve()), f'grpc at {p} 가 embedded python/ 외부 — .deb 에 포함 안 됨'
+print(f'      grpc path: {p}')
+" 2>&1; then
+    echo "[ERROR] grpcio 가 embedded python/ 외부에 설치됨 — .deb 페이로드에 포함되지 않음."
+    exit 1
+fi
+
 # ---- [4/7] Staging → dist/ReplayKit/ ----
 # Canonical staging. Windows dist/ReplayKit 와 같은 구조.
 # 사용자가 git clone 으로 받는 트리 = 사용자 머신의 ReplayKit.sh 가 실행되는 트리.
@@ -357,6 +382,17 @@ else
         exit 1
     fi
     echo "      PySide6 fs-check OK (in $OPT_DIR/python/...)"
+
+    # grpcio 가 staging 에 들어왔는지 fs 검증 — TH client.py 동작 의존성.
+    if [ ! -d "$OPT_DIR/python/lib/python3.10/site-packages/grpc" ]; then
+        echo "[ERROR] grpcio(grpc) 가 $OPT_DIR/python/lib/python3.10/site-packages/ 에 없음."
+        echo "        TH 플러그인의 grpc client.py 가 동작하지 않습니다."
+        echo "        진단:"
+        echo "          ls -la $DIST_REPLAYKIT/python/lib/python3.10/site-packages/ | grep -i grpc"
+        echo "          ls -la $OPT_DIR/python/lib/python3.10/site-packages/ | grep -i grpc"
+        exit 1
+    fi
+    echo "      grpcio fs-check OK (in $OPT_DIR/python/...)"
 
     # ---- [6/7] Launcher / Desktop / Icon / GUI ----
     echo "[6/7] Launcher + desktop entry + icon..."
