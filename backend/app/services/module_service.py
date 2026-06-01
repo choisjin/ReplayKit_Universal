@@ -358,6 +358,8 @@ def list_available_modules() -> list[dict]:
              {"name": "th_home", "label": "TH 버전 디렉터리 (선택 필요)", "type": "folder", "default": ""},
              {"name": "th_root", "label": "TH root (host_ends_setup.sh / ensure-adb.sh 위치)",
               "type": "folder", "default": "/home/cdc/Desktop/TH"},
+             {"name": "microservice_gateways", "label": "게이트웨이 번호 (공백 구분, 예: 57 89 191 207)",
+              "type": "text", "default": ""},
              {"name": "sudo_password", "label": "sudo 비밀번호 (passwordless 미설정 시 필수)",
               "type": "password", "default": ""},
              # 숨김 항목 — connect_th.sh USER CONFIG 디폴트 그대로 사용. extra_fields 에는 들어가서
@@ -382,6 +384,8 @@ def list_available_modules() -> list[dict]:
               "options": ["True", "False"], "hidden": True},
              {"name": "launch_cvd", "label": "Setup 시 launch_cvd 자동 spawn", "type": "select", "default": "True",
               "options": ["True", "False"], "hidden": True},
+             {"name": "run_microservice", "label": "Setup 시 게이트웨이(th_run_microservice.sh) 자동 기동",
+              "type": "select", "default": "True", "options": ["True", "False"], "hidden": True},
          ]},
         # SCAR — 런타임(REST/Docker) + 등록 시 netns VLAN 자동 구성.
         #   표시 필드: SCAR 설치 가이드 "2. Network Configuration" 에서 사용자가 결정해야 하는 값.

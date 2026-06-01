@@ -63,6 +63,10 @@ SETUP_ADB_TIMEOUT_S = 15.0
 # 실제 디바이스 사용 시점에는 이미 부팅 끝나 있을 거라는 전제.
 SETUP_CVD_VERIFY_S = 5.0
 
+# th_run_microservice.sh 타임아웃 — 내부 adb wait-for-device + 게이트웨이 기동 + sleep 5 포함.
+# CVD 부팅이 늦으면 wait-for-device 에서 대기하므로 넉넉히.
+SETUP_MICROSERVICE_TIMEOUT_S = 120.0
+
 # launch_cvd 백그라운드 프로세스 추적 파일
 LAUNCH_CVD_LOG = "/tmp/replaykit-launch_cvd.log"
 LAUNCH_CVD_PID_FILE = "/tmp/replaykit-launch_cvd.pid"
@@ -105,6 +109,8 @@ class TH:
         panel_trigger: str = DEFAULT_PANEL_TRIGGER,
         auto_setup = True,                                # 등록 시 자동으로 Setup() 호출
         launch_cvd = True,                                # Setup step 5: launch_cvd 자동 spawn
+        microservice_gateways: str = "",                  # th_run_microservice.sh 게이트웨이 번호 (공백 구분)
+        run_microservice = True,                          # Setup step 6: 게이트웨이 자동 기동
     ):
         # 원본 USER CONFIG 보관.
         self.eth_if = eth_if
@@ -126,6 +132,8 @@ class TH:
         self.panel_trigger = panel_trigger
         self.auto_setup = _as_bool(auto_setup)
         self.launch_cvd = _as_bool(launch_cvd)
+        self.microservice_gateways = (microservice_gateways or "").strip()
+        self.run_microservice = _as_bool(run_microservice)
 
         # Setup 결과 추적 (IsConnected 반환에 사용)
         self._setup_done = False
@@ -231,6 +239,16 @@ class TH:
                 return self._mark_fail("launch_cvd spawn", log)
         else:
             log.append("[5] launch_cvd: skipped (launch_cvd=False)")
+
+        # ── [6] microservice 게이트웨이 (th_run_microservice.sh) ─
+        # 게이트웨이가 떠 있어야 브로커에 토픽이 등록됨 → client.py 의 "Topic not found" 회피.
+        if self.run_microservice and self.microservice_gateways:
+            rc, msg = self._run_microservice()
+            log.append(f"[6] microservice:\n{msg}")
+            if rc != 0:
+                return self._mark_fail("microservice gateways", log)
+        else:
+            log.append("[6] microservice: skipped (게이트웨이 번호 없음 / 비활성)")
 
         self._setup_done = True
         self._setup_last_msg = "ok\n" + "\n".join(log)
@@ -380,6 +398,48 @@ class TH:
         if not has_rbvm:
             return 1, f"  RBVM ({self.rbvm_ip}) not in adb devices\n" + diag
         return 0, diag
+
+    # ── microservice 게이트웨이 기동 ──────────────────────
+    def _run_microservice(self) -> tuple[int, str]:
+        """th_run_microservice.sh 에 게이트웨이 번호를 stdin 주입해 비대화형 기동.
+
+        스크립트(Reference/th_script/th_run_microservice.sh):
+          - 'Enter your choices:' 프롬프트에서 공백 구분 번호 한 줄을 read.
+          - 선택된 grpc_*_gateway 를 adb shell 로 디바이스에서 백그라운드 기동.
+          - 'Script execution is completed.' 출력 후 종료 (게이트웨이는 디바이스에 잔류).
+        sudo 불필요 (사용자 래퍼와 동일). adb wait-for-device 가 내부에 있어 timeout 필요.
+        """
+        th_script_dir = os.path.join(self.th_home, "harness", "harness", "th_script")
+        script = os.path.join(th_script_dir, "th_run_microservice.sh")
+        if not os.path.isfile(script):
+            return 1, f"  th_run_microservice.sh not found at {script}"
+
+        # 번호 검증 — 공백 구분 정수만 허용 (오타로 엉뚱한 stdin 주입 방지).
+        nums = self.microservice_gateways.split()
+        if not all(n.isdigit() for n in nums):
+            return 1, f"  게이트웨이 번호는 공백 구분 숫자여야 함: '{self.microservice_gateways}'"
+
+        try:
+            res = subprocess.run(
+                ["bash", script, self.th_adb],
+                input=" ".join(nums) + "\n",       # 'Enter your choices:' 에 주입
+                capture_output=True, text=True,
+                cwd=th_script_dir,
+                timeout=SETUP_MICROSERVICE_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            return 1, (f"  timeout ({SETUP_MICROSERVICE_TIMEOUT_S}s) — adb wait-for-device 가 막혔을 수 있음 "
+                       f"(CVD({self.th_adb}) 부팅/연결 확인)")
+        except FileNotFoundError:
+            return 1, "  bash not found"
+
+        out = ((res.stdout or "") + (res.stderr or "")).strip()
+        tail = out[-1000:]
+        if "Invalid choice" in out or "No service selected" in out:
+            return 1, f"  게이트웨이 번호 오류 (브로커 메뉴와 번호 불일치)\n{tail}"
+        if "Script execution is completed." not in out:
+            return 1, f"  게이트웨이 기동 미확인 (rc={res.returncode})\n{tail}"
+        return 0, f"  ok — gateways [{self.microservice_gateways}] 기동\n{tail}"
 
     # ── launch_cvd 백그라운드 ─────────────────────────────
     def _launch_cvd_background(self) -> tuple[int, str]:
@@ -702,6 +762,7 @@ class TH:
             f"panel     = {self.panel_enabled} (trigger='{self.panel_trigger}')",
             f"auto_setup= {self.auto_setup}",
             f"launch_cvd= {self.launch_cvd}",
+            f"microsvc  = {self.run_microservice} gateways=[{self.microservice_gateways or '(none)'}]",
             f"sudo_pw   = {sudo_state}",
             f"setup_ok  = {self._setup_done}",
             f"cvd_pid   = {self._cvd_running_pid() or '(not running)'}",
