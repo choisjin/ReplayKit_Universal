@@ -560,6 +560,10 @@ async def websocket_screen_mirror(websocket: WebSocket):
     # WS 세션별 백그라운드 scrcpy try_start task와 그 결과 backend
     scrcpy_task: Optional[asyncio.Task] = None
     scrcpy_backend = None
+    # 이 WS 세션이 scrcpy를 시도/점유한 디바이스 serial. disconnect 시 정확히 이
+    # serial의 backend만 정리하기 위해 세션 스코프로 보관 (finally에서 adb_serial은
+    # ADB 분기 로컬이라 unbound일 수 있음).
+    scrcpy_serial: Optional[str] = None
     # WS 세션 진입 시 ADB 분기에 한 번만 dispatch 의도를 INFO 로그로 출력
     adb_dispatch_logged = False
 
@@ -762,8 +766,15 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     # 백그라운드 scrcpy try_start — main loop는 차단되지 않음.
                     # 첫 iteration에서 task 시작, 이후 매번 done 여부만 확인.
                     # ──────────────────────────────────────────────────────────────
-                    if (not _scrcpy_disabled and _is_active and _now >= scrcpy_retry_after
+                    # 쿨다운은 세션 로컬 + serial 단위(서비스) 중 더 늦은 시각을 적용.
+                    # 재연결로 세션이 새로 떠도 serial 단위 쿨다운이 유지돼 thrash 방지.
+                    _eff_retry_after = max(
+                        scrcpy_retry_after,
+                        adb_service.get_scrcpy_retry_after(adb_serial),
+                    )
+                    if (not _scrcpy_disabled and _is_active and _now >= _eff_retry_after
                             and scrcpy_task is None and scrcpy_backend is None):
+                        scrcpy_serial = adb_serial
                         scrcpy_task = asyncio.create_task(
                             adb_service.ensure_scrcpy_backend(adb_serial, _logical_id),
                         )
@@ -797,6 +808,9 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                 scrcpy_retry_after = (
                                     asyncio.get_event_loop().time() + BACKEND_RETRY_COOLDOWN
                                 )
+                                adb_service.set_scrcpy_retry_after(
+                                    adb_serial, scrcpy_retry_after,
+                                )
                                 logger.info(
                                     "scrcpy try_start failed for %s — "
                                     "will retry in %.0fs (screencap PNG polling meanwhile)",
@@ -815,7 +829,10 @@ async def websocket_screen_mirror(websocket: WebSocket):
                         scrcpy_retry_after = (
                             asyncio.get_event_loop().time() + BACKEND_RETRY_COOLDOWN
                         )
-                        await adb_service.close_scrcpy_backend(adb_serial)
+                        adb_service.set_scrcpy_retry_after(adb_serial, scrcpy_retry_after)
+                        await adb_service.close_scrcpy_backend(
+                            adb_serial, expected=scrcpy_backend,
+                        )
                         scrcpy_backend = None
                         continue
 
@@ -861,13 +878,31 @@ async def websocket_screen_mirror(websocket: WebSocket):
     finally:
         if recv_task and not recv_task.done():
             recv_task.cancel()
-        # 백그라운드 scrcpy try_start task가 진행 중이면 정리
-        if scrcpy_task is not None and not scrcpy_task.done():
-            scrcpy_task.cancel()
+        # 백그라운드 scrcpy try_start task 정리 — 진행 중이면 취소, 이미 backend를
+        # 반환한 채 끝났으면 그 backend도 종료(미종료 시 디바이스 app_process 잔존).
+        if scrcpy_task is not None:
+            if not scrcpy_task.done():
+                scrcpy_task.cancel()
             try:
-                await scrcpy_task
+                _task_backend = await scrcpy_task
             except (asyncio.CancelledError, Exception):
-                pass
+                _task_backend = None
+            if _task_backend is not None and scrcpy_serial is not None:
+                try:
+                    await adb_service.close_scrcpy_backend(
+                        scrcpy_serial, expected=_task_backend,
+                    )
+                except Exception as e:
+                    logger.debug("scrcpy task-backend close on disconnect failed: %s", e)
+        # 이 WS 세션이 점유 중이던 scrcpy backend를 명시적으로 종료. 미종료 시 디바이스
+        # app_process가 살아남아 인코더 전송버퍼를 계속 점유 → 반복 누적 시 OOM.
+        if scrcpy_backend is not None and scrcpy_serial is not None:
+            try:
+                await adb_service.close_scrcpy_backend(
+                    scrcpy_serial, expected=scrcpy_backend,
+                )
+            except Exception as e:
+                logger.debug("scrcpy backend close on disconnect failed: %s", e)
 
 
 # 현재 백그라운드 재생 태스크 (단일 재생만 허용)

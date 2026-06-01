@@ -152,6 +152,10 @@ class ADBService:
         # 일시적인 push/forward 실패와 진짜 미지원 디바이스를 구분하기 위해 카운터 기반.
         self._scrcpy_disabled: set[str] = set()
         self._scrcpy_failure_count: dict[str, int] = {}
+        # scrcpy 재시도 쿨다운(serial → event-loop time). WS 세션 로컬이 아니라 serial
+        # 단위로 두어, 프론트 재연결로 WS 세션이 새로 떠도 쿨다운이 리셋되지 않게 한다
+        # (리셋되면 재연결마다 즉시 try_start → app_process 반복 spawn → OOM).
+        self._scrcpy_retry_after: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Device management
@@ -1070,9 +1074,23 @@ class ADBService:
 
         async with self._scrcpy_lock:
             existing = self._scrcpy_backends.get(serial)
-            if existing and existing.is_alive() and existing.logical_id == (logical_id or 0):
-                return existing
+            if existing and existing.is_alive():
+                if existing.logical_id == (logical_id or 0):
+                    return existing
+                # FCFS — scrcpy v1.25는 single-instance다 (socket name "scrcpy" 고정 +
+                # `adb reverse localabstract:scrcpy` 단일 매핑). 같은 serial에 두 디스플
+                # 레이를 동시 구동할 수 없다. 기존 인스턴스를 즉시 evict하면 서로 다른
+                # 디스플레이를 보는 두 WS 세션이 상대의 app_process를 pkill하며 무한 재
+                # spawn(핑퐁) → 인코더 전송버퍼 누적 → OOM. 따라서 먼저 점유한 디스플레
+                # 이를 유지하고, 다른 디스플레이 요청은 screencap 폴링으로 폴백(None).
+                logger.info(
+                    "scrcpy already serving display=%s on %s — display=%s falls back "
+                    "to screencap polling (v1.25 single-instance)",
+                    existing.logical_id, serial, logical_id,
+                )
+                return None
             if existing:
+                # 죽은 backend 잔존 → 정리 후 새로 시작.
                 try:
                     await existing.close()
                 except Exception as e:
@@ -1111,8 +1129,19 @@ class ADBService:
                 self.mark_scrcpy_disabled(serial)
             return None
 
-    async def close_scrcpy_backend(self, serial: str) -> None:
+    async def close_scrcpy_backend(
+        self, serial: str, expected: Optional[ScrcpyServerBackend] = None,
+    ) -> None:
+        """serial의 scrcpy backend 종료.
+
+        expected 지정 시, 현재 dict 항목이 expected와 동일 객체일 때만 종료한다.
+        FCFS 하에서 한 WS 세션의 disconnect 정리가 다른 세션이 새로 띄운 backend를
+        실수로 닫는 것을 방지하기 위함.
+        """
         async with self._scrcpy_lock:
+            current = self._scrcpy_backends.get(serial)
+            if expected is not None and current is not expected:
+                return
             backend = self._scrcpy_backends.pop(serial, None)
         if backend:
             try:
@@ -1137,6 +1166,13 @@ class ADBService:
     def is_scrcpy_disabled(self, serial: str) -> bool:
         return serial in self._scrcpy_disabled
 
+    def get_scrcpy_retry_after(self, serial: str) -> float:
+        """serial 단위 scrcpy 재시도 쿨다운 만료 시각(event-loop time). WS 세션 간 공유."""
+        return self._scrcpy_retry_after.get(serial, 0.0)
+
+    def set_scrcpy_retry_after(self, serial: str, ts: float) -> None:
+        self._scrcpy_retry_after[serial] = ts
+
     def mark_scrcpy_disabled(self, serial: str) -> None:
         """디바이스가 scrcpy를 지원 못 함을 캐시. 다음 시도부터 즉시 screencap PNG 폴링."""
         if serial not in self._scrcpy_disabled:
@@ -1154,6 +1190,7 @@ class ADBService:
         """
         self._scrcpy_disabled.discard(serial)
         self._scrcpy_failure_count.pop(serial, None)
+        self._scrcpy_retry_after.pop(serial, None)
 
 
 class AdbScreencapStreamer:

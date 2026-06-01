@@ -229,6 +229,9 @@ class ScrcpyServerBackend:
         # scrcpy v1.x는 single-instance 설계 — socket name "scrcpy" 고정, scid 옵션 없음.
         self.local_port = 0
         self._server_proc: Optional[subprocess.Popen] = None
+        # 디바이스측 app_process PID — spawn 시 `echo $$`로 캡처. close 시 정확히 이
+        # PID를 kill -9 해 인코더 전송버퍼를 확실히 회수한다 (pkill 미지원 디바이스 대비).
+        self._device_pid: Optional[int] = None
         # adb reverse 방식: PC가 TCP listen, 디바이스 server.jar가 connect 옴.
         self._listener: Optional[asyncio.base_events.Server] = None
         self._accept_event: Optional[asyncio.Event] = None
@@ -264,6 +267,11 @@ class ScrcpyServerBackend:
             return False
 
         try:
+            # 0) 이전 세션에서 비정상 종료된 scrcpy app_process 선제 정리.
+            #    v1.x는 single-instance(socket "scrcpy" 고정)라 잔존 인스턴스가 있으면
+            #    우리 socket 연결이 충돌해 first-frame 실패 → 재시도 폭주의 씨앗이 된다.
+            #    screenrecord는 screencap 폴백이 쓸 수 있으므로 건드리지 않는다.
+            await self._cleanup_device_side(include_screenrecord=False)
             # 1) jar push (해시 동일 시 skip)
             if not await self._push_jar(jar):
                 return False
@@ -470,9 +478,13 @@ class ScrcpyServerBackend:
             "raw_video_stream=true",
             "codec_options=i-frame-interval=1",
         ]
+        # `echo SCRCPYPID:$$` 후 `exec`로 app_process를 띄우면 셸 PID($$)가 그대로
+        # app_process PID가 된다 → close 시 이 PID를 정확히 kill -9 가능.
+        # echo 출력은 stdout으로 나가 _drain_stdout에서 파싱한다 (scrcpy 로그는 stderr).
         inner = (
+            f"echo SCRCPYPID:$$; "
             f"CLASSPATH={DEVICE_JAR_PATH} "
-            f"app_process / com.genymobile.scrcpy.Server {SCRCPY_VERSION} "
+            f"exec app_process / com.genymobile.scrcpy.Server {SCRCPY_VERSION} "
             + " ".join(opts)
         )
         return [ADB_PATH, "-s", self.serial, "shell", inner]
@@ -508,10 +520,31 @@ class ScrcpyServerBackend:
                 if not chunk:
                     break
                 self._stdout_tail.extend(chunk)
+                if self._device_pid is None:
+                    self._maybe_parse_device_pid()
                 if len(self._stdout_tail) > 4096:
                     del self._stdout_tail[:-2048]
         except Exception:
             pass
+
+    def _maybe_parse_device_pid(self) -> None:
+        """stdout에서 `SCRCPYPID:<pid>` 마커를 찾아 디바이스측 app_process PID 기록."""
+        marker = b"SCRCPYPID:"
+        idx = self._stdout_tail.find(marker)
+        if idx < 0:
+            return
+        start = idx + len(marker)
+        # 개행(종료문자)이 아직 안 들어왔으면 숫자가 chunk 경계에서 잘렸을 수 있어
+        # 확정하지 않는다 (잘못된 PID를 kill하는 것을 방지).
+        nl = self._stdout_tail.find(b"\n", start)
+        if nl < 0:
+            return
+        digits = bytes(self._stdout_tail[start:nl]).strip()
+        if digits.isdigit():
+            try:
+                self._device_pid = int(digits.decode())
+            except ValueError:
+                pass
 
     def _drain_stderr(self) -> None:
         proc = self._server_proc
@@ -758,29 +791,56 @@ class ScrcpyServerBackend:
             self.serial, self._total_bytes_in, self._total_frames_decoded,
         )
 
-    async def _cleanup_device_side(self) -> None:
+    async def _cleanup_device_side(self, *, include_screenrecord: bool = True) -> None:
         """디바이스에 남아있을지 모를 scrcpy/screenrecord 프로세스 정리.
 
         v1.x는 single-instance(socket name "scrcpy" 고정)라 scid 구분 안 함.
         같은 디바이스의 HW 인코더 자원을 다른 백엔드도 쓸 수 있어 cross-cleanup.
+
+        자동차/IVI Android의 toybox는 `pkill`이 없거나 `-f`를 지원 안 하는 경우가
+        많아, pkill만으로는 app_process가 살아남아 인코더 전송버퍼가 누적된다
+        (→ OOM). 따라서 3단계로 강제 회수한다:
+          1. spawn 시 캡처한 정확한 PID를 `kill -9` (kill은 toybox에 항상 존재).
+          2. `pkill -f` (지원 디바이스에서 빠른 일괄 정리).
+          3. `/proc/<pid>/cmdline` 스캔 폴백 — pkill 미지원 디바이스에서 scrcpy.Server
+             cmdline을 가진 잔존 PID를 직접 kill -9.
         """
         loop = asyncio.get_event_loop()
-        patterns = [
-            "scrcpy.Server",   # scrcpy 서버 인스턴스 (어떤 것이든)
-            "screenrecord",    # 다른 백엔드의 stale (cross-cleanup)
-        ]
-        for pat in patterns:
-            cmd = [ADB_PATH, "-s", self.serial, "shell", "pkill", "-f", pat]
+
+        def _run(args: list[str], timeout: float) -> None:
             try:
-                await loop.run_in_executor(
-                    None,
-                    lambda c=cmd: subprocess.run(
-                        c, capture_output=True, timeout=2,
-                        creationflags=_NO_WINDOW,
-                    ),
+                subprocess.run(
+                    args, capture_output=True, timeout=timeout,
+                    creationflags=_NO_WINDOW,
                 )
             except Exception:
                 pass
+
+        # 1) 우리가 spawn한 정확한 PID 우선 종료.
+        if self._device_pid is not None:
+            kill_cmd = [
+                ADB_PATH, "-s", self.serial, "shell",
+                "kill", "-9", str(self._device_pid),
+            ]
+            await loop.run_in_executor(None, lambda: _run(kill_cmd, 2))
+
+        # 2) pkill -f (지원 디바이스 한정 빠른 정리).
+        patterns = ["scrcpy.Server"]
+        if include_screenrecord:
+            patterns.append("screenrecord")  # 다른 백엔드 stale (cross-cleanup)
+        for pat in patterns:
+            cmd = [ADB_PATH, "-s", self.serial, "shell", "pkill", "-f", pat]
+            await loop.run_in_executor(None, lambda c=cmd: _run(c, 2))
+
+        # 3) /proc 스캔 폴백 — pkill 미지원(toybox 일부 자동차 Android) 대비.
+        proc_scan = (
+            'for f in /proc/[0-9]*/cmdline; do '
+            'grep -qa scrcpy.Server "$f" 2>/dev/null && '
+            '{ p=${f#/proc/}; p=${p%/cmdline}; kill -9 "$p" 2>/dev/null; }; '
+            'done'
+        )
+        scan_cmd = [ADB_PATH, "-s", self.serial, "shell", proc_scan]
+        await loop.run_in_executor(None, lambda: _run(scan_cmd, 3))
 
     def is_alive(self) -> bool:
         return (
