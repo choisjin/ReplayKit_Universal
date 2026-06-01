@@ -343,7 +343,12 @@ class Launcher(QWidget):
         else:
             self._start()
 
-    def _start(self) -> None:
+    def _start(self, open_browser: bool = True) -> None:
+        """서버 spawn. open_browser=True 일 때만 ready 후 브라우저 자동 오픈.
+
+        최초 실행/수동 시작은 True (브라우저 띄워줌), 업데이트·수동 재시작은 False —
+        사용자가 이미 띄워둔 웹 UI 위에 창이 하나 더 뜨는 것을 막는다.
+        """
         if get_running_pid() is not None:
             return
         if not PY.exists():
@@ -372,10 +377,14 @@ class Launcher(QWidget):
             PID_FILE.write_text(str(self._server_proc.pid))
             self.status_lbl.setText("시작 중...")
             self.status_lbl.setStyleSheet(f"color: {_C['YELLOW']}; background: transparent;")
-            # ready 감지 → 브라우저 자동 오픈 시퀀스 시작
-            self._pending_browser_open = True
-            self._browser_check_attempts = 0
-            QTimer.singleShot(1500, self._check_and_open_browser)  # 1.5s 후 첫 체크
+            # ready 감지 → 브라우저 자동 오픈 시퀀스 시작 (open_browser 일 때만).
+            # 재시작/업데이트 경로는 False — 중복 창 방지.
+            if open_browser:
+                self._pending_browser_open = True
+                self._browser_check_attempts = 0
+                QTimer.singleShot(1500, self._check_and_open_browser)  # 1.5s 후 첫 체크
+            else:
+                self._pending_browser_open = False
         except Exception as e:
             self.status_lbl.setText(f"오류: {e}"[:40])
             self.status_lbl.setStyleSheet(f"color: {_C['RED']}; background: transparent;")
@@ -408,7 +417,8 @@ class Launcher(QWidget):
     def _restart(self) -> None:
         if get_running_pid():
             self._stop()
-            QTimer.singleShot(2500, self._start)
+            # 재시작은 브라우저 재오픈 안 함 — 이미 띄워둔 창 유지.
+            QTimer.singleShot(2500, lambda: self._start(open_browser=False))
         else:
             self._start()
 
@@ -474,7 +484,8 @@ class Launcher(QWidget):
         다음 update 시 다시 시도 가능. finally 로 보장.
         """
         try:
-            self._start()
+            # 업데이트 후 재시작 — 브라우저 자동 오픈 금지 (이미 떠 있는 웹 위에 중복 창 방지).
+            self._start(open_browser=False)
         except Exception as e:
             self.status_lbl.setText(f"start 오류: {e}"[:40])
             self.status_lbl.setStyleSheet(f"color: {_C['RED']}; background: transparent;")
