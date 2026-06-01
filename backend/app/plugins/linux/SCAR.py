@@ -215,8 +215,15 @@ class SCAR:
         # ── [4] scar.sh 기동 (컨테이너 미기동 시) ─────────
         if self.launch_scar and not self._docker.is_running():
             if self._health.reconnect_script:
-                self._health._reconnect()  # noqa: SLF001 — start_via_script + wait
-                log.append(f"[4] scar launch: started (waited {self._health.reconnect_wait_s}s)")
+                ok = self._health._reconnect()  # noqa: SLF001 — start_via_script + wait
+                if ok:
+                    log.append(f"[4] scar launch: started (waited {self._health.reconnect_wait_s}s)")
+                else:
+                    log.append(
+                        f"[4] scar launch: FAILED (scar.sh 기동 실패)\n"
+                        f"  → 원인 확인: {SCAR_LAUNCH_LOG}\n"
+                        f"  → scar.sh 절대경로(파일)·실행권한 확인"
+                    )
             else:
                 log.append("[4] scar launch: skipped (reconnect_script not set)")
         else:

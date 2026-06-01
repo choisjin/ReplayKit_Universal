@@ -68,11 +68,15 @@ class SCARHealth:
         logger.warning("SCAR is not ready after %d retries. Continue without SCAR.", max_retry)
         return "NONE"
 
-    def _reconnect(self) -> None:
+    def _reconnect(self) -> bool:
+        """scar.sh 기동 시도. 실제 spawn 성공 여부(ok)를 반환.
+
+        spawn 실패(잘못된 경로/권한 등)면 20s 대기를 건너뛴다 — 어차피 안 뜬다.
+        """
         if not self.reconnect_script:
             logger.warning("SCAR reconnect_script not configured; skipping reconnect")
             self.force_docker_mode = True
-            return
+            return False
         ok = self.docker.start_via_script(
             self.reconnect_script,
             self.reconnect_args,
@@ -80,4 +84,6 @@ class SCARHealth:
         )
         self.force_docker_mode = True
         logger.info("SCAR reconnect started ok=%s; waiting %.1fs", ok, self.reconnect_wait_s)
-        time.sleep(self.reconnect_wait_s)
+        if ok:
+            time.sleep(self.reconnect_wait_s)
+        return ok
