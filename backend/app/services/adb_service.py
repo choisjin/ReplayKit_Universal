@@ -16,7 +16,7 @@ from typing import Optional
 # `from .capture import ...` 형태는 ImportError를 일으킨다. 반드시 서브모듈을
 # 직접 명시해서 import해야 .pyd 컴파일 배포본에서도 정상 동작한다.
 from .capture.scrcpy_server import (
-    ScrcpyServerBackend, detect_scrcpy_server, detect_av,
+    ScrcpyServerBackend, detect_scrcpy_server,
 )
 
 logger = logging.getLogger(__name__)
@@ -1067,7 +1067,7 @@ class ADBService:
           호출자는 screencap PNG 폴링 폴백 사용.
         - 누적 실패 카운트가 SCRCPY_FAILURE_THRESHOLD에 도달하면 영구 disable 자동 마킹.
         """
-        if not detect_scrcpy_server() or not detect_av():
+        if not detect_scrcpy_server():
             return None
         if serial in self._scrcpy_disabled:
             return None

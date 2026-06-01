@@ -560,6 +560,10 @@ async def websocket_screen_mirror(websocket: WebSocket):
     # WS 세션별 백그라운드 scrcpy try_start task와 그 결과 backend
     scrcpy_task: Optional[asyncio.Task] = None
     scrcpy_backend = None
+    # 현재 프론트에 통지한 렌더 모드. scrcpy(H.264 relay) ↔ screencap(JPEG) 전환 시에만
+    # mode 메시지를 보내 프론트가 JMuxer ↔ <img> 경로를 올바르게 토글하도록 한다.
+    # 초기값은 아래 send_json({"mode":"jpeg"})와 일치시킨다.
+    current_ws_mode = "jpeg"
     # 이 WS 세션이 scrcpy를 시도/점유한 디바이스 serial. disconnect 시 정확히 이
     # serial의 backend만 정리하기 위해 세션 스코프로 보관 (finally에서 adb_serial은
     # ADB 분기 로컬이라 unbound일 수 있음).
@@ -821,19 +825,28 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                     adb_serial, BACKEND_RETRY_COOLDOWN,
                                 )
 
-                    # scrcpy 준비됨 → stream 진입 (실패/종료 시 다시 폴링으로 복귀)
+                    # scrcpy 준비됨 → H.264 relay stream 진입 (실패/종료 시 다시 폴링으로 복귀)
                     if scrcpy_backend is not None:
+                        # 프론트에 H.264 모드 통지 (JMuxer 초기화 트리거). raw NAL 을 그대로
+                        # relay 하므로 브라우저가 GPU 로 디코딩한다 (PC 트랜스코딩 없음).
+                        if current_ws_mode != "h264":
+                            await websocket.send_json({
+                                "mode": "h264",
+                                "width": scrcpy_backend.video_width or 1080,
+                                "height": scrcpy_backend.video_height or 1920,
+                            })
+                            current_ws_mode = "h264"
                         try:
-                            async for jpeg in scrcpy_backend.stream_jpeg():
-                                await websocket.send_bytes(jpeg)
+                            async for nal in scrcpy_backend.stream_h264():
+                                await websocket.send_bytes(nal)
                         except WebSocketDisconnect:
                             raise
                         except Exception as e:
-                            # str(e)가 빈 예외(av/소켓/ws 일부)가 많아 타입+repr까지 남긴다.
+                            # str(e)가 빈 예외(소켓/ws 일부)가 많아 타입+repr까지 남긴다.
                             # 시나리오 스텝마다 scrcpy가 죽는 원인 특정에 필수.
                             logger.warning(
                                 "scrcpy stream error (%s): type=%s repr=%r "
-                                "frames=%d bytes_in=%d",
+                                "chunks=%d bytes_in=%d",
                                 adb_serial, type(e).__name__, e,
                                 getattr(scrcpy_backend, "_total_frames_decoded", -1),
                                 getattr(scrcpy_backend, "_total_bytes_in", -1),
@@ -867,6 +880,11 @@ async def websocket_screen_mirror(websocket: WebSocket):
                         serial=adb_serial, fmt="jpeg", sf_display_id=sf_did,
                     )
                     if jpeg_bytes:
+                        # scrcpy(H.264)에서 screencap(JPEG) 폴백으로 전환 시 프론트에 통지해
+                        # JMuxer 경로를 닫고 <img> 경로로 되돌린다.
+                        if current_ws_mode != "jpeg":
+                            await websocket.send_json({"mode": "jpeg"})
+                            current_ws_mode = "jpeg"
                         await websocket.send_bytes(jpeg_bytes)
                     frame_elapsed = loop.time() - frame_t0
                     sleep_s = _interval - frame_elapsed

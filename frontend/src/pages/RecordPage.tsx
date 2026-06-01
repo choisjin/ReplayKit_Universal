@@ -1200,6 +1200,22 @@ export default function RecordPage() {
     return screenshotDeviceId;
   }, [screenshotDeviceId, wcConnected, leftPanelTab]);
 
+  // 비교용 expected 이미지 저장 시 step 에 기록할 screen_type 결정.
+  // 라이브 뷰 상태(isScreenHkmc/screenType)가 아니라 *캡처 타깃 디바이스* 기준으로 판단한다.
+  // wait 처럼 device_id 가 없는 스텝의 멀티스크린 비교에서, 라이브 뷰가 다른 디바이스를
+  // 보고 있으면 screen_type 이 null 로 누락되어 재생 시 front_center 로 폴백되는 버그를 막는다.
+  // (snapshotScreenshot 의 needsScreenType 과 동일 규칙 — modal 스냅샷과 저장 screen_type 일관성 유지.)
+  const screenTypeArgForDevice = useCallback((targetDevId: string | undefined): string | undefined => {
+    if (!targetDevId || targetDevId === 'WinControl') return undefined;
+    const dev = primaryDevices.find(d => d.id === targetDevId)
+      || auxiliaryDevices.find(d => d.id === targetDevId);
+    if (!dev) return undefined;
+    const needsScreenType = dev.type === 'hkmc_agent' || dev.type === 'isap_agent'
+      || dev.type === 'icas_agent' || dev.type === 'mib_agent' || dev.type === 'hkmc5th_wide_agent'
+      || (dev.type === 'adb' && (dev.info?.displays?.length ?? 0) > 1);
+    return needsScreenType ? screenType : undefined;
+  }, [primaryDevices, auxiliaryDevices, screenType]);
+
   // WinControl 로 expected 를 캡처하는 스텝의 params 에 현재 임베드된 프로세스 정보를 병합.
   // 재생 시 _resolve_screenshot_device → wincontrol 캡처 직전에 ensure_attached 가 process_name/
   // exe_path/window_title/aumid 등을 사용해 자동 재임베드. wait 처럼 액션 자체엔 프로세스 정보가
@@ -1919,15 +1935,14 @@ export default function RecordPage() {
     if (!scenarioName || !targetDevId) return;
     await ensureSavedForImageOp();
     try {
-      const isWin = step?.type?.startsWith('win_');
-      const screenTypeArg = isWin ? undefined : ((isScreenHkmc || isScreenICAS || hasMultiDisplay) ? screenType : undefined);
+      const screenTypeArg = screenTypeArgForDevice(targetDevId);
       const res = await scenarioApi.captureExpectedImage(scenarioName, stepIdx, targetDevId, undefined, undefined, undefined, screenTypeArg);
       setSteps(prev => prev.map((s, i) => i === stepIdx ? { ...s, expected_image: res.data.filename, screenshot_device_id: targetDevId, _imageVer: Date.now(), roi: null, exclude_rois: [], expected_images: [] } : s));
       message.success(t('record.expectedSaved', { index: stepIdx + 1 }));
     } catch (e: any) {
       message.error(e.response?.data?.detail || t('record.expectedImageSaveFailed'));
     }
-  }, [scenarioName, captureDeviceIdForStep, steps, isScreenHkmc, hasMultiDisplay, screenType, t]);
+  }, [scenarioName, captureDeviceIdForStep, steps, screenTypeArgForDevice, t]);
 
   const openCaptureModal = useCallback(async (stepIdx: number) => {
     // 현재 화면 스냅샷만 (저장은 사용자가 크롭 확정 시)
@@ -2048,10 +2063,8 @@ export default function RecordPage() {
     }
     await ensureSavedForImageOp();
     // WinControl 은 screen_type 개념 없음 — undefined 전송. 그 외 멀티 스크린 디바이스는 현재 선택.
-    const isWinTarget = targetDev === 'WinControl';
-    const screenTypeArg = isWinTarget
-      ? undefined
-      : ((isScreenHkmc || isScreenICAS || hasMultiDisplay) ? screenType : undefined);
+    // 라이브 뷰가 아니라 캡처 타깃 디바이스(targetDev) 기준으로 판단.
+    const screenTypeArg = screenTypeArgForDevice(targetDev);
     setImageTapBusy(true);
     try {
       if (imageTapEditIndex != null) {
@@ -2108,7 +2121,7 @@ export default function RecordPage() {
     } finally {
       setImageTapBusy(false);
     }
-  }, [scenarioName, screenshotDeviceId, imageTapSimilarity, isScreenHkmc, isScreenICAS, hasMultiDisplay, screenType, delayMs, refreshScreenshot, t, imageTapEditIndex]);
+  }, [scenarioName, screenshotDeviceId, imageTapSimilarity, screenTypeArgForDevice, delayMs, refreshScreenshot, t, imageTapEditIndex]);
 
   useEffect(() => {
     if (imageTapModalOpen) setTimeout(() => drawImageTapCanvas(), 50);
@@ -2368,8 +2381,7 @@ export default function RecordPage() {
         message.error(t('record.expectedImageSaveFailed'));
         return;
       }
-      const isWin = stepForCapture?.type?.startsWith('win_');
-      const screenTypeArg = isWin ? undefined : ((isScreenHkmc || isScreenICAS || hasMultiDisplay) ? screenType : undefined);
+      const screenTypeArg = screenTypeArgForDevice(targetDevId);
       // 매칭크롭이면 백엔드가 step.compare_mode='match_crop' 을 확정 저장하도록 명시 전달.
       // (sync-steps 가 누락되거나 타이밍 이슈로 in-memory 가 갱신 안 된 경우 대비.)
       const compareModeArg = stepForCapture?.compare_mode === 'match_crop' ? 'match_crop' : undefined;
@@ -2386,7 +2398,7 @@ export default function RecordPage() {
           params: enrichParamsForWcCapture(s.params, targetDevId),
           expected_image: res.data.filename, roi: crop,
           screenshot_device_id: targetDevId,
-          screen_type: isWin ? s.screen_type : ((isScreenHkmc || isScreenICAS || hasMultiDisplay) ? screenType : s.screen_type),
+          screen_type: screenTypeArg ?? s.screen_type,
           _imageVer: Date.now(), exclude_rois: [], expected_images: [],
         } : s));
         message.success(t('record.cropExpectedSaved', { index: captureStepIndex + 1, size: `${rw}×${rh}` }));
@@ -2397,7 +2409,7 @@ export default function RecordPage() {
         message.error(e.response?.data?.detail || t('record.expectedImageSaveFailed'));
       }
     }
-  }, [captureStepIndex, scenarioName, screenshotDeviceId, t, enrichParamsForWcCapture, isScreenHkmc, isScreenICAS, hasMultiDisplay, screenType]);
+  }, [captureStepIndex, scenarioName, screenshotDeviceId, t, enrichParamsForWcCapture, screenTypeArgForDevice]);
 
   useEffect(() => {
     if (captureModalOpen) setTimeout(() => drawCaptureCanvas(), 50);
@@ -2570,8 +2582,7 @@ export default function RecordPage() {
           message.error(t('record.cropSaveFailed'));
           return;
         }
-        const isWin = step?.type?.startsWith('win_');
-        const screenTypeArg = isWin ? undefined : ((isScreenHkmc || isScreenICAS || hasMultiDisplay) ? screenType : undefined);
+        const screenTypeArg = screenTypeArgForDevice(targetDevId);
         try {
           const capRes = await scenarioApi.saveExpectedImage(
             scenarioName, excludeRoiEditingIndex, modalImage,
@@ -2583,7 +2594,7 @@ export default function RecordPage() {
             params: enrichParamsForWcCapture(s.params, targetDevId),
             expected_image: capRes.data.filename,
             screenshot_device_id: targetDevId,
-            screen_type: isWin ? s.screen_type : ((isScreenHkmc || isScreenICAS || hasMultiDisplay) ? screenType : s.screen_type),
+            screen_type: screenTypeArg ?? s.screen_type,
             _imageVer: Date.now(), roi: null, expected_images: [],
           } : s));
         } catch (e: any) {
@@ -2613,7 +2624,7 @@ export default function RecordPage() {
       // Redraw canvas with updated regions after state update
       setTimeout(() => drawExcludeRoiCanvas(), 50);
     }
-  }, [excludeRoiEditingIndex, excludeRoiSelectedIdx, drawExcludeRoiCanvas, steps, scenarioName, screenshotDeviceId, isScreenHkmc, hasMultiDisplay, screenType]);
+  }, [excludeRoiEditingIndex, excludeRoiSelectedIdx, drawExcludeRoiCanvas, steps, scenarioName, screenshotDeviceId, screenTypeArgForDevice]);
 
   const removeExcludeRoi = useCallback((stepIdx: number, roiIdx: number) => {
     setSteps(prev => prev.map((s, i) => {
@@ -2734,8 +2745,7 @@ export default function RecordPage() {
         message.error(t('record.cropSaveFailed'));
         return;
       }
-      const isWinMulti = stepForMulti?.type?.startsWith('win_');
-      const screenTypeArgMulti = isWinMulti ? undefined : ((isScreenHkmc || isScreenICAS || hasMultiDisplay) ? screenType : undefined);
+      const screenTypeArgMulti = screenTypeArgForDevice(targetDevIdMulti);
       try {
         // preserve_crops=true: 기존 multi_crop 아이템을 유지 (아래 cropFromExpected에서 추가/교체)
         const capRes = await scenarioApi.saveExpectedImage(
@@ -2747,6 +2757,7 @@ export default function RecordPage() {
           ...s,
           params: enrichParamsForWcCapture(s.params, targetDevIdMulti),
           expected_image: capRes.data.filename, screenshot_device_id: targetDevIdMulti,
+          screen_type: screenTypeArgMulti ?? s.screen_type,
           _imageVer: Date.now(), roi: null, exclude_rois: [],
         } : s));
         const replaceIdx = multiCropSelectedIdx ?? undefined;
@@ -2774,7 +2785,7 @@ export default function RecordPage() {
         message.error(e.response?.data?.detail || t('record.cropSaveFailed'));
       }
     }
-  }, [multiCropEditingIndex, multiCropSelectedIdx, scenarioName, screenshotDeviceId, isScreenHkmc, hasMultiDisplay, screenType, drawMultiCropCanvas]);
+  }, [multiCropEditingIndex, multiCropSelectedIdx, scenarioName, screenshotDeviceId, screenTypeArgForDevice, drawMultiCropCanvas]);
 
   const removeMultiCropItem = useCallback((cropIdx: number) => {
     if (multiCropEditingIndex == null) return;

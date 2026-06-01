@@ -293,6 +293,13 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
             setH264Size({ width: msg.width || 1080, height: msg.height || 1920 });
             // JMuxer는 useEffect에서 video 엘리먼트 준비 후 초기화
           } else if (msg.mode === 'jpeg') {
+            // H.264 → JPEG 폴백 전환: JMuxer/MediaSource 를 정리해야 <img> 경로가
+            // 깨끗이 렌더된다. 정리 안 하면 stale <video> 와 누적 SourceBuffer 가 남는다.
+            if (h264ModeRef.current && jmuxerRef.current) {
+              try { jmuxerRef.current.destroy(); } catch { /* ignore */ }
+              jmuxerRef.current = null;
+              releaseVideoBuffer();
+            }
             h264ModeRef.current = false;
             setH264Mode(false);
           } else if (msg.type === 'frame' && msg.image) {

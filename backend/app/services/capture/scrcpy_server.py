@@ -2,7 +2,7 @@
 
 scrcpy-server.jar를 디바이스에 push 후 app_process로 실행해 MediaCodec API를
 직접 호출한다. screenrecord와 달리:
-  * idle 시에도 frame 출력이 자연스러움 (인코더 직접 제어)
+  * idle 시에도 frame 출력이 자연스러움 (인코더 직접 제어 + i-frame-interval=1 로 ~1fps)
   * 무한 streaming (segment 175초 제한 없음)
   * raw_video_stream=true 모드로 prefix bytes 없이 순수 H.264 NAL stream 수신
 
@@ -17,9 +17,20 @@ v1.25 + adb reverse 선택 이유:
     forward 방향(device listen, PC connect)은 SELinux/컨테이너 정책에 막힐 수 있지만,
     reverse 방향(PC listen, device connect)은 허용되는 경우가 많다.
 
-디코딩 파이프라인:
-  socket → PyAV CodecContext (H.264 직접 디코딩) → cv2.imencode JPEG
-  PyAV 미설치/실패 시 try_start False 반환 → 호출자가 screencap PNG 폴백 사용.
+전송 파이프라인 (raw H.264 relay):
+  socket → (디코딩 없이) raw H.264 NAL chunk → asyncio.Queue → stream_h264() yield
+  → main.py 가 WebSocket 으로 그대로 relay → 브라우저 JMuxer(MSE) 가 GPU 디코딩.
+
+  ★ 과거에는 PyAV 로 디코딩 후 cv2 로 JPEG 재인코딩(MJPEG)해 보냈으나, 그 Python
+    트랜스코딩이 4Mbps 를 못 따라가 디바이스측 인코더 송신버퍼가 역압으로 누적 →
+    자동차 IVI 의 적은 RAM 에서 OOM → 디바이스 재부팅을 유발했다. relay 는 PC 가
+    소켓을 scrcpy.exe 수준으로 빠르게 비워 인코더가 밀리지 않으므로 OOM 을 근절한다.
+
+디바이스 보호 불변식:
+  relay reader 태스크는 **WebSocket 전송 속도와 무관하게** 디바이스 소켓을 항상 읽어
+  비운다. 소비자(WS)가 느려 큐가 가득 차면 큐 backlog 를 버리고 다음 SPS/IDR
+  키프레임부터 재동기한다 (i-frame-interval=1 로 ~1초 내 복구). 절대 디바이스 소켓
+  읽기를 WS 전송에 막지 않는다 → 디바이스측 버퍼 누적(OOM) 방지.
 
 흐름:
   1. tools/scrcpy-server.jar(v1.25) 를 /data/local/tmp/scrcpy-server.jar 로 push
@@ -28,15 +39,14 @@ v1.25 + adb reverse 선택 이유:
   4. adb shell CLASSPATH=... app_process / com.genymobile.scrcpy.Server 1.25 ...
      server.jar가 localabstract:scrcpy 로 connect → adb reverse가 PC TCP로 forward
   5. 우리 listen socket이 connection 받음 → reader/writer 획득
-  6. async task가 reader.read() → single-thread executor로 PyAV decode + JPEG encode
-  7. JPEG 프레임을 asyncio.Queue에 put → stream_jpeg()에서 yield
+  6. relay 태스크가 reader.read() → 키프레임 정렬 후 raw NAL 을 큐에 put
+  7. stream_h264()가 큐에서 꺼내 yield
 
 폴백 트리거:
   * scrcpy-server.jar 부재 (배포 누락)
-  * PyAV(av) 미설치
   * adb push / reverse 실패
   * app_process 실행 실패
-  * 디바이스 connect 실패 또는 첫 프레임 timeout
+  * 디바이스 connect 실패 또는 첫 NAL 수신 timeout
 """
 
 from __future__ import annotations
@@ -46,10 +56,10 @@ import functools
 import hashlib
 import logging
 import os
+import re
 import socket
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
@@ -67,20 +77,18 @@ SCRCPY_VERSION = "1.25"
 # 디바이스 측 jar 경로.
 DEVICE_JAR_PATH = "/data/local/tmp/scrcpy-server.jar"
 
-# 첫 JPEG 프레임 수신 timeout (초). IVI 등 정적 화면에서 첫 IDR이 늦게 오는 케이스에
+# 첫 NAL 수신 timeout (초). IVI 등 정적 화면에서 첫 IDR이 늦게 오는 케이스에
 # 대응해 12초로 넉넉히 잡음. codec_options.i-frame-interval=1 로도 보완되지만 디바이스
 # 별로 적용 시점에 차이가 있어 timeout 여유와 함께 사용.
 _FIRST_FRAME_TIMEOUT = 12.0
 
-# idle keep-alive 간격 (초) — 화면 변화가 없을 때 마지막 프레임을 재전송해 클라이언트
-# 측 stale detection을 피한다.
-_IDLE_FRAME_TIMEOUT = 1.0
-
-# socket → decoder chunk 크기. 너무 크면 첫 프레임 latency 증가, 너무 작으면 syscall 폭주.
+# socket → relay chunk 크기. 너무 크면 첫 프레임 latency 증가, 너무 작으면 syscall 폭주.
 _READ_CHUNK = 64 * 1024
 
-# JPEG 인코딩 품질 (cv2.IMWRITE_JPEG_QUALITY). 75~85 사이가 시각적/대역폭 균형점.
-_JPEG_QUALITY = 80
+# relay 큐 최대 chunk 수 (~64KB/chunk). 소비자(WS)가 느릴 때 여기까지만 backlog 를
+# 허용하고, 초과 시 backlog 를 버린 뒤 다음 키프레임부터 재동기한다. 4MB(=64) 정도면
+# 일시적 네트워크 지터를 흡수하면서도 PC 메모리 증가를 제한한다.
+_QUEUE_MAX_CHUNKS = 64
 
 
 # ----------------------------------------------------------------------
@@ -89,27 +97,15 @@ _JPEG_QUALITY = 80
 
 @functools.lru_cache(maxsize=1)
 def detect_av() -> bool:
-    """PyAV (av) 라이브러리 가용 여부. 미설치 시 scrcpy 백엔드 비활성 → screencap 폴백."""
+    """PyAV (av) 가용 여부.
+
+    raw H.264 relay 백엔드는 PyAV/cv2 없이 동작하므로 더 이상 활성 조건이 아니다.
+    (브라우저 JMuxer 가 디코딩) — 호환성을 위해 함수는 유지하되 결과는 사용되지 않는다.
+    """
     try:
         import av  # noqa: F401
         return True
     except ImportError:
-        logger.info(
-            "PyAV (av) not installed — scrcpy backend disabled, "
-            "screencap PNG polling fallback will be used. "
-            "Install with: pip install av"
-        )
-        return False
-
-
-@functools.lru_cache(maxsize=1)
-def detect_cv2() -> bool:
-    """cv2 가용 여부. JPEG 인코딩에 필수."""
-    try:
-        import cv2  # noqa: F401
-        return True
-    except ImportError:
-        logger.info("cv2 not installed — scrcpy backend disabled")
         return False
 
 
@@ -160,30 +156,24 @@ def detect_scrcpy_server() -> Optional[str]:
 
 
 def log_scrcpy_status() -> None:
-    """기동 시 한 번 호출 — scrcpy-server.jar + PyAV 가용성 로그."""
+    """기동 시 한 번 호출 — scrcpy-server.jar 가용성 로그.
+
+    raw H.264 relay 는 PyAV/cv2 가 필요 없으므로 jar 존재만으로 활성화된다.
+    """
     jar = detect_scrcpy_server()
-    av_ok = detect_av()
-    cv2_ok = detect_cv2()
-    if jar and av_ok and cv2_ok:
+    if jar:
         try:
             size = os.path.getsize(jar)
         except OSError:
             size = 0
         logger.info(
-            "scrcpy backend ready: path=%s size=%d (PyAV+cv2 decode)",
+            "scrcpy backend ready: path=%s size=%d (raw H.264 relay)",
             jar, size,
         )
     else:
-        reasons = []
-        if not jar:
-            reasons.append("scrcpy-server.jar not found")
-        if not av_ok:
-            reasons.append("PyAV(av) not installed")
-        if not cv2_ok:
-            reasons.append("cv2 not installed")
         logger.info(
-            "scrcpy backend disabled (%s) — screencap PNG fallback will be used.",
-            ", ".join(reasons),
+            "scrcpy backend disabled (scrcpy-server.jar not found) — "
+            "screencap PNG fallback will be used.",
         )
 
 
@@ -219,13 +209,15 @@ class ScrcpyServerBackend:
         *,
         bitrate: int = 4_000_000,
         max_fps: int = 0,
-        jpeg_quality: int = _JPEG_QUALITY,
     ):
         self.serial = serial
         self.logical_id = logical_id or 0
         self.bitrate = bitrate
         self.max_fps = max_fps
-        self.jpeg_quality = jpeg_quality
+        # 디바이스 해상도 (JMuxer/<video> 레이아웃 힌트). try_start 에서 best-effort 로
+        # wm size 조회. 실패 시 None → 프론트가 기본값(1080x1920) 사용.
+        self.video_width: Optional[int] = None
+        self.video_height: Optional[int] = None
         # scrcpy v1.x는 single-instance 설계 — socket name "scrcpy" 고정, scid 옵션 없음.
         self.local_port = 0
         self._server_proc: Optional[subprocess.Popen] = None
@@ -237,20 +229,19 @@ class ScrcpyServerBackend:
         self._accept_event: Optional[asyncio.Event] = None
         self._reader: Optional[asyncio.StreamReader] = None
         self._writer: Optional[asyncio.StreamWriter] = None
-        # 디코더 task와 디코더 전용 single-thread executor
-        self._decoder_task: Optional[asyncio.Task] = None
-        self._decoder_executor: Optional[ThreadPoolExecutor] = None
-        # 인코딩된 JPEG 큐 — maxsize=2로 backpressure (디코더 < 소비자 속도 차 흡수)
-        self._jpeg_queue: asyncio.Queue = asyncio.Queue(maxsize=2)
+        # relay task — 디바이스 소켓을 항상 읽어(디바이스 보호) 큐에 raw NAL 적재.
+        self._relay_task: Optional[asyncio.Task] = None
+        # raw H.264 NAL chunk 큐. 가득 차면 relay_loop 가 backlog 를 버리고 키프레임
+        # 재동기 (디바이스 소켓 읽기는 막지 않음).
+        self._frame_queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAX_CHUNKS)
         self._first_frame_event: asyncio.Event = asyncio.Event()
-        self._first_frame: Optional[bytes] = None
         self._closed = False
         # 진단용 stdout/stderr tail
         self._stderr_tail: bytearray = bytearray()
         self._stdout_tail: bytearray = bytearray()
-        # 디코딩 통계 (진단용)
+        # relay 통계 (진단용)
         self._total_bytes_in: int = 0
-        self._total_frames_decoded: int = 0
+        self._total_frames_decoded: int = 0  # 큐에 넣은 chunk 수 (relay 단위)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -259,9 +250,10 @@ class ScrcpyServerBackend:
     async def try_start(
         self, first_frame_timeout: float = _FIRST_FRAME_TIMEOUT,
     ) -> bool:
-        """시작 + 첫 프레임 수신 검증. 실패 시 cleanup하고 False."""
-        if not detect_av() or not detect_cv2():
-            return False
+        """시작 + 첫 NAL 수신 검증. 실패 시 cleanup하고 False.
+
+        raw H.264 relay 는 PyAV/cv2 가 필요 없으므로 jar 존재만으로 시도한다.
+        """
         jar = detect_scrcpy_server()
         if not jar:
             return False
@@ -289,24 +281,24 @@ class ScrcpyServerBackend:
             # 5) 디바이스가 우리에게 connect 올 때까지 대기
             if not await self._accept_socket():
                 return False
-            # 6) PyAV 디코더 task 시작
-            if not self._start_decoder_task():
+            # 6) relay task 시작 (디코딩 없이 raw NAL 을 큐로)
+            if not self._start_relay_task():
                 return False
-            # 7) 첫 프레임 검증 — queue에 첫 JPEG가 들어올 때까지
+            # 7) 첫 NAL 검증 — queue에 첫 키프레임 chunk가 들어올 때까지
             await asyncio.wait_for(
                 self._first_frame_event.wait(), timeout=first_frame_timeout,
             )
-            if self._jpeg_queue.empty():
+            if self._frame_queue.empty():
                 raise RuntimeError("first_frame event set but queue empty")
-            # 첫 프레임을 미리 꺼내둠 — stream_jpeg가 이걸 먼저 yield
-            self._first_frame = await self._jpeg_queue.get()
+            # 8) 해상도 힌트 best-effort 조회 (실패해도 미러는 정상 — 프론트 기본값 사용)
+            await self._fetch_resolution()
         except (asyncio.TimeoutError, Exception) as e:
             sr_err = self._stderr_tail_str()
             sr_out = self._stdout_tail_str()
             srv_rc = self._server_proc.poll() if self._server_proc else None
             logger.info(
                 "scrcpy first-frame check failed (serial=%s display=%s): %s "
-                "server_rc=%s bytes_in=%d frames=%d server_out=%r server_err=%r",
+                "server_rc=%s bytes_in=%d chunks=%d server_out=%r server_err=%r",
                 self.serial, self.logical_id, type(e).__name__,
                 srv_rc, self._total_bytes_in, self._total_frames_decoded,
                 sr_out, sr_err,
@@ -315,11 +307,37 @@ class ScrcpyServerBackend:
             return False
 
         logger.info(
-            "scrcpy backend started: serial=%s display=%s port=%d bitrate=%d (v%s, PyAV)",
+            "scrcpy backend started: serial=%s display=%s port=%d bitrate=%d "
+            "size=%sx%s (v%s, H.264 relay)",
             self.serial, self.logical_id, self.local_port, self.bitrate,
-            SCRCPY_VERSION,
+            self.video_width, self.video_height, SCRCPY_VERSION,
         )
         return True
+
+    async def _fetch_resolution(self) -> None:
+        """`adb shell wm size` 로 디바이스 해상도 best-effort 조회 (JMuxer 레이아웃 힌트).
+
+        MSE 는 SPS 에서 실제 해상도를 자동 인식하므로 이 값은 초기 레이아웃 힌트일 뿐.
+        실패/파싱 불가 시 None 유지 → 프론트가 기본값을 쓴다. 미러 동작에 영향 없음.
+        """
+        loop = asyncio.get_event_loop()
+        cmd = [ADB_PATH, "-s", self.serial, "shell", "wm", "size"]
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    cmd, capture_output=True, timeout=3,
+                    creationflags=_NO_WINDOW,
+                ),
+            )
+            text = result.stdout.decode(errors="replace")
+            # "Physical size: 1080x1920" / "Override size: 1080x1920"
+            m = re.search(r"(\d{2,5})x(\d{2,5})", text)
+            if m:
+                self.video_width = int(m.group(1))
+                self.video_height = int(m.group(2))
+        except Exception:
+            pass
 
     async def _push_jar(self, local_jar: str) -> bool:
         """디바이스에 jar push. 해시 동일 시 skip."""
@@ -599,36 +617,32 @@ class ScrcpyServerBackend:
             return False
 
     # ------------------------------------------------------------------
-    # PyAV 디코딩 파이프라인
+    # raw H.264 relay 파이프라인
     # ------------------------------------------------------------------
 
-    def _start_decoder_task(self) -> bool:
-        """디코더 task 시작 — socket reader → PyAV → JPEG → queue."""
+    def _start_relay_task(self) -> bool:
+        """relay task 시작 — socket reader → (키프레임 정렬) → raw NAL queue."""
         if not self._reader:
             return False
-        # codec context는 thread-safe가 아니므로 single-worker executor 사용.
-        self._decoder_executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix=f"scrcpy-decode-{self.serial[:8]}",
-        )
-        self._decoder_task = asyncio.create_task(self._decoder_loop())
+        self._relay_task = asyncio.create_task(self._relay_loop())
         return True
 
-    async def _decoder_loop(self) -> None:
-        """async: socket에서 H.264 chunk를 읽고 executor로 디코딩 위임.
+    async def _relay_loop(self) -> None:
+        """디바이스 소켓을 항상 읽어 raw H.264 NAL chunk 를 큐에 적재.
 
-        디코딩+JPEG 인코딩은 CPU bound이므로 이벤트 루프 차단을 피하기 위해
-        백엔드 전용 single-thread executor에서 실행.
+        디바이스 보호 불변식: 이 루프는 WS 전송 속도와 무관하게 reader.read() 를
+        계속 호출해 디바이스측 인코더 송신버퍼를 비운다 (OOM 방지). 소비자(WS)가
+        느려 큐가 가득 차면 backlog 를 버리고 다음 SPS/IDR 키프레임부터 재동기한다.
+        디코딩은 하지 않으므로 CPU 부담이 거의 없다.
         """
-        import av  # detect_av로 이미 확인됨
-        # CodecContext는 같은 스레드에서만 사용해야 안전 → executor 워커 1개 보장.
-        codec = av.CodecContext.create("h264", "r")
-
-        loop = asyncio.get_event_loop()
         reader = self._reader
-        executor = self._decoder_executor
-        if reader is None or executor is None:
+        if reader is None:
             return
+
+        # 최초 join 시 깨끗한 GOP 경계(SPS/IDR)부터 시작하도록 키프레임 대기 상태로 출발.
+        need_keyframe = True
+        # start code 가 chunk 경계에 걸칠 때를 대비한 carry (최대 3바이트).
+        carry = b""
 
         try:
             while not self._closed:
@@ -644,79 +658,78 @@ class ScrcpyServerBackend:
                     break
                 self._total_bytes_in += len(chunk)
 
-                # CPU bound 디코딩+인코딩을 executor로 위임.
-                try:
-                    jpegs = await loop.run_in_executor(
-                        executor, _decode_chunk_to_jpegs,
-                        codec, chunk, self.jpeg_quality,
-                    )
-                except Exception as e:
-                    logger.debug("scrcpy decode error: %s", e)
-                    continue
+                # 키프레임 재동기 중이면 SPS/IDR 시작점까지 버린다.
+                if need_keyframe:
+                    buf = carry + chunk
+                    off = _find_keyframe_offset(buf)
+                    if off < 0:
+                        carry = buf[-3:]  # start code 경계 보존
+                        continue
+                    chunk = buf[off:]
+                    carry = b""
+                    need_keyframe = False
 
-                for jpeg in jpegs:
+                # 큐가 가득 → backlog 폐기 후 키프레임 재동기 요청 (디바이스 읽기는 유지).
+                if self._frame_queue.full():
+                    self._drain_queue()
+                    need_keyframe = True
+                    off = _find_keyframe_offset(chunk)
+                    if off < 0:
+                        carry = chunk[-3:]
+                        continue
+                    chunk = chunk[off:]
+                    carry = b""
+                    need_keyframe = False
+
+                try:
+                    self._frame_queue.put_nowait(chunk)
                     self._total_frames_decoded += 1
-                    # backpressure: queue가 가득 차면 가장 오래된 프레임 드롭.
-                    # 라이브 스트림에서 stale 프레임은 가치가 낮으므로 drop이 정답.
-                    if self._jpeg_queue.full():
-                        try:
-                            self._jpeg_queue.get_nowait()
-                        except asyncio.QueueEmpty:
-                            pass
-                    try:
-                        self._jpeg_queue.put_nowait(jpeg)
-                    except asyncio.QueueFull:
-                        pass
-                    if not self._first_frame_event.is_set():
-                        self._first_frame_event.set()
+                except asyncio.QueueFull:
+                    # 직전 full 체크와 put 사이 경합 — 다음 키프레임부터 재동기.
+                    need_keyframe = True
+                    continue
+                if not self._first_frame_event.is_set():
+                    self._first_frame_event.set()
         except (asyncio.CancelledError, GeneratorExit):
             raise
         except Exception as e:
-            logger.debug("scrcpy decoder loop error: %s", e)
+            logger.debug("scrcpy relay loop error: %s", e)
         finally:
-            # EOF/에러 시 sentinel 넣어 stream_jpeg가 깔끔히 종료되도록.
+            # EOF/에러 시 sentinel 넣어 stream_h264가 깔끔히 종료되도록.
             try:
-                self._jpeg_queue.put_nowait(_EOF_SENTINEL)
+                self._frame_queue.put_nowait(_EOF_SENTINEL)
             except asyncio.QueueFull:
-                # 큐 가득 → 하나 비우고 sentinel 삽입
+                self._drain_queue()
                 try:
-                    self._jpeg_queue.get_nowait()
-                    self._jpeg_queue.put_nowait(_EOF_SENTINEL)
+                    self._frame_queue.put_nowait(_EOF_SENTINEL)
                 except Exception:
                     pass
+
+    def _drain_queue(self) -> None:
+        """큐의 모든 항목을 비운다 (backlog 폐기)."""
+        try:
+            while True:
+                self._frame_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
 
     # ------------------------------------------------------------------
     # Streaming
     # ------------------------------------------------------------------
 
-    async def stream_jpeg(self) -> AsyncIterator[bytes]:
-        """JPEG 프레임 yield.
+    async def stream_h264(self) -> AsyncIterator[bytes]:
+        """raw H.264 NAL chunk yield.
 
-        디코더 task가 _jpeg_queue에 넣는 프레임을 그대로 소비.
-        idle (_IDLE_FRAME_TIMEOUT 동안 새 frame 없음) 시 마지막 프레임 재전송.
-        디코더 종료(EOF/에러) 시 sentinel 받아 자연 종료.
+        relay task가 _frame_queue에 넣는 chunk를 그대로 소비해 WS로 relay 한다.
+        H.264 는 <video>/MSE 가 마지막 프레임을 유지하므로 idle 재전송이 불필요하고,
+        i-frame-interval=1 로 정적 화면에서도 ~1fps 로 IDR 이 흘러 stale 감지에 충분.
+        relay 종료(EOF/에러) 시 sentinel 받아 자연 종료.
         """
-        first = self._first_frame
-        last_frame: Optional[bytes] = None
-        if first is not None:
-            self._first_frame = None
-            last_frame = first
-            yield first
-
         try:
             while not self._closed:
-                try:
-                    item = await asyncio.wait_for(
-                        self._jpeg_queue.get(), timeout=_IDLE_FRAME_TIMEOUT,
-                    )
-                except asyncio.TimeoutError:
-                    if last_frame is not None:
-                        yield last_frame
-                    continue
-
+                item = await self._frame_queue.get()
                 if item is _EOF_SENTINEL:
                     break
-                last_frame = item
                 yield item
         except (asyncio.CancelledError, GeneratorExit):
             raise
@@ -731,24 +744,16 @@ class ScrcpyServerBackend:
             return
         self._closed = True
 
-        # 1) decoder task cancel — socket read를 깨운다
-        if self._decoder_task and not self._decoder_task.done():
-            self._decoder_task.cancel()
+        # 1) relay task cancel — socket read를 깨운다
+        if self._relay_task and not self._relay_task.done():
+            self._relay_task.cancel()
             try:
-                await self._decoder_task
+                await self._relay_task
             except (asyncio.CancelledError, Exception):
                 pass
-        self._decoder_task = None
+        self._relay_task = None
 
-        # 2) executor shutdown
-        if self._decoder_executor is not None:
-            try:
-                self._decoder_executor.shutdown(wait=False, cancel_futures=True)
-            except Exception:
-                pass
-            self._decoder_executor = None
-
-        # 3) video socket close → server.jar가 자연 종료
+        # 2) video socket close → server.jar가 자연 종료
         if self._writer:
             try:
                 self._writer.close()
@@ -789,7 +794,7 @@ class ScrcpyServerBackend:
         await self._remove_reverse()
 
         logger.info(
-            "scrcpy backend closed: serial=%s bytes_in=%d frames=%d",
+            "scrcpy backend closed: serial=%s bytes_in=%d chunks=%d",
             self.serial, self._total_bytes_in, self._total_frames_decoded,
         )
 
@@ -855,59 +860,42 @@ class ScrcpyServerBackend:
     def is_alive(self) -> bool:
         return (
             not self._closed
-            and self._decoder_task is not None
-            and not self._decoder_task.done()
+            and self._relay_task is not None
+            and not self._relay_task.done()
             and self._server_proc is not None
             and self._server_proc.poll() is None
         )
 
 
 # ----------------------------------------------------------------------
-# 디코딩 worker (executor 스레드에서 실행)
+# H.264 키프레임 탐색 (relay 재동기용)
 # ----------------------------------------------------------------------
 
-# stream_jpeg의 정상 종료 sentinel.
+# stream_h264의 정상 종료 sentinel.
 _EOF_SENTINEL: object = object()
 
+# 키프레임으로 취급할 NAL unit type: 5=IDR slice, 7=SPS.
+# scrcpy v1.25 raw_video_stream 은 IDR 앞에 SPS/PPS(7/8) config 를 보내므로,
+# SPS(7) 또는 IDR(5) 시작점에서 재동기하면 JMuxer 가 깨끗한 GOP 로 디코딩을 재개한다.
+_KEYFRAME_NAL_TYPES = frozenset({5, 7})
 
-def _decode_chunk_to_jpegs(codec, chunk: bytes, jpeg_quality: int) -> list[bytes]:
-    """단일 H.264 chunk → JPEG 프레임 리스트.
 
-    같은 codec context를 반복 호출해야 SPS/PPS 컨텍스트가 유지된다. ThreadPoolExecutor
-    worker가 1개이므로 race 없음.
+def _find_keyframe_offset(buf: bytes) -> int:
+    """Annex-B H.264 바이트열에서 다음 키프레임(SPS/IDR) start code 위치 반환.
 
-    raw H.264 NAL stream에서 chunk 경계는 NAL 경계와 일치하지 않을 수 있어,
-    codec.parse(chunk)로 demuxer에 일임해 packet 단위로 정리한 뒤 decode.
+    start code(00 00 01) 뒤 NAL header 의 type(하위 5비트)이 SPS/IDR 이면 그 위치를
+    돌려준다. 4바이트 start code(00 00 00 01)면 앞의 0x00 까지 포함해 반환. 미발견 시 -1.
+    디코딩 없이 바이트 스캔만 하므로 비용이 거의 없다.
     """
-    import av
-    import cv2
-
-    out: list[bytes] = []
-    try:
-        packets = codec.parse(chunk)
-    except av.InvalidDataError:
-        return out
-    except Exception:
-        return out
-
-    for packet in packets:
-        try:
-            frames = codec.decode(packet)
-        except av.InvalidDataError:
-            continue
-        except Exception:
-            continue
-        for frame in frames:
-            try:
-                arr = frame.to_ndarray(format="bgr24")
-            except Exception:
-                continue
-            try:
-                ok, buf = cv2.imencode(
-                    ".jpg", arr, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality],
-                )
-            except Exception:
-                continue
-            if ok:
-                out.append(bytes(buf))
-    return out
+    n = len(buf)
+    i = 0
+    while True:
+        j = buf.find(b"\x00\x00\x01", i)
+        if j < 0 or j + 3 >= n:
+            return -1
+        nal_type = buf[j + 3] & 0x1F
+        if nal_type in _KEYFRAME_NAL_TYPES:
+            if j > 0 and buf[j - 1] == 0:
+                return j - 1  # 4바이트 start code 포함
+            return j
+        i = j + 3
