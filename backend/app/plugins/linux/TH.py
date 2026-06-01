@@ -706,4 +706,12 @@ def _format_result(
         parts.append(f"e2e_ms={e2e_ms:.2f}")
     header = " ".join(parts)
     tail = stdout_bytes[-tail_bytes:].decode("utf-8", "replace").strip()
+
+    # client.py 는 토픽 미발견/내부 오류에도 rc=0 으로 종료한다 → rc 만으로는 성공 판정 불가.
+    # stdout 의 명확한 실패 마커를 감지해 "FAIL:" 로 보고 (시나리오가 PASS 로 오인하지 않도록).
+    full = stdout_bytes.decode("utf-8", "replace")
+    for marker in ("Topic not found", "Unexpected error has occurred"):
+        if marker in full:
+            return f"FAIL: TH client error — {marker} ({header})\n{tail}"
+
     return f"{header}\n{tail}" if tail else header
