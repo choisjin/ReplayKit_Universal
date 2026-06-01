@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode, useCallback } from 'react';
 import JMuxer from 'jmuxer';
 import { deviceApi, scenarioApi } from '../services/api';
+import { H264Renderer, webCodecsSupported } from '../lib/h264Renderer';
 
 export interface ManagedDevice {
   id: string;
@@ -39,6 +40,8 @@ interface DeviceContextType {
   h264Mode: boolean;
   h264Size: { width: number; height: number };
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  // WebCodecs H.264 렌더러 (RecordPage 의 rAF 가 drawTo 로 캔버스에 그림). 미지원 시 null.
+  h264RendererRef: React.RefObject<H264Renderer | null>;
   sendControl: (msg: object) => void;
   // 실시간 FPS
   streamFps: number;
@@ -73,7 +76,9 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const h264ModeRef = useRef(false);
   const jmuxerRef = useRef<JMuxer | null>(null);
-  const h264FeedCountRef = useRef(0);  // [진단] H.264 feed 횟수 (첫 feed/주기 video 상태 로그용)
+  // WebCodecs 렌더러 (우선 경로). 미지원 브라우저는 JMuxer(<video>)로 폴백.
+  const h264RendererRef = useRef<H264Renderer | null>(null);
+  const h264FeedCountRef = useRef(0);  // [진단] H.264 feed 횟수 (첫 feed/주기 상태 로그용)
   const screenAliveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [streamFps, setStreamFps] = useState(0);
   const fpsCountRef = useRef(0);
@@ -210,6 +215,10 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
 
   // --- WebSocket cleanup helper ---
   const closeWs = useCallback(() => {
+    if (h264RendererRef.current) {
+      try { h264RendererRef.current.close(); } catch { /* ignore */ }
+      h264RendererRef.current = null;
+    }
     if (jmuxerRef.current) {
       try { jmuxerRef.current.destroy(); } catch { /* ignore */ }
       jmuxerRef.current = null;
@@ -218,6 +227,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     releaseVideoBuffer();
     h264ModeRef.current = false;
     setH264Mode(false);
+    h264FeedCountRef.current = 0;
     stopFpsCounter();
     if (wsRef.current) {
       // 이전 WebSocket의 이벤트 핸들러 제거 (close 완료 전 프레임 수신 방지)
@@ -292,14 +302,20 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
             h264ModeRef.current = true;
             setH264Mode(true);
             setH264Size({ width: msg.width || 1080, height: msg.height || 1920 });
-            // JMuxer는 useEffect에서 video 엘리먼트 준비 후 초기화
+            // 디코더는 useEffect에서 초기화 (WebCodecs 우선, JMuxer 폴백)
           } else if (msg.mode === 'jpeg') {
-            // H.264 → JPEG 폴백 전환: JMuxer/MediaSource 를 정리해야 <img> 경로가
-            // 깨끗이 렌더된다. 정리 안 하면 stale <video> 와 누적 SourceBuffer 가 남는다.
-            if (h264ModeRef.current && jmuxerRef.current) {
-              try { jmuxerRef.current.destroy(); } catch { /* ignore */ }
-              jmuxerRef.current = null;
-              releaseVideoBuffer();
+            // H.264 → JPEG 폴백 전환: 디코더를 정리해야 <img> 경로가 깨끗이 렌더된다.
+            if (h264ModeRef.current) {
+              if (h264RendererRef.current) {
+                try { h264RendererRef.current.close(); } catch { /* ignore */ }
+                h264RendererRef.current = null;
+              }
+              if (jmuxerRef.current) {
+                try { jmuxerRef.current.destroy(); } catch { /* ignore */ }
+                jmuxerRef.current = null;
+                releaseVideoBuffer();
+              }
+              h264FeedCountRef.current = 0;
             }
             h264ModeRef.current = false;
             setH264Mode(false);
@@ -313,21 +329,19 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         } catch { /* ignore */ }
       } else if (event.data instanceof ArrayBuffer) {
         if (h264ModeRef.current) {
-          // H.264 NAL 데이터
-          if (jmuxerRef.current) {
-            jmuxerRef.current.feed({ video: new Uint8Array(event.data) });
-            // [진단] 첫 feed + 120회마다 video 디코드 상태(해상도/readyState/재생시각/버퍼) 로그.
-            // currentTime 이 0에서 안 움직이거나 videoWidth 가 0이면 디코드 실패/정체 진단 가능.
+          // H.264 NAL 데이터 — WebCodecs 렌더러 우선, 없으면 JMuxer 폴백.
+          const bytes = new Uint8Array(event.data);
+          if (h264RendererRef.current) {
+            h264RendererRef.current.feed(bytes);
             const n = ++h264FeedCountRef.current;
-            if (n === 1 || n % 120 === 0) {
-              const v = videoRef.current;
-              const buf = v && v.buffered && v.buffered.length > 0
-                ? `${v.buffered.start(0).toFixed(2)}~${v.buffered.end(v.buffered.length - 1).toFixed(2)}` : 'none';
-              console.info(`[mirror] feed#${n} bytes=${(event.data as ArrayBuffer).byteLength} videoWH=${v?.videoWidth}x${v?.videoHeight} ready=${v?.readyState} paused=${v?.paused} t=${v?.currentTime?.toFixed(2)} buffered=${buf}`);
+            if (n === 1 || n % 300 === 0) {
+              console.info(`[mirror] feed#${n} bytes=${bytes.length} hasFrame=${h264RendererRef.current.hasFrame} (WebCodecs)`);
             }
+          } else if (jmuxerRef.current) {
+            jmuxerRef.current.feed({ video: bytes });
           } else if (h264FeedCountRef.current === 0) {
-            // JMuxer 미초기화 시 데이터 드롭 (useEffect에서 곧 초기화됨) — 첫 케이스만 알림.
-            console.warn('[mirror] H.264 binary arrived but JMuxer not ready yet (dropping until init)');
+            // 디코더 미초기화 시 데이터 드롭 (useEffect에서 곧 초기화됨) — 첫 케이스만 알림.
+            console.warn('[mirror] H.264 binary arrived but decoder not ready yet (dropping until init)');
           }
           markFrameAlive();
         } else {
@@ -396,21 +410,24 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     }
   }, [pollInterval, pollFn]);
 
-  // H.264 모드 시 JMuxer 초기화 (video 엘리먼트가 DOM에 렌더된 후 실행)
+  // H.264 모드 시 디코더 초기화.
+  //  - WebCodecs 지원: H264Renderer(VideoDecoder) 사용 — 모든 프로파일 디코딩, <video> 불필요.
+  //  - 미지원: JMuxer(MSE, <video>)로 폴백 (구형 브라우저).
   useEffect(() => {
     if (!h264Mode) return;
-    // video 엘리먼트가 렌더될 때까지 대기
+
+    if (webCodecsSupported()) {
+      if (!h264RendererRef.current) {
+        console.info('[mirror] init H.264 via WebCodecs VideoDecoder');
+        h264RendererRef.current = new H264Renderer((msg) => console.info('[mirror]', msg));
+      }
+      return;
+    }
+
+    // ── 폴백: JMuxer (video 엘리먼트가 DOM에 렌더된 후 실행) ──
+    console.warn('[mirror] WebCodecs 미지원 → JMuxer 폴백 (High profile 디코딩 제약 가능)');
     const initJMuxer = () => {
       if (videoRef.current && !jmuxerRef.current) {
-        // [진단] MSE H.264 코덱 지원 여부 (3840x1440 같은 고해상도/프로파일 거부 케이스 확인용)
-        try {
-          const support = {
-            high41: typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('video/mp4; codecs="avc1.640028"'),
-            high51: typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('video/mp4; codecs="avc1.640033"'),
-            baseline: typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01F"'),
-          };
-          console.info('[mirror] init H.264 JMuxer; MSE support:', support);
-        } catch { /* ignore */ }
         jmuxerRef.current = new JMuxer({
           node: videoRef.current,
           mode: 'video',
@@ -420,16 +437,10 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
           onReady: () => console.info('[mirror] JMuxer onReady'),
           onError: (e: any) => console.error('[mirror] JMuxer onError', e),
         });
-        // [진단] video 디코드/MSE 에러 표면화
         const vEl = videoRef.current;
-        const onVErr = () => console.error('[mirror] <video> error', vEl.error?.code, vEl.error?.message);
-        vEl.addEventListener('error', onVErr);
-        // autoPlay 정책상 보통 자동 재생되지만, MSE SourceBuffer 첫 append 전 stall 을
-        // 막기 위해 명시적으로 play() 시도 (muted 라 제스처 불필요).
         vEl.play?.().catch((err) => console.warn('[mirror] video.play() rejected', err?.name));
       }
     };
-    // 즉시 시도 + 폴백 (React 렌더 지연 대비)
     initJMuxer();
     if (!jmuxerRef.current) {
       const timer = setInterval(() => {
@@ -603,6 +614,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       h264Mode,
       h264Size,
       videoRef,
+      h264RendererRef,
       sendControl,
       streamFps,
       screenPausedForPlayback,

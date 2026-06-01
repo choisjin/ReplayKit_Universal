@@ -263,7 +263,7 @@ export default function RecordPage() {
   const {
     primaryDevices, auxiliaryDevices, fetchDevices,
     screenshotDeviceId, setScreenshotDeviceId, screenshot,
-    h264Mode, h264Size, videoRef, sendControl,
+    h264Mode, h264Size, videoRef, h264RendererRef, sendControl,
     screenType, setScreenType, refreshScreenshot,
     screenAlive, streamFps,
     screenPausedForPlayback,
@@ -4047,31 +4047,42 @@ export default function RecordPage() {
     img.src = screenshot;
   }, [screenshot, viewCropEnabled, viewCropX, viewCropY, h264Mode]);
 
-  // H.264 모드: 숨겨진 <video>(JMuxer가 MSE 디코딩)를 매 프레임 메인 캔버스에 그린다.
+  // H.264 모드: 디코딩된 프레임을 매 프레임 메인 캔버스에 그린다.
+  //  - WebCodecs(H264Renderer): renderer.drawTo(canvas) — VideoFrame 직접 렌더.
+  //  - JMuxer 폴백: 숨겨진 <video>를 drawImage.
   // JPEG 모드의 screenshot 캔버스와 동일한 출력면(canvasRef)을 공유해 탭/크롭/ROI 좌표
-  // 매핑·오버레이 로직을 그대로 재사용한다. drawImage(video)는 GPU 가속이라 저비용.
+  // 매핑·오버레이 로직을 그대로 재사용한다. drawImage는 GPU 가속이라 저비용.
   useEffect(() => {
     if (!h264Mode) return;
     let raf = 0;
     const draw = () => {
-      const v = videoRef.current;
       const canvas = canvasRef.current;
-      // readyState >= 2(HAVE_CURRENT_DATA) 이고 디코드 해상도가 잡힌 뒤에만 그린다.
-      if (v && canvas && v.videoWidth > 0 && v.readyState >= 2) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          if (viewCropEnabled) {
-            const sx = Math.round(viewCropX[0] * v.videoWidth);
-            const sy = Math.round(viewCropY[0] * v.videoHeight);
-            const sw = Math.round((viewCropX[1] - viewCropX[0]) * v.videoWidth);
-            const sh = Math.round((viewCropY[1] - viewCropY[0]) * v.videoHeight);
-            if (canvas.width !== sw) canvas.width = sw;
-            if (canvas.height !== sh) canvas.height = sh;
-            ctx.drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
-          } else {
-            if (canvas.width !== v.videoWidth) canvas.width = v.videoWidth;
-            if (canvas.height !== v.videoHeight) canvas.height = v.videoHeight;
-            ctx.drawImage(v, 0, 0);
+      const renderer = h264RendererRef.current;
+      if (canvas && renderer && renderer.hasFrame) {
+        // WebCodecs 경로
+        const crop = viewCropEnabled
+          ? { x0: viewCropX[0], y0: viewCropY[0], x1: viewCropX[1], y1: viewCropY[1] }
+          : undefined;
+        renderer.drawTo(canvas, crop);
+      } else {
+        // JMuxer 폴백 경로 (<video>)
+        const v = videoRef.current;
+        if (v && canvas && v.videoWidth > 0 && v.readyState >= 2) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            if (viewCropEnabled) {
+              const sx = Math.round(viewCropX[0] * v.videoWidth);
+              const sy = Math.round(viewCropY[0] * v.videoHeight);
+              const sw = Math.round((viewCropX[1] - viewCropX[0]) * v.videoWidth);
+              const sh = Math.round((viewCropY[1] - viewCropY[0]) * v.videoHeight);
+              if (canvas.width !== sw) canvas.width = sw;
+              if (canvas.height !== sh) canvas.height = sh;
+              ctx.drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
+            } else {
+              if (canvas.width !== v.videoWidth) canvas.width = v.videoWidth;
+              if (canvas.height !== v.videoHeight) canvas.height = v.videoHeight;
+              ctx.drawImage(v, 0, 0);
+            }
           }
         }
       }
@@ -4079,7 +4090,7 @@ export default function RecordPage() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [h264Mode, viewCropEnabled, viewCropX, viewCropY, videoRef]);
+  }, [h264Mode, viewCropEnabled, viewCropX, viewCropY, videoRef, h264RendererRef]);
 
   const getDeviceTag = (deviceId: string | null) => {
     if (!deviceId) return <Tag>-</Tag>;
