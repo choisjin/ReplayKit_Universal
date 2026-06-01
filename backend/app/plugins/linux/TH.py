@@ -592,9 +592,12 @@ class TH:
             return "FAIL: topic_name 이 비어 있음"
         if not json_path or not str(json_path).strip():
             return "FAIL: json_path 가 비어 있음 — payload JSON 파일 경로 필요"
+        # client.py 는 cwd=client_dir 에서 실행되므로 상대경로(예: ../generated_json/X.json)는
+        # client_dir 기준으로 해석해야 한다. 백엔드 cwd 기준으로 보면 안 됨.
+        check_path = json_path if os.path.isabs(json_path) else os.path.join(self.client_dir, json_path)
         # exists 사용: 실제 .json + /dev/null(테스트) 모두 허용, 빈 문자열·오타 경로만 차단.
-        if not os.path.exists(json_path):
-            return f"FAIL: json_path 경로 없음: {json_path}"
+        if not os.path.exists(check_path):
+            return f"FAIL: json_path 경로 없음: {json_path} (client_dir 기준 해석: {check_path})"
         return None
 
     @staticmethod
