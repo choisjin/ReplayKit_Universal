@@ -383,16 +383,47 @@ def list_available_modules() -> list[dict]:
              {"name": "launch_cvd", "label": "Setup 시 launch_cvd 자동 spawn", "type": "select", "default": "True",
               "options": ["True", "False"], "hidden": True},
          ]},
+        # SCAR — 런타임(REST/Docker) + 등록 시 netns VLAN 자동 구성.
+        #   표시 필드: SCAR 설치 가이드 "2. Network Configuration" 에서 사용자가 결정해야 하는 값.
+        #   iface 는 SCAR/radmoon 스캔 결과의 인터페이스로 자동 채워진다 (없으면 수동 입력).
+        #   숨김 필드: 가이드 예시 디폴트 그대로 — extra_fields 로 SCAR 생성자에 전달되지만 폼엔 미표시.
         {"name": "SCAR", "label": "SCAR (SDV Control, Linux)", "connect_type": "none",
          "connect_fields": [
              {"name": "api_base", "label": "SCAR REST URL", "type": "text",
               "default": "http://localhost:8081"},
              {"name": "container", "label": "Docker container 이름", "type": "text", "default": "scar"},
-             {"name": "reconnect_script", "label": "재기동 스크립트 (절대경로, 선택)", "type": "text", "default": ""},
-             {"name": "reconnect_args", "label": "재기동 스크립트 인자 (공백 구분, 선택)", "type": "text",
+             # ── netns VLAN 구성 (등록 시 자동 셋업) ──
+             {"name": "vlan_config_dir", "label": "sdv_vlan_config 디렉터리 (netns.sh 위치, 비우면 netns 건너뜀)",
+              "type": "folder", "default": ""},
+             {"name": "iface", "label": "네트워크 인터페이스 (RAD_Moon/Technica, 스캔 자동 채움)",
+              "type": "text", "default": ""},
+             {"name": "net_mode", "label": "구성 모드", "type": "select", "default": "multiverse",
+              "options": ["multiverse", "standalone"]},
+             {"name": "ends", "label": "ENDS 버전", "type": "text", "default": "FaceStep1_2025_R10"},
+             {"name": "stub_ecus", "label": "stub_ecus (콤마 구분, 비우면 모드 기본값)", "type": "text",
+              "default": ""},
+             {"name": "sudo_password", "label": "sudo 비밀번호 (passwordless 미설정 시 필수)",
+              "type": "password", "default": ""},
+             # ── 재기동 스크립트 (scar.sh) ──
+             {"name": "reconnect_script", "label": "scar.sh 절대경로 (등록 시 자동 기동 / 재기동, 선택)",
+              "type": "text", "default": ""},
+             {"name": "reconnect_args", "label": "scar.sh 인자 (공백 구분)", "type": "text",
               "default": "-t 2.2.0 --ui --arti tls"},
-             {"name": "reconnect_cwd", "label": "재기동 스크립트 cwd (선택)", "type": "text", "default": ""},
+             {"name": "reconnect_cwd", "label": "scar.sh cwd (선택)", "type": "text", "default": ""},
              {"name": "reconnect_wait_s", "label": "재기동 후 대기 (초)", "type": "number", "default": "20"},
+             # ── 숨김: 가이드 디폴트 ──
+             {"name": "standalone_ip", "label": "standalone 모드 IP", "type": "text",
+              "default": "192.168.1.10", "hidden": True},
+             {"name": "ufw", "label": "ufw", "type": "select", "default": "off",
+              "options": ["off", "on"], "hidden": True},
+             {"name": "log_folder", "label": "log_folder", "type": "text", "default": "/tmp",
+              "hidden": True},
+             {"name": "auto_setup", "label": "등록 시 자동 Setup(netns) 실행", "type": "select",
+              "default": "True", "options": ["True", "False"], "hidden": True},
+             {"name": "netns_clean", "label": "apply 전 --clean 수행", "type": "select",
+              "default": "True", "options": ["True", "False"], "hidden": True},
+             {"name": "launch_scar", "label": "Setup 중 scar.sh 자동 기동", "type": "select",
+              "default": "True", "options": ["True", "False"], "hidden": True},
          ]},
     ]
     available = []

@@ -237,7 +237,7 @@ export default function DevicePage() {
   const [hasScanned, setHasScanned] = useState(false);
   const [scannedDlt, setScannedDlt] = useState<{ ip: string; port: number }[]>([]);
   const [scannedSmartbench, setScannedSmartbench] = useState<{ ip: string; port: number; label: string; module: string }[]>([]);
-  const [scannedScar, setScannedScar] = useState<{ ip: string; port: number; container: string; api_alive: boolean; docker_running: boolean; label: string; module: string }[]>([]);
+  const [scannedScar, setScannedScar] = useState<{ ip: string; port: number; container: string; api_alive: boolean; docker_running: boolean; interfaces?: string[]; label: string; module: string }[]>([]);
   const [scannedRadmoon, setScannedRadmoon] = useState<{
     bridge: string;
     bridge_operstate: string;
@@ -2051,20 +2051,27 @@ export default function DevicePage() {
                             dataSource={scannedScar}
                             pagination={scannedScar.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
                             renderItem={(h) => {
+                              const firstIface = (h.interfaces && h.interfaces[0]) || '';
                               const existing = findExisting(x => x.type === 'module' && x.info?.module === 'SCAR' && x.address === h.ip);
-                              const doAdd = async () => {
-                                try {
-                                  const devId = `SCAR_${h.ip}`;
-                                  const apiBase = `http://${h.ip}:${h.port}`;
-                                  await connectDevice('module', h.ip, undefined, devId, 'auxiliary', 'SCAR', 'none', {
-                                    api_base: apiBase,
-                                    container: h.container,
-                                  });
-                                  message.success(`SCAR ${h.ip}:${h.port} ${t('common.connect')}`);
-                                  closeAddModal();
-                                } catch (e: any) {
-                                  message.error(e.response?.data?.detail || 'Connect failed');
+                              const doAdd = () => {
+                                // SCAR 모듈 폼으로 전환 — netns VLAN 구성을 검토 후 등록.
+                                // (netns clean 은 파괴적이므로 즉시 연결 대신 폼에서 확인하게 한다.
+                                //  vlan_config_dir 가 비어 있으면 netns 단계는 건너뛰고 런타임만 사용.)
+                                const scarInfo = modules.find(m => m.name === 'SCAR');
+                                const defaults: Record<string, any> = {};
+                                if (scarInfo?.connect_fields) {
+                                  for (const f of scarInfo.connect_fields) {
+                                    defaults[f.name] = f.default ?? '';
+                                  }
                                 }
+                                defaults.api_base = `http://${h.ip}:${h.port}`;
+                                defaults.container = h.container;
+                                if (firstIface) defaults.iface = firstIface;  // 스캔한 인터페이스 자동 채움
+                                setConnectType('module');
+                                setSelectedModule('SCAR');
+                                setConnectAddress(h.ip);
+                                setExtraFieldValues(defaults);
+                                setModalTabKey('manual');
                               };
                               return (
                                 <List.Item actions={[renderScanAction(existing, t('common.connect'), doAdd)]}>
@@ -2074,6 +2081,11 @@ export default function DevicePage() {
                                     <span style={{ marginLeft: 8, color: '#888' }}>container={h.container}</span>
                                     {h.api_alive && <Tag color="green" style={{ marginLeft: 6 }}>API</Tag>}
                                     {h.docker_running && <Tag color="blue" style={{ marginLeft: 4 }}>DOCKER</Tag>}
+                                    {h.interfaces && h.interfaces.length > 0 && (
+                                      <span style={{ marginLeft: 8, color: '#888' }}>
+                                        iface={h.interfaces.join(',')}
+                                      </span>
+                                    )}
                                   </div>
                                 </List.Item>
                               );

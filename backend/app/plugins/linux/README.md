@@ -118,19 +118,58 @@ USB 어댑터 enumeration 이 아니라 **bridge 가 존재하는지** 로 판�
 
 **SCAR 디바이스 추가**
 
-SCAR 도 스캔 가능 (`docker inspect scar` + `GET http://localhost:8081/`). 결과 행의 **연결** 버튼이면 충분.
+SCAR 도 스캔 가능 (`docker inspect scar` + `GET http://localhost:8081/`). 스캔 결과 행의 **연결**
+버튼을 누르면 (radmoon 과 동일하게) SCAR 폼이 열리며, 스캔이 찾은 USB 인터페이스(enx*)가 `iface` 에
+자동 채워진다. 사용자는 `vlan_config_dir` / `net_mode` / `ends` 만 확인 후 등록.
 
-스캔이 후보를 못 찾는 경우 수동 추가:
+> **설치 가이드 자동/수동 분류** (`Reference/Renault_CDC_Plugin/collab SCAR 설치 guide.pdf`):
+>
+> | 가이드 단계 | 항목 | 분류 |
+> |---|---|---|
+> | 1. Install | Docker/compose 설치, scar-master.tar, scar 도커 이미지 load | **수동** (1회 호스트 프로비저닝 / 내부 artifactory 인증) |
+> | 2. Network | 미디어 컨버터(RAD_Moon/Technica) 물리 연결 + base 설정 | **수동** (하드웨어) |
+> | 2. Network | 인터페이스 이름 파악 | **자동** (스캔이 enx* 자동 채움) |
+> | 2. Network | `netns.sh --clean` + JSON 생성 + `netns.sh -c <cfg>` | **자동** (`Setup()` / `auto_setup`) |
+> | 3. Usage | `scar.sh` 기동 | **자동** (`reconnect_script` → Setup 중 자동 기동) |
+> | 3. Usage | `docker exec scar ip netns` 검증 | **자동** (`NetnsStatus()` / Setup 5단계) |
+> | 4. HMI | 신호 송신, Deep Sleep | **자동** (시나리오에서 `SendApi`/`Exec`) |
+
+수동 추가 시 폼 필드:
 
 | 폼 필드 | 입력값 예시 | 비고 |
 |---|---|---|
 | Module | `SCAR (SDV Control, Linux)` | 드롭다운 선택 |
-| SCAR REST URL | `http://localhost:8081` | 기본값 그대로 두면 됨 |
+| SCAR REST URL | `http://localhost:8081` | 기본값 그대로 |
 | Docker container 이름 | `scar` | 기본값 |
-| 재기동 스크립트 (절대경로) | `/home/scar/scar.sh` | 빈 칸이면 `Reconnect()` 호출 시 FAIL |
-| 재기동 스크립트 인자 | `-t 2.2.0 --ui --arti tls` | 공백 구분 |
-| 재기동 스크립트 cwd | `/home/scar` | 스크립트 실행 working dir |
+| sdv_vlan_config 디렉터리 | `/home/cdc/SCAR/sdv_vlan_config` | `netns.sh` 위치. **빈 칸이면 netns 단계 전체 건너뜀** (런타임만) |
+| 네트워크 인터페이스 (iface) | `enx74da38fe250a` | 스캔 자동 채움. 가이드의 `YOUR_INTERFACE_NAME` |
+| 구성 모드 | `multiverse` 또는 `standalone` | full bench=multiverse, CDC 단독=standalone |
+| ENDS 버전 | `FaceStep1_2025_R10` | 가이드 예시 |
+| stub_ecus (콤마 구분) | (빈 칸) | 빈 칸이면 모드 기본값: multiverse=`PIU_Mst`, standalone=`PIU_Mst,PCU_PROXY_FrontEnd,IVC` |
+| sudo 비밀번호 | (passwordless 면 빈 칸) | `netns.sh` 가 내부적으로 sudo 호출 → passwordless 권장 |
+| scar.sh 절대경로 | `/home/scar/scar.sh` | 빈 칸이면 Setup 중 자동 기동 안 함 + `Reconnect()` FAIL |
+| scar.sh 인자 | `-t 2.2.0 --ui --arti tls` | 공백 구분 |
+| scar.sh cwd | `/home/scar` | 스크립트 실행 working dir |
 | 재기동 후 대기 (초) | `20` | 원본 Robot `Wait 20` 보존 |
+
+**등록 직후 자동 Setup** (`auto_setup=True`, 숨김 필드 기본값) — 설치 가이드 2단계 등가:
+
+```
+[1] netns clean    sudo ./netns.sh --setup=hil -i <iface> --clean   (netns_clean=True)
+[2] config         vlan_config_dir/replaykit-<mode>.json 생성 (multiverse/standalone)
+[3] netns apply    sudo ./netns.sh -c <config>.json
+[4] scar launch    컨테이너 미기동 + scar.sh 경로 있으면 기동 + 대기 (launch_scar=True)
+[5] netns verify   docker exec <container> ip netns — 네임스페이스 확인 (실패는 경고만)
+```
+
+`vlan_config_dir` 가 비어 있으면 [1]~[5] 를 건너뛰고 가용성(api/docker)만 비파괴적으로 확인한다
+(force_docker_mode 오염 방지). 따라서 디렉터리를 지정하지 않은 기본 등록은 네트워크를 건드리지 않는다.
+
+**sudo 요구**: `netns.sh` 의 clean/apply 가 모두 우리 쪽 sudo 래퍼로 실행된다 (password 있으면 `-S`,
+없으면 `-n`). TH 와 동일하게 passwordless sudo 설정을 권장. 예시 `/etc/sudoers.d/replaykit-scar`:
+```
+cdc ALL=(root) NOPASSWD: /home/cdc/SCAR/sdv_vlan_config/netns.sh
+```
 
 ### 1.3 시나리오에서 호출
 
@@ -274,10 +313,21 @@ from backend.app.plugins.linux.SCAR import SCAR
 scar = SCAR(
     api_base="http://localhost:8081",                  # SCAR REST 서버
     container="scar",                                  # docker container 이름
-    reconnect_script="/home/scar/scar.sh",             # (선택) 재기동 스크립트 절대경로
+    reconnect_script="/home/scar/scar.sh",             # (선택) scar.sh 절대경로
     reconnect_args="-t 2.2.0 --ui --arti tls",         # (선택) 공백 구분 인자 문자열
     reconnect_cwd="/home/scar",                        # (선택) 스크립트 cwd
     reconnect_wait_s=20.0,                             # 재기동 후 대기 (원본 'Wait 20')
+    # ── netns VLAN 구성 (설치 가이드 2단계) ──
+    vlan_config_dir="/home/cdc/SCAR/sdv_vlan_config",  # netns.sh 위치. 빈 칸이면 netns 건너뜀
+    iface="enx74da38fe250a",                           # YOUR_INTERFACE_NAME (스캔 자동 채움)
+    net_mode="multiverse",                             # "multiverse" | "standalone"
+    ends="FaceStep1_2025_R10",                         # ENDS 버전
+    stub_ecus="",                                      # 콤마 구분, 빈 칸=모드 기본값
+    standalone_ip="192.168.1.10",                      # standalone 전용
+    sudo_password="",                                  # 빈 칸=sudo -n (passwordless)
+    auto_setup=True,                                   # 등록 직후 Setup() 자동 실행
+    netns_clean=True,                                  # apply 전 --clean
+    launch_scar=True,                                  # Setup 중 컨테이너 미기동 시 scar.sh 기동
 )
 ```
 
@@ -285,10 +335,25 @@ scar = SCAR(
 
 | 메서드 | 설명 | 반환 |
 |---|---|---|
+| `Setup()` | 설치 가이드 2단계(netns clean → JSON → apply → scar.sh 기동 → ip netns 검증) 자동 실행. 등록 시 `auto_setup=True` 면 자동 호출. 수동 재실행 가능. | `"ok\n<log>"` 또는 `"FAIL: ...\n<log>"` |
+| `NetnsStatus()` | `docker exec <container> ip netns` 출력. netns 생성 재확인. | `"<ns 목록>"` 또는 `"FAIL: ..."` |
 | `Ready(max_retry=3)` | API → DOCKER → reconnect 순으로 모드 자동 판별. | `"API"` / `"DOCKER"` / `"NONE"` |
 | `SendApi(url, headers, data, max_retry=3)` | REST POST. headers/data 는 JSON 문자열. | `"status=<n>\n<body 512자>"` 또는 `"FAIL: ..."` |
 | `Exec(cmd, timeout=300, max_retry=3)` | `docker exec scar bash -c <cmd>`. | `"rc=<n>\n<stdout 2KB>"` 또는 `"FAIL: ..."` |
 | `Reconnect()` | `setsid <reconnect_script> ... &` + 대기. | `"DOCKER"` / `"FAIL: ..."` |
+| `Connect()` / `IsConnected()` | device_manager 가 등록/상태확인용으로 호출. `Connect` 은 `auto_setup` 이면 `Setup` 위임. | Setup 결과 / bool |
+| `Info()` | 현재 설정 + netns.sh 존재 + api/docker 가용 요약. sudo 비번 마스킹. | 여러 줄 텍스트 |
+
+### 3.2.1 netns 구성 자동화 상세
+
+`common/scar_netns.py` 의 `SCARNetns` + `build_config` 가 담당. 모드별 생성 JSON:
+
+- **multiverse** — `vcans:0`, `net_config[].{interface, arp:on, stub_ecus}`
+- **standalone** — `net_config[].{interface, ip, arp:on, stub_ecus, stub_groups:[], conf_type:veth, cuttlefish:true}`
+
+`netns.sh` 가 내부에서 sudo 를 호출하지만, 우리가 clean/apply 를 sudo 래퍼로 실행하므로 스크립트
+내부 sudo 는 캐시된 root 세션을 재사용한다 (추가 프롬프트 없음). 생성 파일은 `replaykit-<mode>.json`
+이름으로 기록되어 사용자가 손으로 만든 `multiverse.json` / `standalone.json` 을 덮어쓰지 않는다.
 
 ### 3.3 자동 판별 동작
 
@@ -542,3 +607,4 @@ ensure-adb.sh 가 ADB 인터페이스를 못 찾은 것. eth_if 가 실제 HU �
 | SCAR REST | `common/scar_api.py` | requests.Session 재사용 |
 | SCAR Docker | `common/scar_docker.py` | inspect/exec/start_via_script |
 | SCAR 상태머신 | `common/scar_health.py` | ensure_ready, force_docker_mode |
+| SCAR netns 구성 | `common/scar_netns.py` | netns.sh clean/apply/verify, JSON 생성 (설치 가이드 2단계) |

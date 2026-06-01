@@ -549,17 +549,49 @@ async def _scan_scar(host: str | None = None, port: int | None = None,
                      target_host, target_port, target_container)
         return []
 
-    logger.info("SCAR scan: api_alive=%s docker_running=%s (%s:%d, container=%s)",
-                api_alive, docker_running, target_host, target_port, target_container)
+    # netns VLAN 구성 폼의 iface 자동 채움용 — RAD_Moon/Technica 후보 인터페이스.
+    interfaces = await loop.run_in_executor(None, _scan_net_interfaces_sync)
+
+    logger.info("SCAR scan: api_alive=%s docker_running=%s (%s:%d, container=%s, ifaces=%s)",
+                api_alive, docker_running, target_host, target_port, target_container, interfaces)
     return [{
         "ip": target_host,
         "port": target_port,
         "container": target_container,
         "api_alive": bool(api_alive),
         "docker_running": bool(docker_running),
+        "interfaces": interfaces,
         "label": "SCAR",
         "module": "SCAR",
     }]
+
+
+def _scan_net_interfaces_sync() -> list[str]:
+    """SCAR netns 용 후보 네트워크 인터페이스 — enx*(USB) 우선, up 우선.
+
+    radmoon(cvd-ebr) 멤버 탐지와 달리 SCAR 는 어떤 모드(multiverse/standalone)냐에 따라
+    bridge 가 없을 수도 있으므로 물리 USB 어댑터(enx*)를 직접 나열한다.
+    lo / docker / veth / cvd-* 등 가상/시스템 인터페이스는 제외.
+    """
+    sysnet = Path("/sys/class/net")
+    if not sysnet.is_dir():
+        return []
+    skip_prefix = ("lo", "docker", "veth", "br-", "cvd-", "virbr", "tap", "tun")
+    cands: list[tuple[tuple, str]] = []
+    for iface_path in sysnet.iterdir():
+        iface = iface_path.name
+        if iface.startswith(skip_prefix):
+            continue
+        try:
+            operstate = (iface_path / "operstate").read_text().strip()
+        except OSError:
+            operstate = "unknown"
+        is_enx = iface.startswith("enx")
+        is_up = operstate == "up"
+        # 우선순위: enx* + up → enx* → up → 나머지
+        cands.append(((0 if is_enx else 1, 0 if is_up else 1, iface), iface))
+    cands.sort(key=lambda c: c[0])
+    return [name for _, name in cands]
 
 
 def _probe_scar_api_sync(host: str, port: int, timeout: float) -> bool:
