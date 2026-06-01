@@ -11,6 +11,7 @@ proc.spawn 을 재사용해 process group 단위 종료 가능.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
@@ -73,15 +74,18 @@ class SCARDocker:
         scar.sh 가 백그라운드에서 컨테이너를 띄우는데 보통 ~20초 걸린다 (원본 Wait 20).
         """
         cmd_str = " ".join(["setsid", script, *(args or [])]) + " </dev/null >/dev/null 2>&1 &"
+        # cwd 가 빈 문자열('')이면 Popen 이 FileNotFoundError 를 던지므로 None 으로 정규화.
+        # 미지정 시 scar.sh 가 있는 디렉터리에서 실행 (가이드: ~/scar/scar-master/scripts$ ./scar.sh).
+        run_cwd = cwd or (os.path.dirname(script) or None)
         try:
             subprocess.Popen(
                 ["bash", "-c", cmd_str],
-                cwd=cwd,
+                cwd=run_cwd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
             return True
         except (OSError, FileNotFoundError) as e:
-            logger.warning("Failed to start SCAR reconnect script: %s", e)
+            logger.warning("Failed to start SCAR reconnect script (cwd=%r): %s", run_cwd, e)
             return False
