@@ -237,7 +237,7 @@ export default function DevicePage() {
   const [hasScanned, setHasScanned] = useState(false);
   const [scannedDlt, setScannedDlt] = useState<{ ip: string; port: number }[]>([]);
   const [scannedSmartbench, setScannedSmartbench] = useState<{ ip: string; port: number; label: string; module: string }[]>([]);
-  const [scannedScar, setScannedScar] = useState<{ ip: string; port: number; container: string; api_alive: boolean; docker_running: boolean; interfaces?: string[]; label: string; module: string }[]>([]);
+  const [scannedScar, setScannedScar] = useState<{ ip: string; port: number; container: string; api_alive: boolean; docker_running: boolean; docker_installed?: boolean; interfaces?: string[]; label: string; module: string }[]>([]);
   const [scannedRadmoon, setScannedRadmoon] = useState<{
     bridge: string;
     bridge_operstate: string;
@@ -2081,6 +2081,9 @@ export default function DevicePage() {
                                     <span style={{ marginLeft: 8, color: '#888' }}>container={h.container}</span>
                                     {h.api_alive && <Tag color="green" style={{ marginLeft: 6 }}>API</Tag>}
                                     {h.docker_running && <Tag color="blue" style={{ marginLeft: 4 }}>DOCKER</Tag>}
+                                    {!h.api_alive && !h.docker_running && (
+                                      <Tag color="orange" style={{ marginLeft: 6 }}>미기동 — 등록 시 자동 기동</Tag>
+                                    )}
                                     {h.interfaces && h.interfaces.length > 0 && (
                                       <span style={{ marginLeft: 8, color: '#888' }}>
                                         iface={h.interfaces.join(',')}

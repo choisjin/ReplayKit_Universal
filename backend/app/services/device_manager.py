@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -542,24 +543,33 @@ async def _scan_scar(host: str | None = None, port: int | None = None,
     loop = asyncio.get_event_loop()
     api_fut = loop.run_in_executor(None, _probe_scar_api_sync, target_host, target_port, 2.0)
     docker_fut = loop.run_in_executor(None, _probe_scar_docker_sync, target_container, 3.0)
-    api_alive, docker_running = await asyncio.gather(api_fut, docker_fut)
+    docker_cli_fut = loop.run_in_executor(None, _docker_cli_available_sync)
+    api_alive, docker_running, docker_installed = await asyncio.gather(
+        api_fut, docker_fut, docker_cli_fut
+    )
 
-    if not api_alive and not docker_running:
-        logger.debug("SCAR scan: API %s:%d down, container '%s' not running",
+    # SCAR 는 컨테이너가 아직 안 떠 있어도 "등록 → auto_setup 이 scar.sh 로 자동 기동" 하는
+    # 흐름을 위해 docker CLI 가 설치돼 있으면 후보 1행을 항상 노출한다 (닭-달걀 해소).
+    # docker 자체가 없는 PC + API/컨테이너 모두 다운이면 띄울 방법이 없으므로 숨긴다.
+    if not api_alive and not docker_running and not docker_installed:
+        logger.debug("SCAR scan: API %s:%d down, container '%s' not running, docker CLI absent",
                      target_host, target_port, target_container)
         return []
 
     # netns VLAN 구성 폼의 iface 자동 채움용 — RAD_Moon/Technica 후보 인터페이스.
     interfaces = await loop.run_in_executor(None, _scan_net_interfaces_sync)
 
-    logger.info("SCAR scan: api_alive=%s docker_running=%s (%s:%d, container=%s, ifaces=%s)",
-                api_alive, docker_running, target_host, target_port, target_container, interfaces)
+    logger.info("SCAR scan: api_alive=%s docker_running=%s docker_installed=%s "
+                "(%s:%d, container=%s, ifaces=%s)",
+                api_alive, docker_running, docker_installed,
+                target_host, target_port, target_container, interfaces)
     return [{
         "ip": target_host,
         "port": target_port,
         "container": target_container,
         "api_alive": bool(api_alive),
         "docker_running": bool(docker_running),
+        "docker_installed": bool(docker_installed),
         "interfaces": interfaces,
         "label": "SCAR",
         "module": "SCAR",
@@ -611,6 +621,14 @@ def _probe_scar_api_sync(host: str, port: int, timeout: float) -> bool:
     except Exception as e:
         logger.debug("SCAR API probe %s:%d failed: %s", host, port, e)
         return False
+
+
+def _docker_cli_available_sync() -> bool:
+    """docker CLI 가 PATH 에 존재하는지. 컨테이너 기동 가능 여부 판정용.
+
+    실행은 하지 않고 바이너리 존재만 확인 (subprocess 비용 회피).
+    """
+    return shutil.which("docker") is not None
 
 
 def _probe_scar_docker_sync(container: str, timeout: float) -> bool:
