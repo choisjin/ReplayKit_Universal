@@ -24,6 +24,9 @@ interface ConnectField {
   // true 면 폼에서 숨김. extra_fields 에는 default 값이 그대로 들어가서 백엔드에 전달됨.
   // 사용자 편집 UI 가 필요 없는 고급 설정 필드용.
   hidden?: boolean;
+  // folder 타입 전용: 찾아보기로 폴더 선택 후 이 접미사를 자동 부착 (예: '/scar.sh').
+  // scar.sh 가 있는 폴더만 고르면 파일 경로까지 완성되게 한다.
+  append?: string;
 }
 
 interface ModuleInfo {
@@ -1319,7 +1322,13 @@ export default function DevicePage() {
                 try {
                   const initial = values[f.name] || f.default || '';
                   const picked = await browseFolder(initial);
-                  if (picked) onChange({ ...values, [f.name]: picked });
+                  if (picked) {
+                    // append 가 있으면(예: '/scar.sh') 폴더 끝에 자동 부착 — 파일 경로 완성.
+                    const finalVal = f.append && !picked.endsWith(f.append)
+                      ? picked.replace(/[/\\]+$/, '') + f.append
+                      : picked;
+                    onChange({ ...values, [f.name]: finalVal });
+                  }
                 } catch (e: any) {
                   message.error(e?.response?.data?.detail || '폴더 선택 실패');
                 }
@@ -2313,7 +2322,7 @@ export default function DevicePage() {
                         )}
                       </Space>
                     )}
-                    {modalCategory === 'auxiliary' && modules.length > 0 && (
+                    {modalCategory === 'auxiliary' && modules.length > 0 && !selectedModule && (
                       <Select
                         allowClear
                         placeholder={t('device.moduleSelect')}
@@ -2776,21 +2785,7 @@ export default function DevicePage() {
                 />
               </div>
             )}
-            {editDevice.category === 'auxiliary' && (
-              <div>
-                <span style={{ fontSize: 11, color: '#888' }}>{`${t('device.module')}:`}</span>
-                <Select
-                  allowClear
-                  placeholder={t('device.moduleSelectPlaceholder')}
-                  value={editModule}
-                  onChange={setEditModule}
-                  style={{ width: '100%' }}
-                  options={modules
-                    .filter(m => isModuleVisible(m.name) || m.name === editModule)
-                    .map(m => ({ label: m.label, value: m.name }))}
-                />
-              </div>
-            )}
+            {/* 모듈 선택기는 숨김 — 편집 시 모듈은 고정(editModule 은 dev.info.module 로 유지). */}
             {(() => {
               const fields = getModuleConnectFields(editModule);
               if (fields.length > 0) {
