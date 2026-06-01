@@ -73,6 +73,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const h264ModeRef = useRef(false);
   const jmuxerRef = useRef<JMuxer | null>(null);
+  const h264FeedCountRef = useRef(0);  // [진단] H.264 feed 횟수 (첫 feed/주기 video 상태 로그용)
   const screenAliveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [streamFps, setStreamFps] = useState(0);
   const fpsCountRef = useRef(0);
@@ -315,8 +316,19 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
           // H.264 NAL 데이터
           if (jmuxerRef.current) {
             jmuxerRef.current.feed({ video: new Uint8Array(event.data) });
+            // [진단] 첫 feed + 120회마다 video 디코드 상태(해상도/readyState/재생시각/버퍼) 로그.
+            // currentTime 이 0에서 안 움직이거나 videoWidth 가 0이면 디코드 실패/정체 진단 가능.
+            const n = ++h264FeedCountRef.current;
+            if (n === 1 || n % 120 === 0) {
+              const v = videoRef.current;
+              const buf = v && v.buffered && v.buffered.length > 0
+                ? `${v.buffered.start(0).toFixed(2)}~${v.buffered.end(v.buffered.length - 1).toFixed(2)}` : 'none';
+              console.info(`[mirror] feed#${n} bytes=${(event.data as ArrayBuffer).byteLength} videoWH=${v?.videoWidth}x${v?.videoHeight} ready=${v?.readyState} paused=${v?.paused} t=${v?.currentTime?.toFixed(2)} buffered=${buf}`);
+            }
+          } else if (h264FeedCountRef.current === 0) {
+            // JMuxer 미초기화 시 데이터 드롭 (useEffect에서 곧 초기화됨) — 첫 케이스만 알림.
+            console.warn('[mirror] H.264 binary arrived but JMuxer not ready yet (dropping until init)');
           }
-          // JMuxer 미초기화 시 데이터 드롭 (useEffect에서 곧 초기화됨)
           markFrameAlive();
         } else {
           // JPEG 바이너리 → Blob URL → <img>/<canvas>
@@ -390,16 +402,31 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     // video 엘리먼트가 렌더될 때까지 대기
     const initJMuxer = () => {
       if (videoRef.current && !jmuxerRef.current) {
+        // [진단] MSE H.264 코덱 지원 여부 (3840x1440 같은 고해상도/프로파일 거부 케이스 확인용)
+        try {
+          const support = {
+            high41: typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('video/mp4; codecs="avc1.640028"'),
+            high51: typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('video/mp4; codecs="avc1.640033"'),
+            baseline: typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01F"'),
+          };
+          console.info('[mirror] init H.264 JMuxer; MSE support:', support);
+        } catch { /* ignore */ }
         jmuxerRef.current = new JMuxer({
           node: videoRef.current,
           mode: 'video',
           flushingTime: 1,
           fps: 60,
           debug: false,
+          onReady: () => console.info('[mirror] JMuxer onReady'),
+          onError: (e: any) => console.error('[mirror] JMuxer onError', e),
         });
+        // [진단] video 디코드/MSE 에러 표면화
+        const vEl = videoRef.current;
+        const onVErr = () => console.error('[mirror] <video> error', vEl.error?.code, vEl.error?.message);
+        vEl.addEventListener('error', onVErr);
         // autoPlay 정책상 보통 자동 재생되지만, MSE SourceBuffer 첫 append 전 stall 을
         // 막기 위해 명시적으로 play() 시도 (muted 라 제스처 불필요).
-        videoRef.current.play?.().catch(() => { /* autoplay 차단 시 무시 */ });
+        vEl.play?.().catch((err) => console.warn('[mirror] video.play() rejected', err?.name));
       }
     };
     // 즉시 시도 + 폴백 (React 렌더 지연 대비)
