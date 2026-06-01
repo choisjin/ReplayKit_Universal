@@ -237,7 +237,7 @@ export default function DevicePage() {
   const [hasScanned, setHasScanned] = useState(false);
   const [scannedDlt, setScannedDlt] = useState<{ ip: string; port: number }[]>([]);
   const [scannedSmartbench, setScannedSmartbench] = useState<{ ip: string; port: number; label: string; module: string }[]>([]);
-  const [scannedScar, setScannedScar] = useState<{ ip: string; port: number; container: string; api_alive: boolean; docker_running: boolean; docker_installed?: boolean; interfaces?: string[]; label: string; module: string }[]>([]);
+  const [scannedScar, setScannedScar] = useState<{ ip: string; port: number; container: string; api_alive: boolean; docker_running: boolean; docker_installed?: boolean; interfaces?: string[]; internet_ifaces?: string[]; label: string; module: string }[]>([]);
   const [scannedRadmoon, setScannedRadmoon] = useState<{
     bridge: string;
     bridge_operstate: string;
@@ -2051,7 +2051,10 @@ export default function DevicePage() {
                             dataSource={scannedScar}
                             pagination={scannedScar.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
                             renderItem={(h) => {
-                              const firstIface = (h.interfaces && h.interfaces[0]) || '';
+                              const inetSet = new Set(h.internet_ifaces || []);
+                              // 인터넷(default route) 어댑터는 netns 가 가져가면 인터넷이 끊기므로 자동채움 후보에서 제외.
+                              const safeIfaces = (h.interfaces || []).filter(i => !inetSet.has(i));
+                              const firstIface = safeIfaces[0] || '';
                               const existing = findExisting(x => x.type === 'module' && x.info?.module === 'SCAR' && x.address === h.ip);
                               const doAdd = () => {
                                 // SCAR 모듈 폼으로 전환 — netns VLAN 구성을 검토 후 등록.
@@ -2066,7 +2069,7 @@ export default function DevicePage() {
                                 }
                                 defaults.api_base = `http://${h.ip}:${h.port}`;
                                 defaults.container = h.container;
-                                if (firstIface) defaults.iface = firstIface;  // 스캔한 인터페이스 자동 채움
+                                if (firstIface) defaults.iface = firstIface;  // 인터넷 어댑터 제외한 안전 후보만 자동 채움
                                 setConnectType('module');
                                 setSelectedModule('SCAR');
                                 setConnectAddress(h.ip);
@@ -2084,10 +2087,15 @@ export default function DevicePage() {
                                     {!h.api_alive && !h.docker_running && (
                                       <Tag color="orange" style={{ marginLeft: 6 }}>미기동 — 등록 시 자동 기동</Tag>
                                     )}
-                                    {h.interfaces && h.interfaces.length > 0 && (
+                                    {safeIfaces.length > 0 && (
                                       <span style={{ marginLeft: 8, color: '#888' }}>
-                                        iface={h.interfaces.join(',')}
+                                        iface={safeIfaces.join(',')}
                                       </span>
+                                    )}
+                                    {inetSet.size > 0 && (
+                                      <Tag color="red" style={{ marginLeft: 6 }}>
+                                        ⚠ 인터넷 어댑터(선택 금지): {[...inetSet].join(',')}
+                                      </Tag>
                                     )}
                                   </div>
                                 </List.Item>

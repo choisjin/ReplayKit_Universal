@@ -557,12 +557,15 @@ async def _scan_scar(host: str | None = None, port: int | None = None,
         return []
 
     # netns VLAN 구성 폼의 iface 자동 채움용 — RAD_Moon/Technica 후보 인터페이스.
+    # interfaces[0] 는 인터넷(default route) 어댑터를 강등한 안전한 후보.
     interfaces = await loop.run_in_executor(None, _scan_net_interfaces_sync)
+    # 인터넷 어댑터 목록 — UI 경고용 (netns 가 가져가면 인터넷 끊김).
+    internet_ifaces = await loop.run_in_executor(None, _default_route_ifaces_sync)
 
     logger.info("SCAR scan: api_alive=%s docker_running=%s docker_installed=%s "
-                "(%s:%d, container=%s, ifaces=%s)",
+                "(%s:%d, container=%s, ifaces=%s, internet=%s)",
                 api_alive, docker_running, docker_installed,
-                target_host, target_port, target_container, interfaces)
+                target_host, target_port, target_container, interfaces, sorted(internet_ifaces))
     return [{
         "ip": target_host,
         "port": target_port,
@@ -571,21 +574,53 @@ async def _scan_scar(host: str | None = None, port: int | None = None,
         "docker_running": bool(docker_running),
         "docker_installed": bool(docker_installed),
         "interfaces": interfaces,
+        "internet_ifaces": sorted(internet_ifaces),
         "label": "SCAR",
         "module": "SCAR",
     }]
 
 
-def _scan_net_interfaces_sync() -> list[str]:
-    """SCAR netns 용 후보 네트워크 인터페이스 — enx*(USB) 우선, up 우선.
+def _default_route_ifaces_sync() -> set[str]:
+    """default route(인터넷 경로)를 가진 인터페이스 집합.
 
-    radmoon(cvd-ebr) 멤버 탐지와 달리 SCAR 는 어떤 모드(multiverse/standalone)냐에 따라
+    netns 가 이 인터페이스를 네임스페이스로 가져가면 호스트 인터넷이 끊기므로
+    SCAR netns 후보에서 제외/강등하는 데 쓴다.
+    """
+    try:
+        res = subprocess.run(
+            ["ip", "route", "show", "default"],
+            capture_output=True, text=True, timeout=3.0,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return set()
+    if res.returncode != 0:
+        return set()
+    ifaces: set[str] = set()
+    for line in (res.stdout or "").splitlines():
+        # 예: "default via 10.176.146.1 dev enp3s0 proto dhcp metric 100"
+        toks = line.split()
+        if "dev" in toks:
+            idx = toks.index("dev") + 1
+            if idx < len(toks):
+                ifaces.add(toks[idx])
+    return ifaces
+
+
+def _scan_net_interfaces_sync() -> list[str]:
+    """SCAR netns 용 후보 네트워크 인터페이스.
+
+    ⚠️ 인터넷(default route)을 들고 있는 어댑터는 netns 가 가져가면 호스트 인터넷이
+    끊기므로 후보 **최하위로 강등**한다 (USB LAN 으로 인터넷이 나가는 PC 보호).
+    그 외에는 enx*(USB, 미디어 컨버터) 우선, up 우선.
+
+    radmoon(cvd-ebr) 멤버 탐지와 달리 SCAR 는 모드(multiverse/standalone)에 따라
     bridge 가 없을 수도 있으므로 물리 USB 어댑터(enx*)를 직접 나열한다.
     lo / docker / veth / cvd-* 등 가상/시스템 인터페이스는 제외.
     """
     sysnet = Path("/sys/class/net")
     if not sysnet.is_dir():
         return []
+    inet_ifaces = _default_route_ifaces_sync()
     skip_prefix = ("lo", "docker", "veth", "br-", "cvd-", "virbr", "tap", "tun")
     cands: list[tuple[tuple, str]] = []
     for iface_path in sysnet.iterdir():
@@ -596,11 +631,17 @@ def _scan_net_interfaces_sync() -> list[str]:
             operstate = (iface_path / "operstate").read_text().strip()
         except OSError:
             operstate = "unknown"
+        has_default = iface in inet_ifaces       # 인터넷 NIC → 무조건 뒤로
         is_enx = iface.startswith("enx")
         is_up = operstate == "up"
-        # 우선순위: enx* + up → enx* → up → 나머지
-        cands.append(((0 if is_enx else 1, 0 if is_up else 1, iface), iface))
+        # 우선순위: default route 없음 → enx* → up → 이름순
+        cands.append((
+            (1 if has_default else 0, 0 if is_enx else 1, 0 if is_up else 1, iface),
+            iface,
+        ))
     cands.sort(key=lambda c: c[0])
+    if inet_ifaces:
+        logger.info("SCAR iface scan: default-route(인터넷) 어댑터 강등: %s", sorted(inet_ifaces))
     return [name for _, name in cands]
 
 
