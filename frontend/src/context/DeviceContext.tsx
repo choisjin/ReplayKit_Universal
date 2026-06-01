@@ -397,6 +397,9 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
           fps: 60,
           debug: false,
         });
+        // autoPlay 정책상 보통 자동 재생되지만, MSE SourceBuffer 첫 append 전 stall 을
+        // 막기 위해 명시적으로 play() 시도 (muted 라 제스처 불필요).
+        videoRef.current.play?.().catch(() => { /* autoplay 차단 시 무시 */ });
       }
     };
     // 즉시 시도 + 폴백 (React 렌더 지연 대비)
@@ -582,6 +585,17 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       resumeDevicePolling,
     }}>
       {children}
+      {/* H.264 라이브 미러용 숨겨진 <video> — JMuxer가 이 엘리먼트에 MSE로 디코딩한다.
+          소비 화면(RecordPage)은 rAF로 이 video를 canvas에 그려 탭/크롭/ROI 상호작용을
+          기존 canvas 경로 그대로 재사용한다. videoRef가 항상 바인딩되도록 페이지와 무관하게
+          provider에 상주시킨다. autoPlay+muted+playsInline = 사용자 제스처 없이 자동 재생. */}
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        style={{ display: 'none' }}
+      />
     </DeviceContext.Provider>
   );
 }

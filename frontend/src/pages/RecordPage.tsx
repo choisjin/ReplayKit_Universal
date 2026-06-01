@@ -4022,8 +4022,9 @@ export default function RecordPage() {
     }, 100);
   }, [updateCompareMode, saveExpectedFull, openCaptureModal, openExcludeRoiModal, openMultiCropModal, settings]);
 
-  // Draw screenshot on canvas
+  // Draw screenshot on canvas (JPEG 모드). H.264 모드에선 아래 rAF 루프가 그리므로 skip.
   useEffect(() => {
+    if (h264Mode) return;
     if (!screenshot || !canvasRef.current) return;
     const img = new window.Image();
     img.onload = () => {
@@ -4044,7 +4045,41 @@ export default function RecordPage() {
       }
     };
     img.src = screenshot;
-  }, [screenshot, viewCropEnabled, viewCropX, viewCropY]);
+  }, [screenshot, viewCropEnabled, viewCropX, viewCropY, h264Mode]);
+
+  // H.264 모드: 숨겨진 <video>(JMuxer가 MSE 디코딩)를 매 프레임 메인 캔버스에 그린다.
+  // JPEG 모드의 screenshot 캔버스와 동일한 출력면(canvasRef)을 공유해 탭/크롭/ROI 좌표
+  // 매핑·오버레이 로직을 그대로 재사용한다. drawImage(video)는 GPU 가속이라 저비용.
+  useEffect(() => {
+    if (!h264Mode) return;
+    let raf = 0;
+    const draw = () => {
+      const v = videoRef.current;
+      const canvas = canvasRef.current;
+      // readyState >= 2(HAVE_CURRENT_DATA) 이고 디코드 해상도가 잡힌 뒤에만 그린다.
+      if (v && canvas && v.videoWidth > 0 && v.readyState >= 2) {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          if (viewCropEnabled) {
+            const sx = Math.round(viewCropX[0] * v.videoWidth);
+            const sy = Math.round(viewCropY[0] * v.videoHeight);
+            const sw = Math.round((viewCropX[1] - viewCropX[0]) * v.videoWidth);
+            const sh = Math.round((viewCropY[1] - viewCropY[0]) * v.videoHeight);
+            if (canvas.width !== sw) canvas.width = sw;
+            if (canvas.height !== sh) canvas.height = sh;
+            ctx.drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
+          } else {
+            if (canvas.width !== v.videoWidth) canvas.width = v.videoWidth;
+            if (canvas.height !== v.videoHeight) canvas.height = v.videoHeight;
+            ctx.drawImage(v, 0, 0);
+          }
+        }
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [h264Mode, viewCropEnabled, viewCropX, viewCropY, videoRef]);
 
   const getDeviceTag = (deviceId: string | null) => {
     if (!deviceId) return <Tag>-</Tag>;
@@ -4479,7 +4514,7 @@ export default function RecordPage() {
               body: { flex: 1, overflow: 'auto', padding: 6, display: 'flex', flexDirection: 'column', alignItems: 'center' },
             }}
           >
-            {screenshotDeviceId && screenshot ? (
+            {screenshotDeviceId && (screenshot || h264Mode) ? (
               <>
               <div style={{
                 position: 'relative', display: 'inline-block', maxWidth: '100%',
