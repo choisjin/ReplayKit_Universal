@@ -77,6 +77,29 @@ class SCARDocker:
         호스트 셸이 죽어도 스크립트가 계속 떠있도록 start_new_session=True 로 분리.
         scar.sh 가 백그라운드에서 컨테이너를 띄우는데 보통 ~20초 걸린다 (원본 Wait 20).
         """
+        # 잘못된 경로(폴더/없는 파일/실행권한 없음)면 setsid 가 'Permission denied' 로만 찍혀
+        # 원인 파악이 어렵다. 미리 검사해 분명한 사유를 남긴다.
+        if not os.path.isfile(script):
+            reason = ("디렉터리임 (scar.sh 파일 경로 필요)" if os.path.isdir(script)
+                      else "파일 없음")
+            logger.warning("SCAR launch aborted: %r — %s", script, reason)
+            try:
+                with open(SCAR_LAUNCH_LOG, "w") as f:
+                    f.write(f"launch aborted: {script!r} — {reason}\n"
+                            f"scar.sh 의 전체 파일 경로를 지정하세요 "
+                            f"(예: <scar-master>/scripts/scar.sh)\n")
+            except OSError:
+                pass
+            return False
+        if not os.access(script, os.X_OK):
+            logger.warning("SCAR launch aborted: %r — 실행권한 없음 (chmod +x 필요)", script)
+            try:
+                with open(SCAR_LAUNCH_LOG, "w") as f:
+                    f.write(f"launch aborted: {script!r} — 실행권한 없음\nchmod +x {script}\n")
+            except OSError:
+                pass
+            return False
+
         # scar.sh 출력을 /dev/null 대신 로그 파일로 남긴다 — 컨테이너 미기동 원인 진단용.
         cmd_str = (
             " ".join(["setsid", script, *(args or [])])
