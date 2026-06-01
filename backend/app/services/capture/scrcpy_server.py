@@ -271,7 +271,9 @@ class ScrcpyServerBackend:
             #    v1.x는 single-instance(socket "scrcpy" 고정)라 잔존 인스턴스가 있으면
             #    우리 socket 연결이 충돌해 first-frame 실패 → 재시도 폭주의 씨앗이 된다.
             #    screenrecord는 screencap 폴백이 쓸 수 있으므로 건드리지 않는다.
-            await self._cleanup_device_side(include_screenrecord=False)
+            #    deep=False: /proc 전수 스캔(느림)은 생략 — pkill만으로 hot path 경량화.
+            #    (정상 종료 시 close()의 deep 정리가 잔존을 이미 회수하므로 충분)
+            await self._cleanup_device_side(include_screenrecord=False, deep=False)
             # 1) jar push (해시 동일 시 skip)
             if not await self._push_jar(jar):
                 return False
@@ -791,7 +793,9 @@ class ScrcpyServerBackend:
             self.serial, self._total_bytes_in, self._total_frames_decoded,
         )
 
-    async def _cleanup_device_side(self, *, include_screenrecord: bool = True) -> None:
+    async def _cleanup_device_side(
+        self, *, include_screenrecord: bool = True, deep: bool = True,
+    ) -> None:
         """디바이스에 남아있을지 모를 scrcpy/screenrecord 프로세스 정리.
 
         v1.x는 single-instance(socket name "scrcpy" 고정)라 scid 구분 안 함.
@@ -804,6 +808,10 @@ class ScrcpyServerBackend:
           2. `pkill -f` (지원 디바이스에서 빠른 일괄 정리).
           3. `/proc/<pid>/cmdline` 스캔 폴백 — pkill 미지원 디바이스에서 scrcpy.Server
              cmdline을 가진 잔존 PID를 직접 kill -9.
+
+        deep=False면 3)을 생략한다. 3)은 디바이스의 모든 프로세스를 전수 grep하므로
+        프로세스 많은 IVI에서 수 초가 걸려, 매 기동 전 선제 정리(hot path)에는 부담이
+        크다. 따라서 try_start 선제 정리는 deep=False(pkill만), close 시에는 deep=True.
         """
         loop = asyncio.get_event_loop()
 
@@ -833,14 +841,16 @@ class ScrcpyServerBackend:
             await loop.run_in_executor(None, lambda c=cmd: _run(c, 2))
 
         # 3) /proc 스캔 폴백 — pkill 미지원(toybox 일부 자동차 Android) 대비.
-        proc_scan = (
-            'for f in /proc/[0-9]*/cmdline; do '
-            'grep -qa scrcpy.Server "$f" 2>/dev/null && '
-            '{ p=${f#/proc/}; p=${p%/cmdline}; kill -9 "$p" 2>/dev/null; }; '
-            'done'
-        )
-        scan_cmd = [ADB_PATH, "-s", self.serial, "shell", proc_scan]
-        await loop.run_in_executor(None, lambda: _run(scan_cmd, 3))
+        #    전수 grep이라 느리므로 deep=True(주로 close 경로)에서만 실행.
+        if deep:
+            proc_scan = (
+                'for f in /proc/[0-9]*/cmdline; do '
+                'grep -qa scrcpy.Server "$f" 2>/dev/null && '
+                '{ p=${f#/proc/}; p=${p%/cmdline}; kill -9 "$p" 2>/dev/null; }; '
+                'done'
+            )
+            scan_cmd = [ADB_PATH, "-s", self.serial, "shell", proc_scan]
+            await loop.run_in_executor(None, lambda: _run(scan_cmd, 3))
 
     def is_alive(self) -> bool:
         return (

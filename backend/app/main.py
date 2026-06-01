@@ -772,7 +772,11 @@ async def websocket_screen_mirror(websocket: WebSocket):
                         scrcpy_retry_after,
                         adb_service.get_scrcpy_retry_after(adb_serial),
                     )
+                    # 시나리오 재생 중에는 scrcpy를 띄우지 않는다 — 미러는 프론트에서
+                    # 중단되며(부하 감소), 재생 중 spawn은 인코더 churn + 재생 종료 후
+                    # stale 쿨다운으로 복귀 지연만 유발한다.
                     if (not _scrcpy_disabled and _is_active and _now >= _eff_retry_after
+                            and not playback_service.is_running
                             and scrcpy_task is None and scrcpy_backend is None):
                         scrcpy_serial = adb_serial
                         scrcpy_task = asyncio.create_task(
@@ -834,10 +838,14 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                 getattr(scrcpy_backend, "_total_frames_decoded", -1),
                                 getattr(scrcpy_backend, "_total_bytes_in", -1),
                             )
-                        scrcpy_retry_after = (
-                            asyncio.get_event_loop().time() + BACKEND_RETRY_COOLDOWN
-                        )
-                        adb_service.set_scrcpy_retry_after(adb_serial, scrcpy_retry_after)
+                        # 재생 중 stream error는 스텝 screencap 등 contention 때문이지
+                        # scrcpy 자체 고장이 아니다. 쿨다운을 박으면 재생 종료 후 재연결
+                        # 시 stale 쿨다운으로 복귀가 느려지므로, 재생 중이 아닐 때만 박는다.
+                        if not playback_service.is_running:
+                            scrcpy_retry_after = (
+                                asyncio.get_event_loop().time() + BACKEND_RETRY_COOLDOWN
+                            )
+                            adb_service.set_scrcpy_retry_after(adb_serial, scrcpy_retry_after)
                         await adb_service.close_scrcpy_backend(
                             adb_serial, expected=scrcpy_backend,
                         )
