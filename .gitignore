@@ -79,5 +79,6 @@ CLAUDE.md
 .playwright-mcp/
 DLL_DEBUG/
 References/
+Reference/
 frontend/package-lock.json
 frontend/package-lock.json

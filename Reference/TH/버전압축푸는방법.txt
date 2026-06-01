@@ -1,9 +1,0 @@
-[Download and unzip TH]
-mkdir TH
-mv TH_SSOT_0.41.35.zip TH/th.zip
-cd TH
-unzip th.zip
-unzip caros_*.zip
-tar xvf cvd-host_package.tar.gz
-unzip harness/harness.zip
-cd ..
