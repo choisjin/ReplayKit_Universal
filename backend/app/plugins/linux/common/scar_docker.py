@@ -21,6 +21,10 @@ from . import proc
 
 logger = logging.getLogger(__name__)
 
+# scar.sh 백그라운드 기동 출력을 남길 로그 (왜 컨테이너가 안 뜨는지 진단용).
+# 기존엔 /dev/null 로 버려서 실패 원인이 안 보였다.
+SCAR_LAUNCH_LOG = "/tmp/replaykit-scar-launch.log"
+
 
 @dataclass
 class ExecResult:
@@ -73,7 +77,11 @@ class SCARDocker:
         호스트 셸이 죽어도 스크립트가 계속 떠있도록 start_new_session=True 로 분리.
         scar.sh 가 백그라운드에서 컨테이너를 띄우는데 보통 ~20초 걸린다 (원본 Wait 20).
         """
-        cmd_str = " ".join(["setsid", script, *(args or [])]) + " </dev/null >/dev/null 2>&1 &"
+        # scar.sh 출력을 /dev/null 대신 로그 파일로 남긴다 — 컨테이너 미기동 원인 진단용.
+        cmd_str = (
+            " ".join(["setsid", script, *(args or [])])
+            + f" </dev/null >{SCAR_LAUNCH_LOG} 2>&1 &"
+        )
         # cwd 가 빈 문자열('')이면 Popen 이 FileNotFoundError 를 던지므로 None 으로 정규화.
         # 미지정 시 scar.sh 가 있는 디렉터리에서 실행 (가이드: ~/scar/scar-master/scripts$ ./scar.sh).
         run_cwd = cwd or (os.path.dirname(script) or None)
@@ -85,6 +93,7 @@ class SCARDocker:
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
+            logger.info("SCAR launch: %s (cwd=%r) → output at %s", script, run_cwd, SCAR_LAUNCH_LOG)
             return True
         except (OSError, FileNotFoundError) as e:
             logger.warning("Failed to start SCAR reconnect script (cwd=%r): %s", run_cwd, e)

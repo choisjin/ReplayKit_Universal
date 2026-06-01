@@ -41,7 +41,7 @@ import time
 from typing import Optional
 
 from .common.scar_api import SCARApi
-from .common.scar_docker import SCARDocker
+from .common.scar_docker import SCARDocker, SCAR_LAUNCH_LOG
 from .common.scar_health import SCARHealth
 from .common.scar_netns import SCARNetns, build_config, DEFAULT_STUB_ECUS
 
@@ -233,7 +233,12 @@ class SCAR:
                 # 검증 실패는 경고로만 — apply 는 성공했으므로 등록은 유지.
                 log.append("  warn: ip netns 검증 실패 (컨테이너 부팅 지연 가능). NetnsStatus() 로 재확인.")
         else:
-            log.append("[5] netns verify: skipped (container not running)")
+            # scar.sh 는 돌았지만 컨테이너가 안 떴다 — 출력 로그로 원인 안내.
+            log.append(
+                f"[5] netns verify: skipped (container '{self.container}' not running)\n"
+                f"  → scar.sh 기동 출력 확인: {SCAR_LAUNCH_LOG}\n"
+                f"  → 컨테이너 이름 확인: docker ps -a (이름이 '{self.container}' 가 아니면 폼의 container 수정)"
+            )
 
         self._setup_done = True
         self._setup_last_msg = "ok\n" + "\n".join(log)
