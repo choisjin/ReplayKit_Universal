@@ -825,7 +825,15 @@ async def websocket_screen_mirror(websocket: WebSocket):
                         except WebSocketDisconnect:
                             raise
                         except Exception as e:
-                            logger.warning("scrcpy stream error (%s): %s", adb_serial, e)
+                            # str(e)가 빈 예외(av/소켓/ws 일부)가 많아 타입+repr까지 남긴다.
+                            # 시나리오 스텝마다 scrcpy가 죽는 원인 특정에 필수.
+                            logger.warning(
+                                "scrcpy stream error (%s): type=%s repr=%r "
+                                "frames=%d bytes_in=%d",
+                                adb_serial, type(e).__name__, e,
+                                getattr(scrcpy_backend, "_total_frames_decoded", -1),
+                                getattr(scrcpy_backend, "_total_bytes_in", -1),
+                            )
                         scrcpy_retry_after = (
                             asyncio.get_event_loop().time() + BACKEND_RETRY_COOLDOWN
                         )

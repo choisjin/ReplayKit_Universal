@@ -266,6 +266,7 @@ export default function RecordPage() {
     h264Mode, h264Size, videoRef, sendControl,
     screenType, setScreenType, refreshScreenshot,
     screenAlive, streamFps,
+    screenPausedForPlayback,
     pauseScreenStream, resumeScreenStream,
   } = useDevice();
 
@@ -4503,6 +4504,13 @@ export default function RecordPage() {
                 {testingStepIndex != null && (
                   <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)', borderRadius: 4, pointerEvents: 'none' }}>
                     <Tag color="processing" style={{ fontSize: 12, padding: '4px 12px' }}>{t('record.stepTesting')}</Tag>
+                  </div>
+                )}
+                {screenPausedForPlayback && (
+                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.55)', borderRadius: 4, pointerEvents: 'none' }}>
+                    <Tag color="processing" style={{ fontSize: 13, padding: '6px 14px', whiteSpace: 'normal', textAlign: 'center', maxWidth: '90%', lineHeight: 1.5 }}>
+                      {t('record.mirrorPausedForPlayback')}
+                    </Tag>
                   </div>
                 )}
                 {smartSwipe && isScreenAdb && gestureRef.current.active && gesturePathRef.current.length > 1 && testingStepIndex == null && (() => {

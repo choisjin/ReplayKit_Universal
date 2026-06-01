@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode, useCallback } from 'react';
 import JMuxer from 'jmuxer';
-import { deviceApi } from '../services/api';
+import { deviceApi, scenarioApi } from '../services/api';
 
 export interface ManagedDevice {
   id: string;
@@ -42,7 +42,9 @@ interface DeviceContextType {
   sendControl: (msg: object) => void;
   // 실시간 FPS
   streamFps: number;
-  // 화면 스트리밍 일시정지/재개
+  // 시나리오 재생 중 미러링 중단 여부 (디바이스 부하 감소 — 안내 오버레이용)
+  screenPausedForPlayback: boolean;
+  // 화면 스트리밍 일시정지/재개 (deprecated: 재생 중단은 screenPausedForPlayback이 담당)
   pauseScreenStream: () => void;
   resumeScreenStream: () => void;
   // 디바이스 폴링 일시정지/재개
@@ -58,6 +60,11 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [screenshotDeviceId, setScreenshotDeviceId] = useState('');
   const [screenshot, setScreenshot] = useState('');
+  // 시나리오 재생 중에는 디바이스 부하를 줄이기 위해 미러 스트림을 일괄 중단한다.
+  // 백엔드 재생상태(scenarioApi.playbackStatus)를 단일 소스로 폴링해 판단하므로,
+  // 어느 페이지/트리거에서 시작했든·ScenarioPage 언마운트 여부와 무관하게 동작한다.
+  const [screenPausedForPlayback, setScreenPausedForPlayback] = useState(false);
+  const screenPausedForPlaybackRef = useRef(false);
   const [pollInterval, setPollInterval] = useState(500);
   const [screenType, setScreenType] = useState('front_center');
   const [screenAlive, setScreenAlive] = useState(false);
@@ -343,6 +350,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const pollFn = useCallback(async () => {
     const deviceId = screenshotDeviceIdRef.current;
     if (!deviceId) return;
+    if (screenPausedForPlaybackRef.current) return;  // 재생 중 미러 부하 차단
     if (pollInFlightRef.current) return;
     pollInFlightRef.current = true;
     try {
@@ -479,6 +487,12 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    // 시나리오 재생 중 — 미러 스트림 중단(마지막 프레임은 그대로 유지).
+    // flag 해제 시 effect가 재실행되어 자동 재연결된다 (deps에 flag 포함).
+    if (screenPausedForPlayback) {
+      return;
+    }
+
     // 100ms 디바운스: deviceId 변경 → screenType 자동 설정 → 확정 후 WS 1회 연결
     wsDebounceRef.current = setTimeout(() => {
       wsDebounceRef.current = null;
@@ -501,18 +515,35 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       closeWs();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screenshotDeviceId, screenType]);
+  }, [screenshotDeviceId, screenType, screenPausedForPlayback]);
 
-  const pauseScreenStream = useCallback(() => {
-    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-    closeWs();
-  }, [closeWs]);
+  // 백엔드 재생상태를 단일 소스로 폴링 → 재생 중이면 미러 중단 플래그 설정.
+  // (ScenarioPage가 아니라 여기서 판단하므로 어떤 경로로 재생을 시작/종료해도 일관)
+  useEffect(() => {
+    screenPausedForPlaybackRef.current = screenPausedForPlayback;
+  }, [screenPausedForPlayback]);
 
-  const resumeScreenStream = useCallback(() => {
-    const deviceId = screenshotDeviceIdRef.current;
-    if (!deviceId) return;
-    startWsStream(deviceId, screenTypeRef.current);
-  }, [startWsStream]);
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await scenarioApi.playbackStatus();
+        if (alive) setScreenPausedForPlayback(!!(r.data && r.data.running));
+      } catch {
+        // 백엔드 연결 실패 등 — 무시 (미러 상태 유지)
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1200);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  // 스텝 테스트/시나리오 스텝마다 미러를 멈췄다 재개하던 동작은 제거됨.
+  // 테스트 중에는 화면을 그대로 유지하고, 전체 시나리오 재생 중에만
+  // screenPausedForPlayback(백엔드 재생상태 기반)이 미러를 일괄 중단한다.
+  // 기존 호출부 호환을 위해 시그니처만 no-op으로 유지.
+  const pauseScreenStream = useCallback(() => { /* deprecated no-op */ }, []);
+  const resumeScreenStream = useCallback(() => { /* deprecated no-op */ }, []);
 
   return (
     <DeviceContext.Provider value={{
@@ -537,6 +568,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       videoRef,
       sendControl,
       streamFps,
+      screenPausedForPlayback,
       pauseScreenStream,
       resumeScreenStream,
       pauseDevicePolling,
