@@ -261,10 +261,15 @@ class TH:
         # 기존 IP 조회 후, host_ip 와 다르면 삭제. 이미 있는지 플래그로 기록해서 add 스킵.
         host_ip_already_present = False
         if self._iface_exists(self.cvd_br):
-            res = subprocess.run(
-                ["ip", "-4", "addr", "show", "dev", self.cvd_br],
-                capture_output=True, text=True, timeout=SETUP_IP_TIMEOUT_S,
-            )
+            try:
+                res = subprocess.run(
+                    ["ip", "-4", "addr", "show", "dev", self.cvd_br],
+                    capture_output=True, text=True, timeout=SETUP_IP_TIMEOUT_S,
+                )
+            except FileNotFoundError:
+                return 1, "\n".join(msgs + ["  'ip' command not found in PATH"])
+            except subprocess.TimeoutExpired:
+                return 1, "\n".join(msgs + [f"  timeout: ip addr show dev {self.cvd_br}"])
             for line in res.stdout.splitlines():
                 m = re.search(r"\binet\s+(\d+\.\d+\.\d+\.\d+/\d+)\b", line)
                 if not m:
