@@ -161,6 +161,13 @@ def scan_until(
             terminate(p)
             rc = p.returncode
 
+    # PIPE read end 를 명시적으로 닫는다 — 매 호출 fd 누수 → 장시간 후 EMFILE 방지.
+    if p.stdout is not None:
+        try:
+            p.stdout.close()
+        except OSError:
+            pass
+
     return ScanResult(
         rc=rc,
         stdout=bytes(captured),

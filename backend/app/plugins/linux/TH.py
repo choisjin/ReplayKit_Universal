@@ -577,6 +577,30 @@ class TH:
             return f"FAIL: client.py not found at {self.client_dir} — check th_home"
         return None
 
+    def _precheck_signal(self, topic_name: str, json_path: str) -> Optional[str]:
+        """Send/SendAndUpdate 인자까지 검증. client.py 가 빈 인자에도 rc=0 으로 끝나
+        거짓 PASS 가 나던 문제를 호출 전에 차단한다."""
+        pre = self._precheck()
+        if pre is not None:
+            return pre
+        if not topic_name or not str(topic_name).strip():
+            return "FAIL: topic_name 이 비어 있음"
+        if not json_path or not str(json_path).strip():
+            return "FAIL: json_path 가 비어 있음 — payload JSON 파일 경로 필요"
+        # exists 사용: 실제 .json + /dev/null(테스트) 모두 허용, 빈 문자열·오타 경로만 차단.
+        if not os.path.exists(json_path):
+            return f"FAIL: json_path 경로 없음: {json_path}"
+        return None
+
+    @staticmethod
+    def _coerce_timeout(timeout, default: float = 10.0) -> float:
+        """timeout 을 안전하게 float 으로. 비숫자/음수면 default — ValueError 크래시 방지."""
+        try:
+            t = float(timeout)
+        except (TypeError, ValueError):
+            return default
+        return t if t > 0 else default
+
     def Send(self, topic_name: str, json_path: str, timeout: int = 10) -> str:
         """패널 갱신 없이 신호만 전송.
 
@@ -584,22 +608,23 @@ class TH:
           정상: "rc=<n>\\n<stdout 마지막 1KB>"
           실패: "FAIL: ..."
         """
-        pre = self._precheck()
+        pre = self._precheck_signal(topic_name, json_path)
         if pre is not None:
             return pre
+        to = self._coerce_timeout(timeout)
         try:
             sr = self._signal.send(
                 topic_name=topic_name,
                 json_path=json_path,
                 trigger=None,
                 on_trigger=None,
-                timeout=float(timeout),
+                timeout=to,
             )
-        except (OSError, FileNotFoundError) as e:
-            return f"FAIL: TH client spawn error: {e}"
+        except Exception as e:
+            return f"FAIL: TH client spawn error: {type(e).__name__}: {e}"
 
         if sr.timed_out:
-            return f"FAIL: TH timeout ({timeout}s) rc={sr.rc}"
+            return f"FAIL: TH timeout ({to}s) rc={sr.rc}"
 
         return _format_result(sr.rc, None, sr.stdout)
 
@@ -618,9 +643,10 @@ class TH:
           매치: "rc=<n> trigger_hit=<tok> e2e_ms=<x.x>"
           미매치: "FAIL: trigger '<tok>' not detected (timeout=<n>s) rc=<rc>"
         """
-        pre = self._precheck()
+        pre = self._precheck_signal(topic_name, json_path)
         if pre is not None:
             return pre
+        to = self._coerce_timeout(timeout)
         trig_bytes = trigger.encode("utf-8") if trigger else self._trigger_bytes
 
         def _on_trig(_ts: float) -> None:
@@ -633,14 +659,21 @@ class TH:
                 json_path=json_path,
                 trigger=trig_bytes,
                 on_trigger=_on_trig,
-                timeout=float(timeout),
+                timeout=to,
             )
-        except (OSError, FileNotFoundError) as e:
-            return f"FAIL: TH client spawn error: {e}"
+        except Exception as e:
+            return f"FAIL: TH client spawn error: {type(e).__name__}: {e}"
 
+        tok = trig_bytes.decode("utf-8", "replace")
+        # stdout 의 브로커 오류(Topic not found 등) 를 trigger 미검출보다 먼저 보고 — 더 정확한 사유.
+        full = sr.stdout.decode("utf-8", "replace")
+        for marker in ("Topic not found", "Unexpected error has occurred"):
+            if marker in full:
+                return f"FAIL: TH client error — {marker} (rc={sr.rc})\n{full[-1024:].strip()}"
+        if sr.timed_out:
+            return f"FAIL: TH timeout ({to}s) — trigger '{tok}' not seen rc={sr.rc}"
         if not sr.trigger_hit:
-            tok = trig_bytes.decode("utf-8", "replace")
-            return f"FAIL: trigger '{tok}' not detected (timeout={timeout}s) rc={sr.rc}"
+            return f"FAIL: trigger '{tok}' not detected (timeout={to}s) rc={sr.rc}"
 
         return _format_result(sr.rc, sr.e2e_ms, sr.stdout, trigger_hit=sr.trigger_hit)
 
