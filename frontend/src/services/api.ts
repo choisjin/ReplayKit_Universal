@@ -126,6 +126,7 @@ export const scenarioApi = {
     screenType?: string,
     delayAfterMs?: number,
     description?: string,
+    xOffset?: number,
   ) => api.post('/scenario/record/image-tap', {
     scenario_name: scenarioName,
     device_id: deviceId,
@@ -135,6 +136,7 @@ export const scenarioApi = {
     screen_type: screenType,
     delay_after_ms: delayAfterMs ?? 3000,
     description: description ?? '',
+    x_offset: xOffset ?? 0,
   }),
   updateImageTap: (
     scenarioName: string,
@@ -144,6 +146,7 @@ export const scenarioApi = {
     similarity: number,
     screenType?: string,
     deviceId?: string,
+    xOffset?: number,
   ) => api.post('/scenario/record/update-image-tap', {
     scenario_name: scenarioName,
     step_index: stepIndex,
@@ -152,6 +155,7 @@ export const scenarioApi = {
     similarity,
     screen_type: screenType,
     device_id: deviceId,
+    x_offset: xOffset,
   }),
   // Folders
   getFolders: () => api.get('/scenario/folders'),

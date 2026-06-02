@@ -1216,6 +1216,17 @@ export default function RecordPage() {
     return needsScreenType ? screenType : undefined;
   }, [primaryDevices, auxiliaryDevices, screenType]);
 
+  // HKMC 일체형 표시 보정 오프셋 — 일체형(integrated)에서 AVN(front_center) 영역이
+  // x로 +1920 밀려 있어, 서버(image_tap/OCR)가 매칭 좌표에 더할 값. 수동 탭과 동일 규칙.
+  const xOffsetForDevice = useCallback((targetDevId: string | undefined): number => {
+    if (hkmcDisplayMode !== 'integrated') return 0;
+    const dev = primaryDevices.find(d => d.id === targetDevId)
+      || auxiliaryDevices.find(d => d.id === targetDevId);
+    const isHkmcFam = dev?.type === 'hkmc_agent' || dev?.type === 'isap_agent'
+      || dev?.type === 'hkmc5th_wide_agent';
+    return isHkmcFam ? 1920 : 0;
+  }, [hkmcDisplayMode, primaryDevices, auxiliaryDevices]);
+
   // WinControl 로 expected 를 캡처하는 스텝의 params 에 현재 임베드된 프로세스 정보를 병합.
   // 재생 시 _resolve_screenshot_device → wincontrol 캡처 직전에 ensure_attached 가 process_name/
   // exe_path/window_title/aumid 등을 사용해 자동 재임베드. wait 처럼 액션 자체엔 프로세스 정보가
@@ -2065,6 +2076,7 @@ export default function RecordPage() {
     // WinControl 은 screen_type 개념 없음 — undefined 전송. 그 외 멀티 스크린 디바이스는 현재 선택.
     // 라이브 뷰가 아니라 캡처 타깃 디바이스(targetDev) 기준으로 판단.
     const screenTypeArg = screenTypeArgForDevice(targetDev);
+    const xOffsetArg = xOffsetForDevice(targetDev);
     setImageTapBusy(true);
     try {
       if (imageTapEditIndex != null) {
@@ -2077,6 +2089,7 @@ export default function RecordPage() {
           imageTapSimilarity,
           screenTypeArg,
           targetDev,
+          xOffsetArg,
         );
         const updated = res.data.step;
         const editIdx = imageTapEditIndex;
@@ -2102,6 +2115,7 @@ export default function RecordPage() {
           screenTypeArg,
           delayMs,
           `image_tap (sim≥${imageTapSimilarity.toFixed(2)})`,
+          xOffsetArg,
         );
         const newStep = res.data.step;
         const match = res.data.match;
@@ -2121,7 +2135,7 @@ export default function RecordPage() {
     } finally {
       setImageTapBusy(false);
     }
-  }, [scenarioName, screenshotDeviceId, imageTapSimilarity, screenTypeArgForDevice, delayMs, refreshScreenshot, t, imageTapEditIndex]);
+  }, [scenarioName, screenshotDeviceId, imageTapSimilarity, screenTypeArgForDevice, xOffsetForDevice, delayMs, refreshScreenshot, t, imageTapEditIndex]);
 
   useEffect(() => {
     if (imageTapModalOpen) setTimeout(() => drawImageTapCanvas(), 50);
@@ -3058,7 +3072,12 @@ export default function RecordPage() {
     if (selectedModuleName === 'DLTViewer' && selectedModuleFunc === 'WaitLog' && dltBackground) {
       funcName = 'StartMonitor';
     }
-    const params = { module: selectedModuleName, function: funcName, args: { ...moduleFuncArgs } };
+    const params: any = { module: selectedModuleName, function: funcName, args: { ...moduleFuncArgs } };
+    // OCR ClickText: 일체형 표시 보정. 재생 시 _execute_ocr_step이 step.params.x_offset를
+    // OCR이 찾은 좌표에 더해 실제 터치 좌표계로 환산한다. 탭 대상은 캡처(화면) 디바이스.
+    if (selectedModuleName === 'OCR' && funcName === 'ClickText') {
+      params.x_offset = xOffsetForDevice(screenshotDeviceId);
+    }
 
     try {
       const res = await scenarioApi.addStep({
