@@ -1068,16 +1068,15 @@ class HKMC6thService:
         """rear_left/rear_right일 때만 LCD 패킷에 monitor 바이트 포함.
         front_center는 None 반환 → 레거시 agent와의 호환성 유지.
 
-        CCRC 디바이스(ccIC_Agent)는 monitor 매핑이 정반대(REAR_R=1, REAR_L=2)이므로
-        SCREEN_TOUCH_MAP의 결과를 swap하여 송신한다.
+        터치 monitor 바이트는 캡처(SCREEN_CAPTURE_MAP)와 동일하게 LEFT=1/RIGHT=2로
+        송신한다. 과거 ccRC를 legacy ccIC_Agent(REAR_R=1, REAR_L=2)로 간주해 좌우를
+        swap했으나, 현행 ccRC/HKMC Agent에서는 화면 출력이 LEFT=1/RIGHT=2로 정상인데
+        터치만 swap되어 좌우가 반대로 동작하는 회귀가 확인되어 swap을 제거한다
+        (화면=터치 모니터 매핑 일치).
         """
         if screen_type not in ("rear_left", "rear_right"):
             return None
-        v = SCREEN_TOUCH_MAP.get(screen_type)
-        if self._is_ccrc_legacy_monitor and v is not None:
-            # 1↔2 swap (LEFT↔RIGHT)
-            return CCRC_MONITOR_RIGHT if v == CCRC_MONITOR_LEFT else CCRC_MONITOR_LEFT
-        return v
+        return SCREEN_TOUCH_MAP.get(screen_type)
 
 
     def tap(self, x: int, y: int, screen_type: str = "front_center") -> None:
