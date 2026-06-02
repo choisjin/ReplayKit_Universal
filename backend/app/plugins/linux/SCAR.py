@@ -212,23 +212,36 @@ class SCAR:
         if rc != 0:
             return self._mark_fail("netns apply", log)
 
-        # ── [4] scar.sh 기동 (컨테이너 미기동 시) ─────────
-        if self.launch_scar and not self._docker.is_running():
+        # ── [4] scar.sh 기동 (컨테이너 미기동 또는 8081 UI 미응답 시) ─────────
+        # 컨테이너가 '--ui' 없이 떠서 8081 UI 가 안 뜬 경우(이때 SendApi 가 DOCKER 로
+        # 거부됨)도 포함하기 위해 api.is_alive() 도 함께 본다. 컨테이너 running 만으로는
+        # API 모드 준비를 보장하지 못한다 (scar.sh --ui 가 돌아야 8081 이 뜸).
+        running = self._docker.is_running()
+        api_alive = self._api.is_alive()
+        if self.launch_scar and not (running and api_alive):
             if self._health.reconnect_script:
-                ok = self._health._reconnect()  # noqa: SLF001 — start_via_script + wait
+                reason = "container down" if not running else "container up but 8081 down"
+                ok = self._health._reconnect()  # noqa: SLF001 — start_via_script(--ui) + wait
                 if ok:
-                    log.append(f"[4] scar launch: started (waited {self._health.reconnect_wait_s}s)")
+                    log.append(f"[4] scar launch: started ({reason}, waited {self._health.reconnect_wait_s}s)")
                 else:
                     log.append(
                         f"[4] scar launch: FAILED (scar.sh 기동 실패)\n"
                         f"  → 원인 확인: {SCAR_LAUNCH_LOG}\n"
                         f"  → scar.sh 절대경로(파일)·실행권한 확인"
                     )
+                # _reconnect 는 force_docker_mode=True 를 박는다(원본 폴백 의미).
+                # 그러나 여기선 setup 차원의 '--ui 기동' 이므로, 기동 후 8081 이 살아나면
+                # API 모드를 되살리기 위해 플래그를 해제한다 (아니면 SendApi 가 계속 DOCKER 거부).
+                if self._api.is_alive():
+                    self._health.force_docker_mode = False
+                    log.append("  → 8081 alive: API 모드 활성 (force_docker_mode 해제)")
             else:
                 log.append("[4] scar launch: skipped (reconnect_script not set)")
+        elif not self.launch_scar:
+            log.append("[4] scar launch: skipped (launch_scar=False)")
         else:
-            running = self._docker.is_running()
-            log.append(f"[4] scar launch: {'already running' if running else 'skipped (launch_scar=False)'}")
+            log.append("[4] scar launch: already running (container up, 8081 alive)")
 
         # ── [5] netns 검증 (컨테이너 떠 있을 때만) ────────
         if self._docker.is_running():

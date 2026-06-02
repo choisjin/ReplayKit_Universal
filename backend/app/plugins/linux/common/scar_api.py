@@ -36,16 +36,21 @@ class SCARApi:
 
     # ─── readiness ────────────────────────────────────
     def is_alive(self) -> bool:
-        """GET / 가 2xx~3xx 면 alive."""
+        """GET / 가 '응답'을 주면(상태코드 무관) alive — 연결거부/타임아웃만 down.
+
+        8081 은 SCAR UI(정적 http-server)라 `/` 에 404 를 줄 수 있다. 2xx~3xx 로
+        좁히면 살아있는 서버를 down 으로 오판함(README: "200/404 등 응답"이면 up).
+        따라서 reachable(응답 도착) = alive 로 본다.
+        """
         try:
-            resp = self._session.get(
+            self._session.get(
                 self.base_url + "/",
                 timeout=min(self.timeout, 3.0),
             )
         except requests.RequestException as e:
             logger.debug("SCAR API not alive: %s", e)
             return False
-        return 200 <= resp.status_code < 400
+        return True
 
     # ─── POST ─────────────────────────────────────────
     def post(
