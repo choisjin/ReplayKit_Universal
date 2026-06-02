@@ -564,6 +564,10 @@ class ImageTapRequest(BaseModel):
     crop: dict  # {x, y, width, height} — 사용자가 드래그한 크롭 영역 (image_base64 픽셀 좌표)
     similarity: float = 0.85  # 0.0~1.0
     screen_type: Optional[str] = None  # HKMC/ICAS rear_left/HU 등 — 캡처 화면과 일치해야 함
+    # HKMC 일체형 표시 보정: AVN(front_center) 캡처는 로컬 좌표인데 실제 터치 좌표계는
+    # x로 x_offset(일체형=1920)만큼 밀려 있다. 프론트가 일체형이면 1920, 기본형이면 0 전송.
+    # 레코딩 즉시 탭과 저장 step params(재생 시 _run_image_tap이 읽음)에 모두 반영.
+    x_offset: int = 0
     delay_after_ms: int = 3000
     description: str = ""
 
@@ -657,17 +661,22 @@ async def record_image_tap(req: ImageTapRequest):
     dev = dm.get_device(req.device_id)
     dev_type = dev.type if dev else "adb"
 
+    # 일체형 오프셋은 AVN(front_center) 좌표계를 쓰는 agent 터치에만 적용.
+    # win/adb는 x_offset이 의미 없으므로 0으로 둔다.
+    x_offset = int(req.x_offset or 0)
+    tap_x = center_x + x_offset
+
     try:
         if dev_type in ("hkmc_agent", "isap_agent"):
             await recording_svc._execute_step_action(
                 StepType.HKMC_TOUCH,
-                {"x": center_x, "y": center_y, "screen_type": req.screen_type or "front_center"},
+                {"x": tap_x, "y": center_y, "screen_type": req.screen_type or "front_center"},
                 req.device_id,
             )
         elif dev_type in ("icas_agent", "mib_agent"):
             await recording_svc._execute_step_action(
                 StepType.ICAS_TOUCH,
-                {"x": center_x, "y": center_y, "screen_type": req.screen_type or "HU"},
+                {"x": tap_x, "y": center_y, "screen_type": req.screen_type or "HU"},
                 req.device_id,
             )
         elif dev_type == "wincontrol":
@@ -693,6 +702,7 @@ async def record_image_tap(req: ImageTapRequest):
             "template": tpl_filename,
             "similarity": threshold,
             "screen_type": req.screen_type,
+            "x_offset": x_offset,  # 재생 시 _run_image_tap이 매칭 좌표에 더해 터치 좌표계로 환산
             "matched_x": center_x,
             "matched_y": center_y,
             "template_width": cw,

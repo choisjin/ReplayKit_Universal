@@ -1963,8 +1963,12 @@ class PlaybackService:
             if center is None:
                 return f"FAIL: '{target}' 텍스트를 찾을 수 없음"
             x, y = center
-            await self._tap_ocr_device(dev_info, x, y)
-            return f"PASS: '{target}' 클릭 완료 (x={x}, y={y})"
+            # HKMC 일체형 표시 보정 — image_tap과 동일. OCR은 front_center(AVN) 캡처의
+            # 로컬 좌표를 찾으므로 실제 터치 좌표계(+x_offset)로 환산해야 한다.
+            # 기본형/비-HKMC는 params에 x_offset이 없어 0 → 무영향.
+            x_offset = int((step.params or {}).get("x_offset", 0) or 0)
+            await self._tap_ocr_device(dev_info, x + x_offset, y)
+            return f"PASS: '{target}' 클릭 완료 (x={x + x_offset}, y={y})"
 
         elif func_name == "ExtractAllText":
             # 디버깅/시나리오 작성용 — 화면(또는 영역)의 모든 텍스트를 결과로 반환.
@@ -2961,9 +2965,15 @@ class PlaybackService:
         th, tw = tpl_gray.shape[:2]
         center_x = int(max_loc[0]) + tw // 2
         center_y = int(max_loc[1]) + th // 2
+        # HKMC 일체형 표시 보정: 매칭은 front_center(AVN) 캡처의 로컬 좌표계에서
+        # 이뤄지지만 실제 터치 좌표계는 x로 x_offset(일체형=1920)만큼 밀려 있다.
+        # 수동 탭(프론트엔드)·랜덤입력은 이 오프셋을 더하므로 image_tap도 동일하게 적용.
+        # 기본형/비-HKMC는 params에 x_offset이 없어 0 → 무영향.
+        x_offset = int(params.get("x_offset", 0) or 0)
+        tap_x = center_x + x_offset
         logger.info(
-            "image_tap match: tpl=%s confidence=%.3f center=(%d,%d) device=%s",
-            tpl_name, confidence, center_x, center_y, real_id,
+            "image_tap match: tpl=%s confidence=%.3f center=(%d,%d) x_offset=%d tap=(%d,%d) device=%s",
+            tpl_name, confidence, center_x, center_y, x_offset, tap_x, center_y, real_id,
         )
 
         # 3) 디바이스별 tap 실행
@@ -2972,19 +2982,19 @@ class PlaybackService:
                    else self.dm.get_hkmc_service(real_id))
             if not svc:
                 raise RuntimeError(f"image_tap: agent {real_id} not connected")
-            await svc.async_tap(center_x, center_y, screen_type or "front_center")
+            await svc.async_tap(tap_x, center_y, screen_type or "front_center")
         elif dev.type in ("icas_agent", "mib_agent"):
             svc = (self.dm.get_mib_service(real_id) if dev.type == "mib_agent"
                    else self.dm.get_icas_service(real_id))
             if not svc:
                 raise RuntimeError(f"image_tap: agent {real_id} not connected")
-            await svc.async_tap(center_x, center_y, screen_type or "HU")
+            await svc.async_tap(tap_x, center_y, screen_type or "HU")
         elif dev.type == "wincontrol":
             wc = self.dm.get_wincontrol_service()
             import asyncio as _asyncio, functools as _ft
             loop = _asyncio.get_event_loop()
             await loop.run_in_executor(
-                None, _ft.partial(wc.send_tap, center_x, center_y, "left"),
+                None, _ft.partial(wc.send_tap, tap_x, center_y, "left"),
             )
         else:
             # ADB
@@ -2997,7 +3007,7 @@ class PlaybackService:
                 except (ValueError, TypeError):
                     our_index = None
             adb_display_id = resolve_input_display_id(dev.info, our_index)
-            await self.adb.tap(center_x, center_y, serial=adb_serial, display_id=adb_display_id)
+            await self.adb.tap(tap_x, center_y, serial=adb_serial, display_id=adb_display_id)
 
     def _rel_path(self, abs_path: str, scenario_name: str) -> str:
         """절대 경로 → 웹 서빙용 상대 경로.
