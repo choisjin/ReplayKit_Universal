@@ -763,6 +763,9 @@ def get_module_functions(module_name: str) -> list[dict]:
     # 모듈 스텝 UI에서 숨길 메서드 (시나리오는 자동으로 연결을 관리하므로 노출 불필요)
     per_module_excluded: dict[str, set[str]] = {
         "SerialLogging": {"Connect", "Disconnect", "IsConnected"},
+        # SCAR.Disconnect 는 device_manager 연결해제/등록삭제 시 netns 복원용으로 자동 호출 —
+        # 시나리오 스텝에 노출할 필요 없음 (Reconnect/Setup/SendApi/Exec 등은 그대로 노출).
+        "SCAR": {"Disconnect"},
         "CMD": {"CheckCapture", "RunCapture", "RunBackground", "ListBackground"},
         # SHELL 은 CMD 의 Linux/macOS 대응 모듈 — 노출 정책 동일
         "SHELL": {"CheckCapture", "RunCapture", "RunBackground", "ListBackground"},
@@ -1453,10 +1456,43 @@ async def execute_module_function(
         raise
 
 
+# 연결 해제/등록 삭제 시 graceful teardown(disconnect_instance)을 적용할 module 화이트리스트.
+# 다른 module 의 기존 동작(해제 시 Disconnect/Close 미호출)을 바꾸지 않기 위해 명시적으로 좁힌다.
+# 현재 SCAR 만 — 해제 시 netns 복원이 필요(인터넷 복구). 추가하려면 해당 module 에 Disconnect 구현 필요.
+MODULES_WITH_DISCONNECT_TEARDOWN = {"SCAR"}
+
+
 def reset_instance(module_name: str) -> None:
-    """Remove cached instance (e.g. on device disconnect)."""
+    """Remove cached instance (단순 무효화 — 재생성용. teardown 호출 안 함)."""
     _instances.pop(module_name, None)
     _auto_connected.discard(module_name)
+
+
+def disconnect_instance(module_name: str):
+    """연결 해제/등록 삭제 시 모듈 인스턴스에 graceful teardown 후 캐시 제거.
+
+    인스턴스가 Disconnect/Close/close 를 가지면 호출(예외는 문자열로 캡처)하고 pop 한다.
+    SCAR 처럼 해제 시 정리(netns 복원 등)가 필요한 모듈을 위함. '단순 무효화(재생성용)' 에는
+    teardown 을 부르면 안 되므로 그 경우는 reset_instance 를 계속 쓸 것.
+
+    Returns:
+        teardown 메서드 반환값(문자열) 또는 None(해당 메서드 없음/인스턴스 없음).
+    """
+    inst = _instances.get(module_name)
+    result = None
+    if inst is not None:
+        for method_name in ("Disconnect", "disconnect", "Close", "close"):
+            method = getattr(inst, method_name, None)
+            if callable(method):
+                try:
+                    ret = method()
+                    result = str(ret) if ret is not None else "ok"
+                except Exception as e:
+                    result = f"error: {e}"
+                break
+    _instances.pop(module_name, None)
+    _auto_connected.discard(module_name)
+    return result
 
 
 def cleanup_active_instances(reason: str = "") -> dict[str, str]:

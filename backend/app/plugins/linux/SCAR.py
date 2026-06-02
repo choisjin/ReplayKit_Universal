@@ -359,6 +359,25 @@ class SCAR:
         header = f"rc={res.rc}"
         return f"{header}\n{tail}" if tail else header
 
+    def Disconnect(self) -> str:
+        """연결 해제/등록 삭제 시 netns VLAN 구성 복원 (호스트 인터넷 복구).
+
+        등록 시 Setup 이 netns 를 구성하는데, netns 가 default-route(인터넷) 어댑터를
+        네임스페이스로 가져가면 호스트 인터넷이 끊긴다. 해제 시 대칭으로 clean 하지 않으면
+        그 상태가 그대로 남으므로, 여기서 `netns.sh --setup=hil -i <iface> --clean` 으로
+        되돌린다. 컨테이너(scar.sh)는 유지한다 — 다음 연결 시 재사용(A안).
+        netns 미사용(vlan_config_dir 빈칸) 등록이면 정리할 것이 없다.
+
+        device_manager 의 연결 해제(disconnect_device_by_id) / 등록 삭제(remove_device)
+        에서 module teardown 으로 호출된다.
+        """
+        if not self._netns.is_available() or not self.iface:
+            return "ok: netns not in use (nothing to clean)"
+        rc, msg = self._netns.clean(self.iface)
+        if rc != 0:
+            return f"FAIL: netns clean (iface={self.iface})\n{self._indent(msg)}"
+        return f"ok: netns cleaned (iface={self.iface})"
+
     def Reconnect(self) -> str:
         """원본 'Reconnect SCAR'. setsid 로 scar.sh 백그라운드 spawn + 20s 대기."""
         if not self._health.reconnect_script:

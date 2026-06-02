@@ -2220,11 +2220,20 @@ class DeviceManager:
                 pass
         # Close SSH connection if applicable
         self._close_ssh_conn(dev.id)
-        # 모듈 인스턴스 캐시 제거
+        # 모듈 인스턴스 정리: 화이트리스트 module 은 teardown(SCAR: netns 복원) + pop, 나머지는 pop 만.
         module_name = dev.info.get("module")
         if module_name:
-            from .module_service import reset_instance
-            reset_instance(module_name)
+            from .module_service import (MODULES_WITH_DISCONNECT_TEARDOWN,
+                                         disconnect_instance, reset_instance)
+            if module_name in MODULES_WITH_DISCONNECT_TEARDOWN:
+                try:
+                    msg = disconnect_instance(module_name)
+                    if msg:
+                        logger.info("module '%s' remove teardown: %s", module_name, msg)
+                except Exception as e:
+                    logger.debug("module teardown failed for %s: %s", module_name, e)
+            else:
+                reset_instance(module_name)
         self._devices.pop(dev.id, None)
         self._ever_connected.discard(dev.id)
         self._save_auxiliary_devices()
@@ -3000,6 +3009,17 @@ class DeviceManager:
             return f"Disconnected: {dev.id}"
 
         if dev.type == "serial" or dev.type == "module":
+            # 화이트리스트 module 만 teardown (SCAR: netns 복원으로 인터넷 복구). 다른 module 은 무영향.
+            if dev.type == "module":
+                module_name = dev.info.get("module")
+                from .module_service import MODULES_WITH_DISCONNECT_TEARDOWN, disconnect_instance
+                if module_name in MODULES_WITH_DISCONNECT_TEARDOWN:
+                    try:
+                        msg = disconnect_instance(module_name)
+                        if msg:
+                            logger.info("module '%s' disconnect teardown: %s", module_name, msg)
+                    except Exception as e:
+                        logger.debug("module teardown failed for %s: %s", module_name, e)
             self._close_serial_conn(device_id)
             dev.status = "disconnected"
             return f"Disconnected: {dev.id}"
