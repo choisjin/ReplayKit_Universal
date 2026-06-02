@@ -406,16 +406,21 @@ class TH:
         """th_run_microservice.sh 를 '사람처럼' 비대화형 기동 (번호 입력 그대로).
 
         사용자 수동: 메뉴가 다 뜬 뒤 'Enter your choices:' 에 번호(예: 57 89 191 207)를
-        타이핑하면 정상 동작한다. 그런데 번호를 처음부터 stdin 파이프에 부어두면 실패한다 —
-        스크립트가 메뉴 read 이전에 실행하는 `adb shell "...ls grpc_*_gateway"`(17행)가
-        파이프의 번호를 먼저 소비해버려, 정작 'Enter your choices:' read 가 빈 값을 받기
-        때문이다("No service selected. Exiting."). 사람이 직접 할 땐 그 시점에 stdin 이
-        비어 있어 adb 가 가로챌 게 없으므로 멀쩡하다.
+        타이핑하면 정상 동작한다. 자동화에서 stdin 을 일반 PIPE 로 주면 두 가지가 깨진다:
+          1) 번호를 미리 부어두면, 메뉴 read 이전에 실행되는
+             `adb shell "...ls grpc_*_gateway"`(17행)가 파이프의 번호를 먼저 소비해버려
+             read 가 빈 값을 받아 "No service selected" 로 끝난다.
+          2) 번호를 안 부어두면 메뉴는 뜨지만, bash `read -p` 의 프롬프트는 stdin 이
+             '터미널일 때만' 출력되므로 PIPE 에서는 'Enter your choices:' 가 아예 안 나와
+             프롬프트 감지가 불가능하다(→ timeout).
 
-        → 그래서 stdout 을 스캔해 'Enter your choices:' 프롬프트가 보인 '뒤에' 번호를
-          주입한다(사람과 동일한 타이밍). 스크립트/입력 방식은 그대로.
-        sudo 불필요. 내부 adb wait-for-device 대비 timeout 필요.
+        → 그래서 가짜 터미널(pty)을 자식에게 붙여 사람의 터미널을 그대로 재현한다.
+          이러면 (1) adb 가 stdin 을 가로채지 않고(사람과 동일) (2) read -p 프롬프트가
+          정상 출력된다. 출력에서 'Enter your choices:' 를 본 '뒤에' 번호를 주입한다.
+        sudo 불필요. 내부 adb wait-for-device 대비 timeout 필요. (pty → Linux 전용)
         """
+        import pty
+
         th_script_dir = os.path.join(self.th_home, "harness", "harness", "th_script")
         script = os.path.join(th_script_dir, "th_run_microservice.sh")
         if not os.path.isfile(script):
@@ -428,19 +433,21 @@ class TH:
 
         answer = (" ".join(nums) + "\n").encode()
         needle = b"Enter your choices:"
+        master, slave = pty.openpty()
         try:
             proc = subprocess.Popen(
                 ["bash", script, self.th_adb],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                cwd=th_script_dir,
+                stdin=slave, stdout=slave, stderr=slave,
+                cwd=th_script_dir, close_fds=True,
             )
         except FileNotFoundError:
+            os.close(master); os.close(slave)
             return 1, "  bash not found"
+        os.close(slave)                            # 부모는 slave 미사용 — master 로만 입출력
 
         buf = b""
         sent = False
         start = time.monotonic()
-        fd = proc.stdout.fileno()
         try:
             while True:
                 if time.monotonic() - start > SETUP_MICROSERVICE_TIMEOUT_S:
@@ -448,17 +455,18 @@ class TH:
                     tail = buf[-1000:].decode(errors="replace")
                     return 1, (f"  timeout ({SETUP_MICROSERVICE_TIMEOUT_S}s) — 프롬프트 미도달 또는 "
                                f"adb wait-for-device 막힘 (CVD({self.th_adb}) 부팅/연결 확인)\n{tail}")
-                r, _, _ = select.select([fd], [], [], 0.5)
+                r, _, _ = select.select([master], [], [], 0.5)
                 if r:
-                    chunk = os.read(fd, 4096)
+                    try:
+                        chunk = os.read(master, 4096)
+                    except OSError:
+                        break                      # 자식 종료 시 pty 는 EIO 를 던짐
                     if not chunk:
-                        break                      # EOF
+                        break
                     buf += chunk
                     if not sent and needle in buf:
                         # 사람처럼 — 프롬프트가 뜬 '뒤에' 번호 주입
-                        proc.stdin.write(answer)
-                        proc.stdin.flush()
-                        proc.stdin.close()
+                        os.write(master, answer)
                         sent = True
                 elif proc.poll() is not None:
                     break                          # 프로세스 종료 + 더 읽을 것 없음
@@ -466,6 +474,11 @@ class TH:
         except Exception as e:
             proc.kill()
             return 1, f"  microservice 실행 오류: {e}"
+        finally:
+            try:
+                os.close(master)
+            except OSError:
+                pass
 
         out = buf.decode(errors="replace").strip()
         tail = out[-1000:]
