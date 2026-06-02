@@ -34,8 +34,10 @@ from __future__ import annotations
 import logging
 import os
 import re
+import select
 import subprocess
 import sys
+import time
 from typing import Optional
 
 from .common.th_panel_client import PanelClient
@@ -109,7 +111,7 @@ class TH:
         panel_trigger: str = DEFAULT_PANEL_TRIGGER,
         auto_setup = True,                                # 등록 시 자동으로 Setup() 호출
         launch_cvd = True,                                # Setup step 5: launch_cvd 자동 spawn
-        microservice_gateways: str = "",                  # th_run_microservice.sh 게이트웨이 번호 (공백 구분)
+        microservice_gateways: str = "",                  # th_run_microservice.sh 게이트웨이 번호 (공백 구분, 예: 57 89 191 207)
         run_microservice = True,                          # Setup step 6: 게이트웨이 자동 기동
     ):
         # 원본 USER CONFIG 보관.
@@ -401,44 +403,78 @@ class TH:
 
     # ── microservice 게이트웨이 기동 ──────────────────────
     def _run_microservice(self) -> tuple[int, str]:
-        """th_run_microservice.sh 에 게이트웨이 번호를 stdin 주입해 비대화형 기동.
+        """th_run_microservice.sh 를 '사람처럼' 비대화형 기동 (번호 입력 그대로).
 
-        스크립트(Reference/th_script/th_run_microservice.sh):
-          - 'Enter your choices:' 프롬프트에서 공백 구분 번호 한 줄을 read.
-          - 선택된 grpc_*_gateway 를 adb shell 로 디바이스에서 백그라운드 기동.
-          - 'Script execution is completed.' 출력 후 종료 (게이트웨이는 디바이스에 잔류).
-        sudo 불필요 (사용자 래퍼와 동일). adb wait-for-device 가 내부에 있어 timeout 필요.
+        사용자 수동: 메뉴가 다 뜬 뒤 'Enter your choices:' 에 번호(예: 57 89 191 207)를
+        타이핑하면 정상 동작한다. 그런데 번호를 처음부터 stdin 파이프에 부어두면 실패한다 —
+        스크립트가 메뉴 read 이전에 실행하는 `adb shell "...ls grpc_*_gateway"`(17행)가
+        파이프의 번호를 먼저 소비해버려, 정작 'Enter your choices:' read 가 빈 값을 받기
+        때문이다("No service selected. Exiting."). 사람이 직접 할 땐 그 시점에 stdin 이
+        비어 있어 adb 가 가로챌 게 없으므로 멀쩡하다.
+
+        → 그래서 stdout 을 스캔해 'Enter your choices:' 프롬프트가 보인 '뒤에' 번호를
+          주입한다(사람과 동일한 타이밍). 스크립트/입력 방식은 그대로.
+        sudo 불필요. 내부 adb wait-for-device 대비 timeout 필요.
         """
         th_script_dir = os.path.join(self.th_home, "harness", "harness", "th_script")
         script = os.path.join(th_script_dir, "th_run_microservice.sh")
         if not os.path.isfile(script):
             return 1, f"  th_run_microservice.sh not found at {script}"
 
-        # 번호 검증 — 공백 구분 정수만 허용 (오타로 엉뚱한 stdin 주입 방지).
+        # 번호 검증 — 공백 구분 정수만 허용 (오타로 엉뚱한 입력 방지).
         nums = self.microservice_gateways.split()
         if not all(n.isdigit() for n in nums):
             return 1, f"  게이트웨이 번호는 공백 구분 숫자여야 함: '{self.microservice_gateways}'"
 
+        answer = (" ".join(nums) + "\n").encode()
+        needle = b"Enter your choices:"
         try:
-            res = subprocess.run(
+            proc = subprocess.Popen(
                 ["bash", script, self.th_adb],
-                input=" ".join(nums) + "\n",       # 'Enter your choices:' 에 주입
-                capture_output=True, text=True,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 cwd=th_script_dir,
-                timeout=SETUP_MICROSERVICE_TIMEOUT_S,
             )
-        except subprocess.TimeoutExpired:
-            return 1, (f"  timeout ({SETUP_MICROSERVICE_TIMEOUT_S}s) — adb wait-for-device 가 막혔을 수 있음 "
-                       f"(CVD({self.th_adb}) 부팅/연결 확인)")
         except FileNotFoundError:
             return 1, "  bash not found"
 
-        out = ((res.stdout or "") + (res.stderr or "")).strip()
+        buf = b""
+        sent = False
+        start = time.monotonic()
+        fd = proc.stdout.fileno()
+        try:
+            while True:
+                if time.monotonic() - start > SETUP_MICROSERVICE_TIMEOUT_S:
+                    proc.kill()
+                    tail = buf[-1000:].decode(errors="replace")
+                    return 1, (f"  timeout ({SETUP_MICROSERVICE_TIMEOUT_S}s) — 프롬프트 미도달 또는 "
+                               f"adb wait-for-device 막힘 (CVD({self.th_adb}) 부팅/연결 확인)\n{tail}")
+                r, _, _ = select.select([fd], [], [], 0.5)
+                if r:
+                    chunk = os.read(fd, 4096)
+                    if not chunk:
+                        break                      # EOF
+                    buf += chunk
+                    if not sent and needle in buf:
+                        # 사람처럼 — 프롬프트가 뜬 '뒤에' 번호 주입
+                        proc.stdin.write(answer)
+                        proc.stdin.flush()
+                        proc.stdin.close()
+                        sent = True
+                elif proc.poll() is not None:
+                    break                          # 프로세스 종료 + 더 읽을 것 없음
+            proc.wait(timeout=10)
+        except Exception as e:
+            proc.kill()
+            return 1, f"  microservice 실행 오류: {e}"
+
+        out = buf.decode(errors="replace").strip()
         tail = out[-1000:]
+        if not sent:
+            return 1, f"  'Enter your choices:' 프롬프트 미도달 — 번호 주입 실패\n{tail}"
         if "Invalid choice" in out or "No service selected" in out:
-            return 1, f"  게이트웨이 번호 오류 (브로커 메뉴와 번호 불일치)\n{tail}"
+            return 1, f"  게이트웨이 번호 오류 (메뉴 범위 밖이거나 디바이스 목록과 불일치)\n{tail}"
         if "Script execution is completed." not in out:
-            return 1, f"  게이트웨이 기동 미확인 (rc={res.returncode})\n{tail}"
+            return 1, f"  게이트웨이 기동 미확인 (rc={proc.returncode})\n{tail}"
         return 0, f"  ok — gateways [{self.microservice_gateways}] 기동\n{tail}"
 
     # ── launch_cvd 백그라운드 ─────────────────────────────
