@@ -268,46 +268,44 @@ HKMC_5TH_WIDE_APP_LIST = [
 # "dial": True → DIAL_ACTION 서브커맨드 사용, direction 필드 필요
 #
 # ── nHK 매핑 (MKBD 값 기준) ────────────────────────────────────────────────
-# RADIO_K    → CMD_HKEY, MKBD_RADIO=0x12      (≡ HKEY_MEDIA)
-# MEDIA_K    → CMD_HKEY, MKBD_MEDIA=0x14      (≡ HKEY_TRACK)
-#              short: send_key_by_name("MEDIA_K")                   → sub_cmd=SHORT_KEY
-#              long:  send_key_by_name("MEDIA_K", sub_cmd=LONG_KEY) → MEDIA_PRE_K 동작
-# CUSTOM_K   → CMD_HKEY, MKBD_CUSTOM=0x16     (≡ HKEY_NAV)
-#              short: send_key_by_name("CUSTOM_K")
-#              long:  send_key_by_name("CUSTOM_K", sub_cmd=LONG_KEY)
-# SEEK_UP_K  → CMD_SWC,  SWC_SEEK_UP=0x09
-# SEEK_DN_K  → CMD_SWC,  SWC_SEEK_DOWN=0x08
-# MAP_K      → CMD_HKEY, MKBD_MAP=0x11        (≡ HKEY_FMAM)
-# NAVI_K     → CMD_NAVI_KEY=0x63, msg
-# SETUP_K    → CMD_HKEY, MKBD_SETUP=0x18      (≡ HKEY_SETUP)
-#              short: send_key_by_name("SETUP_K")
-#              long:  send_key_by_name("SETUP_K",  sub_cmd=LONG_KEY)
-# TUNE_UP_K  → CMD_HKEY, MKBD_TUNE_CLOCK=0xA0,  dial, CLOCK
-# TUNE_DN_K  → CMD_HKEY, MKBD_TUNE_ANTICLOCK=0xA0, dial, ANTI_CLOCK
-# TUNE_PRE_K → CMD_HKEY, MKBD_TUNE_PRESS=0x1C  (≡ HKEY_TUNE_CENTER)
-# VOL_UP_K   → CMD_HKEY, MKBD_POWER_VOLUME_CLOCK=0xF1, dial, CLOCK
-# VOL_DN_K   → CMD_HKEY, MKBD_POWER_VOLUME_ANTICLOCK=0xF1, dial, ANTI_CLOCK
-# POWER_K    → CMD_HKEY, MKBD_POWER_VOLUME_PRESS=0xF0 (≡ HKEY_VOLUME_CENTER)
+# NAVI     → CMD_NAVI_KEY=0x63, msg
+# RADIO    → CMD_HKEY, MKBD_RADIO=0x12      (≡ HKEY_MEDIA)
+# MEDIA    → CMD_HKEY, MKBD_MEDIA=0x14      (≡ HKEY_TRACK)
+#              short: send_key_by_name("MEDIA")                   → sub_cmd=SHORT_KEY
+#              long:  send_key_by_name("MEDIA", sub_cmd=LONG_KEY) → MEDIA_PRE 동작
+# CUSTOM   → CMD_HKEY, MKBD_CUSTOM=0x16     (≡ HKEY_NAV)
+#              short: send_key_by_name("CUSTOM")
+#              long:  send_key_by_name("CUSTOM", sub_cmd=LONG_KEY)
+# MAP      → CMD_HKEY, MKBD_MAP=0x11        (≡ HKEY_FMAM)
+# SETUP    → CMD_HKEY, MKBD_SETUP=0x18      (≡ HKEY_SETUP)
+#              short: send_key_by_name("SETUP")
+#              long:  send_key_by_name("SETUP",  sub_cmd=LONG_KEY)
+# TUNE_UP  → CMD_HKEY, MKBD_TUNE_CLOCK=0xA0,  dial, CLOCK
+# TUNE_DN  → CMD_HKEY, MKBD_TUNE_ANTICLOCK=0xA0, dial, ANTI_CLOCK
+# TUNE_PRE → CMD_HKEY, MKBD_TUNE_PRESS=0x1C  (≡ HKEY_TUNE_CENTER)
+# VOL_UP   → CMD_HKEY, MKBD_POWER_VOLUME_CLOCK=0xF1, dial, CLOCK
+# VOL_DN   → CMD_HKEY, MKBD_POWER_VOLUME_ANTICLOCK=0xF1, dial, ANTI_CLOCK
+# POWER    → CMD_HKEY, MKBD_POWER_VOLUME_PRESS=0xF0 (≡ HKEY_VOLUME_CENTER)
+# SEEK_UP  → CMD_SWC,  SWC_SEEK_UP=0x09
+# SEEK_DN  → CMD_SWC,  SWC_SEEK_DOWN=0x08
 HKMC5TH_WIDE_KEYS: dict[str, dict] = {
-    # ── HKEY (CMD_HKEY=0x60) — keyExt int 방식 ────────────────────────────
-    "RADIO_K":    {"cmd": CMD_HKEY, "key": MKBD_RADIO},                                          # 0x12
-    "MEDIA_K":    {"cmd": CMD_HKEY, "key": MKBD_MEDIA},                                          # 0x14  (long → LONG_KEY)
-    "CUSTOM_K":   {"cmd": CMD_HKEY, "key": MKBD_CUSTOM},                                         # 0x16  (long → LONG_KEY)
-    "MAP_K":      {"cmd": CMD_HKEY, "key": MKBD_MAP},                                            # 0x11
-    "SETUP_K":    {"cmd": CMD_HKEY, "key": MKBD_SETUP},                                          # 0x18  (long → LONG_KEY)
-    "TUNE_UP_K":  {"cmd": CMD_HKEY, "key": MKBD_TUNE_CLOCK,         "dial": True, "direction": CLOCK},
-    "TUNE_DN_K":  {"cmd": CMD_HKEY, "key": MKBD_TUNE_ANTICLOCK,     "dial": True, "direction": ANTI_CLOCK},
-    "TUNE_PRE_K": {"cmd": CMD_HKEY, "key": MKBD_TUNE_PRESS},                                     # 0x1C
-    "VOL_UP_K":   {"cmd": CMD_HKEY, "key": MKBD_POWER_VOLUME_CLOCK, "dial": True, "direction": CLOCK},
-    "VOL_DN_K":   {"cmd": CMD_HKEY, "key": MKBD_POWER_VOLUME_ANTICLOCK, "dial": True, "direction": ANTI_CLOCK},
-    "POWER_K":    {"cmd": CMD_HKEY, "key": MKBD_POWER_VOLUME_PRESS},                             # 0xF0
+    # ── MKBD (CMD_HKEY=0x60 / CMD_NAVI_KEY=0x63) ──────────────────────────
+    "NAVI":     {"cmd": CMD_NAVI_KEY, "msg": True},                                          # 0x63  (msg)
+    "RADIO":    {"cmd": CMD_HKEY, "key": MKBD_RADIO},                                        # 0x12
+    "MEDIA":    {"cmd": CMD_HKEY, "key": MKBD_MEDIA},                                        # 0x14  (long → LONG_KEY)
+    "CUSTOM":   {"cmd": CMD_HKEY, "key": MKBD_CUSTOM},                                       # 0x16  (long → LONG_KEY)
+    "MAP":      {"cmd": CMD_HKEY, "key": MKBD_MAP},                                          # 0x11
+    "SETUP":    {"cmd": CMD_HKEY, "key": MKBD_SETUP},                                        # 0x18  (long → LONG_KEY)
+    "TUNE_UP":  {"cmd": CMD_HKEY, "key": MKBD_TUNE_CLOCK,         "dial": True, "direction": CLOCK},
+    "TUNE_DN":  {"cmd": CMD_HKEY, "key": MKBD_TUNE_ANTICLOCK,     "dial": True, "direction": ANTI_CLOCK},
+    "TUNE_PRE": {"cmd": CMD_HKEY, "key": MKBD_TUNE_PRESS},                                   # 0x1C
+    "VOL_UP":   {"cmd": CMD_HKEY, "key": MKBD_POWER_VOLUME_CLOCK, "dial": True, "direction": CLOCK},
+    "VOL_DN":   {"cmd": CMD_HKEY, "key": MKBD_POWER_VOLUME_ANTICLOCK, "dial": True, "direction": ANTI_CLOCK},
+    "POWER":    {"cmd": CMD_HKEY, "key": MKBD_POWER_VOLUME_PRESS},                           # 0xF0
 
     # ── SWC (CMD_SWC=0x70) — keyExt int 방식 ─────────────────────────────
-    "SEEK_UP_K":  {"cmd": CMD_SWC,  "key": SWC_SEEK_UP},                                         # 0x09
-    "SEEK_DN_K":  {"cmd": CMD_SWC,  "key": SWC_SEEK_DOWN},                                       # 0x08
-
-    # ── 메시지 키 (데이터 페이로드 없음) ─────────────────────────────────
-    "NAVI_K":     {"cmd": CMD_NAVI_KEY, "msg": True},                                            # 0x63
+    "SEEK_UP":  {"cmd": CMD_SWC,  "key": SWC_SEEK_UP},                                       # 0x09
+    "SEEK_DN":  {"cmd": CMD_SWC,  "key": SWC_SEEK_DOWN},                                     # 0x08
 }
 
 
