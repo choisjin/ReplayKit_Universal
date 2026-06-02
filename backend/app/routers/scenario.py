@@ -750,6 +750,7 @@ class UpdateImageTapRequest(BaseModel):
     similarity: float = 0.85
     screen_type: Optional[str] = None
     device_id: Optional[str] = None  # 현재 화면에서 선택된 디바이스 — 스텝의 device_id를 덮어씀
+    x_offset: Optional[int] = None  # 일체형 표시 보정값(일체형=1920, 기본형=0). None이면 기존 값 유지
 
 
 @router.post("/record/update-image-tap")
@@ -837,6 +838,8 @@ async def update_image_tap(req: UpdateImageTapRequest):
     if req.screen_type is not None:
         new_params["screen_type"] = req.screen_type
         step.screen_type = req.screen_type
+    if req.x_offset is not None:
+        new_params["x_offset"] = int(req.x_offset or 0)
     step.params = new_params
 
     # device_id 덮어쓰기 — 편집 시 현재 화면에 선택된 디바이스로 갱신.
