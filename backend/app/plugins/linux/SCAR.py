@@ -23,6 +23,13 @@
     [5] docker exec <container> ip netns 검증
   vlan_config_dir 이 비어 있으면 netns 단계는 통째로 건너뛴다 (런타임 기능만 사용).
 
+  ── 연결 직후 UI 자동화 (설치 가이드 "3~4" UI 단계) ──
+  post_connect=True 면 Connect() 끝에서 UI 제어 백엔드(port 3000)로:
+    [1] POST /config {ends:<ui_version>}            -> UI 버전(ENDS) 선택
+    [2] POST /bencontrol/buttons/<id> {state}       -> Bench IO 토글 ON
+  주의: UI 정적 프론트는 8081(api_base), 실제 제어 REST 는 3000(control_base).
+  토글 id 는 /config/infos 의 등록 목록에서 name 으로 해석(capability 별 중복 id 대응).
+
 시나리오 노출 메서드:
   - Ready(max_retry=3)               -> "API" / "DOCKER" / "NONE"
   - SendApi(url, headers, data)      -> 응답 요약 또는 "FAIL: ..."
@@ -30,6 +37,10 @@
   - Reconnect()                      -> scar.sh 백그라운드 spawn + 20s 대기
   - Setup()                          -> netns VLAN 구성 (수동 재실행 가능)
   - NetnsStatus()                    -> docker exec scar ip netns 출력
+  - ListUiVersions()                 -> GET /list/ends (선택 가능 버전)
+  - SelectVersion(version)           -> POST /config {ends} (UI 버전 선택)
+  - ListBenchToggles()               -> GET /config/infos (등록된 토글 id/name)
+  - SetBench(name_or_id, on=True)    -> POST /bencontrol/buttons/<id> (토글 ON/OFF)
 """
 
 from __future__ import annotations
@@ -90,8 +101,18 @@ class SCAR:
         auto_setup = True,                       # 등록 직후 Setup() 자동 실행
         netns_clean = True,                      # apply 전에 --clean 먼저
         launch_scar = True,                      # Setup 중 컨테이너 미기동 시 scar.sh 기동
+        # ── 연결 직후 UI 자동화 (port 3000 제어 백엔드) ──────
+        # 주의: UI 정적 프론트는 8081(api_base), 실제 제어 REST 는 3000(control_base).
+        #       버전 선택(/config {ends})·bench 토글(/bencontrol/buttons/<id>)은 3000 으로 간다.
+        control_base: str = "http://localhost:3000",  # scar-server.js 제어 API
+        post_connect = True,                     # Connect 끝에 버전선택+bench토글 자동 실행
+        ui_version: str = "",                    # UI 에서 선택할 ENDS 버전 (빈 칸 = 건너뜀)
+        bench_toggle: str = "",                  # 활성화할 Bench IO 토글 이름/ID (빈 칸 = 건너뜀)
+        bench_state: str = "switched",           # 토글 상태 ("switched"=ON / "unswitched"=OFF)
     ):
         self._api = SCARApi(base_url=api_base)
+        # 제어 백엔드(3000) — 버전 선택 / bench 토글 / 목록 조회. 비면 api_base 호스트에서 유추.
+        self._control = SCARApi(base_url=control_base or self._derive_control_base(api_base))
         self._docker = SCARDocker(container=container)
         self.container = container
         args_list = reconnect_args.split() if reconnect_args else None
@@ -117,6 +138,11 @@ class SCAR:
         self.auto_setup = _as_bool(auto_setup)
         self.netns_clean = _as_bool(netns_clean)
         self.launch_scar = _as_bool(launch_scar)
+        # 연결 직후 UI 자동화
+        self.post_connect = _as_bool(post_connect)
+        self.ui_version = (ui_version or "").strip()
+        self.bench_toggle = (bench_toggle or "").strip()
+        self.bench_state = (bench_state or "switched").strip() or "switched"
         self._netns = SCARNetns(
             vlan_config_dir=vlan_config_dir,
             sudo_password=sudo_password,
@@ -137,9 +163,17 @@ class SCAR:
             logger.info("SCAR.Connect: auto_setup disabled, skipping netns setup")
             mode = self.Ready()
             self._setup_done = mode != "NONE"
-            self._setup_last_msg = f"ok (auto_setup disabled, Ready={mode})"
-            return self._setup_last_msg
-        return self.Setup()
+            msg = f"ok (auto_setup disabled, Ready={mode})"
+        else:
+            msg = self.Setup()
+
+        # ── 연결 직후 UI 자동화 (버전 선택 + bench 토글) ──────
+        # setup 이 성공(_setup_done)했고 할 일이 있을 때만. 실패해도 등록 자체는 유지(경고만).
+        if self.post_connect and self._setup_done and (self.ui_version or self.bench_toggle):
+            pc = self._post_connect()
+            msg = f"{msg}\n{pc}"
+            self._setup_last_msg = msg
+        return msg
 
     def IsConnected(self) -> bool:
         """device_manager._is_connected 가 호출. Setup 성공 또는 SCAR 가용이면 True."""
@@ -386,12 +420,153 @@ class SCAR:
         self._health._reconnect()  # noqa: SLF001 — 의도적 호출
         return "DOCKER" if self._health.force_docker_mode else "NONE"
 
+    # ── 연결 직후 UI 자동화 (port 3000 제어 백엔드) ─────────
+    @staticmethod
+    def _derive_control_base(api_base: str) -> str:
+        """api_base(8081) 호스트를 재사용해 제어 백엔드(3000) URL 유추."""
+        from urllib.parse import urlparse
+        try:
+            u = urlparse(api_base if "://" in api_base else "http://" + api_base)
+            host = u.hostname or "localhost"
+            scheme = u.scheme or "http"
+            return f"{scheme}://{host}:3000"
+        except Exception:
+            return "http://localhost:3000"
+
+    def _control_ready(self, retries: int = 10, wait_s: float = 2.0) -> bool:
+        """제어 백엔드(3000) 가 응답할 때까지 대기. GET /list/ends 로 프로브.
+
+        주의: 3000 의 GET / 는 응답을 안 보내(hang) 프로브로 못 쓴다 → /list/ends 사용.
+        """
+        url = self._control.base_url + "/list/ends"
+        for _ in range(max(1, retries)):
+            resp = self._control.get(url)
+            if resp is not None and resp.status_code < 500:
+                return True
+            time.sleep(wait_s)
+        return False
+
+    def _fetch_benchcontrol(self):
+        """/config/infos 의 benchcontrol 리스트. 실패 시 None, 없으면 []."""
+        resp = self._control.get(self._control.base_url + "/config/infos")
+        if resp is None:
+            return None
+        try:
+            data = resp.json()
+        except ValueError:
+            return None
+        bc = data.get("benchcontrol")
+        return bc if isinstance(bc, list) else []
+
+    def ListUiVersions(self) -> str:
+        """GET /list/ends — UI 에서 선택 가능한 ENDS 버전 목록."""
+        resp = self._control.get(self._control.base_url + "/list/ends")
+        if resp is None:
+            return "FAIL: control API(3000) not reachable"
+        try:
+            versions = resp.json().get("versions", [])
+        except ValueError:
+            return f"FAIL: bad JSON from /list/ends (status={resp.status_code})"
+        return "\n".join(versions) if versions else "(no versions)"
+
+    def SelectVersion(self, version: str = "") -> str:
+        """POST /config {ends:<version>} — UI 버전(ENDS) 선택.
+
+        version 미지정 시 생성자 ui_version 사용. 시나리오 스텝으로도 호출 가능.
+        """
+        version = (version or self.ui_version or "").strip()
+        if not version:
+            return "FAIL: no version given (ui_version 비어있음)"
+        resp = self._control.post(
+            self._control.base_url + "/config",
+            data={"ends": version},
+        )
+        if resp is None:
+            return "FAIL: control API(3000) POST /config failed"
+        if resp.status_code != 200:
+            return f"FAIL: /config status={resp.status_code} {resp.text[:256]}"
+        return f"ok: version='{version}' selected"
+
+    def ListBenchToggles(self) -> str:
+        """GET /config/infos — 현재 등록된 Bench 토글(id/name) 목록."""
+        toggles = self._fetch_benchcontrol()
+        if toggles is None:
+            return "FAIL: control API(3000) /config/infos not reachable"
+        if not toggles:
+            return "(no bench toggles registered — UI Setup 에서 추가 필요)"
+        return "\n".join(f"{t.get('id')}  |  {t.get('name')}" for t in toggles)
+
+    def _resolve_toggle_id(self, name_or_id: str):
+        """토글 name(대소문자 무시) 또는 id 로 실제 id 해석.
+
+        같은 name 이 capability 별로 여러 id(예: with_pcu/without_pcu/relay)일 수 있어
+        /config/infos 가 돌려주는 '현재 벤치에 등록된' 목록에서 매칭한다.
+        반환: (id, note) — 못 찾으면 (None, 사유).
+        """
+        toggles = self._fetch_benchcontrol()
+        if toggles is None:
+            return None, "control API(3000) /config/infos not reachable"
+        if not toggles:
+            return None, "no bench toggles registered (UI Setup 에서 추가 필요)"
+        key = name_or_id.strip().lower()
+        # 1) id 정확 매칭
+        for t in toggles:
+            if str(t.get("id", "")).lower() == key:
+                return t.get("id"), "matched by id"
+        # 2) name 정확 매칭 (capability 별 중복 가능)
+        named = [t for t in toggles if str(t.get("name", "")).strip().lower() == key]
+        if len(named) == 1:
+            return named[0].get("id"), f"matched by name → id={named[0].get('id')}"
+        if len(named) > 1:
+            ids = ", ".join(str(t.get("id")) for t in named)
+            return None, f"name '{name_or_id}' 모호 (복수 id: {ids}) — id 로 지정"
+        return None, f"toggle '{name_or_id}' not found in registered list"
+
+    def SetBench(self, name_or_id: str = "", on: bool = True) -> str:
+        """POST /bencontrol/buttons/<id> {state} — Bench 토글 ON/OFF.
+
+        name_or_id: 토글 표시이름('Wake up/Sleep minimal CDC/SA') 또는 id.
+        on=True → switched(=생성자 bench_state), False → unswitched. 시나리오 스텝 호출 가능.
+        """
+        name_or_id = (name_or_id or self.bench_toggle or "").strip()
+        if not name_or_id:
+            return "FAIL: no bench toggle given (bench_toggle 비어있음)"
+        tid, note = self._resolve_toggle_id(name_or_id)
+        if tid is None:
+            return f"FAIL: {note}"
+        state = self.bench_state if on else "unswitched"
+        resp = self._control.post(
+            self._control.base_url + f"/bencontrol/buttons/{tid}",
+            data={"state": state},
+        )
+        if resp is None:
+            return f"FAIL: POST /bencontrol/buttons/{tid} failed"
+        if resp.status_code != 200:
+            return f"FAIL: toggle '{tid}' status={resp.status_code} {resp.text[:256]}"
+        return f"ok: bench '{tid}' → {state} ({note})"
+
+    def _post_connect(self) -> str:
+        """Connect 직후 자동: 제어 백엔드 준비 대기 → 버전 선택 → bench 토글."""
+        log = [f"[post-connect] UI 자동화 (control={self._control.base_url})"]
+        if not self._control_ready():
+            log.append("  FAIL: 제어 백엔드(3000) 미응답 — 버전/토글 건너뜀")
+            return "\n".join(log)
+        if self.ui_version:
+            log.append("  [version] " + self.SelectVersion(self.ui_version))
+        if self.bench_toggle:
+            log.append("  [bench]   " + self.SetBench(self.bench_toggle, on=True))
+        return "\n".join(log)
+
     def Info(self) -> str:
         """현재 인스턴스 설정 요약 (디버그/검증용). sudo 비밀번호는 마스킹."""
         sudo_state = f"(set, {len(self.sudo_password)} chars)" if self.sudo_password else "(unset → -n)"
         lines = [
             f"container     = {self.container}",
             f"api_base      = {self._api.base_url}",
+            f"control_base  = {self._control.base_url}",
+            f"post_connect  = {self.post_connect}",
+            f"ui_version    = {self.ui_version or '(unset → skip)'}",
+            f"bench_toggle  = {self.bench_toggle or '(unset → skip)'} state={self.bench_state}",
             f"vlan_config   = {self.vlan_config_dir or '(unset → netns skip)'}",
             f"netns.sh      = {self._netns.is_available()} ({self._netns.script_path})",
             f"ends          = {self.ends}",

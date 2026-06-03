@@ -52,6 +52,27 @@ class SCARApi:
             return False
         return True
 
+    # ─── GET ──────────────────────────────────────────
+    def get(
+        self,
+        url: str,
+        headers: Optional[dict] = None,
+    ) -> Optional[requests.Response]:
+        """GET 요청 — UI 제어 백엔드(/list/ends, /config/infos 등)용.
+
+        실패해도 예외를 던지지 않는다(post 와 동일 — 호출자가 결정).
+        """
+        try:
+            resp = self._session.get(
+                url,
+                headers=headers or {},
+                timeout=self.timeout,
+            )
+        except requests.RequestException as e:
+            logger.warning("SCAR API GET failed (%s): %s", url, e)
+            return None
+        return resp
+
     # ─── POST ─────────────────────────────────────────
     def post(
         self,

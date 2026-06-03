@@ -431,6 +431,18 @@ def list_available_modules() -> list[dict]:
               "default": "True", "options": ["True", "False"], "hidden": True},
              {"name": "launch_scar", "label": "Setup 중 scar.sh 자동 기동", "type": "select",
               "default": "True", "options": ["True", "False"], "hidden": True},
+             # ── 연결 직후 UI 자동화 (port 3000 제어 백엔드) ──
+             #   UI 정적 프론트는 8081, 실제 제어 REST 는 3000. 버전선택/토글은 3000 으로 간다.
+             {"name": "ui_version", "label": "UI 버전 선택 (ENDS, 비우면 건너뜀)",
+              "type": "text", "default": ""},
+             {"name": "bench_toggle", "label": "연결 후 활성화할 Bench 토글 이름 (비우면 건너뜀)",
+              "type": "text", "default": "Wake up/Sleep minimal CDC/SA"},
+             {"name": "control_base", "label": "SCAR UI 제어 API (port 3000)", "type": "text",
+              "default": "http://localhost:3000", "hidden": True},
+             {"name": "post_connect", "label": "연결 직후 버전선택+토글 자동 실행", "type": "select",
+              "default": "True", "options": ["True", "False"], "hidden": True},
+             {"name": "bench_state", "label": "토글 상태", "type": "select", "default": "switched",
+              "options": ["switched", "unswitched"], "hidden": True},
          ]},
     ]
     available = []
