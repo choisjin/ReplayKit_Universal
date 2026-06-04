@@ -42,6 +42,9 @@
   - SelectVersion(version)           -> POST /config {ends} (UI 버전 선택)
   - ListBenchToggles()               -> GET /config/infos (등록된 토글 id/name)
   - SetBench(name_or_id, on=True)    -> POST /bencontrol/buttons/<id> (토글 ON/OFF)
+  - StartService(service, ecu)       -> POST /start (SOME/IP 서버 기동, 3000 직접)
+  - StopService(service, ecu, uuid)  -> POST /stop  (서비스 정지)
+  - SendControl(path, data)          -> 임의 3000 제어 POST (8081 게이트 없음, SendApi 대체)
 """
 
 from __future__ import annotations
@@ -87,7 +90,7 @@ class SCAR:
         reconnect_script: Optional[str] = None,
         reconnect_args: Optional[str] = None,   # 공백 구분 문자열 (시나리오 호환)
         reconnect_cwd: Optional[str] = None,
-        reconnect_wait_s: float = 20.0,
+        reconnect_wait_s: float = 60.0,  # scar.sh --ui 가 8081/3000 올리는 데 20s 로는 부족 — 폴링 상한
         # ── netns VLAN 구성 (설치 가이드 2단계) ──────────────
         vlan_config_dir: str = "",               # sdv_vlan_config 디렉터리 (netns.sh 위치)
         ends: str = "FaceStep1_2025_R10",        # ENDS 버전
@@ -632,6 +635,43 @@ class SCAR:
         if resp.status_code != 200:
             return f"{prefix}FAIL: toggle '{tid}' status={resp.status_code} {resp.text[:256]}"
         return f"{prefix}ok: bench '{tid}' → {state} ({note})"
+
+    def SendControl(self, path: str, data: str = "", wait_ready: bool = True) -> str:
+        """UI 제어 백엔드(3000)로 임의 POST — /start, /stop, /cmd/* 등.
+
+        SendApi 와의 차이: SendApi 는 8081 Ready() 게이트에 막혀(DOCKER면 거부) 3000 제어용으로
+        부적합하다. 이건 8081 과 무관하게 3000 으로 바로 보내고, 필요시 3000 준비를 기다린다.
+        path: '/start' 처럼 슬래시 시작. data: JSON 문자열(시나리오 호환) 또는 빈 문자열.
+        """
+        if wait_ready and not self._control_ready():
+            return "FAIL: control API(3000) not ready (scar.sh --ui 기동/대기 확인)"
+        try:
+            body = json.loads(data) if data else {}
+        except json.JSONDecodeError as e:
+            return f"FAIL: bad JSON in data: {e}"
+        url = self._control.base_url + ("/" + path.lstrip("/"))
+        resp = self._control.post(url, data=body)
+        if resp is None:
+            return f"FAIL: control POST {path} failed"
+        snippet = resp.text[:512] if resp.text else ""
+        return f"status={resp.status_code}\n{snippet}".strip()
+
+    def StartService(self, service: str, ecu: str) -> str:
+        """POST /start {service, ecu} — SCAR 서비스(SOME/IP 서버) 기동.
+
+        service='All Services' 면 해당 ecu 전체 기동. 예: StartService('VehicleUtcTime',
+        'PCU_PROXY_FrontEnd_PIU_Mst'). UI 의 Start 버튼과 동일 경로(3000).
+        """
+        if not service or not ecu:
+            return "FAIL: service/ecu required"
+        return self.SendControl("/start", json.dumps({"service": service, "ecu": ecu}))
+
+    def StopService(self, service: str, ecu: str, uuid: str = "") -> str:
+        """POST /stop {service, ecu, uuid} — SCAR 서비스 정지."""
+        if not service or not ecu:
+            return "FAIL: service/ecu required"
+        payload = {"service": service, "ecu": ecu, "uuid": uuid or (ecu + service)}
+        return self.SendControl("/stop", json.dumps(payload))
 
     def _post_connect(self) -> str:
         """Connect 직후 자동: 제어 백엔드 준비 대기 → 버전 선택 → bench 토글."""
