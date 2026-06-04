@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { Button, Card, Checkbox, Input, InputNumber, List, Modal, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd';
+import { AutoComplete, Button, Card, Checkbox, Input, InputNumber, List, Modal, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd';
 import { ReloadOutlined, PlusOutlined, DisconnectOutlined, DeleteOutlined, WifiOutlined, SearchOutlined, EditOutlined, ApiOutlined, LinkOutlined, SettingOutlined, HolderOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
@@ -27,6 +27,9 @@ interface ConnectField {
   // folder 타입 전용: 찾아보기로 폴더 선택 후 이 접미사를 자동 부착 (예: '/scar.sh').
   // scar.sh 가 있는 폴더만 고르면 파일 경로까지 완성되게 한다.
   append?: string;
+  // select 타입 전용: 정적 options 대신 이 백엔드 endpoint 에서 옵션을 live 조회.
+  // 예: SCAR 의 '/api/device/scar/versions' → {ok, versions:[...]}. 실패 시 자유 입력 폴백.
+  options_endpoint?: string;
 }
 
 interface ModuleInfo {
@@ -90,6 +93,53 @@ function SortableDeviceRow({ device, children }: { device: ManagedDevice; childr
       />
       {children}
     </div>
+  );
+}
+
+// connect_fields 의 options_endpoint 를 live 조회해 드롭다운으로 보여주되,
+// 목록 조회 실패(예: SCAR 제어 백엔드 미기동)면 자유 입력으로 폴백 — AutoComplete 로 둘 다 지원.
+function DynamicOptionsSelect({ endpoint, controlBase, value, onChange }: {
+  endpoint: string;
+  controlBase?: string;
+  value?: string;
+  onChange: (v: string) => void;
+}) {
+  const [options, setOptions] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string>('');
+
+  const fetchOpts = useCallback(async () => {
+    setLoading(true);
+    setErr('');
+    try {
+      const res = await deviceApi.fieldOptions(endpoint, controlBase ? { control_base: controlBase } : {});
+      const data = res.data || {};
+      const list = data.versions ?? data.options ?? [];
+      setOptions(Array.isArray(list) ? list : []);
+      if (data.ok === false) setErr(data.error || 'unavailable');
+    } catch (e: any) {
+      setOptions([]);
+      setErr(e?.message || 'fetch failed');
+    } finally {
+      setLoading(false);
+    }
+  }, [endpoint, controlBase]);
+
+  useEffect(() => { fetchOpts(); }, [fetchOpts]);
+
+  return (
+    <Space.Compact style={{ width: '100%' }}>
+      <AutoComplete
+        style={{ width: '100%' }}
+        value={value}
+        options={options.map(o => ({ value: o }))}
+        onChange={(v) => onChange(v)}
+        allowClear
+        placeholder={loading ? '불러오는 중…' : (err ? `목록 조회 실패 — 직접 입력 (${err})` : '선택 또는 직접 입력')}
+        filterOption={(input, opt) => String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+      />
+      <Button icon={<ReloadOutlined />} loading={loading} onClick={fetchOpts} title="목록 새로고침" />
+    </Space.Compact>
   );
 }
 
@@ -1289,6 +1339,13 @@ export default function DevicePage() {
         <span style={{ fontSize: 11, color: '#888', marginRight: 6 }}>{f.label}:</span>
         {f.type === 'object_list' ? (
           renderObjectList(f, values, onChange)
+        ) : f.options_endpoint ? (
+          <DynamicOptionsSelect
+            endpoint={f.options_endpoint}
+            controlBase={values.control_base}
+            value={values[f.name] ?? f.default}
+            onChange={(v) => onChange({ ...values, [f.name]: v })}
+          />
         ) : f.type === 'select' && f.options ? (
           <Select
             style={{ width: '100%' }}
@@ -2078,6 +2135,7 @@ export default function DevicePage() {
                                 }
                                 defaults.api_base = `http://${h.ip}:${h.port}`;
                                 defaults.container = h.container;
+                                defaults.control_base = `http://${h.ip}:3000`;  // 제어 REST(버전/토글)는 3000 — 버전 드롭다운 조회 대상
                                 if (firstIface) defaults.iface = firstIface;  // 인터넷 어댑터 제외한 안전 후보만 자동 채움
                                 setConnectType('module');
                                 setSelectedModule('SCAR');

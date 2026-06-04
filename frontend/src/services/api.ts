@@ -49,6 +49,8 @@ export const deviceApi = {
   listModules: () => api.get('/device/modules'),
   getModuleFunctions: (moduleName: string) => api.get(`/device/modules/${moduleName}/functions`),
   localInterfaces: () => api.get('/device/local-interfaces'),
+  // connect_fields 의 options_endpoint 용 동적 옵션 조회 (예: SCAR UI 버전 목록).
+  fieldOptions: (endpoint: string, params?: Record<string, any>) => api.get(endpoint, { params }),
   visionForceIp: (mac: string, ip: string, subnet: string, gateway: string) =>
     api.post('/device/vision-force-ip', { mac, ip, subnet, gateway }),
   dltViewerLaunch: (projectFile?: string, logFile?: string) =>

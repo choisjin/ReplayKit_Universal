@@ -433,8 +433,10 @@ def list_available_modules() -> list[dict]:
               "default": "True", "options": ["True", "False"], "hidden": True},
              # ── 연결 직후 UI 자동화 (port 3000 제어 백엔드) ──
              #   UI 정적 프론트는 8081, 실제 제어 REST 는 3000. 버전선택/토글은 3000 으로 간다.
+             #   ui_version 은 options_endpoint 로 /list/ends 를 live 조회해 드롭다운 구성(폴백: 자유입력).
              {"name": "ui_version", "label": "UI 버전 선택 (ENDS, 비우면 건너뜀)",
-              "type": "text", "default": ""},
+              "type": "select", "default": "", "options": [],
+              "options_endpoint": "/api/device/scar/versions"},
              {"name": "bench_toggle", "label": "연결 후 활성화할 Bench 토글 이름 (비우면 건너뜀)",
               "type": "text", "default": "Wake up/Sleep minimal CDC/SA"},
              {"name": "control_base", "label": "SCAR UI 제어 API (port 3000)", "type": "text",
@@ -443,6 +445,8 @@ def list_available_modules() -> list[dict]:
               "default": "True", "options": ["True", "False"], "hidden": True},
              {"name": "bench_state", "label": "토글 상태", "type": "select", "default": "switched",
               "options": ["switched", "unswitched"], "hidden": True},
+             {"name": "auto_register", "label": "미등록 토글 자동 등록", "type": "select",
+              "default": "True", "options": ["True", "False"], "hidden": True},
          ]},
     ]
     available = []

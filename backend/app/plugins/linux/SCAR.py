@@ -28,7 +28,8 @@
     [1] POST /config {ends:<ui_version>}            -> UI 버전(ENDS) 선택
     [2] POST /bencontrol/buttons/<id> {state}       -> Bench IO 토글 ON
   주의: UI 정적 프론트는 8081(api_base), 실제 제어 REST 는 3000(control_base).
-  토글 id 는 /config/infos 의 등록 목록에서 name 으로 해석(capability 별 중복 id 대응).
+  토글 id 는 /config/infos 의 등록목록 → 없으면 toolbox(전체)에서 capability 매칭으로 해석.
+  미등록 토글은 auto_register=True 면 POST /config 로 benchconfig 에 자동 등록 후 토글.
 
 시나리오 노출 메서드:
   - Ready(max_retry=3)               -> "API" / "DOCKER" / "NONE"
@@ -109,6 +110,7 @@ class SCAR:
         ui_version: str = "",                    # UI 에서 선택할 ENDS 버전 (빈 칸 = 건너뜀)
         bench_toggle: str = "",                  # 활성화할 Bench IO 토글 이름/ID (빈 칸 = 건너뜀)
         bench_state: str = "switched",           # 토글 상태 ("switched"=ON / "unswitched"=OFF)
+        auto_register = True,                    # 미등록 토글이면 toolbox 에서 찾아 자동 등록
     ):
         self._api = SCARApi(base_url=api_base)
         # 제어 백엔드(3000) — 버전 선택 / bench 토글 / 목록 조회. 비면 api_base 호스트에서 유추.
@@ -143,6 +145,7 @@ class SCAR:
         self.ui_version = (ui_version or "").strip()
         self.bench_toggle = (bench_toggle or "").strip()
         self.bench_state = (bench_state or "switched").strip() or "switched"
+        self.auto_register = _as_bool(auto_register)
         self._netns = SCARNetns(
             vlan_config_dir=vlan_config_dir,
             sudo_password=sudo_password,
@@ -446,17 +449,45 @@ class SCAR:
             time.sleep(wait_s)
         return False
 
-    def _fetch_benchcontrol(self):
-        """/config/infos 의 benchcontrol 리스트. 실패 시 None, 없으면 []."""
+    def _fetch_infos(self):
+        """GET /config/infos → 전체 dict (benchcontrol/toolbox/capabilities). 실패 시 None."""
         resp = self._control.get(self._control.base_url + "/config/infos")
         if resp is None:
             return None
         try:
-            data = resp.json()
+            return resp.json()
         except ValueError:
+            return None
+
+    def _fetch_benchcontrol(self):
+        """현재 '등록된' 토글 리스트. 실패 시 None, 없으면 []."""
+        data = self._fetch_infos()
+        if data is None:
             return None
         bc = data.get("benchcontrol")
         return bc if isinstance(bc, list) else []
+
+    @staticmethod
+    def _flatten_toolbox(toolbox) -> list:
+        """configToolbox({category:[btn,...]}) → 전체 버튼 리스트(평탄화)."""
+        out: list = []
+        if isinstance(toolbox, dict):
+            for items in toolbox.values():
+                if isinstance(items, list):
+                    out.extend(items)
+        return out
+
+    @staticmethod
+    def _cap_ok(button_caps, bench_caps) -> bool:
+        """버튼 capability 가 벤치 capability 에 모두 포함되면 적용 가능.
+
+        벤치 capability 정보가 없으면(미구성) 판별 불가 → True(필터 안 함).
+        """
+        if not bench_caps:
+            return True
+        want = {str(c).strip().lower() for c in (button_caps or [])}
+        have = {str(c).strip().lower() for c in bench_caps}
+        return want.issubset(have)
 
     def ListUiVersions(self) -> str:
         """GET /list/ends — UI 에서 선택 가능한 ENDS 버전 목록."""
@@ -496,54 +527,111 @@ class SCAR:
             return "(no bench toggles registered — UI Setup 에서 추가 필요)"
         return "\n".join(f"{t.get('id')}  |  {t.get('name')}" for t in toggles)
 
-    def _resolve_toggle_id(self, name_or_id: str):
-        """토글 name(대소문자 무시) 또는 id 로 실제 id 해석.
-
-        같은 name 이 capability 별로 여러 id(예: with_pcu/without_pcu/relay)일 수 있어
-        /config/infos 가 돌려주는 '현재 벤치에 등록된' 목록에서 매칭한다.
-        반환: (id, note) — 못 찾으면 (None, 사유).
-        """
-        toggles = self._fetch_benchcontrol()
-        if toggles is None:
-            return None, "control API(3000) /config/infos not reachable"
-        if not toggles:
-            return None, "no bench toggles registered (UI Setup 에서 추가 필요)"
-        key = name_or_id.strip().lower()
+    @staticmethod
+    def _match_in(items: list, key: str, bench_caps=None):
+        """items 에서 id 정확매칭 → name 매칭(capability 필터). (matched_id, note, ambiguous_ids)."""
         # 1) id 정확 매칭
-        for t in toggles:
+        for t in items:
             if str(t.get("id", "")).lower() == key:
-                return t.get("id"), "matched by id"
-        # 2) name 정확 매칭 (capability 별 중복 가능)
-        named = [t for t in toggles if str(t.get("name", "")).strip().lower() == key]
+                return t.get("id"), "matched by id", []
+        # 2) name 정확 매칭
+        named = [t for t in items if str(t.get("name", "")).strip().lower() == key]
+        if len(named) > 1 and bench_caps is not None:
+            # capability 로 좁히기 (with_pcu/without_pcu/relay 등 변종 구분)
+            narrowed = [t for t in named if SCAR._cap_ok(t.get("capability"), bench_caps)]
+            if narrowed:
+                named = narrowed
         if len(named) == 1:
-            return named[0].get("id"), f"matched by name → id={named[0].get('id')}"
+            return named[0].get("id"), f"matched by name → id={named[0].get('id')}", []
         if len(named) > 1:
-            ids = ", ".join(str(t.get("id")) for t in named)
-            return None, f"name '{name_or_id}' 모호 (복수 id: {ids}) — id 로 지정"
-        return None, f"toggle '{name_or_id}' not found in registered list"
+            return None, "", [str(t.get("id")) for t in named]
+        return None, "not found", []
+
+    def _resolve_toggle_id(self, name_or_id: str):
+        """토글 name/ID 해석 — 등록목록 우선, 없으면 toolbox(전체)에서 capability 매칭.
+
+        반환: (id, registered: bool, note: str). 못 찾으면 (None, False, 사유).
+          registered=True  → 이미 benchconfig 에 등록됨(바로 토글 가능)
+          registered=False → toolbox 에만 있음(토글 전 등록 필요)
+        """
+        data = self._fetch_infos()
+        if data is None:
+            return None, False, "control API(3000) /config/infos not reachable"
+        key = name_or_id.strip().lower()
+        registered = data.get("benchcontrol") if isinstance(data.get("benchcontrol"), list) else []
+        bench_caps = data.get("capabilities")
+
+        # 1) 이미 등록된 토글에서 (등록목록은 벤치 capability 로 이미 걸러져 있음)
+        tid, note, ambig = self._match_in(registered, key, bench_caps=None)
+        if tid is not None:
+            return tid, True, note
+        if ambig:
+            return None, False, f"name '{name_or_id}' 등록목록서 모호 (복수 id: {', '.join(ambig)}) — id 로 지정"
+
+        # 2) toolbox(전체 버튼)에서 — capability 로 변종 구분
+        toolbox = self._flatten_toolbox(data.get("toolbox"))
+        if not toolbox:
+            return None, False, f"toggle '{name_or_id}' not found (toolbox 비어있음)"
+        tid, note, ambig = self._match_in(toolbox, key, bench_caps=bench_caps)
+        if tid is not None:
+            return tid, False, note + " (toolbox)"
+        if ambig:
+            return None, False, (f"name '{name_or_id}' toolbox 서 모호 (복수 id: {', '.join(ambig)}) "
+                                 f"— bench capabilities={bench_caps} 로 좁혀지지 않음, id 로 지정")
+        return None, False, f"toggle '{name_or_id}' not found in registered/toolbox"
+
+    def _register_toggle(self, tid: str) -> str:
+        """POST /config {benchcontrol:[기존ids + tid]} — toolbox 버튼을 benchconfig 에 등록.
+
+        /config 의 benchcontrol 은 '치환' 이라 기존 등록 id 를 모두 포함해 보낸다(누락 방지).
+        """
+        registered = self._fetch_benchcontrol() or []
+        ids = [str(t.get("id")) for t in registered if t.get("id")]
+        if tid not in ids:
+            ids.append(tid)
+        resp = self._control.post(
+            self._control.base_url + "/config",
+            data={"benchcontrol": ids},
+        )
+        if resp is None:
+            return "FAIL: POST /config (register) failed"
+        if resp.status_code != 200:
+            return f"FAIL: register status={resp.status_code} {resp.text[:256]}"
+        return f"ok: registered '{tid}' (benchcontrol={ids})"
 
     def SetBench(self, name_or_id: str = "", on: bool = True) -> str:
         """POST /bencontrol/buttons/<id> {state} — Bench 토글 ON/OFF.
 
         name_or_id: 토글 표시이름('Wake up/Sleep minimal CDC/SA') 또는 id.
+        미등록 토글이면 auto_register=True 일 때 toolbox 에서 찾아 자동 등록 후 토글.
         on=True → switched(=생성자 bench_state), False → unswitched. 시나리오 스텝 호출 가능.
         """
         name_or_id = (name_or_id or self.bench_toggle or "").strip()
         if not name_or_id:
             return "FAIL: no bench toggle given (bench_toggle 비어있음)"
-        tid, note = self._resolve_toggle_id(name_or_id)
+        tid, registered, note = self._resolve_toggle_id(name_or_id)
         if tid is None:
             return f"FAIL: {note}"
+
+        prefix = ""
+        if not registered:
+            if not self.auto_register:
+                return f"FAIL: toggle '{tid}' not registered (auto_register=False; UI Setup 에서 추가)"
+            reg = self._register_toggle(tid)
+            if reg.startswith("FAIL"):
+                return f"FAIL: auto-register '{tid}': {reg}"
+            prefix = f"[auto-registered] {reg}\n  "
+
         state = self.bench_state if on else "unswitched"
         resp = self._control.post(
             self._control.base_url + f"/bencontrol/buttons/{tid}",
             data={"state": state},
         )
         if resp is None:
-            return f"FAIL: POST /bencontrol/buttons/{tid} failed"
+            return f"{prefix}FAIL: POST /bencontrol/buttons/{tid} failed"
         if resp.status_code != 200:
-            return f"FAIL: toggle '{tid}' status={resp.status_code} {resp.text[:256]}"
-        return f"ok: bench '{tid}' → {state} ({note})"
+            return f"{prefix}FAIL: toggle '{tid}' status={resp.status_code} {resp.text[:256]}"
+        return f"{prefix}ok: bench '{tid}' → {state} ({note})"
 
     def _post_connect(self) -> str:
         """Connect 직후 자동: 제어 백엔드 준비 대기 → 버전 선택 → bench 토글."""
@@ -567,6 +655,7 @@ class SCAR:
             f"post_connect  = {self.post_connect}",
             f"ui_version    = {self.ui_version or '(unset → skip)'}",
             f"bench_toggle  = {self.bench_toggle or '(unset → skip)'} state={self.bench_state}",
+            f"auto_register = {self.auto_register}",
             f"vlan_config   = {self.vlan_config_dir or '(unset → netns skip)'}",
             f"netns.sh      = {self._netns.is_available()} ({self._netns.script_path})",
             f"ends          = {self.ends}",

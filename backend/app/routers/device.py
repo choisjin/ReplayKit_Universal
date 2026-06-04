@@ -289,6 +289,35 @@ async def save_scan_settings(request: Request):
     return {"status": "ok"}
 
 
+@router.get("/scar/versions")
+async def scar_ui_versions(control_base: str = "http://localhost:3000"):
+    """SCAR UI 제어 백엔드(port 3000)의 /list/ends 를 프록시 — 연결 폼 버전 드롭다운용.
+
+    SCAR UI 는 8081(정적 프론트)과 3000(제어 REST)로 분리돼 있고, 선택 가능한 ENDS
+    버전 목록은 3000/list/ends 에서 온다. .deb 로 벤치에 설치되므로 백엔드가 직접 접근.
+    제어 백엔드 미기동(scar.sh --ui 전)이면 ok=False — 프론트는 자유 입력으로 폴백.
+    """
+    import asyncio
+
+    def _fetch() -> dict:
+        try:
+            import requests  # type: ignore
+        except Exception as e:  # pragma: no cover
+            return {"ok": False, "versions": [], "error": f"requests unavailable: {e}"}
+        url = control_base.rstrip("/") + "/list/ends"
+        try:
+            resp = requests.get(url, timeout=3.0, verify=False)
+        except Exception as e:
+            return {"ok": False, "versions": [], "error": f"control API(3000) unreachable: {e}"}
+        try:
+            versions = resp.json().get("versions", [])
+        except ValueError:
+            return {"ok": False, "versions": [], "error": f"bad JSON (status={resp.status_code})"}
+        return {"ok": True, "versions": versions if isinstance(versions, list) else []}
+
+    return await asyncio.get_event_loop().run_in_executor(None, _fetch)
+
+
 @router.get("/catalog")
 async def get_device_catalog():
     """프로젝트/모델 콤보 + 모듈 표시여부 카탈로그 조회."""
