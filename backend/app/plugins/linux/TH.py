@@ -113,6 +113,9 @@ class TH:
         launch_cvd = True,                                # Setup step 5: launch_cvd 자동 spawn
         microservice_gateways: str = "",                  # th_run_microservice.sh 게이트웨이 번호 (공백 구분, 예: 57 89 191 207)
         run_microservice = True,                          # Setup step 6: 게이트웨이 자동 기동
+        # ── 연결 해제/서버 종료 시 정리 (Disconnect) ──────────
+        microservice_stop_cmd: str = "",                  # 게이트웨이 정지 쉘 명령 (비면 skip, 벤치별)
+        stop_cvd_on_disconnect = False,                   # 해제 시 cuttlefish(launch_cvd)도 종료할지
     ):
         # 원본 USER CONFIG 보관.
         self.eth_if = eth_if
@@ -136,6 +139,8 @@ class TH:
         self.launch_cvd = _as_bool(launch_cvd)
         self.microservice_gateways = (microservice_gateways or "").strip()
         self.run_microservice = _as_bool(run_microservice)
+        self.microservice_stop_cmd = (microservice_stop_cmd or "").strip()
+        self.stop_cvd_on_disconnect = _as_bool(stop_cvd_on_disconnect)
 
         # Setup 결과 추적 (IsConnected 반환에 사용)
         self._setup_done = False
@@ -667,6 +672,41 @@ class TH:
         self._sudo_run(["kill", "-KILL", str(pid)], timeout=5.0)
         self._cleanup_cvd_pid_file()
         return f"ok (killed pid={pid} after grace)"
+
+    def Disconnect(self) -> str:
+        """연결 해제 / 서버 종료 시 TH 정리.
+
+        매 연결마다 Setup[6] 이 게이트웨이를 재기동하면 SDV identity 충돌(FqinAlreadyExists)이
+        나므로, 해제 시 게이트웨이를 정리해 다음 연결에서 깨끗이 재기동되게 한다.
+          - microservice_stop_cmd: 게이트웨이 정지 쉘 명령(벤치별). 비면 skip.
+            예) host: 'pkill -f grpc_.*_gateway'  /  device: 'adb -s 0.0.0.0:6520 shell pkill -f grpc_'
+          - stop_cvd_on_disconnect=True 면 cuttlefish(launch_cvd)도 종료(기본 False — 재연결 빠르게).
+        device_manager 가 module teardown(MODULES_WITH_DISCONNECT_TEARDOWN)으로 호출.
+        """
+        parts: list[str] = []
+        # ── 게이트웨이 정지 ──
+        if self.microservice_stop_cmd:
+            try:
+                res = subprocess.run(
+                    self.microservice_stop_cmd, shell=True,
+                    capture_output=True, text=True, timeout=SETUP_SCRIPT_TIMEOUT_S,
+                )
+                # pkill 은 대상 없으면 rc=1 — 실패로 보지 않는다(이미 정리된 상태).
+                tail = ((res.stdout or "") + (res.stderr or "")).strip()[-256:]
+                parts.append(f"gateway stop (rc={res.returncode}){(': ' + tail) if tail else ''}")
+            except subprocess.TimeoutExpired:
+                parts.append("gateway stop: timeout")
+            except Exception as e:
+                parts.append(f"gateway stop: error {e}")
+        else:
+            parts.append("gateway stop: skipped (microservice_stop_cmd 미설정)")
+        # ── cuttlefish 정지 (옵션) ──
+        if self.stop_cvd_on_disconnect:
+            parts.append("cuttlefish: " + self.StopCvd())
+        else:
+            parts.append("cuttlefish: kept (stop_cvd_on_disconnect=False)")
+        self._setup_done = False
+        return "ok: " + " | ".join(parts)
 
     def CvdStatus(self) -> str:
         """launch_cvd 가 떠 있는지 + 로그 마지막 몇 줄."""

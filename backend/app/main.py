@@ -325,6 +325,15 @@ async def lifespan(app: FastAPI):
     # --- Shutdown ---
     await monitor_client.stop()
     reconnect_task.cancel()
+    # 모듈 인스턴스 graceful teardown — SCAR(netns 복원=인터넷/cvd-ebr 정리), TH(게이트웨이/cuttlefish
+    # 정리) 등 무거운 모듈이 서버 종료 시 잔류 상태를 남기지 않도록. (재시작 후 stale 상태로 인한
+    # "connected 인데 동작 안 함" / FqinAlreadyExists 완화)
+    try:
+        from .services.module_service import cleanup_active_instances
+        summary = await asyncio.to_thread(cleanup_active_instances, "server-shutdown")
+        logger.info("Module teardown on shutdown: %s", summary)
+    except Exception as e:
+        logger.warning("Module teardown on shutdown failed: %s", e)
     logger.info("Closing all serial connections...")
     device_manager.close_all_serial_connections()
     # ADB 서버 kill 전에 장기 adb shell 화면 세션부터 정리

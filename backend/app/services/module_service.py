@@ -386,6 +386,12 @@ def list_available_modules() -> list[dict]:
               "options": ["True", "False"], "hidden": True},
              {"name": "run_microservice", "label": "Setup 시 게이트웨이(th_run_microservice.sh) 자동 기동",
               "type": "select", "default": "True", "options": ["True", "False"], "hidden": True},
+             # ── 연결 해제/서버 종료 시 정리 (Disconnect) ──
+             {"name": "microservice_stop_cmd",
+              "label": "게이트웨이 정지 명령 (해제 시, 비우면 skip)", "type": "text",
+              "default": "", "hidden": True},
+             {"name": "stop_cvd_on_disconnect", "label": "해제 시 cuttlefish 종료",
+              "type": "select", "default": "False", "options": ["True", "False"], "hidden": True},
          ]},
         # SCAR — 런타임(REST/Docker) + 등록 시 netns VLAN 자동 구성.
         #   표시 필드: SCAR 설치 가이드 "2. Network Configuration" 에서 사용자가 결정해야 하는 값.
@@ -1502,8 +1508,9 @@ async def execute_module_function(
 
 # 연결 해제/등록 삭제 시 graceful teardown(disconnect_instance)을 적용할 module 화이트리스트.
 # 다른 module 의 기존 동작(해제 시 Disconnect/Close 미호출)을 바꾸지 않기 위해 명시적으로 좁힌다.
-# 현재 SCAR 만 — 해제 시 netns 복원이 필요(인터넷 복구). 추가하려면 해당 module 에 Disconnect 구현 필요.
-MODULES_WITH_DISCONNECT_TEARDOWN = {"SCAR"}
+# SCAR: 해제 시 netns 복원(인터넷/cvd-ebr). TH: 해제 시 게이트웨이 정리(FqinAlreadyExists 방지)
+# +선택적 cuttlefish 종료. 추가하려면 해당 module 에 Disconnect 구현 필요.
+MODULES_WITH_DISCONNECT_TEARDOWN = {"SCAR", "TH"}
 
 # ReplayKit 재시작 시 자동 연결(startup Setup/Connect)을 '건너뛸' module 화이트리스트.
 # SCAR/TH 는 연결 시 netns 재구성·UI 재기동·cuttlefish/microservice 등 무거운(그리고 cvd-ebr 를
