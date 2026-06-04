@@ -14,10 +14,45 @@ import sys
 from pathlib import Path
 from html import escape
 
-GUIDES_PATH = Path(__file__).resolve().parent.parent / "backend" / "app" / "services" / "module_guides.json"
-GUIDES_PATH_EN = Path(__file__).resolve().parent.parent / "backend" / "app" / "services" / "module_guides_en.json"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+GUIDES_PATH = REPO_ROOT / "backend" / "app" / "services" / "module_guides.json"
+GUIDES_PATH_EN = REPO_ROOT / "backend" / "app" / "services" / "module_guides_en.json"
 OUTPUT_PATH = Path(__file__).resolve().parent / "module-guide.html"
 OUTPUT_PATH_EN = Path(__file__).resolve().parent / "module-guide-en.html"
+
+
+def compute_visible_map(module_names: list[str]) -> dict[str, set[str]]:
+    """앱이 실제로 사용자에게 노출하는 함수 집합을 모듈별로 계산.
+
+    module_service.get_module_functions()를 단일 소스로 사용한다. 이 함수는
+    화이트리스트(per_module_included)·제외 목록(per_module_excluded)·가상 모듈
+    정책을 모두 반영하므로, 가이드 HTML이 앱 스텝 드롭다운과 정확히 일치하게 된다.
+
+    반환: {module_name: {노출 함수명, ...}}. 어떤 모듈이 맵에 없으면(=introspection
+    실패 또는 import 실패) 그 모듈은 필터 없이 전체 함수를 표시한다(안전 폴백 — 도구가
+    플러그인을 못 불러도 가이드가 비어버리지 않도록).
+    """
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    try:
+        from backend.app.services.module_service import get_module_functions
+    except Exception as e:
+        print(f"[warn] module_service import 실패 — 노출 필터 미적용(전체 함수 표시): {e}")
+        return {}
+
+    vmap: dict[str, set[str]] = {}
+    for name in module_names:
+        try:
+            exposed = {f["name"] for f in get_module_functions(name)}
+        except Exception as e:
+            print(f"[warn] {name}: get_module_functions 실패 — 전체 표시 폴백 ({e})")
+            continue
+        if exposed:
+            vmap[name] = exposed
+        else:
+            # 문서화된 모듈이 0개 노출이면 introspection 실패로 간주 → 폴백(전체 표시)
+            print(f"[warn] {name}: 노출 함수 0개(introspection 실패 추정) — 전체 표시 폴백")
+    return vmap
 
 # 모듈 카테고리 분류 (id, ko_label, en_label, modules)
 CATEGORIES = [
@@ -83,10 +118,18 @@ CONNECT_LABELS = {
 }
 
 
-def generate_html(data: dict, lang: str = "ko") -> str:
+def generate_html(data: dict, lang: str = "ko", visible_map: dict[str, set[str]] | None = None) -> str:
     t = I18N[lang]
     cat_label_idx = t["cat_label_idx"]
+    visible_map = visible_map or {}
     modules = {k: v for k, v in data.items() if k != "_meta"}
+
+    def _visible_funcs(mod_name: str, funcs: dict) -> dict:
+        """앱에 실제 노출되는 함수만 남긴다. 맵에 없는 모듈은 전체 표시(폴백)."""
+        allowed = visible_map.get(mod_name)
+        if allowed is None:
+            return funcs
+        return {fn: info for fn, info in funcs.items() if fn in allowed}
 
     # 카테고리에 속하지 않은 모듈 수집
     cats = [list(c) for c in CATEGORIES]  # mutable copy
@@ -119,7 +162,7 @@ def generate_html(data: dict, lang: str = "ko") -> str:
     overview_rows = []
     total_funcs = 0
     for name, mod in modules.items():
-        fc = len(mod.get("functions", {}))
+        fc = len(_visible_funcs(name, mod.get("functions", {})))
         total_funcs += fc
         desc = escape(mod.get("_description", "").split(" — ")[-1] if " — " in mod.get("_description", "") else mod.get("_description", ""))
         overview_rows.append(f'<tr><td><a href="#mod-{name}"><strong>{name}</strong></a></td><td>{desc}</td><td style="text-align:center">{fc}</td></tr>')
@@ -135,7 +178,7 @@ def generate_html(data: dict, lang: str = "ko") -> str:
                 continue
             mod = modules[name]
             desc = escape(mod.get("_description", ""))
-            funcs = mod.get("functions", {})
+            funcs = _visible_funcs(name, mod.get("functions", {}))
 
             # 함수 테이블
             func_rows = []
@@ -399,16 +442,25 @@ def main():
     output_map = {"ko": OUTPUT_PATH, "en": OUTPUT_PATH_EN}
     data_map = {"ko": data, "en": data_en}
 
+    # 앱 실제 노출 함수 집합(화이트리스트/제외 정책 반영) — 가이드를 이 집합으로 필터.
+    module_names = [k for k in data if k != "_meta"]
+    visible_map = compute_visible_map(module_names)
+
     for lang in langs_to_gen:
-        html = generate_html(data_map[lang], lang=lang)
+        html = generate_html(data_map[lang], lang=lang, visible_map=visible_map)
         out = output_map[lang]
         with open(out, "w", encoding="utf-8") as f:
             f.write(html)
         print(f"Generated ({lang}): {out}")
 
     modules = {k: v for k, v in data.items() if k != "_meta"}
-    total = sum(len(v.get("functions", {})) for v in modules.values())
-    print(f"  {len(modules)} modules, {total} functions")
+
+    def _visible_count(name: str, funcs: dict) -> int:
+        allowed = visible_map.get(name)
+        return len(funcs) if allowed is None else sum(1 for fn in funcs if fn in allowed)
+
+    total = sum(_visible_count(n, v.get("functions", {})) for n, v in modules.items())
+    print(f"  {len(modules)} modules, {total} functions (노출 기준)")
 
 
 if __name__ == "__main__":

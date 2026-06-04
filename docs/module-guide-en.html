@@ -161,12 +161,12 @@
     </div>
 
     <h2 id="overview">All Modules</h2>
-    <p>Total <strong>9</strong> modules, <strong>201</strong> functions registered.</p>
+    <p>Total <strong>9</strong> modules, <strong>84</strong> functions registered.</p>
     <table>
       <thead><tr><th>Module</th><th>Description</th><th>Functions</th></tr></thead>
       <tbody>
         <tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>Sends and receives CAN bus messages via CANat hardware</td><td style="text-align:center">7</td></tr>
-<tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>Comprehensive control of relays, power, sensors, audio, LCD, buttons, and USB on the serial-connected QE test bench</td><td style="text-align:center">117</td></tr>
+<tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>Comprehensive control of relays, power, sensors, audio, LCD, buttons, and USB on the serial-connected QE test bench</td><td style="text-align:center">8</td></tr>
 <tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>Connects to remote devices via SSH for command execution and file transfer</td><td style="text-align:center">7</td></tr>
 <tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>Captures and saves logs via direct TCP connection to the DLT daemon, with keyword-based PASS/FAIL evaluation (no GUI required)</td><td style="text-align:center">10</td></tr>
 <tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>Captures serial port logs with keyword-based fail detection.
@@ -184,8 +184,8 @@ Standard usage pattern:
   3) StopLogging()                               ← last step (writes log file + ends capture, port stays open)</td><td style="text-align:center">5</td></tr>
 <tr><td><a href="#mod-SmartBench"><strong>SmartBench</strong></a></td><td>Controls power, buttons, current, and LEDs on Smart Bench equipment via TCP socket</td><td style="text-align:center">15</td></tr>
 <tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>Integrated UDP test bench: vehicle power control (IGN/ACC/Battery) + CAN FD signal transmission</td><td style="text-align:center">25</td></tr>
-<tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Executes Windows command prompt (CMD) commands. Used for running external programs or system commands</td><td style="text-align:center">7</td></tr>
-<tr><td><a href="#mod-SHELL"><strong>SHELL</strong></a></td><td>Executes Linux/macOS bash commands. Linux counterpart of CMD. Used for running external programs or system commands.</td><td style="text-align:center">8</td></tr>
+<tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Executes Windows command prompt (CMD) commands. Used for running external programs or system commands</td><td style="text-align:center">3</td></tr>
+<tr><td><a href="#mod-SHELL"><strong>SHELL</strong></a></td><td>Executes Linux/macOS bash commands. Linux counterpart of CMD. Used for running external programs or system commands.</td><td style="text-align:center">4</td></tr>
       </tbody>
     </table>
 
@@ -198,29 +198,9 @@ Standard usage pattern:
 <thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
 <tbody>
 <tr>
-<td><code>Connect</code></td>
-<td>Connects to the bench via serial. Automatically called when adding the device.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>Disconnect</code></td>
-<td>Disconnects from the bench.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
 <td><code>ACCOnOff</code></td>
 <td>Turns ACC (Accessory) power on or off.</td>
 <td style="font-size:12px"><code>state</code>: 0 = OFF, 1 = ON<br><code>bench_info</code>: Bench type. &#x27;OLD_BENCH&#x27; (default) or &#x27;NEW_BENCH&#x27;</td>
-</tr>
-<tr>
-<td><code>ACCSinglePulse</code></td>
-<td>Generates a single pulse on ACC power. Used for momentary voltage fluctuation testing.</td>
-<td style="font-size:12px"><code>nVoltage</code>: Pulse voltage (V)<br><code>nDelay</code>: Delay between pulses (ms)<br><code>nCnt</code>: Number of pulse repetitions</td>
-</tr>
-<tr>
-<td><code>AccControl</code></td>
-<td>Controls the ACC relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON<br><code>bench_info</code>: Bench type</td>
 </tr>
 <tr>
 <td><code>AccVoltage</code></td>
@@ -233,24 +213,9 @@ Standard usage pattern:
 <td style="font-size:12px"><code>nState</code>: 0 = OFF (disconnect battery), 1 = ON (connect battery)<br><code>bench_info</code>: Bench type. &#x27;OLD_BENCH&#x27; (default) or &#x27;NEW_BENCH&#x27;</td>
 </tr>
 <tr>
-<td><code>BatteryControl</code></td>
-<td>Controls the battery relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON<br><code>bench_info</code>: Bench type</td>
-</tr>
-<tr>
-<td><code>BatteryMinusControl</code></td>
-<td>Controls the battery negative (-) terminal relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (connected), 1 = ON (disconnected)</td>
-</tr>
-<tr>
 <td><code>BatteryVoltage</code></td>
 <td>Sets the battery voltage state.</td>
 <td style="font-size:12px"><code>nState</code>: Voltage state value</td>
-</tr>
-<tr>
-<td><code>BatterySinglePulse</code></td>
-<td>Generates a single pulse on the battery.</td>
-<td style="font-size:12px"><code>nVoltage</code>: Pulse voltage (V)<br><code>nDelay</code>: Delay between pulses (ms)<br><code>nCnt</code>: Number of pulse repetitions</td>
 </tr>
 <tr>
 <td><code>IGNControl</code></td>
@@ -263,156 +228,6 @@ Standard usage pattern:
 <td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
 </tr>
 <tr>
-<td><code>ALTControl</code></td>
-<td>Controls the alternator signal.</td>
-<td style="font-size:12px"><code>status</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ILLControl</code></td>
-<td>Controls the illumination signal (vehicle lighting interlock).</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ILLControlMinus</code></td>
-<td>Controls the illumination negative signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ReverseControl</code></td>
-<td>Controls the reverse gear signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (forward), 1 = ON (reverse)</td>
-</tr>
-<tr>
-<td><code>ReverseActiveHigh</code></td>
-<td>Controls the reverse signal as Active High.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ReverseActiveLow</code></td>
-<td>Controls the reverse signal as Active Low.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ParkingControl</code></td>
-<td>Controls the parking signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>PPositonControl</code></td>
-<td>Controls the P (Park) gear position signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>NPositionControl</code></td>
-<td>Controls the N (Neutral) gear position signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>SpeedControl</code></td>
-<td>Controls the vehicle speed signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (stopped), 1 = ON (driving)</td>
-</tr>
-<tr>
-<td><code>DoorControl</code></td>
-<td>Controls the door open/close signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (closed), 1 = ON (open)</td>
-</tr>
-<tr>
-<td><code>DoorUnLockControl</code></td>
-<td>Controls the door unlock signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (locked), 1 = ON (unlocked)</td>
-</tr>
-<tr>
-<td><code>TransDetectControl</code></td>
-<td>Controls the transmission detection signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>FUELControl</code></td>
-<td>Controls the fuel-related signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>KeylessBootingControl</code></td>
-<td>Controls the keyless (smart key) boot signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AutolightControl</code></td>
-<td>Controls the auto-light signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AlarmDetectControl</code></td>
-<td>Controls the alarm detection signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AirbagCrashDetection</code></td>
-<td>Controls the airbag crash detection signal.</td>
-<td style="font-size:12px"><code>model</code>: Vehicle model name<br><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ShieldBoxControl</code></td>
-<td>Controls the shield box (RF shielding box) open/close.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (close), 1 = ON (open)</td>
-</tr>
-<tr>
-<td><code>ANTControl</code></td>
-<td>Controls the antenna relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AmpControl</code></td>
-<td>Controls the external audio amplifier power.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>MICControl</code></td>
-<td>Controls the microphone relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AUXControl</code></td>
-<td>Controls the AUX input relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>CDControl</code></td>
-<td>Controls the CD drive relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>IPODControl</code></td>
-<td>Controls the iPod connection relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>RcInControl</code></td>
-<td>Controls the RC input relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ComEnableControl</code></td>
-<td>Controls the COM (communication) enable.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (disabled), 1 = ON (enabled)</td>
-</tr>
-<tr>
-<td><code>Detent</code></td>
-<td>Controls the detent (rotary encoder for volume knob, etc.) signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AVNSDDetect</code></td>
-<td>Controls the AVN SD card detection signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (not inserted), 1 = ON (inserted)</td>
-</tr>
-<tr>
-<td><code>USB1Control</code></td>
-<td>Controls the USB 1 port relay.</td>
-<td style="font-size:12px"><code>Status</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
 <td><code>USBFrontSwitchControl</code></td>
 <td>Controls the front USB switch relay.</td>
 <td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
@@ -421,366 +236,6 @@ Standard usage pattern:
 <td><code>USBRearSwitchControl</code></td>
 <td>Controls the rear USB switch relay.</td>
 <td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>USBSelectorControl</code></td>
-<td>Selects a USB selector port.</td>
-<td style="font-size:12px"><code>nOnPortNum</code>: USB port number to activate</td>
-</tr>
-<tr>
-<td><code>USBSelector10CHSwitch5CH</code></td>
-<td>Controls the USB selector 10-channel/5-channel switch.</td>
-<td style="font-size:12px"><code>nType</code>: Switch type<br><code>nPortNum</code>: Port number<br><code>nOnOffStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Telltale</code></td>
-<td>Controls the telltale (dashboard warning indicator) relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>TelltaleLED</code></td>
-<td>Sets the telltale LED blink period.</td>
-<td style="font-size:12px"><code>nPeriod</code>: Blink period (ms)</td>
-</tr>
-<tr>
-<td><code>CheckTelltale</code></td>
-<td>Checks the telltale (warning indicator) status.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>LEDPulse</code></td>
-<td>Sets the LED blink period.</td>
-<td style="font-size:12px"><code>nPeriod</code>: Blink period (ms)</td>
-</tr>
-<tr>
-<td><code>LedTCU4</code></td>
-<td>Sets the TCU4 LED blink period.</td>
-<td style="font-size:12px"><code>nPeriod</code>: Blink period (ms)</td>
-</tr>
-<tr>
-<td><code>CheckLedTCU4</code></td>
-<td>Checks the TCU4 LED status.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>GetLEDPulse</code></td>
-<td>Reads the current LED pulse value.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CheckLCD</code></td>
-<td>Checks the LCD display status.</td>
-<td style="font-size:12px"><code>nStatus</code>: Status value to check</td>
-</tr>
-<tr>
-<td><code>CheckLCDDimming</code></td>
-<td>Checks the LCD dimming (brightness control) status.</td>
-<td style="font-size:12px"><code>nStatus</code>: Status value to check</td>
-</tr>
-<tr>
-<td><code>SetLCDValue</code></td>
-<td>Sets the LCD value.</td>
-<td style="font-size:12px"><code>nLCDValue</code>: LCD value to set</td>
-</tr>
-<tr>
-<td><code>GetLCDValue</code></td>
-<td>Reads the current LCD value.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CheckVoltage</code></td>
-<td>Checks whether voltage is within the specified range.</td>
-<td style="font-size:12px"><code>nMin</code>: Minimum voltage (V)<br><code>nMax</code>: Maximum voltage (V)</td>
-</tr>
-<tr>
-<td><code>CheckCurrent</code></td>
-<td>Checks whether current is within the specified range.</td>
-<td style="font-size:12px"><code>nMin</code>: Minimum current (A)<br><code>nMax</code>: Maximum current (A)</td>
-</tr>
-<tr>
-<td><code>ExtCheckCurrent</code></td>
-<td>Checks whether external current is within the specified range.</td>
-<td style="font-size:12px"><code>fMin</code>: Minimum current (A)<br><code>fMax</code>: Maximum current (A)</td>
-</tr>
-<tr>
-<td><code>EXT_CURRENT</code></td>
-<td>Checks external current within range after a delay.</td>
-<td style="font-size:12px"><code>min_current</code>: Minimum current (A)<br><code>max_current</code>: Maximum current (A)<br><code>check_delay</code>: Delay before check (seconds)</td>
-</tr>
-<tr>
-<td><code>GetEXTCurrent</code></td>
-<td>Reads the current external current value.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CheckEXTCurrentList</code></td>
-<td>Checks whether collected external current values are within range.</td>
-<td style="font-size:12px"><code>nMin</code>: Minimum current (A)<br><code>nMax</code>: Maximum current (A)</td>
-</tr>
-<tr>
-<td><code>ClearEXTCurrentList</code></td>
-<td>Clears the collected external current list.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CheckKeyOutVoltage</code></td>
-<td>Checks whether key output voltage is within range.</td>
-<td style="font-size:12px"><code>nMin</code>: Minimum voltage (V)<br><code>nMax</code>: Maximum voltage (V)</td>
-</tr>
-<tr>
-<td><code>ClearKeyOutVoltageList</code></td>
-<td>Clears the key output voltage list.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CheckSound</code></td>
-<td>Checks the audio output status.</td>
-<td style="font-size:12px"><code>nStatus</code>: Status value to check</td>
-</tr>
-<tr>
-<td><code>PlaySound</code></td>
-<td>Plays a sound file on the bench.</td>
-<td style="font-size:12px"><code>strFileName</code>: File name to play<br><code>nFileNameLen</code>: File name length</td>
-</tr>
-<tr>
-<td><code>InitSoundUpdate</code></td>
-<td>Initializes the sound update.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>WaitSoundUpdate</code></td>
-<td>Waits until the sound update completes.</td>
-<td style="font-size:12px"><code>timeout</code>: Max wait time in seconds</td>
-</tr>
-<tr>
-<td><code>RequestLightSensorControl</code></td>
-<td>Controls the light sensor.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON<br><code>pbData</code>: PB data<br><code>twData</code>: TW data</td>
-</tr>
-<tr>
-<td><code>GetLightSensorData</code></td>
-<td>Reads light sensor data.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CheckLightSensorResult</code></td>
-<td>Checks the light sensor result.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>TenButton</code></td>
-<td>Presses a button on the 10-button panel.</td>
-<td style="font-size:12px"><code>nButton</code>: Button number (0-9)<br><code>nDelay</code>: Button press duration (ms)</td>
-</tr>
-<tr>
-<td><code>ThreeButton</code></td>
-<td>Presses a button on the 3-button panel.</td>
-<td style="font-size:12px"><code>nButton</code>: Button number (0-2)<br><code>nDelay</code>: Button press duration (ms)</td>
-</tr>
-<tr>
-<td><code>ThreeButton_Front</code></td>
-<td>Presses a button on the front 3-button panel.</td>
-<td style="font-size:12px"><code>nButton</code>: Button number (0-2)<br><code>nDelay</code>: Button press duration (ms)</td>
-</tr>
-<tr>
-<td><code>ThreeButton_Rear</code></td>
-<td>Presses a button on the rear 3-button panel.</td>
-<td style="font-size:12px"><code>nButton</code>: Button number (0-2)<br><code>nDelay</code>: Button press duration (ms)</td>
-</tr>
-<tr>
-<td><code>TwoButton</code></td>
-<td>Presses a button on the 2-button panel.</td>
-<td style="font-size:12px"><code>nButton</code>: Button number (0-1)<br><code>nDelay</code>: Button press duration (ms)</td>
-</tr>
-<tr>
-<td><code>rf_btn_press</code></td>
-<td>Presses an RF button.</td>
-<td style="font-size:12px"><code>btnNum</code>: Button number<br><code>delay</code>: Press duration (ms)</td>
-</tr>
-<tr>
-<td><code>FileToSD</code></td>
-<td>Copies a file to the SD card.</td>
-<td style="font-size:12px"><code>userFilePath</code>: Source file path on PC<br><code>sdCardFileName</code>: File name to save on SD card</td>
-</tr>
-<tr>
-<td><code>Relay_10</code></td>
-<td>Controls relay 10.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Relay_11</code></td>
-<td>Controls relay 11.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Relay_12</code></td>
-<td>Controls relay 12.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Relay_13</code></td>
-<td>Controls relay 13.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Relay_14</code></td>
-<td>Controls relay 14.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>RelayInitialization</code></td>
-<td>Resets all relays to their default values.</td>
-<td style="font-size:12px"><code>init_value</code>: Initialization value</td>
-</tr>
-<tr>
-<td><code>SetRelayConfig</code></td>
-<td>Sets the relay configuration.</td>
-<td style="font-size:12px"><code>nRelayCfg</code>: Relay configuration value</td>
-</tr>
-<tr>
-<td><code>CallRelayFunc</code></td>
-<td>Calls a relay function by index.</td>
-<td style="font-size:12px"><code>func_index</code>: Function index number<br><code>data</code>: Data to pass</td>
-</tr>
-<tr>
-<td><code>RequestRelayInitialStatus</code></td>
-<td>Requests the initial relay status.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>RequestRelaySet</code></td>
-<td>Sets relays using a command list.</td>
-<td style="font-size:12px"><code>nCmdList</code>: Relay command list</td>
-</tr>
-<tr>
-<td><code>SystemReset</code></td>
-<td>Resets the bench system.</td>
-<td style="font-size:12px"><code>nMs</code>: Wait time after reset (ms). Default: 1000</td>
-</tr>
-<tr>
-<td><code>SetSystemTime</code></td>
-<td>Sets the bench system time to the current PC time.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>RequestSystemVersion</code></td>
-<td>Requests the bench system version information.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CalcCRC16</code></td>
-<td>Calculates a CRC-16 checksum. Used for communication data verification.</td>
-<td style="font-size:12px"><code>listData</code>: Data list<br><code>nLen</code>: Data length</td>
-</tr>
-<tr>
-<td><code>CalibrationStartOrStop</code></td>
-<td>Starts or stops calibration.</td>
-<td style="font-size:12px"><code>sensitivity</code>: Sensitivity value<br><code>threshold</code>: Threshold value</td>
-</tr>
-<tr>
-<td><code>AnnouncesAutoTestStartOrEnd</code></td>
-<td>Announces the start/end of an automated test.</td>
-<td style="font-size:12px"><code>bisStart</code>: True = test start, False = test end</td>
-</tr>
-<tr>
-<td><code>BATSwitchSETtoPC</code></td>
-<td>Switches the battery switch from SET to PC.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>BATSwitchUSBtoPC</code></td>
-<td>Switches the battery switch from USB to PC.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>RequestAudioFrequency</code></td>
-<td>Requests audio frequency measurement.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nMs</code>: Measurement interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestAudioStatusAndADCValue</code></td>
-<td>Requests audio status and ADC value.</td>
-<td style="font-size:12px"><code>nMs</code>: Response wait time (ms)</td>
-</tr>
-<tr>
-<td><code>RequestAudioStatusAndADCValuePeriodicallyNoti</code></td>
-<td>Receives periodic notifications of audio status and ADC value.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestAudioStatusPeriodicallyNoti</code></td>
-<td>Receives periodic notifications of audio status.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestCurrentPeriodicallyNoti</code></td>
-<td>Receives periodic notifications of current value.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestExtCurrentPeriodicallyNoti</code></td>
-<td>Receives periodic notifications of external current value.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestVoltagePeriodicallyNoti</code></td>
-<td>Receives periodic notifications of voltage value.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestKeyOutVoltagePeriodicallyNoti</code></td>
-<td>Receives periodic notifications of key output voltage.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestLCDStatus</code></td>
-<td>Requests LCD status.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nMs</code>: Response wait time (ms)</td>
-</tr>
-<tr>
-<td><code>RequestLCDIllumiSensorValue</code></td>
-<td>Requests LCD illumination sensor value.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nMs</code>: Response wait time (ms)</td>
-</tr>
-<tr>
-<td><code>RequestLCDStatusAndIllumiSensorValuePeriodicallyNoti</code></td>
-<td>Receives periodic notifications of LCD status and illumination sensor value.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestSoundFileInfo</code></td>
-<td>Requests sound file information.</td>
-<td style="font-size:12px"><code>nSoundType</code>: Sound type</td>
-</tr>
-<tr>
-<td><code>RequestSoundFileList</code></td>
-<td>Requests the sound file list.</td>
-<td style="font-size:12px"><code>nSoundType</code>: Sound type</td>
-</tr>
-<tr>
-<td><code>Read</code></td>
-<td>Reads data from the bench.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>Send</code></td>
-<td>Sends raw byte data to the bench.</td>
-<td style="font-size:12px"><code>listData</code>: Data list to send<br><code>nLen</code>: Data length</td>
-</tr>
-<tr>
-<td><code>WriteRawString</code></td>
-<td>Sends a raw string to the bench.</td>
-<td style="font-size:12px"><code>string</code>: String to send</td>
-</tr>
-<tr>
-<td><code>ReceiveStart</code></td>
-<td>Starts or stops bench data reception.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start receiving, False = stop receiving<br><code>queue</code>: Queue to store received data (optional)</td>
-</tr>
-<tr>
-<td><code>timer_compare</code></td>
-<td>Compares timer values.</td>
-<td style="font-size:12px"><code>Time_Init</code>: Start time<br><code>Time_Check</code>: Time to compare</td>
 </tr>
 </tbody>
 </table>
@@ -1226,29 +681,9 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td style="font-size:12px"><code>command</code>: Command to execute<br><code>expected</code>: Expected substring or full match value<br><code>match_mode</code>: Comparison mode: &#x27;contains&#x27; (substring) or &#x27;exact&#x27; (full match). Default: contains<br><code>timeout</code>: Max wait time in seconds. Default: 300</td>
 </tr>
 <tr>
-<td><code>RunCapture</code></td>
-<td>Executes a command in the background and immediately returns a &#x27;[BG_TASK:bg_x]&#x27; placeholder (non-blocking). The actual output can be retrieved later via the polling endpoint.</td>
-<td style="font-size:12px"><code>command</code>: Command to execute</td>
-</tr>
-<tr>
-<td><code>CheckCapture</code></td>
-<td>Executes a command in the background and returns a &#x27;[BG_TASK:bg_x]&#x27; placeholder. On completion, the server evaluates expected/match_mode to determine the final pass/fail.</td>
-<td style="font-size:12px"><code>command</code>: Command to execute<br><code>expected</code>: Expected string<br><code>match_mode</code>: &#x27;contains&#x27; or &#x27;exact&#x27;. Default: contains</td>
-</tr>
-<tr>
-<td><code>RunBackground</code></td>
-<td>Spawns a subprocess fire-and-forget. Returns the PID but the output cannot be retrieved.</td>
-<td style="font-size:12px"><code>command</code>: Command to execute. e.g. &#x27;notepad&#x27;, &#x27;python script.py&#x27;</td>
-</tr>
-<tr>
 <td><code>Kill</code></td>
 <td>Terminates a background process.</td>
 <td style="font-size:12px"><code>pid</code>: PID of the process to terminate</td>
-</tr>
-<tr>
-<td><code>ListBackground</code></td>
-<td>Returns the list of running background processes.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 </tbody>
 </table>
@@ -1278,29 +713,9 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td style="font-size:12px"><code>command</code>: bash command to execute<br><code>keywords</code>: Comma-separated keyword list. e.g. &#x27;OK,ready,done&#x27;<br><code>logic</code>: &#x27;and&#x27; (all keywords required) or &#x27;or&#x27; (any one). Default: and<br><code>timeout</code>: Max wait time in seconds. Default: 30</td>
 </tr>
 <tr>
-<td><code>RunCapture</code></td>
-<td>Executes a command in the background and immediately returns a &#x27;[BG_TASK:bg_x]&#x27; placeholder (non-blocking).</td>
-<td style="font-size:12px"><code>command</code>: Command to execute</td>
-</tr>
-<tr>
-<td><code>CheckCapture</code></td>
-<td>Executes a command in the background and returns a &#x27;[BG_TASK:bg_x]&#x27; placeholder. On completion, the server evaluates expected/match_mode for final pass/fail.</td>
-<td style="font-size:12px"><code>command</code>: Command to execute<br><code>expected</code>: Expected string<br><code>match_mode</code>: &#x27;contains&#x27; or &#x27;exact&#x27;. Default: contains</td>
-</tr>
-<tr>
-<td><code>RunBackground</code></td>
-<td>Spawns a bash subprocess fire-and-forget. Detaches via setsid so it survives caller termination. Returns the PID but output cannot be retrieved.</td>
-<td style="font-size:12px"><code>command</code>: bash command to execute. e.g. &#x27;sleep 60&#x27;, &#x27;python3 script.py&#x27;</td>
-</tr>
-<tr>
 <td><code>Kill</code></td>
 <td>Terminates a background process (SIGKILL).</td>
 <td style="font-size:12px"><code>pid</code>: PID of the process to terminate</td>
-</tr>
-<tr>
-<td><code>ListBackground</code></td>
-<td>Returns the list of running background processes.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 </tbody>
 </table>
