@@ -185,7 +185,7 @@ class SCAR:
 
         # ── 연결 직후 UI 자동화 (버전 선택 + bench 토글) ──────
         # setup 이 성공(_setup_done)했고 할 일이 있을 때만. 실패해도 등록 자체는 유지(경고만).
-        if self.post_connect and self._setup_done and (self.ui_version or self.start_services or self.bench_toggle):
+        if self.post_connect and self._setup_done and (self.ui_version or self.ends or self.start_services or self.bench_toggle):
             pc = self._post_connect()
             msg = f"{msg}\n{pc}"
             self._setup_last_msg = msg
@@ -538,6 +538,32 @@ class SCAR:
             return f"FAIL: bad JSON from /list/ends (status={resp.status_code})"
         return "\n".join(versions) if versions else "(no versions)"
 
+    def _resolve_ui_version(self) -> str:
+        """netns ENDS(self.ends, 예: 'FaceStep1_2025_R10') → UI ENDS(예: '2025_r10').
+
+        상단 'ENDS 버전' 필드 하나로 UI 버전까지 처리하기 위함. netns 와 UI 의 ENDS 표기가
+        달라(FaceStep1_ 접두어/대소문자) /list/ends 실제 목록과 매칭해 정확한 값을 고른다.
+        매칭 실패 시 정규화값(접두어 제거+소문자) 반환. ends 비어있으면 "".
+        """
+        raw = (self.ends or "").strip()
+        if not raw:
+            return ""
+        norm = raw.lower()
+        if norm.startswith("facestep1_"):
+            norm = norm[len("facestep1_"):]
+        versions = []
+        resp = self._control.get(self._control.base_url + "/list/ends")
+        if resp is not None:
+            try:
+                versions = resp.json().get("versions", []) or []
+            except ValueError:
+                versions = []
+        for v in versions:
+            vl = str(v).lower()
+            if vl == norm or vl == raw.lower() or raw.lower().endswith(vl):
+                return v
+        return norm
+
     def SelectVersion(self, version: str = "") -> str:
         """POST /config {ends:<version>} — UI 버전(ENDS) 선택.
 
@@ -741,8 +767,10 @@ class SCAR:
         if not self._control_ready():
             log.append("  FAIL: 제어 백엔드(3000) 미응답 — 버전/서비스/토글 건너뜀")
             return "\n".join(log)
-        if self.ui_version:
-            log.append("  [version] " + self.SelectVersion(self.ui_version))
+        # UI 버전: 명시 ui_version 우선, 없으면 상단 ENDS 버전(self.ends)에서 도출.
+        ui_ver = self.ui_version or self._resolve_ui_version()
+        if ui_ver:
+            log.append(f"  [version] (ends={self.ends!r}→{ui_ver}) " + self.SelectVersion(ui_ver))
         for svc in self.start_services:
             log.append(f"  [service] {svc['service']}@{svc['ecu']}: "
                        + self.StartService(svc["service"], svc["ecu"]))

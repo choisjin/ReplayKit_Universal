@@ -411,7 +411,7 @@ def list_available_modules() -> list[dict]:
              #   기본값은 start_services 기본(PCU_PROXY_FrontEnd_PIU_Mst 서비스)에 맞춘 base ECU 셋.
              {"name": "stub_ecus",
               "label": "stub_ecus (netns ECU, 콤마 구분). /start의 _PIU_Mst 접미사 빼고 base 이름 사용",
-              "type": "text", "default": "PIU_Mst, PCU_PROXY_FrontEnd"},
+              "type": "text", "default": "PIU_Mst, PCU_PROXY_FrontEnd", "hidden": True},
              {"name": "sudo_password", "label": "sudo 비밀번호 (passwordless 미설정 시 필수)",
               "type": "password", "default": ""},
              # ── 재기동 스크립트 (scar.sh) ──
@@ -444,15 +444,13 @@ def list_available_modules() -> list[dict]:
               "default": "/home/scar", "hidden": True},
              # ── 연결 직후 UI 자동화 (port 3000 제어 백엔드) ──
              #   UI 정적 프론트는 8081, 실제 제어 REST 는 3000. 버전선택/토글은 3000 으로 간다.
-             #   ui_version 은 options_endpoint 로 /list/ends 를 live 조회해 드롭다운 구성(폴백: 자유입력).
-             {"name": "ui_version", "label": "UI 버전 선택 (ENDS, 비우면 건너뜀)",
-              "type": "select", "default": "", "options": [],
-              "options_endpoint": "/api/device/scar/versions"},
+             #   UI 버전(ENDS)은 별도 필드 없이 상단 'ENDS 버전'(ends)에서 도출(_resolve_ui_version):
+             #   netns ENDS(FaceStep1_2025_R10) → /list/ends 매칭 → UI ENDS(2025_r10).
              # 토글 전에 자동 start 할 SOME/IP 서비스 (UI 의 'Simulated ECU target' + 'Service to
              #   simulate/register' → Start 와 동일). bench 토글은 InfrastructureGotoSleep 등이 떠
              #   있어야 유지되므로 토글보다 먼저 순서대로 start. 해당 ECU 는 stub_ecus 에도 포함돼야 함.
              {"name": "start_services", "label": "연결 후 자동 start할 서비스 (토글 전, 순서대로)",
-              "type": "object_list",
+              "type": "object_list", "hidden": True,
               "default_items": [
                   {"ecu": "PCU_PROXY_FrontEnd_PIU_Mst", "service": "VehicleUtcTime"},
                   {"ecu": "PCU_PROXY_FrontEnd_PIU_Mst", "service": "InfrastructureGotoSleep"},
@@ -464,7 +462,7 @@ def list_available_modules() -> list[dict]:
                    "default": ""},
               ]},
              {"name": "bench_toggle", "label": "연결 후 활성화할 Bench 토글 이름 (비우면 건너뜀)",
-              "type": "text", "default": "Wake up/Sleep minimal CDC/SA"},
+              "type": "text", "default": "Wake up/Sleep minimal CDC/SA", "hidden": True},
              {"name": "control_base", "label": "SCAR UI 제어 API (port 3000)", "type": "text",
               "default": "http://localhost:3000", "hidden": True},
              {"name": "post_connect", "label": "연결 직후 버전선택+토글 자동 실행", "type": "select",
