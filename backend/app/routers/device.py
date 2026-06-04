@@ -1292,9 +1292,17 @@ async def connect_registered_devices(req: ConnectRegisteredRequest):
     """등록된 디바이스를 연결. device_ids가 비어있으면 전체 연결."""
     all_devices = dm.list_all()
     if req.device_ids:
+        # 명시적으로 지정된 디바이스는 그대로 연결 (SCAR/TH 도 개별 선택 시 연결 허용).
         targets = [d for d in all_devices if d.id in req.device_ids]
     else:
-        targets = all_devices
+        # 전체 연결(빈 목록=일괄/자동): SCAR/TH 등은 제외 — 재시작/일괄 연결로 자동 연결되지 않게,
+        # 수동으로 개별 선택해야만 연결. (연결 시 netns/UI/cuttlefish 무거운 Setup + cvd-ebr 영향)
+        from ..services.module_service import MODULES_NO_STARTUP_AUTOCONNECT
+        targets = [
+            d for d in all_devices
+            if not (d.type == "module"
+                    and d.info.get("module") in MODULES_NO_STARTUP_AUTOCONNECT)
+        ]
 
     results = []
     for dev in targets:
