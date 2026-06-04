@@ -2021,7 +2021,40 @@ class DeviceManager:
 
     async def add_module_device(self, address: str, module: str, connect_type: str = "none",
                                name: str = "", extra_fields: dict | None = None, device_id: str = "") -> ManagedDevice:
-        """모듈 디바이스 등록만 (연결은 connect_device_by_id로 별도 수행)."""
+        """모듈 디바이스 등록만 (연결은 connect_device_by_id로 별도 수행).
+
+        connect_type="none" 모듈(TH/SCAR 등)은 인스턴스가 모듈명 기준 1개로 공유(_instances[module])
+        되므로 디바이스도 1개만 의미가 있다. 같은 모듈의 none 디바이스가 이미 있으면 새로 만들지 않고
+        그것을 재사용(설정 갱신 + 캐시 인스턴스 무효화)해서 중복 등록(TH_1/TH_2)을 막는다.
+        — 중복이 생기면 startup/재연결 시 두 디바이스가 한 인스턴스를 두고 충돌해
+          "connected 인데 동작 안 함" / "th 디렉토리 못 찾음" 이 발생했다.
+        """
+        if connect_type == "none" and not device_id:
+            dup = next(
+                (d for d in self._devices.values()
+                 if d.type == "module"
+                 and d.info.get("module") == module
+                 and (d.info.get("connect_type") or "none") == "none"),
+                None,
+            )
+            if dup is not None:
+                if extra_fields:
+                    dup.info.update(extra_fields)
+                if name:
+                    dup.name = name
+                if address:
+                    dup.address = address
+                dup.status = "disconnected"
+                self._save_auxiliary_devices()
+                # 설정(th_home 등)이 바뀌었을 수 있으니 공유 인스턴스를 버려 재연결 시 새 kwargs 로 재생성.
+                try:
+                    from .module_service import reset_instance
+                    reset_instance(module)
+                except Exception as e:
+                    logger.debug("reset_instance(%s) on dedup failed: %s", module, e)
+                logger.info("Reusing existing '%s' module device %s (dedup, connect_type=none)", module, dup.id)
+                return dup
+
         final_id = device_id or self._generate_device_id("module", module)
         display_name = name or (f"{module} ({address})" if address else module)
         info: dict = {"module": module, "connect_type": connect_type}
