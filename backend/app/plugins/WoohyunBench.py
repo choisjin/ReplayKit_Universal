@@ -47,13 +47,17 @@ def _payload_size_to_dlc(payload_size: int) -> int:
 class WoohyunBench:
     """CCIC 우현벤치 UDP 제어 플러그인 (전원 + CAN FD)."""
 
-    def __init__(self, host: str = "", udp_port: int = DEFAULT_UDP_PORT, signal_file: str = ""):
+    def __init__(self, host: str = "", udp_port: int = DEFAULT_UDP_PORT,
+                 signal_file: str = "", signal_file_AVN: str = ""):
         self._host = host
         self._udp_port = int(udp_port) if udp_port else DEFAULT_UDP_PORT
         self._signal_file = (signal_file or "").strip()
+        self._signal_file_AVN = (signal_file_AVN or "").strip()
         self._sock = None
         # CAN FD 위임 객체. Connect 시 생성 + 이 플러그인의 _sock을 공유 바인딩.
         self._canfd = None
+        # AVN용 CAN FD 인스턴스 (UDP_CANFD_AVN, signal list 방식, can_type 선택 가능)
+        self._canfd_AVN = None
 
     # ------------------------------------------------------------------
     # Connection
@@ -240,15 +244,16 @@ class WoohyunBench:
             logger.error("WoohyunBench SendCanFd failed: %s", e)
             return f"FAIL: SendCanFd: {e}"
 
-    def SendAvnCan(self, msg_id, payload_hex: str = "") -> str:
-        """AVN 채널 Raw CAN 프레임 송신 (CANTYPE.EXT, send_can.py 동일 동작).
+    def SendAvnCan(self, msg_id, type, payload_hex: str = "") -> str:
+        """AVN 채널 Raw CAN 프레임 송신 (send_can.py TARGET="AVN" 동일 동작).
 
-        send_can.py의 TARGET="AVN" 과 완전히 동일한 패킷 포맷.
-        frame_byte = 0x20 | DLC  (Extended Frame Flag)
+        목적지를 항상 AVN 채널(0x03 헤더)로 고정하고, 프레임 타입은 type 인자로
+        독립 지정한다(표준 0x33E와 확장 1004001을 같은 AVN 채널로 송신 가능).
         msg_id는 '0x' 접두 유무와 무관하게 항상 hex로 파싱.
 
         Args:
             msg_id: CAN ID. 정수 또는 문자열("0x414", "414", "1004001" 모두 hex로 해석).
+            type: 프레임 타입 — "STA"(표준) / "EXT"(확장 프레임) / "FD"(CAN FD).
             payload_hex: 페이로드. 다음 형식 모두 허용:
               - 쉼표 구분 hex: "00,00,00,00,00,00,00,00"
               - 공백 구분:     "00 00 00 00 00 00 00 00"
@@ -259,8 +264,8 @@ class WoohyunBench:
         try:
             cid = self._parse_can_id_hex(msg_id)
             payload = self._parse_payload(payload_hex)
-            self._send_canfd_raw(cid, payload, can_type="EXT")
-            return f"OK: SendAvnCan ID=0x{cid:X} ({len(payload)}B, EXT, x5@200ms)"
+            self._send_canfd_raw(cid, payload, can_type=type, target_ecu="AVN")
+            return f"OK: SendAvnCan ID=0x{cid:X} ({len(payload)}B, {type}, x5@200ms)"
         except Exception as e:
             logger.error("WoohyunBench SendAvnCan failed: %s", e)
             return f"FAIL: SendAvnCan: {e}"
@@ -292,15 +297,23 @@ class WoohyunBench:
 
     def _send_canfd_raw(self, can_id: int, payload: bytearray, fd_mode: bool = False,
                         repeat: int = 5, interval_sec: float = 0.2,
-                        can_type: str = "STA") -> None:
+                        can_type: str = "STA", target_ecu: str = "CLUSTER") -> None:
         """벤치 UDP_CANFD_SEND과 동일한 포맷으로 raw CAN FD 프레임 송신.
 
         포맷: HEADER(6) + LEN(2) + CAN_ID(4) + frame_byte(1) + reserved(0x00,1) + payload
         주기 송신: 벤치/ECU가 CAN 신호를 안정적으로 잡도록 5회 × 200ms 반복.
 
-        can_type 우선순위 (fd_mode는 레거시 호환용으로 유지):
-          "FD"  → frame_byte 0x80 | DLC  (CAN FD, Cluster 계열)
-          "EXT" → frame_byte 0x20 | DLC  (확장 프레임, AVN 계열)
+        목적지 채널(target_ecu)과 프레임 타입(can_type)을 완전히 분리한다.
+        과거에는 프레임 타입이 채널을 강제로 결정해(STA→Cluster) AVN으로 보내야 할
+        표준 프레임(0x33E)이 Cluster로 잘못 라우팅되는 버그가 있었다.
+
+        target_ecu: 목적지 채널 헤더 선택.
+          "AVN"     → 0x03 헤더 (CAN D)
+          "CLUSTER" → 0x04 헤더 (CAN C, 기본값)
+
+        can_type: frame_byte(프레임 타입)만 결정 (채널과 무관).
+          "FD"  → frame_byte 0x80 | DLC  (CAN FD)
+          "EXT" → frame_byte 0x20 | DLC  (확장 프레임)
           "STA" → frame_byte 0x00 | len  (표준 프레임, 기본값)
         """
         if not self._sock:
@@ -311,17 +324,21 @@ class WoohyunBench:
         if fd_mode and ct == "STA":
             ct = "FD"
 
+        # 목적지 채널(Header) — 프레임 타입과 독립적으로 결정
+        if str(target_ecu).upper() == "AVN":
+            send_header = CANFD_SEND_PACKET_HEADER_AVN      # 0x03 — CAN D (AVN)
+        else:
+            send_header = CANFD_SEND_PACKET_HEADER_CLUSTER  # 0x04 — CAN C (Cluster)
+
+        # 프레임 타입(frame_byte) — 채널과 독립적으로 결정
         if ct == "FD":
             dlc = _payload_size_to_dlc(len(payload))
             can_frame = 0x80 | (dlc & 0x7F)
-            send_header = CANFD_SEND_PACKET_HEADER_CLUSTER  # 0x04 — CAN C (Cluster)
         elif ct == "EXT":
             dlc = _payload_size_to_dlc(len(payload))
             can_frame = 0x20 | (dlc & 0x7F)
-            send_header = CANFD_SEND_PACKET_HEADER_AVN      # 0x03 — CAN D (AVN)
         else:  # STA
             can_frame = len(payload) & 0x7F
-            send_header = CANFD_SEND_PACKET_HEADER_CLUSTER  # 기본: 0x04
 
         can_id_bytes = [
             (can_id >> 24) & 0xFF,

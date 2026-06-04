@@ -1195,9 +1195,10 @@
         }
       },
       "SendAvnCan": {
-        "description": "AVN 채널 Raw CAN 프레임 송신. send_can.py TARGET=AVN 과 동일 동작 (CANTYPE.EXT, frame_byte=0x20|DLC). 200ms × 5회 반복.",
+        "description": "AVN 채널(0x03 헤더) Raw CAN 프레임 송신. 목적지는 항상 AVN으로 고정하고 프레임 타입은 type 인자로 지정합니다(표준 0x33E·확장 1004001 모두 AVN 채널로 송신). 200ms × 5회 반복.",
         "params": {
-          "msg_id": "CAN ID (정수 또는 hex 문자열, 예: '0x414', '0x11C47601')",
+          "msg_id": "CAN ID (정수 또는 hex 문자열, 예: '0x33E', '0x414', '1004001')",
+          "type": "프레임 타입: 'STA'(표준 프레임) / 'EXT'(확장 프레임) / 'FD'(CAN FD)",
           "payload_hex": "페이로드 hex 바이트 (공백/쉼표/대괄호 허용, 예: '00,00,00,00,00,00,00,00')"
         }
       },

@@ -1145,9 +1145,10 @@
         }
       },
       "SendAvnCan": {
-        "description": "Sends a raw CAN frame on the AVN channel. Identical to send_can.py TARGET=AVN (CANTYPE.EXT, frame_byte = 0x20 | DLC). Repeats 5 times at 200 ms.",
+        "description": "Sends a raw CAN frame on the AVN channel (0x03 header). The destination is always fixed to AVN while the frame type is chosen via the type argument (both standard 0x33E and extended 1004001 are sent on the AVN channel). Repeats 5 times at 200 ms.",
         "params": {
-          "msg_id": "CAN ID (integer or hex string, e.g. '0x414', '0x11C47601')",
+          "msg_id": "CAN ID (integer or hex string, e.g. '0x33E', '0x414', '1004001')",
+          "type": "Frame type: 'STA' (standard frame) / 'EXT' (extended frame) / 'FD' (CAN FD)",
           "payload_hex": "Payload hex bytes (spaces/commas/brackets allowed, e.g. '00,00,00,00,00,00,00,00')"
         }
       },
