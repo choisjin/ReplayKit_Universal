@@ -138,7 +138,6 @@
       <a href="#mod-SmartBench" class="toc-h3">SmartBench</a>
       <a href="#mod-WoohyunBench" class="toc-h3">WoohyunBench</a>
       <a href="#cat-can" class="toc-h2">CAN 통신</a>
-      <a href="#mod-CANOE" class="toc-h3">CANOE</a>
       <a href="#mod-CANAT" class="toc-h3">CANAT</a>
       <a href="#cat-comm" class="toc-h2">통신 (시리얼/SSH/UART/DLT)</a>
       <a href="#mod-SerialLogging" class="toc-h3">SerialLogging</a>
@@ -146,6 +145,9 @@
       <a href="#mod-DLTLogging" class="toc-h3">DLTLogging</a>
       <a href="#cat-system" class="toc-h2">시스템 & 유틸리티</a>
       <a href="#mod-CMD" class="toc-h3">CMD</a>
+      <a href="#cat-etc" class="toc-h2">기타</a>
+      <a href="#mod-SHELL" class="toc-h3">SHELL</a>
+      <a href="#mod-HKMC6th" class="toc-h3">HKMC6th</a>
     </nav>
   </aside>
 
@@ -160,29 +162,32 @@
     </div>
 
     <h2 id="overview">전체 모듈 목록</h2>
-    <p>총 <strong>9개</strong> 모듈, <strong>205개</strong> 함수가 등록되어 있습니다.</p>
+    <p>총 <strong>10개</strong> 모듈, <strong>222개</strong> 함수가 등록되어 있습니다.</p>
     <table>
       <thead><tr><th>모듈</th><th>설명</th><th>함수 수</th></tr></thead>
       <tbody>
-        <tr><td><a href="#mod-CANOE"><strong>CANOE</strong></a></td><td>Vector CANoe 시뮬레이션 소프트웨어의 시작/중지, 환경변수/시스템변수 설정을 제어하는 모듈</td><td style="text-align:center">6</td></tr>
-<tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>CANat 하드웨어를 통해 CAN 버스 메시지를 송수신하는 모듈</td><td style="text-align:center">7</td></tr>
+        <tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>CANat 하드웨어를 통해 CAN 버스 메시지를 송수신하는 모듈</td><td style="text-align:center">7</td></tr>
 <tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>시리얼 연결된 QE 테스트 벤치의 릴레이, 전원, 센서, 오디오, LCD, 버튼, USB 등을 종합 제어하는 모듈</td><td style="text-align:center">117</td></tr>
 <tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>SSH로 원격 장비에 접속하여 명령 실행, 파일 전송을 수행하는 모듈</td><td style="text-align:center">7</td></tr>
 <tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>DLT 데몬에 TCP 직접 연결하여 로그를 캡처·저장하고 키워드 PASS/FAIL 판정하는 모듈 (GUI 불필요)</td><td style="text-align:center">18</td></tr>
-<tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>시리얼 포트에 연결하여 로그를 캡처·저장하고 키워드 검출하는 모듈.
+<tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>시리얼 포트의 로그를 캡처·저장하고 키워드 검출하는 모듈.
 
-**⚠️ 사용법: StartLogging과 StopLogging은 반드시 한 셋트로 사용해야 합니다.**
-- StartLogging만 호출하고 StopLogging을 누락하면: 로그가 파일로 저장되지 않고, 시리얼 포트 연결이 종료되지 않아 다음 실행에서 포트 점유 오류가 발생할 수 있습니다.
-- 시나리오의 시작 부분에 StartLogging, 끝 부분에 StopLogging을 배치하여 한 쌍으로 운영하세요.
-- 시나리오 중간에 오류가 나도 cleanup이 자동으로 StopLogging을 호출해 포트를 닫지만, 정상 흐름에서는 명시적으로 StopLogging을 두는 것이 권장됩니다.
+**연결 수명 주기**: 시리얼 포트의 open/close는 Device 탭의 Connect/Disconnect가 관리합니다. StartLogging은 포트가 이미 열려 있으면 재open하지 않고 캡처 세션만 시작하므로, connect 시 설정이 초기화되는 장비도 안전하게 사용할 수 있습니다.
+
+**⚠️ 사용법: StartLogging과 StopLogging은 한 셋트로 사용하세요.**
+- StartLogging만 호출하고 StopLogging을 누락하면 메모리 버퍼가 파일로 저장되지 않습니다.
+- StopLogging은 캡처 세션을 종료하지만 **포트 연결은 그대로 유지**합니다. 포트를 닫고 싶다면 Device 탭에서 Disconnect 하세요.
+- 시나리오가 비정상 종료되어도 cleanup이 Disconnect 시 미저장 로그를 자동 저장합니다.
 
 표준 사용 패턴:
-  1) StartLogging()                              ← 시나리오 첫 스텝
+  1) StartLogging()                              ← 시나리오 첫 스텝 (캡처 시작, 포트는 Device 탭에서 미리 Connect)
   2) SendCommand / SendCommand_*_on_keyword ...  ← 중간 스텝들
-  3) StopLogging()                               ← 시나리오 마지막 스텝 (로그 파일 저장 + 포트 해제)</td><td style="text-align:center">5</td></tr>
+  3) StopLogging()                               ← 시나리오 마지막 스텝 (로그 파일 저장 + 캡처 종료, 포트는 유지)</td><td style="text-align:center">5</td></tr>
 <tr><td><a href="#mod-SmartBench"><strong>SmartBench</strong></a></td><td>TCP 소켓으로 Smart Bench 장비의 전원, 버튼, 전류, LED를 제어하는 모듈</td><td style="text-align:center">15</td></tr>
-<tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>UDP 통신으로 차량 전원(IGN/ACC/배터리) 제어 + CAN FD 신호 송신을 지원하는 통합 테스트 벤치</td><td style="text-align:center">23</td></tr>
-<tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Windows 명령 프롬프트(CMD) 명령을 실행하는 모듈. 외부 프로그램 실행이나 시스템 명령에 사용</td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>UDP 통신으로 차량 전원(IGN/ACC/배터리) 제어 + CAN FD 신호 송신을 지원하는 통합 테스트 벤치</td><td style="text-align:center">25</td></tr>
+<tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Windows 명령 프롬프트(CMD) 명령을 실행하는 모듈. 외부 프로그램 실행이나 시스템 명령에 사용</td><td style="text-align:center">8</td></tr>
+<tr><td><a href="#mod-SHELL"><strong>SHELL</strong></a></td><td>Linux/macOS bash 명령을 실행하는 모듈. CMD 의 Linux 대응. 외부 프로그램 실행이나 시스템 명령에 사용</td><td style="text-align:center">8</td></tr>
+<tr><td><a href="#mod-HKMC6th"><strong>HKMC6th</strong></a></td><td>TCP 소켓 프로토콜로 화면 캡처/터치/스와이프/HW 키 제어. 연결된 hkmc_agent 디바이스의 HKMC6thService 함수를 그대로 호출합니다.</td><td style="text-align:center">12</td></tr>
       </tbody>
     </table>
 
@@ -977,8 +982,18 @@
 </tr>
 <tr>
 <td><code>SendCanFd</code></td>
-<td>Raw CAN FD 프레임을 직접 송신합니다 (신호 정의 불필요, 저수준 디버깅용).</td>
-<td style="font-size:12px"><code>can_id</code>: CAN ID (정수, 예: 0x411 → 1041)<br><code>payload_hex</code>: 페이로드 (공백/쉼표 허용 hex 문자열, 예: &#x27;01 02 03&#x27;)</td>
+<td>Raw CAN FD 프레임을 직접 송신합니다 (신호 정의 불필요, 저수준 디버깅용). 200ms × 5회 반복.</td>
+<td style="font-size:12px"><code>can_id</code>: CAN ID (정수 또는 hex 문자열, 예: &#x27;0x448&#x27;)<br><code>payload_hex</code>: 페이로드 (공백/쉼표/대괄호 허용, 예: &#x27;01,02,03&#x27; 또는 &#x27;01 02 03&#x27;)<br><code>can_type</code>: 프레임 타입: &#x27;STA&#x27;(표준, 기본값) / &#x27;EXT&#x27;(확장 프레임, AVN) / &#x27;FD&#x27;(CAN FD, Cluster)</td>
+</tr>
+<tr>
+<td><code>SendAvnCan</code></td>
+<td>AVN 채널(0x03 헤더) Raw CAN 프레임 송신. 목적지는 항상 AVN으로 고정하고 프레임 타입은 type 인자로 지정합니다(표준 0x33E·확장 1004001 모두 AVN 채널로 송신). 200ms × 5회 반복.</td>
+<td style="font-size:12px"><code>msg_id</code>: CAN ID (정수 또는 hex 문자열, 예: &#x27;0x33E&#x27;, &#x27;0x414&#x27;, &#x27;1004001&#x27;)<br><code>type</code>: 프레임 타입: &#x27;STA&#x27;(표준 프레임) / &#x27;EXT&#x27;(확장 프레임) / &#x27;FD&#x27;(CAN FD)<br><code>payload_hex</code>: 페이로드 hex 바이트 (공백/쉼표/대괄호 허용, 예: &#x27;00,00,00,00,00,00,00,00&#x27;)</td>
+</tr>
+<tr>
+<td><code>SendClusterCan</code></td>
+<td>Cluster 채널 Raw CAN FD 프레임 송신. send_can.py TARGET=CLUSTER 과 동일 동작 (CANTYPE.FD, frame_byte=0x80|DLC). 200ms × 5회 반복.</td>
+<td style="font-size:12px"><code>msg_id</code>: CAN ID (정수 또는 hex 문자열, 예: &#x27;0x65&#x27;)<br><code>payload_hex</code>: 페이로드 hex 바이트 (공백/쉼표/대괄호 허용, 예: &#x27;00,00,00,00,00,00,00,00&#x27;)</td>
 </tr>
 <tr>
 <td><code>ReinitCanFd</code></td>
@@ -991,44 +1006,6 @@
 
 
 <h2 id="cat-can">CAN 통신</h2>
-
-<h3 id="mod-CANOE">CANOE</h3>
-<div class="callout callout-info">CANoe 제어 — Vector CANoe 시뮬레이션 소프트웨어의 시작/중지, 환경변수/시스템변수 설정을 제어하는 모듈</div>
-<table>
-<thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
-<tbody>
-<tr>
-<td><code>open_simulation</code></td>
-<td>CANoe 시뮬레이션을 엽니다 (.cfg 파일 로드).</td>
-<td style="font-size:12px"><code>cfgname</code>: CANoe 설정 파일(.cfg) 경로. 예: &#x27;C:/canoe/project.cfg&#x27;</td>
-</tr>
-<tr>
-<td><code>close_simulation</code></td>
-<td>CANoe 시뮬레이션을 닫고 프로그램을 종료합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>start_Measurement</code></td>
-<td>CANoe 측정(Measurement)을 시작합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>stop_Measurement</code></td>
-<td>CANoe 측정(Measurement)을 중지합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>get_EnvVar</code></td>
-<td>CANoe 환경 변수 값을 읽습니다.</td>
-<td style="font-size:12px"><code>var</code>: 환경 변수 이름</td>
-</tr>
-<tr>
-<td><code>set_EnvVar</code></td>
-<td>CANoe 환경 변수 값을 설정합니다.</td>
-<td style="font-size:12px"><code>var</code>: 환경 변수 이름<br><code>value</code>: 설정할 값 (숫자)</td>
-</tr>
-</tbody>
-</table>
 
 <h3 id="mod-CANAT">CANAT</h3>
 <div class="callout callout-info">CANat 디바이스 — CANat 하드웨어를 통해 CAN 버스 메시지를 송수신하는 모듈</div>
@@ -1078,36 +1055,38 @@
 <h2 id="cat-comm">통신 (시리얼/SSH/UART/DLT)</h2>
 
 <h3 id="mod-SerialLogging">SerialLogging</h3>
-<div class="callout callout-info">시리얼 로깅 — 시리얼 포트에 연결하여 로그를 캡처·저장하고 키워드 검출하는 모듈.
+<div class="callout callout-info">시리얼 로깅 — 시리얼 포트의 로그를 캡처·저장하고 키워드 검출하는 모듈.
 
-**⚠️ 사용법: StartLogging과 StopLogging은 반드시 한 셋트로 사용해야 합니다.**
-- StartLogging만 호출하고 StopLogging을 누락하면: 로그가 파일로 저장되지 않고, 시리얼 포트 연결이 종료되지 않아 다음 실행에서 포트 점유 오류가 발생할 수 있습니다.
-- 시나리오의 시작 부분에 StartLogging, 끝 부분에 StopLogging을 배치하여 한 쌍으로 운영하세요.
-- 시나리오 중간에 오류가 나도 cleanup이 자동으로 StopLogging을 호출해 포트를 닫지만, 정상 흐름에서는 명시적으로 StopLogging을 두는 것이 권장됩니다.
+**연결 수명 주기**: 시리얼 포트의 open/close는 Device 탭의 Connect/Disconnect가 관리합니다. StartLogging은 포트가 이미 열려 있으면 재open하지 않고 캡처 세션만 시작하므로, connect 시 설정이 초기화되는 장비도 안전하게 사용할 수 있습니다.
+
+**⚠️ 사용법: StartLogging과 StopLogging은 한 셋트로 사용하세요.**
+- StartLogging만 호출하고 StopLogging을 누락하면 메모리 버퍼가 파일로 저장되지 않습니다.
+- StopLogging은 캡처 세션을 종료하지만 **포트 연결은 그대로 유지**합니다. 포트를 닫고 싶다면 Device 탭에서 Disconnect 하세요.
+- 시나리오가 비정상 종료되어도 cleanup이 Disconnect 시 미저장 로그를 자동 저장합니다.
 
 표준 사용 패턴:
-  1) StartLogging()                              ← 시나리오 첫 스텝
+  1) StartLogging()                              ← 시나리오 첫 스텝 (캡처 시작, 포트는 Device 탭에서 미리 Connect)
   2) SendCommand / SendCommand_*_on_keyword ...  ← 중간 스텝들
-  3) StopLogging()                               ← 시나리오 마지막 스텝 (로그 파일 저장 + 포트 해제)</div>
+  3) StopLogging()                               ← 시나리오 마지막 스텝 (로그 파일 저장 + 캡처 종료, 포트는 유지)</div>
 <table>
 <thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
 <tbody>
 <tr>
 <td><code>StartLogging</code></td>
-<td>시리얼 연결 + 캡처 시작 (메모리만, 파일 저장 없음). 뷰어 모달이 자동 오픈됩니다. **리턴 시점에 포트가 안정화되고 capture 스레드가 ready 상태**라 다음 스텝의 SendCommand가 씹히지 않음.
+<td>시리얼 캡처 시작 (메모리만, 파일 저장 없음). 뷰어 모달이 자동 오픈됩니다. **포트가 이미 열려 있으면 재연결 없이 캡처 세션만 시작**하므로 connect 시 설정이 초기화되는 장비도 안전합니다. 리턴 시점에 capture 스레드가 ready 상태라 다음 스텝의 SendCommand가 씹히지 않습니다.
 
-**⚠️ 반드시 StopLogging과 한 셋트로 사용하세요.** StopLogging이 호출되어야 메모리 버퍼가 파일로 저장되고 시리얼 포트가 정상적으로 해제됩니다. StopLogging 누락 시 로그가 디스크에 저장되지 않고 포트가 점유 상태로 남습니다.</td>
-<td style="font-size:12px"><code>settle_ms</code>: 포트 open 후 안정화 대기(ms). 기본 500. USB-Serial 어댑터 reset/buffer settle 동안 다음 스텝이 씹히지 않게 확보. Arduino처럼 DTR-reset되는 보드는 1500~2000으로 늘리고, 빠른 산업용 시리얼은 100~200까지 낮출 수 있음.</td>
+**⚠️ 반드시 StopLogging과 한 셋트로 사용하세요.** StopLogging이 호출되어야 메모리 버퍼가 .log 파일로 저장됩니다.</td>
+<td style="font-size:12px"><code>settle_ms</code>: 포트 open 후 안정화 대기(ms). 기본 500. **포트가 이미 열려 있으면 이 대기는 스킵됨.** 첫 open에서만 사용되며, USB-Serial 어댑터 reset/buffer settle 동안 다음 스텝이 씹히지 않게 확보. Arduino처럼 DTR-reset되는 보드는 1500~2000으로 늘릴 수 있음.</td>
 </tr>
 <tr>
 <td><code>StopLogging</code></td>
-<td>시리얼 캡처 종료 + 메모리 버퍼를 파일로 일괄 저장 + 시리얼 포트 해제. 자동 경로 또는 지정 경로로 저장.
+<td>메모리 버퍼를 파일로 일괄 저장 + 캡처 세션 종료. **시리얼 포트는 그대로 유지** — 후속 SendCommand 등이 디바이스를 재초기화하지 않습니다. 포트를 닫고 싶다면 Device 탭에서 Disconnect 하세요.
 
 **⚠️ StartLogging과 반드시 짝으로 호출하세요.** 이 함수가 호출되어야:
   • 메모리에 누적된 로그가 .log 파일로 디스크에 저장됨
-  • 시리얼 포트 연결이 정상적으로 닫혀 다음 실행에서 재사용 가능
   • capture 스레드가 정리되어 리소스 누수 방지
-파일 저장 단계에서 예외가 발생해도 finally에서 포트 해제는 무조건 수행됩니다.</td>
+  • 다음 StartLogging이 새 세션으로 시작 가능
+파일 저장 단계에서 예외가 발생해도 finally에서 캡처 정리는 무조건 수행됩니다.</td>
 <td style="font-size:12px"><code>save_path</code>: 저장 파일 경로. 빈 값이면 자동 (재생 중: run_dir/logs/serial_*.log, 스텝 테스트: backend/results/Temp_logs/serial_*.log)</td>
 </tr>
 <tr>
@@ -1281,12 +1260,17 @@
 <tr>
 <td><code>Run</code></td>
 <td>명령어를 실행하고 완료될 때까지 기다립니다(블로킹). 실행 결과를 반환합니다.</td>
-<td style="font-size:12px"><code>command</code>: 실행할 명령어. 예: &#x27;ping 127.0.0.1 -n 3&#x27;, &#x27;ipconfig&#x27;<br><code>timeout</code>: 최대 대기 시간 (초). 기본값: 300초</td>
+<td style="font-size:12px"><code>command</code>: 실행할 명령어. 예: &#x27;ping 127.0.0.1 -n 3&#x27;, &#x27;ipconfig&#x27;<br><code>timeout</code>: 최대 대기 시간 (초). 기본값: 30초</td>
 </tr>
 <tr>
 <td><code>Check</code></td>
 <td>명령어를 실행하고 출력 결과를 기대값과 비교합니다(블로킹). 실패 시 &#x27;FAIL:&#x27; 접두사를 반환하여 스텝이 fail로 판정됩니다.</td>
-<td style="font-size:12px"><code>command</code>: 실행할 명령어<br><code>expected</code>: 출력에 포함되거나 완전히 일치해야 할 기대 문자열<br><code>match_mode</code>: 비교 방식: &#x27;contains&#x27;(부분 일치) 또는 &#x27;exact&#x27;(완전 일치). 기본값: contains<br><code>timeout</code>: 최대 대기 시간 (초). 기본값: 300초</td>
+<td style="font-size:12px"><code>command</code>: 실행할 명령어<br><code>expected</code>: 출력에 포함되거나 완전히 일치해야 할 기대 문자열. 비워두면 &#x27;출력이 없을 때만 pass&#x27;(no-output 검증)로 동작<br><code>match_mode</code>: 비교 방식: &#x27;contains&#x27;(부분 일치) 또는 &#x27;exact&#x27;(완전 일치). 기본값: contains<br><code>timeout</code>: 최대 대기 시간 (초). 기본값: 30초</td>
+</tr>
+<tr>
+<td><code>Check_Logic</code></td>
+<td>명령어를 실행하고 출력에 대해 여러 키워드를 and/or 로직으로 합부 판정합니다(블로킹). 실패 시 &#x27;FAIL:&#x27; 접두사를 반환하여 스텝이 fail로 판정됩니다.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 명령어<br><code>keywords</code>: 키워드 목록. 쉼표로 구분. 예: &#x27;OK,ready,done&#x27;<br><code>logic</code>: 판정 로직: &#x27;and&#x27;(모든 키워드 포함 시 pass) 또는 &#x27;or&#x27;(하나 이상 포함 시 pass). 기본값: and<br><code>timeout</code>: 최대 대기 시간 (초). 기본값: 30초</td>
 </tr>
 <tr>
 <td><code>RunCapture</code></td>
@@ -1312,6 +1296,126 @@
 <td><code>ListBackground</code></td>
 <td>실행 중인 백그라운드 프로세스 목록을 반환합니다.</td>
 <td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+</tbody>
+</table>
+
+
+
+<h2 id="cat-etc">기타</h2>
+
+<h3 id="mod-SHELL">SHELL</h3>
+<div class="callout callout-info">Shell 명령어 실행 — Linux/macOS bash 명령을 실행하는 모듈. CMD 의 Linux 대응. 외부 프로그램 실행이나 시스템 명령에 사용</div>
+<table>
+<thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
+<tbody>
+<tr>
+<td><code>Run</code></td>
+<td>bash 명령어를 실행하고 완료될 때까지 기다립니다(블로킹). 실행 결과를 반환합니다.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 bash 명령어. 예: &#x27;ls -la /tmp&#x27;, &#x27;ps -ef | grep python&#x27;<br><code>timeout</code>: 최대 대기 시간 (초). 기본값: 30초</td>
+</tr>
+<tr>
+<td><code>Check</code></td>
+<td>bash 명령어를 실행하고 출력 결과를 기대값과 비교합니다(블로킹). 실패 시 &#x27;FAIL:&#x27; 접두사를 반환하여 스텝이 fail 로 판정됩니다.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 bash 명령어<br><code>expected</code>: 출력에 포함되거나 완전히 일치해야 할 기대 문자열. 비워두면 &#x27;출력이 없을 때만 pass&#x27;(no-output 검증)로 동작<br><code>match_mode</code>: 비교 방식: &#x27;contains&#x27;(부분 일치) 또는 &#x27;exact&#x27;(완전 일치). 기본값: contains<br><code>timeout</code>: 최대 대기 시간 (초). 기본값: 30초</td>
+</tr>
+<tr>
+<td><code>Check_Logic</code></td>
+<td>bash 명령어를 실행하고 출력에 대해 여러 키워드를 and/or 로직으로 합부 판정합니다(블로킹). 실패 시 &#x27;FAIL:&#x27; 접두사를 반환하여 스텝이 fail 로 판정됩니다.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 bash 명령어<br><code>keywords</code>: 키워드 목록. 쉼표로 구분. 예: &#x27;OK,ready,done&#x27;<br><code>logic</code>: 판정 로직: &#x27;and&#x27;(모든 키워드 포함 시 pass) 또는 &#x27;or&#x27;(하나 이상 포함 시 pass). 기본값: and<br><code>timeout</code>: 최대 대기 시간 (초). 기본값: 30초</td>
+</tr>
+<tr>
+<td><code>RunCapture</code></td>
+<td>명령어를 백그라운드로 실행하고 즉시 &#x27;[BG_TASK:bg_x]&#x27; placeholder 를 반환합니다(논블로킹). 폴링 엔드포인트를 통해 나중에 실제 결과를 회수할 수 있습니다.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 명령어</td>
+</tr>
+<tr>
+<td><code>CheckCapture</code></td>
+<td>명령어를 백그라운드로 실행하고 &#x27;[BG_TASK:bg_x]&#x27; placeholder 를 반환합니다. 완료 시 서버가 expected/match_mode 로 최종 pass/fail 을 판정합니다.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 명령어<br><code>expected</code>: 기대 문자열<br><code>match_mode</code>: &#x27;contains&#x27; 또는 &#x27;exact&#x27;. 기본값: contains</td>
+</tr>
+<tr>
+<td><code>RunBackground</code></td>
+<td>bash 명령어를 서브프로세스로 실행합니다(fire-and-forget). PID 가 반환되지만 결과는 회수할 수 없습니다. setsid 로 새 세션 분리 — 호출자 종료와 무관하게 동작.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 bash 명령어. 예: &#x27;sleep 60&#x27;, &#x27;python3 script.py&#x27;</td>
+</tr>
+<tr>
+<td><code>Kill</code></td>
+<td>백그라운드 프로세스를 종료합니다 (SIGKILL).</td>
+<td style="font-size:12px"><code>pid</code>: 종료할 프로세스 PID</td>
+</tr>
+<tr>
+<td><code>ListBackground</code></td>
+<td>실행 중인 백그라운드 프로세스 목록을 반환합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-HKMC6th">HKMC6th</h3>
+<div class="callout callout-info">HKMC 6세대 IVI 디바이스 — TCP 소켓 프로토콜로 화면 캡처/터치/스와이프/HW 키 제어. 연결된 hkmc_agent 디바이스의 HKMC6thService 함수를 그대로 호출합니다.</div>
+<table>
+<thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
+<tbody>
+<tr>
+<td><code>tap</code></td>
+<td>지정 좌표를 탭(터치)합니다.</td>
+<td style="font-size:12px"><code>x</code>: X 좌표 (px)<br><code>y</code>: Y 좌표 (px)<br><code>screen_type</code>: 화면 종류. front_center / rear_left / rear_right / cluster</td>
+</tr>
+<tr>
+<td><code>repeat_tap</code></td>
+<td>같은 좌표를 N회 연속 탭합니다(빠른 더블/멀티 탭용).</td>
+<td style="font-size:12px"><code>x</code>: X 좌표 (px)<br><code>y</code>: Y 좌표 (px)<br><code>count</code>: 탭 횟수 (기본 5)<br><code>interval_ms</code>: 탭 간격 ms (기본 100)<br><code>screen_type</code>: 화면 종류. front_center / rear_left / rear_right / cluster</td>
+</tr>
+<tr>
+<td><code>long_press</code></td>
+<td>지정 좌표를 누르고 duration_ms만큼 유지한 뒤 떼어냅니다.</td>
+<td style="font-size:12px"><code>x</code>: X 좌표 (px)<br><code>y</code>: Y 좌표 (px)<br><code>duration_ms</code>: 유지 시간 ms (기본 3000)<br><code>screen_type</code>: 화면 종류. front_center / rear_left / rear_right / cluster</td>
+</tr>
+<tr>
+<td><code>swipe</code></td>
+<td>(x1,y1)에서 (x2,y2)로 드래그(스와이프)합니다.</td>
+<td style="font-size:12px"><code>x1</code>: 시작 X<br><code>y1</code>: 시작 Y<br><code>x2</code>: 끝 X<br><code>y2</code>: 끝 Y<br><code>screen_type</code>: 화면 종류. front_center / rear_left / rear_right / cluster</td>
+</tr>
+<tr>
+<td><code>send_key</code></td>
+<td>HW 키 이벤트(6세대 keyExt6th 패킷)를 보냅니다. cmd/sub_cmd/key_data 값은 HKMC 스펙 참조.</td>
+<td style="font-size:12px"><code>cmd</code>: 키 카테고리 cmd 값 (예: CMD_MKBD/CCP/RRC/SWC/MIRROR)<br><code>sub_cmd</code>: 서브 cmd (SHORT_KEY/LONG_KEY/PRESS_KEY/RELEASE_KEY/DIAL_ACTION)<br><code>key_data</code>: 키 코드(int)<br><code>monitor</code>: 타겟 모니터 (0x00=NONE, 0x01=LEFT, 0x02=RIGHT)<br><code>direction</code>: 다이얼/노브 방향 바이트(있으면)</td>
+</tr>
+<tr>
+<td><code>send_key_by_name</code></td>
+<td>키 이름으로 HW 키 이벤트를 보냅니다(스펙 default + 디바이스 오버라이드 적용).</td>
+<td style="font-size:12px"><code>key_name</code>: 키 이름 (HKMC_KEYS 사전 키)<br><code>sub_cmd</code>: 서브 cmd (기본 SHORT_KEY)<br><code>screen_type</code>: 타겟 화면<br><code>direction</code>: 다이얼/노브 방향 바이트(있으면)<br><code>key_source</code>: 키 소스(있는 경우)</td>
+</tr>
+<tr>
+<td><code>screencap</code></td>
+<td>현재 화면을 캡처해 파일로 저장합니다.</td>
+<td style="font-size:12px"><code>output_path</code>: 저장 경로(PNG/BMP)<br><code>screen_type</code>: 화면 종류<br><code>left</code>: ROI 좌(생략 시 0)<br><code>top</code>: ROI 상(생략 시 0)<br><code>right</code>: ROI 우(생략 시 화면 끝)<br><code>bottom</code>: ROI 하(생략 시 화면 끝)<br><code>format</code>: 저장 포맷 (png/bmp)</td>
+</tr>
+<tr>
+<td><code>screencap_bytes</code></td>
+<td>현재 화면을 캡처해 바이트(BMP/PNG)를 반환합니다(파일 저장 안 함).</td>
+<td style="font-size:12px"><code>screen_type</code>: 화면 종류. front_center / rear_left / rear_right / cluster<br><code>fmt</code>: 포맷 (png/bmp)<br><code>timeout</code>: 응답 대기 timeout 초</td>
+</tr>
+<tr>
+<td><code>get_screen_size</code></td>
+<td>지정 화면의 (width, height) 크기를 반환합니다.</td>
+<td style="font-size:12px"><code>screen_type</code>: 화면 종류. front_center / rear_left / rear_right / cluster</td>
+</tr>
+<tr>
+<td><code>ethernet_signal</code></td>
+<td>이더넷 시그널(payload + signal_id)을 전송합니다.</td>
+<td style="font-size:12px"><code>n_signal_payload</code>: 시그널 payload 값<br><code>n_signal_id</code>: 시그널 ID</td>
+</tr>
+<tr>
+<td><code>execute_shell</code></td>
+<td>쉘 명령 패킷을 보냅니다(저수준 — cmd/sub_cmd/resp 직접 지정).</td>
+<td style="font-size:12px"><code>cmd</code>: 패킷 cmd<br><code>sub_cmd</code>: 서브 cmd<br><code>resp</code>: 응답 코드<br><code>str_data</code>: 전송할 문자열</td>
+</tr>
+<tr>
+<td><code>send_shell_cmd</code></td>
+<td>단순 shell 문자열 명령을 디바이스에 전달합니다.</td>
+<td style="font-size:12px"><code>str_data</code>: 전송할 명령 문자열</td>
 </tr>
 </tbody>
 </table>

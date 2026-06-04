@@ -138,7 +138,6 @@
       <a href="#mod-SmartBench" class="toc-h3">SmartBench</a>
       <a href="#mod-WoohyunBench" class="toc-h3">WoohyunBench</a>
       <a href="#cat-can" class="toc-h2">CAN Communication</a>
-      <a href="#mod-CANOE" class="toc-h3">CANOE</a>
       <a href="#mod-CANAT" class="toc-h3">CANAT</a>
       <a href="#cat-comm" class="toc-h2">Communication (Serial/SSH/UART/DLT)</a>
       <a href="#mod-SerialLogging" class="toc-h3">SerialLogging</a>
@@ -146,6 +145,8 @@
       <a href="#mod-DLTLogging" class="toc-h3">DLTLogging</a>
       <a href="#cat-system" class="toc-h2">System & Utilities</a>
       <a href="#mod-CMD" class="toc-h3">CMD</a>
+      <a href="#cat-etc" class="toc-h2">Others</a>
+      <a href="#mod-SHELL" class="toc-h3">SHELL</a>
     </nav>
   </aside>
 
@@ -160,29 +161,31 @@
     </div>
 
     <h2 id="overview">All Modules</h2>
-    <p>Total <strong>9</strong> modules, <strong>197</strong> functions registered.</p>
+    <p>Total <strong>9</strong> modules, <strong>201</strong> functions registered.</p>
     <table>
       <thead><tr><th>Module</th><th>Description</th><th>Functions</th></tr></thead>
       <tbody>
-        <tr><td><a href="#mod-CANOE"><strong>CANOE</strong></a></td><td>Controls Vector CANoe simulation software: start/stop, environment variables, and system variables</td><td style="text-align:center">6</td></tr>
-<tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>Sends and receives CAN bus messages via CANat hardware</td><td style="text-align:center">7</td></tr>
+        <tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>Sends and receives CAN bus messages via CANat hardware</td><td style="text-align:center">7</td></tr>
 <tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>Comprehensive control of relays, power, sensors, audio, LCD, buttons, and USB on the serial-connected QE test bench</td><td style="text-align:center">117</td></tr>
 <tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>Connects to remote devices via SSH for command execution and file transfer</td><td style="text-align:center">7</td></tr>
 <tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>Captures and saves logs via direct TCP connection to the DLT daemon, with keyword-based PASS/FAIL evaluation (no GUI required)</td><td style="text-align:center">10</td></tr>
-<tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>Captures and saves logs via serial port connection, with keyword-based fail detection.
+<tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>Captures serial port logs with keyword-based fail detection.
 
-**⚠️ Usage: StartLogging and StopLogging MUST be used as a pair.**
-- If you call StartLogging without StopLogging: logs are NOT saved to file, and the serial port stays open, which can cause port-busy errors on the next run.
-- Place StartLogging at the beginning of your scenario and StopLogging at the end.
-- Cleanup will auto-call StopLogging if the scenario aborts, but you should still call it explicitly in the normal flow.
+**Connection lifecycle**: The serial port itself is opened/closed by the Device tab&#x27;s Connect/Disconnect. StartLogging does NOT reopen an already-open port, so devices that reset their settings on every connect are safe.
+
+**⚠️ Usage: StartLogging and StopLogging are paired.**
+- Without StopLogging the memory buffer is never written to a file.
+- StopLogging ends the capture session but **keeps the serial port open**. To close the port, use the Device tab Disconnect.
+- On abnormal scenario exit, cleanup auto-saves any unsaved buffer during Disconnect.
 
 Standard usage pattern:
-  1) StartLogging()                              ← first step
+  1) StartLogging()                              ← first step (capture starts; port pre-opened via Device tab Connect)
   2) SendCommand / SendCommand_*_on_keyword ...  ← middle steps
-  3) StopLogging()                               ← last step (writes log file + releases port)</td><td style="text-align:center">5</td></tr>
+  3) StopLogging()                               ← last step (writes log file + ends capture, port stays open)</td><td style="text-align:center">5</td></tr>
 <tr><td><a href="#mod-SmartBench"><strong>SmartBench</strong></a></td><td>Controls power, buttons, current, and LEDs on Smart Bench equipment via TCP socket</td><td style="text-align:center">15</td></tr>
-<tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>Integrated UDP test bench: vehicle power control (IGN/ACC/Battery) + CAN FD signal transmission</td><td style="text-align:center">23</td></tr>
+<tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>Integrated UDP test bench: vehicle power control (IGN/ACC/Battery) + CAN FD signal transmission</td><td style="text-align:center">25</td></tr>
 <tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Executes Windows command prompt (CMD) commands. Used for running external programs or system commands</td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-SHELL"><strong>SHELL</strong></a></td><td>Executes Linux/macOS bash commands. Linux counterpart of CMD. Used for running external programs or system commands.</td><td style="text-align:center">8</td></tr>
       </tbody>
     </table>
 
@@ -977,8 +980,18 @@ Standard usage pattern:
 </tr>
 <tr>
 <td><code>SendCanFd</code></td>
-<td>Sends a raw CAN FD frame directly (no signal definition needed). For low-level debugging.</td>
-<td style="font-size:12px"><code>can_id</code>: CAN ID (integer, e.g. 0x411 = 1041)<br><code>payload_hex</code>: Payload (hex string, spaces/commas allowed; e.g. &#x27;01 02 03&#x27;)</td>
+<td>Sends a raw CAN FD frame directly (no signal definition needed). Repeats 5 times at 200 ms.</td>
+<td style="font-size:12px"><code>can_id</code>: CAN ID (integer or hex string, e.g. &#x27;0x448&#x27;)<br><code>payload_hex</code>: Payload (spaces/commas/brackets allowed, e.g. &#x27;01,02,03&#x27; or &#x27;01 02 03&#x27;)<br><code>can_type</code>: Frame type: &#x27;STA&#x27; (standard, default) / &#x27;EXT&#x27; (extended frame, AVN) / &#x27;FD&#x27; (CAN FD, Cluster)</td>
+</tr>
+<tr>
+<td><code>SendAvnCan</code></td>
+<td>Sends a raw CAN frame on the AVN channel (0x03 header). The destination is always fixed to AVN while the frame type is chosen via the type argument (both standard 0x33E and extended 1004001 are sent on the AVN channel). Repeats 5 times at 200 ms.</td>
+<td style="font-size:12px"><code>msg_id</code>: CAN ID (integer or hex string, e.g. &#x27;0x33E&#x27;, &#x27;0x414&#x27;, &#x27;1004001&#x27;)<br><code>type</code>: Frame type: &#x27;STA&#x27; (standard frame) / &#x27;EXT&#x27; (extended frame) / &#x27;FD&#x27; (CAN FD)<br><code>payload_hex</code>: Payload hex bytes (spaces/commas/brackets allowed, e.g. &#x27;00,00,00,00,00,00,00,00&#x27;)</td>
+</tr>
+<tr>
+<td><code>SendClusterCan</code></td>
+<td>Sends a raw CAN FD frame on the Cluster channel. Identical to send_can.py TARGET=CLUSTER (CANTYPE.FD, frame_byte = 0x80 | DLC). Repeats 5 times at 200 ms.</td>
+<td style="font-size:12px"><code>msg_id</code>: CAN ID (integer or hex string, e.g. &#x27;0x65&#x27;)<br><code>payload_hex</code>: Payload hex bytes (spaces/commas/brackets allowed, e.g. &#x27;00,00,00,00,00,00,00,00&#x27;)</td>
 </tr>
 <tr>
 <td><code>ReinitCanFd</code></td>
@@ -991,44 +1004,6 @@ Standard usage pattern:
 
 
 <h2 id="cat-can">CAN Communication</h2>
-
-<h3 id="mod-CANOE">CANOE</h3>
-<div class="callout callout-info">CANoe Control — Controls Vector CANoe simulation software: start/stop, environment variables, and system variables</div>
-<table>
-<thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
-<tbody>
-<tr>
-<td><code>open_simulation</code></td>
-<td>Opens a CANoe simulation (loads a .cfg file).</td>
-<td style="font-size:12px"><code>cfgname</code>: CANoe configuration file (.cfg) path. e.g. &#x27;C:/canoe/project.cfg&#x27;</td>
-</tr>
-<tr>
-<td><code>close_simulation</code></td>
-<td>Closes the CANoe simulation and exits the program.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>start_Measurement</code></td>
-<td>Starts CANoe measurement.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>stop_Measurement</code></td>
-<td>Stops CANoe measurement.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>get_EnvVar</code></td>
-<td>Reads a CANoe environment variable value.</td>
-<td style="font-size:12px"><code>var</code>: Environment variable name</td>
-</tr>
-<tr>
-<td><code>set_EnvVar</code></td>
-<td>Sets a CANoe environment variable value.</td>
-<td style="font-size:12px"><code>var</code>: Environment variable name<br><code>value</code>: Value to set (numeric)</td>
-</tr>
-</tbody>
-</table>
 
 <h3 id="mod-CANAT">CANAT</h3>
 <div class="callout callout-info">CANat Device — Sends and receives CAN bus messages via CANat hardware</div>
@@ -1078,36 +1053,38 @@ Standard usage pattern:
 <h2 id="cat-comm">Communication (Serial/SSH/UART/DLT)</h2>
 
 <h3 id="mod-SerialLogging">SerialLogging</h3>
-<div class="callout callout-info">Serial Logging — Captures and saves logs via serial port connection, with keyword-based fail detection.
+<div class="callout callout-info">Serial Logging — Captures serial port logs with keyword-based fail detection.
 
-**⚠️ Usage: StartLogging and StopLogging MUST be used as a pair.**
-- If you call StartLogging without StopLogging: logs are NOT saved to file, and the serial port stays open, which can cause port-busy errors on the next run.
-- Place StartLogging at the beginning of your scenario and StopLogging at the end.
-- Cleanup will auto-call StopLogging if the scenario aborts, but you should still call it explicitly in the normal flow.
+**Connection lifecycle**: The serial port itself is opened/closed by the Device tab&#x27;s Connect/Disconnect. StartLogging does NOT reopen an already-open port, so devices that reset their settings on every connect are safe.
+
+**⚠️ Usage: StartLogging and StopLogging are paired.**
+- Without StopLogging the memory buffer is never written to a file.
+- StopLogging ends the capture session but **keeps the serial port open**. To close the port, use the Device tab Disconnect.
+- On abnormal scenario exit, cleanup auto-saves any unsaved buffer during Disconnect.
 
 Standard usage pattern:
-  1) StartLogging()                              ← first step
+  1) StartLogging()                              ← first step (capture starts; port pre-opened via Device tab Connect)
   2) SendCommand / SendCommand_*_on_keyword ...  ← middle steps
-  3) StopLogging()                               ← last step (writes log file + releases port)</div>
+  3) StopLogging()                               ← last step (writes log file + ends capture, port stays open)</div>
 <table>
 <thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
 <tbody>
 <tr>
 <td><code>StartLogging</code></td>
-<td>Connects to the serial port and starts capture (memory only, no file save). Viewer modal opens automatically. The port is stabilized and capture thread is ready by the time this returns.
+<td>Starts serial capture (memory only, no file save). Viewer modal opens automatically. **If the port is already open, no reconnect happens** — only the capture session is (re)started, so devices that reset on connect are safe. Returns once the capture thread is ready, so the next step&#x27;s SendCommand is not dropped.
 
-**⚠️ Must be paired with StopLogging.** Without StopLogging, the in-memory buffer is never flushed to disk and the serial port stays open. Always call StopLogging at the end of the scenario.</td>
-<td style="font-size:12px"><code>settle_ms</code>: Port stabilization wait after open (ms). Default 500. Ensures USB-Serial driver reset/buffer settle so the next step&#x27;s SendCommand isn&#x27;t dropped. Use 1500~2000 for DTR-reset boards (Arduino), 100~200 for fast industrial serial.</td>
+**⚠️ Must be paired with StopLogging.** Without StopLogging the in-memory buffer is never flushed to disk.</td>
+<td style="font-size:12px"><code>settle_ms</code>: Port stabilization wait after open (ms). Default 500. **Skipped if the port is already open.** Used only on the first open to ensure USB-Serial driver reset/buffer settle. Use 1500~2000 for DTR-reset boards (Arduino).</td>
 </tr>
 <tr>
 <td><code>StopLogging</code></td>
-<td>Stops serial capture, writes the memory buffer to a file, and releases the serial port. Auto path or explicit path.
+<td>Writes the memory buffer to a file and ends the capture session. **The serial port is kept open** — subsequent SendCommand calls will not re-initialize the device. To close the port, use the Device tab Disconnect.
 
 **⚠️ Must be paired with StartLogging.** This call is what:
   • Flushes the in-memory log buffer to a .log file on disk
-  • Closes the serial port so it can be reused next run
   • Tears down the capture thread to avoid resource leaks
-Even if the file-save step throws, the finally block guarantees the port is released.</td>
+  • Allows the next StartLogging to begin a fresh session
+Even if the file-save step throws, the finally block guarantees the capture is torn down.</td>
 <td style="font-size:12px"><code>save_path</code>: Save file path. Auto if empty (during playback: run_dir/logs/serial_*.log, step test: backend/results/Temp_logs/serial_*.log)</td>
 </tr>
 <tr>
@@ -1266,6 +1243,58 @@ Even if the file-save step throws, the finally block guarantees the port is rele
 <tr>
 <td><code>Kill</code></td>
 <td>Terminates a background process.</td>
+<td style="font-size:12px"><code>pid</code>: PID of the process to terminate</td>
+</tr>
+<tr>
+<td><code>ListBackground</code></td>
+<td>Returns the list of running background processes.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+</tbody>
+</table>
+
+
+
+<h2 id="cat-etc">Others</h2>
+
+<h3 id="mod-SHELL">SHELL</h3>
+<div class="callout callout-info">Shell Command Execution — Executes Linux/macOS bash commands. Linux counterpart of CMD. Used for running external programs or system commands.</div>
+<table>
+<thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
+<tbody>
+<tr>
+<td><code>Run</code></td>
+<td>Executes a bash command and waits for completion (blocking). Returns the result.</td>
+<td style="font-size:12px"><code>command</code>: bash command to execute. e.g. &#x27;ls -la /tmp&#x27;, &#x27;ps -ef | grep python&#x27;<br><code>timeout</code>: Max wait time in seconds. Default: 30</td>
+</tr>
+<tr>
+<td><code>Check</code></td>
+<td>Executes a bash command and verifies the output against an expected string (blocking). Returns a &#x27;FAIL:&#x27; prefix on mismatch, which causes the step to be marked as fail.</td>
+<td style="font-size:12px"><code>command</code>: bash command to execute<br><code>expected</code>: Expected substring or full-match value. Empty = pass only when output is empty (no-output check)<br><code>match_mode</code>: Comparison mode: &#x27;contains&#x27; (substring) or &#x27;exact&#x27; (full match). Default: contains<br><code>timeout</code>: Max wait time in seconds. Default: 30</td>
+</tr>
+<tr>
+<td><code>Check_Logic</code></td>
+<td>Executes a bash command and verifies the output against multiple keywords using and/or logic (blocking). Returns a &#x27;FAIL:&#x27; prefix on mismatch.</td>
+<td style="font-size:12px"><code>command</code>: bash command to execute<br><code>keywords</code>: Comma-separated keyword list. e.g. &#x27;OK,ready,done&#x27;<br><code>logic</code>: &#x27;and&#x27; (all keywords required) or &#x27;or&#x27; (any one). Default: and<br><code>timeout</code>: Max wait time in seconds. Default: 30</td>
+</tr>
+<tr>
+<td><code>RunCapture</code></td>
+<td>Executes a command in the background and immediately returns a &#x27;[BG_TASK:bg_x]&#x27; placeholder (non-blocking).</td>
+<td style="font-size:12px"><code>command</code>: Command to execute</td>
+</tr>
+<tr>
+<td><code>CheckCapture</code></td>
+<td>Executes a command in the background and returns a &#x27;[BG_TASK:bg_x]&#x27; placeholder. On completion, the server evaluates expected/match_mode for final pass/fail.</td>
+<td style="font-size:12px"><code>command</code>: Command to execute<br><code>expected</code>: Expected string<br><code>match_mode</code>: &#x27;contains&#x27; or &#x27;exact&#x27;. Default: contains</td>
+</tr>
+<tr>
+<td><code>RunBackground</code></td>
+<td>Spawns a bash subprocess fire-and-forget. Detaches via setsid so it survives caller termination. Returns the PID but output cannot be retrieved.</td>
+<td style="font-size:12px"><code>command</code>: bash command to execute. e.g. &#x27;sleep 60&#x27;, &#x27;python3 script.py&#x27;</td>
+</tr>
+<tr>
+<td><code>Kill</code></td>
+<td>Terminates a background process (SIGKILL).</td>
 <td style="font-size:12px"><code>pid</code>: PID of the process to terminate</td>
 </tr>
 <tr>
