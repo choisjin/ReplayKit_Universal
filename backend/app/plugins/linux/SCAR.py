@@ -98,6 +98,7 @@ class SCAR:
         vlan_config_dir: str = "",               # sdv_vlan_config 디렉터리 (netns.sh 위치)
         ends: str = "FaceStep1_2025_R10",        # ENDS 버전
         net_mode: str = "multiverse",            # "multiverse" | "standalone"
+        cuttlefish = True,                       # net_config 에 cuttlefish=true (cvd-ebr/TH 보존)
         iface: str = "",                         # 네트워크 인터페이스 (스캔 자동 채움)
         stub_ecus: str = "",                     # 공백 아닌 콤마 구분 (빈 칸 = 모드 기본값)
         standalone_ip: str = "192.168.1.10",     # standalone 모드 전용 IP
@@ -141,6 +142,7 @@ class SCAR:
         self.vlan_config_dir = vlan_config_dir
         self.ends = ends
         self.net_mode = (net_mode or "multiverse").strip().lower()
+        self.cuttlefish = _as_bool(cuttlefish)
         self.iface = iface
         self.stub_ecus = stub_ecus
         self.standalone_ip = standalone_ip
@@ -254,6 +256,7 @@ class SCAR:
             standalone_ip=self.standalone_ip,
             ufw=self.ufw,
             log_folder=self.log_folder,
+            cuttlefish=self.cuttlefish,
         )
         cfg_path, cfg_msg = self._netns.write_config(config, self.net_mode)
         if cfg_path is None:
@@ -793,7 +796,7 @@ class SCAR:
             f"vlan_config   = {self.vlan_config_dir or '(unset → netns skip)'}",
             f"netns.sh      = {self._netns.is_available()} ({self._netns.script_path})",
             f"ends          = {self.ends}",
-            f"net_mode      = {self.net_mode}",
+            f"net_mode      = {self.net_mode} (cuttlefish={self.cuttlefish})",
             f"iface         = {self.iface or '(unset)'}",
             f"stub_ecus     = {_split_csv(self.stub_ecus) or '(mode default)'}",
             f"standalone_ip = {self.standalone_ip}",

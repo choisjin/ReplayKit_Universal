@@ -403,6 +403,10 @@ def list_available_modules() -> list[dict]:
               "type": "text", "default": "", "hidden": True},
              {"name": "net_mode", "label": "구성 모드", "type": "select", "default": "multiverse",
               "options": ["multiverse", "standalone"]},
+             # cvd-ebr(TH/cuttlefish) 보존 — net_config 에 cuttlefish=true. multiverse 도 적용해야
+             #   netns clean 이 cvd-ebr 를 flush 한 뒤 cuttlefish 용으로 복원, TH adb 가 안 끊긴다.
+             {"name": "cuttlefish", "label": "cuttlefish(cvd-ebr) 보존", "type": "select",
+              "default": "True", "options": ["True", "False"], "hidden": True},
              {"name": "ends", "label": "ENDS 버전", "type": "text", "default": "FaceStep1_2025_R10"},
              # stub_ecus: netns 에 namespace 를 만들 ECU 목록(netns valid 이름).
              #   ⚠️ /start 의 'Simulated ECU target'(예: PCU_PROXY_FrontEnd_PIU_Mst)과 이름이 다르다!

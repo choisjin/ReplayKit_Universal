@@ -51,22 +51,21 @@ def build_config(
     standalone_ip: str = "192.168.1.10",
     ufw: str = "off",
     log_folder: str = "/tmp",
+    cuttlefish: bool = True,
 ) -> dict:
     """가이드의 multiverse.json / standalone.json 동등 dict 생성.
 
-    multiverse: vcans=0, net_config 항목에 interface/arp/stub_ecus.
+    multiverse: vcans=0, net_config 항목에 interface/arp/stub_ecus(+cuttlefish).
     standalone: ip / stub_groups / conf_type=veth / cuttlefish=true 추가, vcans 없음.
+
+    cuttlefish=True 면 net_config 에 "cuttlefish": true 를 넣어 netns.sh 가 cvd-ebr 브리지를
+    cuttlefish 용으로 구성/보존하게 한다. 이게 빠진 multiverse 는 clean 이 cvd-ebr 를 flush 한
+    뒤 복원하지 않아 TH/cuttlefish(같은 cvd-ebr 사용)의 adb 가 끊긴다 → 이를 막기 위해 둘 다 적용.
     """
     mode = (mode or "multiverse").strip().lower()
     if mode not in ("multiverse", "standalone"):
         mode = "multiverse"
     ecus = stub_ecus if stub_ecus else list(DEFAULT_STUB_ECUS[mode])
-
-    net_entry: dict = {
-        "interface": iface,
-        "arp": "on",
-        "stub_ecus": ecus,
-    }
 
     if mode == "standalone":
         # interface 다음에 ip 가 오도록 순서 재구성 (가이드 예시 가독성 유지)
@@ -77,7 +76,7 @@ def build_config(
             "stub_ecus": ecus,
             "stub_groups": [],
             "conf_type": "veth",
-            "cuttlefish": True,
+            "cuttlefish": bool(cuttlefish),
         }
         config = {
             "ends": ends,
@@ -86,6 +85,14 @@ def build_config(
             "net_config": [net_entry],
         }
     else:  # multiverse
+        net_entry = {
+            "interface": iface,
+            "arp": "on",
+            "stub_ecus": ecus,
+        }
+        # cvd-ebr(TH/cuttlefish) 보존 — standalone 과 동일하게 cuttlefish 구성을 둔다.
+        if cuttlefish:
+            net_entry["cuttlefish"] = True
         config = {
             "ends": ends,
             "ufw": ufw,
