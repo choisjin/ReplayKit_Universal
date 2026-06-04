@@ -404,8 +404,13 @@ def list_available_modules() -> list[dict]:
              {"name": "net_mode", "label": "구성 모드", "type": "select", "default": "multiverse",
               "options": ["multiverse", "standalone"]},
              {"name": "ends", "label": "ENDS 버전", "type": "text", "default": "FaceStep1_2025_R10"},
-             {"name": "stub_ecus", "label": "stub_ecus (콤마 구분, 비우면 모드 기본값)", "type": "text",
-              "default": "", "hidden": True},
+             # stub_ecus: netns 에 namespace 를 만들 ECU 목록. 여기 빠진 ECU 의 SOME/IP 서비스는
+             #   "NETNS is not configured for <ECU>" 로 start 실패한다. bench 토글이 의존하는
+             #   서비스(예: InfrastructureGotoSleep@PCU_PROXY_FrontEnd_PIU_Mst)를 쓰려면 그 ECU
+             #   (PCU_PROXY_FrontEnd)를 반드시 포함. multiverse 기본은 PIU_Mst 하나뿐.
+             {"name": "stub_ecus",
+              "label": "stub_ecus (콤마 구분, 비우면 모드 기본값=PIU_Mst). 토글/서비스 쓰면 PCU_PROXY_FrontEnd 등 포함",
+              "type": "text", "default": ""},
              {"name": "sudo_password", "label": "sudo 비밀번호 (passwordless 미설정 시 필수)",
               "type": "password", "default": ""},
              # ── 재기동 스크립트 (scar.sh) ──
