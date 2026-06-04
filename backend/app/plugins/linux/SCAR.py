@@ -114,6 +114,9 @@ class SCAR:
         bench_toggle: str = "",                  # 활성화할 Bench IO 토글 이름/ID (빈 칸 = 건너뜀)
         bench_state: str = "switched",           # 토글 상태 ("switched"=ON / "unswitched"=OFF)
         auto_register = True,                    # 미등록 토글이면 toolbox 에서 찾아 자동 등록
+        # ── 컨테이너 내부 UI 재기동 (host scar.sh -it TTY 함정 우회) ──
+        ui_dir: str = "/home/scar/ui",           # 컨테이너 안 start_ui.sh 디렉터리
+        ui_home: str = "/home/scar",             # start_ui.sh 가 쓰는 HOME_SCAR
     ):
         self._api = SCARApi(base_url=api_base)
         # 제어 백엔드(3000) — 버전 선택 / bench 토글 / 목록 조회. 비면 api_base 호스트에서 유추.
@@ -149,6 +152,8 @@ class SCAR:
         self.bench_toggle = (bench_toggle or "").strip()
         self.bench_state = (bench_state or "switched").strip() or "switched"
         self.auto_register = _as_bool(auto_register)
+        self.ui_dir = (ui_dir or "/home/scar/ui").strip()
+        self.ui_home = (ui_home or "/home/scar").strip()
         self._netns = SCARNetns(
             vlan_config_dir=vlan_config_dir,
             sudo_password=sudo_password,
@@ -252,36 +257,47 @@ class SCAR:
         if rc != 0:
             return self._mark_fail("netns apply", log)
 
-        # ── [4] scar.sh 기동 (컨테이너 미기동 또는 8081 UI 미응답 시) ─────────
-        # 컨테이너가 '--ui' 없이 떠서 8081 UI 가 안 뜬 경우(이때 SendApi 가 DOCKER 로
-        # 거부됨)도 포함하기 위해 api.is_alive() 도 함께 본다. 컨테이너 running 만으로는
-        # API 모드 준비를 보장하지 못한다 (scar.sh --ui 가 돌아야 8081 이 뜸).
+        # ── [4] UI 기동 (컨테이너 미기동 또는 8081 UI 미응답 시) ─────────
+        # 두 경우를 구분해야 한다:
+        #   (a) 컨테이너 running + 8081 down → 컨테이너 안 UI(start_ui.sh)만 직접 재기동.
+        #       host scar.sh --ui 는 running 컨테이너에 `docker exec -it`(TTY)로 들어가는데,
+        #       우리 setsid </dev/null 무TTY 환경에선 'cannot attach stdin to a TTY' 로 실패한다.
+        #       → 그래서 docker exec(무TTY)로 start_ui.sh 를 직접 돌린다 (screen -dm, TTY 불필요).
+        #   (b) 컨테이너 자체가 down → host scar.sh 로 컨테이너+UI 통째 기동.
         running = self._docker.is_running()
         api_alive = self._api.is_alive()
-        if self.launch_scar and not (running and api_alive):
-            if self._health.reconnect_script:
-                reason = "container down" if not running else "container up but 8081 down"
-                ok = self._health._reconnect()  # noqa: SLF001 — start_via_script(--ui) + wait
-                if ok:
-                    log.append(f"[4] scar launch: started ({reason}, waited {self._health.reconnect_wait_s}s)")
-                else:
-                    log.append(
-                        f"[4] scar launch: FAILED (scar.sh 기동 실패)\n"
-                        f"  → 원인 확인: {SCAR_LAUNCH_LOG}\n"
-                        f"  → scar.sh 절대경로(파일)·실행권한 확인"
-                    )
-                # _reconnect 는 force_docker_mode=True 를 박는다(원본 폴백 의미).
-                # 그러나 여기선 setup 차원의 '--ui 기동' 이므로, 기동 후 8081 이 살아나면
-                # API 모드를 되살리기 위해 플래그를 해제한다 (아니면 SendApi 가 계속 DOCKER 거부).
-                if self._api.is_alive():
-                    self._health.force_docker_mode = False
-                    log.append("  → 8081 alive: API 모드 활성 (force_docker_mode 해제)")
+        if not self.launch_scar:
+            log.append("[4] UI launch: skipped (launch_scar=False)")
+        elif running and api_alive:
+            log.append("[4] UI launch: already running (container up, 8081 alive)")
+        elif running and not api_alive:
+            # (a) 컨테이너 안 UI 만 죽음 — 가장 흔한 재발 케이스.
+            ok, msg = self._docker.restart_ui_in_container(self.ui_dir, self.ui_home)
+            log.append(f"[4] UI restart (in-container start_ui.sh): {self._indent(msg).lstrip()}")
+            if ok and self._wait_api_up(self._health.reconnect_wait_s):
+                self._health.force_docker_mode = False  # 직접 기동이라 래치 불필요
+                log.append("  → 8081 alive: API 모드 활성")
+            elif ok:
+                log.append(f"  → 8081 still down after {self._health.reconnect_wait_s}s "
+                           f"(원인 확인: docker exec scar tail /rhw/logs/scar/ui_log_*.log)")
             else:
-                log.append("[4] scar launch: skipped (reconnect_script not set)")
-        elif not self.launch_scar:
-            log.append("[4] scar launch: skipped (launch_scar=False)")
+                log.append("  → start_ui.sh 기동 실패 (위 출력/ui_dir·ui_home 확인)")
+        elif self._health.reconnect_script:
+            # (b) 컨테이너 down — host scar.sh 로 통째 기동 (start_via_script + 폴링).
+            ok = self._health._reconnect()  # noqa: SLF001
+            if ok:
+                log.append(f"[4] scar launch: container start via scar.sh (polled {self._health.reconnect_wait_s}s)")
+            else:
+                log.append(
+                    f"[4] scar launch: FAILED (scar.sh 기동 실패)\n"
+                    f"  → 원인 확인: {SCAR_LAUNCH_LOG}\n"
+                    f"  → scar.sh 절대경로(파일)·실행권한 확인"
+                )
+            if self._api.is_alive():
+                self._health.force_docker_mode = False
+                log.append("  → 8081 alive: API 모드 활성 (force_docker_mode 해제)")
         else:
-            log.append("[4] scar launch: already running (container up, 8081 alive)")
+            log.append("[4] UI launch: skipped (container down, reconnect_script not set)")
 
         # ── [5] netns 검증 (컨테이너 떠 있을 때만) ────────
         if self._docker.is_running():
@@ -438,6 +454,16 @@ class SCAR:
             return f"{scheme}://{host}:3000"
         except Exception:
             return "http://localhost:3000"
+
+    def _wait_api_up(self, timeout_s: float, interval_s: float = 2.0) -> bool:
+        """8081 UI(api_base)가 뜰 때까지 폴링. start_ui.sh 기동 후 준비 확인용."""
+        deadline = time.time() + max(0.0, timeout_s)
+        while True:
+            if self._api.is_alive():
+                return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(min(interval_s, max(0.1, timeout_s)))
 
     def _control_ready(self, retries: int = 10, wait_s: float = 2.0) -> bool:
         """제어 백엔드(3000) 가 응답할 때까지 대기. GET /list/ends 로 프로브.
@@ -707,6 +733,7 @@ class SCAR:
             f"netns_clean   = {self.netns_clean}",
             f"launch_scar   = {self.launch_scar}",
             f"reconnect     = {self._health.reconnect_script or '(unset)'}",
+            f"ui_dir/home   = {self.ui_dir} / {self.ui_home}",
             f"sudo_pw       = {sudo_state}",
             f"setup_ok      = {self._setup_done}",
             f"api_alive     = {self._api.is_alive()}",

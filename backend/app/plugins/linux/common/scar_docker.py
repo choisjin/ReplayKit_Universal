@@ -100,6 +100,9 @@ class SCARDocker:
                 pass
             return False
 
+        # 이미 떠 있는 컨테이너 안의 UI(start_ui.sh) 직접 재기동 — start_via_script 와 별개 경로.
+        # (해당 메서드는 클래스 본문 아래쪽 restart_ui_in_container 로 정의)
+
         # scar.sh 출력을 /dev/null 대신 로그 파일로 남긴다 — 컨테이너 미기동 원인 진단용.
         cmd_str = (
             " ".join(["setsid", script, *(args or [])])
@@ -121,3 +124,40 @@ class SCARDocker:
         except (OSError, FileNotFoundError) as e:
             logger.warning("Failed to start SCAR reconnect script (cwd=%r): %s", run_cwd, e)
             return False
+
+    def restart_ui_in_container(
+        self,
+        ui_dir: str = "/home/scar/ui",
+        home_scar: str = "/home/scar",
+        timeout: float = 60.0,
+    ) -> tuple[bool, str]:
+        """이미 떠 있는 컨테이너 안에서 UI(start_ui.sh) 직접 재기동.
+
+        ★ 핵심: host `scar.sh --ui` 는 컨테이너가 이미 running 이면 `docker exec -it`(TTY) 로
+        들어가 UI 를 띄운다. 우리는 setsid </dev/null (무TTY) 로 실행하므로
+        'cannot attach stdin to a TTY-enabled container because stdin is not a terminal' 로
+        실패한다 → UI 가 안 뜬다. 그래서 여기서 TTY 없이 docker exec 로 start_ui.sh 를 직접 돌린다.
+
+        start_ui.sh 는 backend_ui(node scar-server.js:3000) + frontend_ui(http-server:8081) 를
+        `screen -dm`(detached)로 기동하고, 죽은 backend_ui/frontend_ui screen 은 스스로 quit+wipe.
+        screen -dm 는 TTY 불필요라 무TTY exec 로도 정상 동작한다.
+        """
+        # 죽은 screen 소켓 정리(서비스 포함) 후 start_ui.sh. -lc 로 로그인 env(HOME_SCAR 등) 로드,
+        # 안전하게 HOME_SCAR 도 명시적으로 덮어쓴다 (root 로 exec 시 미설정일 수 있음).
+        inner = (
+            f"screen -wipe || true; "
+            f"cd {ui_dir} && HOME_SCAR={home_scar} ./start_ui.sh"
+        )
+        argv = ["docker", "exec", self.container, "bash", "-lc", inner]
+        try:
+            res = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # start_ui.sh 가 screen -dm 로 백그라운드 기동하므로 보통 빨리 끝난다. 타임아웃이면
+            # 비정상이지만 screen 은 이미 떴을 수 있으니 호출자가 8081 폴링으로 확정한다.
+            return False, f"docker exec timeout ({timeout}s) — 8081 폴링으로 확인"
+        except (OSError, FileNotFoundError) as e:
+            return False, f"docker exec spawn failed: {e}"
+        tail = ((res.stdout or "") + (res.stderr or "")).strip()[-512:]
+        if res.returncode != 0:
+            return False, f"start_ui.sh rc={res.returncode}\n{tail}"
+        return True, f"start_ui.sh launched in {self.container}:{ui_dir}\n{tail}"

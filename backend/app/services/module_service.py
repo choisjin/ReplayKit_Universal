@@ -431,6 +431,11 @@ def list_available_modules() -> list[dict]:
               "default": "True", "options": ["True", "False"], "hidden": True},
              {"name": "launch_scar", "label": "Setup 중 scar.sh 자동 기동", "type": "select",
               "default": "True", "options": ["True", "False"], "hidden": True},
+             # ── 컨테이너 내부 UI 재기동 (host scar.sh -it TTY 함정 우회) ──
+             {"name": "ui_dir", "label": "컨테이너 안 start_ui.sh 디렉터리", "type": "text",
+              "default": "/home/scar/ui", "hidden": True},
+             {"name": "ui_home", "label": "start_ui.sh HOME_SCAR", "type": "text",
+              "default": "/home/scar", "hidden": True},
              # ── 연결 직후 UI 자동화 (port 3000 제어 백엔드) ──
              #   UI 정적 프론트는 8081, 실제 제어 REST 는 3000. 버전선택/토글은 3000 으로 간다.
              #   ui_version 은 options_endpoint 로 /list/ends 를 live 조회해 드롭다운 구성(폴백: 자유입력).
