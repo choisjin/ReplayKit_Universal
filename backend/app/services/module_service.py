@@ -404,13 +404,14 @@ def list_available_modules() -> list[dict]:
              {"name": "net_mode", "label": "구성 모드", "type": "select", "default": "multiverse",
               "options": ["multiverse", "standalone"]},
              {"name": "ends", "label": "ENDS 버전", "type": "text", "default": "FaceStep1_2025_R10"},
-             # stub_ecus: netns 에 namespace 를 만들 ECU 목록. 여기 빠진 ECU 의 SOME/IP 서비스는
-             #   "NETNS is not configured for <ECU>" 로 start 실패한다. 단, 아래 start_services 의
-             #   ECU 는 Setup 이 자동으로 여기에 병합하므로(이름 동일) 보통 비워둬도 된다.
-             #   추가로 더 필요한 ECU 만 콤마로 적는다. 비우면 모드 기본값(multiverse=PIU_Mst).
+             # stub_ecus: netns 에 namespace 를 만들 ECU 목록(netns valid 이름).
+             #   ⚠️ /start 의 'Simulated ECU target'(예: PCU_PROXY_FrontEnd_PIU_Mst)과 이름이 다르다!
+             #   netns 는 base 이름(PCU_PROXY_FrontEnd). 빠진 ECU 의 서비스는 "NETNS is not configured"
+             #   로 start 실패하고, netns apply 자체가 invalid ECU 면 Setup 실패→post_connect skip.
+             #   기본값은 start_services 기본(PCU_PROXY_FrontEnd_PIU_Mst 서비스)에 맞춘 base ECU 셋.
              {"name": "stub_ecus",
-              "label": "stub_ecus 추가 (콤마 구분, 비우면 모드 기본값+start_services ECU 자동 포함)",
-              "type": "text", "default": ""},
+              "label": "stub_ecus (netns ECU, 콤마 구분). /start의 _PIU_Mst 접미사 빼고 base 이름 사용",
+              "type": "text", "default": "PIU_Mst, PCU_PROXY_FrontEnd"},
              {"name": "sudo_password", "label": "sudo 비밀번호 (passwordless 미설정 시 필수)",
               "type": "password", "default": ""},
              # ── 재기동 스크립트 (scar.sh) ──

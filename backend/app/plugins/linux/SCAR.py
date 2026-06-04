@@ -239,16 +239,13 @@ class SCAR:
             log.append("[1] netns clean: skipped (netns_clean=False)")
 
         # ── [2] config 생성 ──────────────────────────────
-        # 명시 stub_ecus(빈 칸이면 모드 기본값) + start_services 의 ECU 를 자동 병합.
-        # start_services 의 ecu 이름(예: PCU_PROXY_FrontEnd_PIU_Mst)이 곧 stub_ecu 이름과 같아,
-        # 그 ECU 의 netns 가 없으면 서비스 start 가 "NETNS is not configured" 로 실패한다.
-        # → 서비스에 쓸 ECU 를 netns 에 자동 포함시켜 수동 정합성 부담을 없앤다.
-        base_ecus = _split_csv(self.stub_ecus) or list(DEFAULT_STUB_ECUS.get(self.net_mode, []))
-        ecus = list(base_ecus)
-        for s in self.start_services:
-            if s["ecu"] not in ecus:
-                ecus.append(s["ecu"])
-        resolved_ecus = ecus  # 검증에 쓸 실제 적용 ecus
+        # ⚠️ netns 의 stub_ecu 이름과 /start 의 ecu(Simulated ECU target) 이름은 다르다!
+        #   netns valid:  PCU_PROXY_FrontEnd  (base ECU)
+        #   /start ecu:   PCU_PROXY_FrontEnd_PIU_Mst  (= base_ + 시뮬 대상 master)
+        #   → start_services 의 ecu 를 netns 에 그대로 병합하면 "Invalid ECU" 로 apply 실패.
+        #   매핑 규칙이 단순치 않아 자동 병합하지 않는다. stub_ecus 는 netns 이름으로 직접 지정.
+        ecus = _split_csv(self.stub_ecus)
+        resolved_ecus = ecus or list(DEFAULT_STUB_ECUS.get(self.net_mode, []))  # 검증용 실제 적용 ecus
         config = build_config(
             ends=self.ends,
             iface=self.iface,
