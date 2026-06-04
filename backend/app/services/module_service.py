@@ -405,11 +405,11 @@ def list_available_modules() -> list[dict]:
               "options": ["multiverse", "standalone"]},
              {"name": "ends", "label": "ENDS 버전", "type": "text", "default": "FaceStep1_2025_R10"},
              # stub_ecus: netns 에 namespace 를 만들 ECU 목록. 여기 빠진 ECU 의 SOME/IP 서비스는
-             #   "NETNS is not configured for <ECU>" 로 start 실패한다. bench 토글이 의존하는
-             #   서비스(예: InfrastructureGotoSleep@PCU_PROXY_FrontEnd_PIU_Mst)를 쓰려면 그 ECU
-             #   (PCU_PROXY_FrontEnd)를 반드시 포함. multiverse 기본은 PIU_Mst 하나뿐.
+             #   "NETNS is not configured for <ECU>" 로 start 실패한다. 단, 아래 start_services 의
+             #   ECU 는 Setup 이 자동으로 여기에 병합하므로(이름 동일) 보통 비워둬도 된다.
+             #   추가로 더 필요한 ECU 만 콤마로 적는다. 비우면 모드 기본값(multiverse=PIU_Mst).
              {"name": "stub_ecus",
-              "label": "stub_ecus (콤마 구분, 비우면 모드 기본값=PIU_Mst). 토글/서비스 쓰면 PCU_PROXY_FrontEnd 등 포함",
+              "label": "stub_ecus 추가 (콤마 구분, 비우면 모드 기본값+start_services ECU 자동 포함)",
               "type": "text", "default": ""},
              {"name": "sudo_password", "label": "sudo 비밀번호 (passwordless 미설정 시 필수)",
               "type": "password", "default": ""},

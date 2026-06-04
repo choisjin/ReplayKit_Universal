@@ -239,9 +239,16 @@ class SCAR:
             log.append("[1] netns clean: skipped (netns_clean=False)")
 
         # ── [2] config 생성 ──────────────────────────────
-        ecus = _split_csv(self.stub_ecus)
-        # 검증에 쓸 실제 적용 ecus (빈 칸이면 모드 기본값으로 해석)
-        resolved_ecus = ecus or list(DEFAULT_STUB_ECUS.get(self.net_mode, []))
+        # 명시 stub_ecus(빈 칸이면 모드 기본값) + start_services 의 ECU 를 자동 병합.
+        # start_services 의 ecu 이름(예: PCU_PROXY_FrontEnd_PIU_Mst)이 곧 stub_ecu 이름과 같아,
+        # 그 ECU 의 netns 가 없으면 서비스 start 가 "NETNS is not configured" 로 실패한다.
+        # → 서비스에 쓸 ECU 를 netns 에 자동 포함시켜 수동 정합성 부담을 없앤다.
+        base_ecus = _split_csv(self.stub_ecus) or list(DEFAULT_STUB_ECUS.get(self.net_mode, []))
+        ecus = list(base_ecus)
+        for s in self.start_services:
+            if s["ecu"] not in ecus:
+                ecus.append(s["ecu"])
+        resolved_ecus = ecus  # 검증에 쓸 실제 적용 ecus
         config = build_config(
             ends=self.ends,
             iface=self.iface,
