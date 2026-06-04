@@ -21,7 +21,6 @@ import queue
 import socket
 import threading
 import time
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -261,51 +260,88 @@ HKMC_5TH_WIDE_APP_LIST = [
 ]
 
 # ---------------------------------------------------------------------------
-# Key definitions  (nHK subset — MKBD naming convention)
+# Key definitions
 # ---------------------------------------------------------------------------
+
 # "msg": True  → keyMessage 방식 (cmd+subCmd, 데이터 없음)
 # "key": int   → keyExt 방식 (cmd+subCmd+keyData as int)
 # "dial": True → DIAL_ACTION 서브커맨드 사용, direction 필드 필요
-#
-# ── nHK 매핑 (MKBD 값 기준) ────────────────────────────────────────────────
-# NAVI     → CMD_NAVI_KEY=0x63, msg
-# RADIO    → CMD_HKEY, MKBD_RADIO=0x12      (≡ HKEY_MEDIA)
-# MEDIA    → CMD_HKEY, MKBD_MEDIA=0x14      (≡ HKEY_TRACK)
-#              short: send_key_by_name("MEDIA")                   → sub_cmd=SHORT_KEY
-#              long:  send_key_by_name("MEDIA", sub_cmd=LONG_KEY) → MEDIA_PRE 동작
-# CUSTOM   → CMD_HKEY, MKBD_CUSTOM=0x16     (≡ HKEY_NAV)
-#              short: send_key_by_name("CUSTOM")
-#              long:  send_key_by_name("CUSTOM", sub_cmd=LONG_KEY)
-# MAP      → CMD_HKEY, MKBD_MAP=0x11        (≡ HKEY_FMAM)
-# SETUP    → CMD_HKEY, MKBD_SETUP=0x18      (≡ HKEY_SETUP)
-#              short: send_key_by_name("SETUP")
-#              long:  send_key_by_name("SETUP",  sub_cmd=LONG_KEY)
-# TUNE_UP  → CMD_HKEY, MKBD_TUNE_CLOCK=0xA0,  dial, CLOCK
-# TUNE_DN  → CMD_HKEY, MKBD_TUNE_ANTICLOCK=0xA0, dial, ANTI_CLOCK
-# TUNE_PRE → CMD_HKEY, MKBD_TUNE_PRESS=0x1C  (≡ HKEY_TUNE_CENTER)
-# VOL_UP   → CMD_HKEY, MKBD_POWER_VOLUME_CLOCK=0xF1, dial, CLOCK
-# VOL_DN   → CMD_HKEY, MKBD_POWER_VOLUME_ANTICLOCK=0xF1, dial, ANTI_CLOCK
-# POWER    → CMD_HKEY, MKBD_POWER_VOLUME_PRESS=0xF0 (≡ HKEY_VOLUME_CENTER)
-# SEEK_UP  → CMD_SWC,  SWC_SEEK_UP=0x09
-# SEEK_DN  → CMD_SWC,  SWC_SEEK_DOWN=0x08
 HKMC5TH_WIDE_KEYS: dict[str, dict] = {
-    # ── MKBD (CMD_HKEY=0x60 / CMD_NAVI_KEY=0x63) ──────────────────────────
-    "NAVI":     {"cmd": CMD_NAVI_KEY, "msg": True},                                          # 0x63  (msg)
-    "RADIO":    {"cmd": CMD_HKEY, "key": MKBD_RADIO},                                        # 0x12
-    "MEDIA":    {"cmd": CMD_HKEY, "key": MKBD_MEDIA},                                        # 0x14  (long → LONG_KEY)
-    "CUSTOM":   {"cmd": CMD_HKEY, "key": MKBD_CUSTOM},                                       # 0x16  (long → LONG_KEY)
-    "MAP":      {"cmd": CMD_HKEY, "key": MKBD_MAP},                                          # 0x11
-    "SETUP":    {"cmd": CMD_HKEY, "key": MKBD_SETUP},                                        # 0x18  (long → LONG_KEY)
-    "TUNE_UP":  {"cmd": CMD_HKEY, "key": MKBD_TUNE_CLOCK,         "dial": True, "direction": CLOCK},
-    "TUNE_DN":  {"cmd": CMD_HKEY, "key": MKBD_TUNE_ANTICLOCK,     "dial": True, "direction": ANTI_CLOCK},
-    "TUNE_PRE": {"cmd": CMD_HKEY, "key": MKBD_TUNE_PRESS},                                   # 0x1C
-    "VOL_UP":   {"cmd": CMD_HKEY, "key": MKBD_POWER_VOLUME_CLOCK, "dial": True, "direction": CLOCK},
-    "VOL_DN":   {"cmd": CMD_HKEY, "key": MKBD_POWER_VOLUME_ANTICLOCK, "dial": True, "direction": ANTI_CLOCK},
-    "POWER":    {"cmd": CMD_HKEY, "key": MKBD_POWER_VOLUME_PRESS},                           # 0xF0
+    # ── 개별 메시지 키 (데이터 페이로드 없음) ─────────────────────────────
+    "DAYNIGHT":     {"cmd": CMD_DAYNIGHT_KEY,    "msg": True},
+    "RADIO":        {"cmd": CMD_RADIO_KEY,       "msg": True},
+    "MAP":          {"cmd": CMD_MAP_KEY,         "msg": True},
+    "NAVI":         {"cmd": CMD_NAVI_KEY,        "msg": True},
+    "SETTING":      {"cmd": CMD_SETTING_KEY,     "msg": True},
+    "INFO":         {"cmd": CMD_INFO_KEY,        "msg": True},
+    "PHONE":        {"cmd": CMD_PHONE_KEY,       "msg": True},
+    "POWER_ON":     {"cmd": CMD_PERCEIVED_POWER_ON,  "msg": True},
+    "POWER_OFF":    {"cmd": CMD_PERCEIVED_POWER_OFF, "msg": True},
+    "TUNE_NEXT":    {"cmd": CMD_TUNE_NEXT_KEY,   "msg": True},
+    "TUNE_BEFORE":  {"cmd": CMD_TUNE_BEFORE_KEY, "msg": True},
+    "TUNE_PRESS":   {"cmd": CMD_TUNE_PRESS_KEY,  "msg": True},
+    "DMB":          {"cmd": CMD_DMB_KEY,         "msg": True},
+    "MEDIA":        {"cmd": CMD_MEDIA_KEY,       "msg": True},
+    "SEEK":         {"cmd": CMD_SEEK_KEY,        "msg": True},
+    "TRACK":        {"cmd": CMD_TRACK_KEY,       "msg": True},
+    "CALL":         {"cmd": CMD_CALL_KEY,        "msg": True},
+    "CALL_LONG":    {"cmd": CMD_CALLLONG_KEY,    "msg": True},
+    "CALL_END":     {"cmd": CMD_CALLEND_KEY,     "msg": True},
+
+    # ── HKEY (CMD_HKEY=0x60) — keyExt int 방식 ────────────────────────────
+    "HKEY_FMAM":              {"cmd": CMD_HKEY, "key": HKEY_FMAM},
+    "HKEY_MEDIA":             {"cmd": CMD_HKEY, "key": HKEY_MEDIA},
+    "HKEY_SEEK":              {"cmd": CMD_HKEY, "key": HKEY_SEEK},
+    "HKEY_TRACK":             {"cmd": CMD_HKEY, "key": HKEY_TRACK},
+    "HKEY_MAPVOICE":          {"cmd": CMD_HKEY, "key": HKEY_MAPVOICE},
+    "HKEY_NAV":               {"cmd": CMD_HKEY, "key": HKEY_NAV},
+    "HKEY_EJECT":             {"cmd": CMD_HKEY, "key": HKEY_EJECT},
+    "HKEY_SETUP":             {"cmd": CMD_HKEY, "key": HKEY_SETUP},
+    "HKEY_TUNE_CENTER":       {"cmd": CMD_HKEY, "key": HKEY_TUNE_CENTER},
+    "HKEY_TUNE_CLOCK":        {"cmd": CMD_HKEY, "key": HKEY_TUNE_DIAL, "dial": True, "direction": CLOCK},
+    "HKEY_TUNE_ANTI":         {"cmd": CMD_HKEY, "key": HKEY_TUNE_DIAL, "dial": True, "direction": ANTI_CLOCK},
+    "HKEY_VOLUME_CENTER":     {"cmd": CMD_HKEY, "key": HKEY_VOLUME_CENTER},
+    "HKEY_VOLUME_CLOCK":      {"cmd": CMD_HKEY, "key": HKEY_VOLUME_DIAL, "dial": True, "direction": CLOCK},
+    "HKEY_VOLUME_ANTI":       {"cmd": CMD_HKEY, "key": HKEY_VOLUME_DIAL, "dial": True, "direction": ANTI_CLOCK},
 
     # ── SWC (CMD_SWC=0x70) — keyExt int 방식 ─────────────────────────────
-    "SEEK_UP":  {"cmd": CMD_SWC,  "key": SWC_SEEK_UP},                                       # 0x09
-    "SEEK_DN":  {"cmd": CMD_SWC,  "key": SWC_SEEK_DOWN},                                     # 0x08
+    "SWC_PHONE_SEND":         {"cmd": CMD_SWC, "key": SWC_PHONE_SEND},
+    "SWC_PHONE_END":          {"cmd": CMD_SWC, "key": SWC_PHONE_END},
+    "SWC_PTT":                {"cmd": CMD_SWC, "key": SWC_PTT},
+    "SWC_VOLUME_DOWN":        {"cmd": CMD_SWC, "key": SWC_VOLUME_DOWN},
+    "SWC_VOLUME_UP":          {"cmd": CMD_SWC, "key": SWC_VOLUME_UP},
+    "SWC_MUTE":               {"cmd": CMD_SWC, "key": SWC_MUTE},
+    "SWC_MODE":               {"cmd": CMD_SWC, "key": SWC_MODE},
+    "SWC_SEEK_DOWN":          {"cmd": CMD_SWC, "key": SWC_SEEK_DOWN},
+    "SWC_SEEK_UP":            {"cmd": CMD_SWC, "key": SWC_SEEK_UP},
+    "SWC_VOL_SCROLL_DOWN":    {"cmd": CMD_SWC, "key": SWC_VOLUME_SCROLL_DOWN},
+    "SWC_VOL_SCROLL_UP":      {"cmd": CMD_SWC, "key": SWC_VOLUME_SCROLL_UP},
+
+    # ── CCP (CMD_CCP=0x80) — 조그 다이얼 (DIAL_ACTION) ───────────────────
+    "CCP_JOGDIAL_CLOCK":      {"cmd": CMD_CCP, "key": 0x00, "dial": True, "direction": CLOCK},
+    "CCP_JOGDIAL_ANTI":       {"cmd": CMD_CCP, "key": 0x00, "dial": True, "direction": ANTI_CLOCK},
+    "CCP_VOLUME_UP":          {"cmd": CMD_CCP, "key": 0x01, "dial": True, "direction": CLOCK},
+    "CCP_VOLUME_DOWN":        {"cmd": CMD_CCP, "key": 0x01, "dial": True, "direction": ANTI_CLOCK},
+    "CCP_TUNE_UP":            {"cmd": CMD_CCP, "key": 0x04, "dial": True, "direction": CLOCK},
+    "CCP_TUNE_DOWN":          {"cmd": CMD_CCP, "key": 0x04, "dial": True, "direction": ANTI_CLOCK},
+    # ── CCP — 일반 버튼 (BACK / HOME / MENU / JOG PRESS) ─────────────────
+    "CCP_BACK":               {"cmd": CMD_CCP, "key": CCP_BACK},
+    "CCP_HOME":               {"cmd": CMD_CCP, "key": CCP_HOME},
+    "CCP_MENU":               {"cmd": CMD_CCP, "key": CCP_MENU},
+    "CCP_JOG_PRESS":          {"cmd": CMD_CCP, "key": CCP_JOG_PRESS},
+    # ── 별칭 — 사용자 친화 (HOME/BACK 만으로도 호출 가능하게 함) ─────────
+    "HOME":                   {"cmd": CMD_CCP, "key": CCP_HOME},
+    "BACK":                   {"cmd": CMD_CCP, "key": CCP_BACK},
+    "MENU":                   {"cmd": CMD_CCP, "key": CCP_MENU},
+
+    # ── RRC (CMD_RRC=0x90) — keyExt int 방식 ─────────────────────────────
+    "RRC_ENTER":              {"cmd": CMD_RRC, "key": 0x08},
+    "RRC_UP":                 {"cmd": CMD_RRC, "key": 0x00},
+    "RRC_DOWN":               {"cmd": CMD_RRC, "key": 0x01},
+    "RRC_LEFT":               {"cmd": CMD_RRC, "key": 0x03},
+    "RRC_RIGHT":              {"cmd": CMD_RRC, "key": 0x06},
+    "RRC_BACK":               {"cmd": CMD_RRC, "key": 0x09},
+    "RRC_HOME":               {"cmd": CMD_RRC, "key": 0x14},
 }
 
 
@@ -369,9 +405,6 @@ class HKMC5thWideService:
         self._exit_flag = False
         self._send_lock = threading.Lock()
         self._capture_lock = threading.Lock()
-        # 입력(키/탭/스와이프) 진행 카운터 — screencap이 이 동안 lock 획득을 양보.
-        # GIL 보장으로 int read/write 는 atomic 이라 별도 lock 불필요.
-        self._input_pending = 0
 
         # Receive state
         self._recv_queue: queue.Queue = queue.Queue()
@@ -928,28 +961,9 @@ class HKMC5thWideService:
             raise FileNotFoundError(f"HKMC5thWide screenshot file not created: {output_path}")
         return output_path
 
-    @contextmanager
-    def _input_priority(self):
-        """입력(키/탭/스와이프) 진행 표시 컨텍스트.
-
-        이 컨텍스트가 활성화된 동안 `screencap_bytes` 는 새 캡처 lock 획득을
-        잠시 양보(최대 0.5초)하여 입력 요청이 빠르게 lock 을 잡도록 한다.
-        """
-        self._input_pending += 1
-        try:
-            yield
-        finally:
-            if self._input_pending > 0:
-                self._input_pending -= 1
-
     def screencap_bytes(self, screen_type: str = "front_center",
                         fmt: str = "png", timeout: float = 10.0) -> bytes:
         """Capture screenshot and return as PNG/JPEG bytes (BMP → convert)."""
-        # 입력 진행 중이면 캡처 우선순위 양보 (최대 0.5초).
-        _yield_deadline = time.monotonic() + 0.5
-        while self._input_pending > 0 and time.monotonic() < _yield_deadline:
-            time.sleep(0.02)
-
         with self._capture_lock:
             w, h = self.get_screen_size(screen_type)
             self._img_buffer = b""
@@ -976,7 +990,7 @@ class HKMC5thWideService:
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if img is not None:
                 if fmt == "jpeg":
-                    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 30])
+                    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
                 else:
                     _, buf = cv2.imencode(".png", img)
                 return buf.tobytes()
@@ -987,7 +1001,7 @@ class HKMC5thWideService:
             from PIL import Image
             pil_img = Image.open(io.BytesIO(bmp_bytes))
             bio = io.BytesIO()
-            pil_img.save(bio, format="PNG" if fmt == "png" else "JPEG", quality=30)
+            pil_img.save(bio, format="PNG" if fmt == "png" else "JPEG", quality=60)
             return bio.getvalue()
         except Exception:
             pass
@@ -1001,9 +1015,7 @@ class HKMC5thWideService:
     def tap(self, x: int, y: int, screen_type: str = "front_center") -> None:
         """Tap at (x, y)."""
         x, y = int(x), int(y)
-        # _input_priority: 라이브 미러링이 _capture_lock 을 점유 중일 때 다음 캡처를
-        # 양보시켜 입력 응답 지연(2~3초)을 1초 이하로 줄임.
-        with self._input_priority(), self._capture_lock:
+        with self._capture_lock:
             time.sleep(0.3)
             with self._send_lock:
                 self._lcd_touch(x, y)
@@ -1014,7 +1026,7 @@ class HKMC5thWideService:
                    screen_type: str = "front_center") -> None:
         x, y = int(x), int(y)
         interval_sec = interval_ms / 1000.0
-        with self._input_priority(), self._capture_lock:
+        with self._capture_lock:
             with self._send_lock:
                 for i in range(count):
                     self._lcd_touch(x, y)
@@ -1028,7 +1040,7 @@ class HKMC5thWideService:
         """Long press using PRESS_KEY + delay + RELEASE_KEY sub_cmd."""
         x, y = int(x), int(y)
         data = [(x >> 8) & 0xFF, x & 0xFF, (y >> 8) & 0xFF, y & 0xFF]
-        with self._input_priority(), self._capture_lock:
+        with self._capture_lock:
             time.sleep(0.3)
             with self._send_lock:
                 self._make_send_packet(CMD_LCDTOUCH, PRESS_KEY, 0, list(data))
@@ -1042,7 +1054,7 @@ class HKMC5thWideService:
               screen_type: str = "front_center", duration_ms: int = 0) -> None:
         """Swipe (drag) from (x1, y1) to (x2, y2)."""
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-        with self._input_priority(), self._capture_lock:
+        with self._capture_lock:
             time.sleep(0.3)
             with self._send_lock:
                 self._lcd_drag(x1, y1, x2, y2)
@@ -1183,7 +1195,7 @@ class HKMC5thWideService:
         is_msg = bool(key_info.get("msg"))
         is_dial = bool(key_info.get("dial"))
 
-        with self._input_priority(), self._capture_lock:
+        with self._capture_lock:
             if is_msg:
                 # 메시지 키: 데이터 없이 cmd+subCmd만 전송
                 self.send_key_message(cmd, sub_cmd)
