@@ -26,7 +26,10 @@
   ── 연결 직후 UI 자동화 (설치 가이드 "3~4" UI 단계) ──
   post_connect=True 면 Connect() 끝에서 UI 제어 백엔드(port 3000)로:
     [1] POST /config {ends:<ui_version>}            -> UI 버전(ENDS) 선택
-    [2] POST /bencontrol/buttons/<id> {state}       -> Bench IO 토글 ON
+    [2] POST /start {service, ecu} (start_services)  -> 토글 의존 SOME/IP 서비스 기동
+    [3] POST /bencontrol/buttons/<id> {state}       -> Bench IO 토글 ON
+  순서 주의: 토글은 의존 서비스(InfrastructureGotoSleep 등)가 떠 있어야 유지되므로 서비스를 먼저.
+  서비스 start 는 그 ECU 가 netns(stub_ecus)에 있어야 성공("NETNS is not configured" 방지).
   주의: UI 정적 프론트는 8081(api_base), 실제 제어 REST 는 3000(control_base).
   토글 id 는 /config/infos 의 등록목록 → 없으면 toolbox(전체)에서 capability 매칭으로 해석.
   미등록 토글은 auto_register=True 면 POST /config 로 benchconfig 에 자동 등록 후 토글.
@@ -111,6 +114,7 @@ class SCAR:
         control_base: str = "http://localhost:3000",  # scar-server.js 제어 API
         post_connect = True,                     # Connect 끝에 버전선택+bench토글 자동 실행
         ui_version: str = "",                    # UI 에서 선택할 ENDS 버전 (빈 칸 = 건너뜀)
+        start_services = None,                   # 토글 전 자동 start: [{ecu, service}, ...] 또는 JSON
         bench_toggle: str = "",                  # 활성화할 Bench IO 토글 이름/ID (빈 칸 = 건너뜀)
         bench_state: str = "switched",           # 토글 상태 ("switched"=ON / "unswitched"=OFF)
         auto_register = True,                    # 미등록 토글이면 toolbox 에서 찾아 자동 등록
@@ -149,6 +153,7 @@ class SCAR:
         # 연결 직후 UI 자동화
         self.post_connect = _as_bool(post_connect)
         self.ui_version = (ui_version or "").strip()
+        self.start_services = self._parse_services(start_services)
         self.bench_toggle = (bench_toggle or "").strip()
         self.bench_state = (bench_state or "switched").strip() or "switched"
         self.auto_register = _as_bool(auto_register)
@@ -180,7 +185,7 @@ class SCAR:
 
         # ── 연결 직후 UI 자동화 (버전 선택 + bench 토글) ──────
         # setup 이 성공(_setup_done)했고 할 일이 있을 때만. 실패해도 등록 자체는 유지(경고만).
-        if self.post_connect and self._setup_done and (self.ui_version or self.bench_toggle):
+        if self.post_connect and self._setup_done and (self.ui_version or self.start_services or self.bench_toggle):
             pc = self._post_connect()
             msg = f"{msg}\n{pc}"
             self._setup_last_msg = msg
@@ -699,14 +704,44 @@ class SCAR:
         payload = {"service": service, "ecu": ecu, "uuid": uuid or (ecu + service)}
         return self.SendControl("/stop", json.dumps(payload))
 
+    @staticmethod
+    def _parse_services(spec):
+        """start_services 입력 정규화 → [{'ecu':.., 'service':..}, ...].
+
+        object_list(list[dict]) / JSON 문자열 / None 모두 허용. ecu·service 둘 다 있는 항목만.
+        """
+        if not spec:
+            return []
+        if isinstance(spec, str):
+            try:
+                spec = json.loads(spec)
+            except json.JSONDecodeError:
+                return []
+        out = []
+        if isinstance(spec, list):
+            for it in spec:
+                if isinstance(it, dict):
+                    ecu = str(it.get("ecu", "")).strip()
+                    svc = str(it.get("service", "")).strip()
+                    if ecu and svc:
+                        out.append({"ecu": ecu, "service": svc})
+        return out
+
     def _post_connect(self) -> str:
-        """Connect 직후 자동: 제어 백엔드 준비 대기 → 버전 선택 → bench 토글."""
+        """Connect 직후 자동: 제어 백엔드 준비 → 버전 선택 → 서비스 start → bench 토글.
+
+        토글(Wake up/Sleep minimal CDC/SA)은 의존 서비스(예: InfrastructureGotoSleep)가 떠 있어야
+        '유지'되므로(update_powerseq_status.sh 가 미기동 시 강제 OFF), 서비스 start 를 토글보다 먼저 한다.
+        """
         log = [f"[post-connect] UI 자동화 (control={self._control.base_url})"]
         if not self._control_ready():
-            log.append("  FAIL: 제어 백엔드(3000) 미응답 — 버전/토글 건너뜀")
+            log.append("  FAIL: 제어 백엔드(3000) 미응답 — 버전/서비스/토글 건너뜀")
             return "\n".join(log)
         if self.ui_version:
             log.append("  [version] " + self.SelectVersion(self.ui_version))
+        for svc in self.start_services:
+            log.append(f"  [service] {svc['service']}@{svc['ecu']}: "
+                       + self.StartService(svc["service"], svc["ecu"]))
         if self.bench_toggle:
             log.append("  [bench]   " + self.SetBench(self.bench_toggle, on=True))
         return "\n".join(log)
@@ -720,6 +755,7 @@ class SCAR:
             f"control_base  = {self._control.base_url}",
             f"post_connect  = {self.post_connect}",
             f"ui_version    = {self.ui_version or '(unset → skip)'}",
+            f"start_services= {[s['service'] + '@' + s['ecu'] for s in self.start_services] or '(none)'}",
             f"bench_toggle  = {self.bench_toggle or '(unset → skip)'} state={self.bench_state}",
             f"auto_register = {self.auto_register}",
             f"vlan_config   = {self.vlan_config_dir or '(unset → netns skip)'}",

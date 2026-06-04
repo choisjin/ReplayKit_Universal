@@ -447,6 +447,21 @@ def list_available_modules() -> list[dict]:
              {"name": "ui_version", "label": "UI 버전 선택 (ENDS, 비우면 건너뜀)",
               "type": "select", "default": "", "options": [],
               "options_endpoint": "/api/device/scar/versions"},
+             # 토글 전에 자동 start 할 SOME/IP 서비스 (UI 의 'Simulated ECU target' + 'Service to
+             #   simulate/register' → Start 와 동일). bench 토글은 InfrastructureGotoSleep 등이 떠
+             #   있어야 유지되므로 토글보다 먼저 순서대로 start. 해당 ECU 는 stub_ecus 에도 포함돼야 함.
+             {"name": "start_services", "label": "연결 후 자동 start할 서비스 (토글 전, 순서대로)",
+              "type": "object_list",
+              "default_items": [
+                  {"ecu": "PCU_PROXY_FrontEnd_PIU_Mst", "service": "VehicleUtcTime"},
+                  {"ecu": "PCU_PROXY_FrontEnd_PIU_Mst", "service": "InfrastructureGotoSleep"},
+              ],
+              "item_fields": [
+                  {"name": "ecu", "label": "Simulated ECU target", "type": "text",
+                   "default": "PCU_PROXY_FrontEnd_PIU_Mst"},
+                  {"name": "service", "label": "Service to simulate/register", "type": "text",
+                   "default": ""},
+              ]},
              {"name": "bench_toggle", "label": "연결 후 활성화할 Bench 토글 이름 (비우면 건너뜀)",
               "type": "text", "default": "Wake up/Sleep minimal CDC/SA"},
              {"name": "control_base", "label": "SCAR UI 제어 API (port 3000)", "type": "text",
