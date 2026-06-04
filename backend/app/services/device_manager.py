@@ -2427,6 +2427,17 @@ class DeviceManager:
                 module_name = dev.info.get("module", "")
                 if not module_name:
                     continue
+                # 재시작 시 자동 연결을 건너뛸 모듈(SCAR/TH) — 등록은 유지, status=disconnected 로 두고
+                # 사용자가 수동 연결. (자동 연결이 netns/cvd-ebr/cuttlefish 에 부작용을 일으켜서)
+                try:
+                    from .module_service import MODULES_NO_STARTUP_AUTOCONNECT
+                    if module_name in MODULES_NO_STARTUP_AUTOCONNECT:
+                        dev.status = "disconnected"
+                        logger.info("Module %s (%s): startup auto-connect skipped (manual connect required)",
+                                    dev.id, module_name)
+                        continue
+                except Exception as e:
+                    logger.debug("startup auto-connect skip check for %s failed: %s", module_name, e)
                 # 가상 모듈 (plugins/*.py(.pyd)에도 lge.auto에도 클래스 없음) — 실제 인스턴스 생성 불필요.
                 # 예: "OCR" — module_service가 직접 처리(playback_service에서 가상 핸들러).
                 # _ensure_default_ocr_device가 미리 설정한 status="connected"를 유지하기 위해 skip.

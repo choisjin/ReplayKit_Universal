@@ -1505,6 +1505,12 @@ async def execute_module_function(
 # 현재 SCAR 만 — 해제 시 netns 복원이 필요(인터넷 복구). 추가하려면 해당 module 에 Disconnect 구현 필요.
 MODULES_WITH_DISCONNECT_TEARDOWN = {"SCAR"}
 
+# ReplayKit 재시작 시 자동 연결(startup Setup/Connect)을 '건너뛸' module 화이트리스트.
+# SCAR/TH 는 연결 시 netns 재구성·UI 재기동·cuttlefish/microservice 등 무거운(그리고 cvd-ebr 를
+# 건드리는) Setup 을 돌리므로, 재시작마다 자동 연결되면 부작용(TH "connected 인데 동작 안 함",
+# cvd-ebr flush 등)이 크다. 등록은 유지하되 status=disconnected 로 두고 사용자가 수동 연결하게 한다.
+MODULES_NO_STARTUP_AUTOCONNECT = {"SCAR", "TH"}
+
 
 def reset_instance(module_name: str) -> None:
     """Remove cached instance (단순 무효화 — 재생성용. teardown 호출 안 함)."""
