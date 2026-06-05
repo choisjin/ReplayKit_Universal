@@ -816,7 +816,7 @@ def get_module_functions(module_name: str) -> list[dict]:
         # SCAR.Disconnect 는 device_manager 연결해제/등록삭제 시 netns 복원용으로 자동 호출 —
         # 시나리오 스텝에 노출할 필요 없음 (Reconnect/Setup/SendApi/Exec 등은 그대로 노출).
         "SCAR": {"Disconnect"},
-        "CMD": {"CheckCapture", "RunCapture", "RunBackground", "ListBackground"},
+        "CMD": {"CheckCapture", "RunCapture", "ListBackground"},
         # SHELL 은 CMD 의 Linux/macOS 대응 모듈 — 노출 정책 동일
         "SHELL": {"CheckCapture", "RunCapture", "RunBackground", "ListBackground"},
     }
