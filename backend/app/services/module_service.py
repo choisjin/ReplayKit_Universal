@@ -240,7 +240,8 @@ def list_available_modules() -> list[dict]:
     #   "socket" = needs IP host address
     #   custom list = specific fields [{name, label, type, default?}]
     # connect_fields: extra fields shown in the UI when adding a device
-    #   Each field: {name, label, type("text"|"number"|"select"), default?, options?[]}
+    #   Each field: {name, label, type("text"|"number"|"select"|"multiselect"), default?, options?[]}
+    #   multiselect: 고정 options 중 중복 선택(배열). default 는 CSV 문자열, 백엔드로는 CSV 전달.
     modules = [
         {"name": "POWER", "label": "POWER", "connect_type": "serial",
          "connect_fields": []},
@@ -456,6 +457,14 @@ def list_available_modules() -> list[dict]:
              #   UI 정적 프론트는 8081, 실제 제어 REST 는 3000. 버전선택/토글은 3000 으로 간다.
              #   UI 버전(ENDS)은 별도 필드 없이 상단 'ENDS 버전'(ends)에서 도출(_resolve_ui_version):
              #   netns ENDS(FaceStep1_2025_R10) → /list/ends 매칭 → UI ENDS(2025_r10).
+             # ── Bench Capabilities (8081 'Select Bench Capabilities' 최초 셋업) ──
+             #   이게 안 들어가면 서버 benchConfig 에 capabilities/benchcontrol 키가 안 생겨
+             #   토글이 scar-server.js 에서 '.length of undefined' 로 죽고(500), 8081 은 최초 화면에 멈춤.
+             #   표시이름 → 서버 id 변환(소문자+공백→'_')은 SCAR._compute_cap_id 가 처리.
+             {"name": "capabilities", "label": "Bench Capabilities (중복 선택)", "type": "multiselect",
+              "default": "Multiverse, Without PCU HW",
+              "options": ["RelayCard", "Multiverse", "Without PCU HW", "Without PCU HW but CF PCU",
+                          "With PCU HW", "PCU DTOOL", "CAN Multiverse"]},
              # 토글 전에 자동 start 할 SOME/IP 서비스 (UI 의 'Simulated ECU target' + 'Service to
              #   simulate/register' → Start 와 동일). bench 토글은 InfrastructureGotoSleep 등이 떠
              #   있어야 유지되므로 토글보다 먼저 순서대로 start. 해당 ECU 는 stub_ecus 에도 포함돼야 함.

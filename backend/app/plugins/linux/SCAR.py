@@ -25,10 +25,13 @@
 
   ── 연결 직후 UI 자동화 (설치 가이드 "3~4" UI 단계) ──
   post_connect=True 면 Connect() 끝에서 UI 제어 백엔드(port 3000)로:
+    [0] POST /config {capabilities:[...]} (capabilities) -> Bench Capabilities 최초 셋업
     [1] POST /config {ends:<ui_version>}            -> UI 버전(ENDS) 선택
     [2] POST /start {service, ecu} (start_services)  -> 토글 의존 SOME/IP 서비스 기동
     [3] POST /bencontrol/buttons/<id> {state}       -> Bench IO 토글 ON
-  순서 주의: 토글은 의존 서비스(InfrastructureGotoSleep 등)가 떠 있어야 유지되므로 서비스를 먼저.
+  순서 주의: capabilities 가 먼저여야 benchConfig 에 benchcontrol 키가 생겨 토글이 가능하다
+  (미셋업 시 8081 은 'Select Bench Capabilities' 최초 화면, 토글은 서버에서 .length undefined 로 죽음).
+  토글은 의존 서비스(InfrastructureGotoSleep 등)가 떠 있어야 유지되므로 서비스를 먼저.
   서비스 start 는 그 ECU 가 netns(stub_ecus)에 있어야 성공("NETNS is not configured" 방지).
   주의: UI 정적 프론트는 8081(api_base), 실제 제어 REST 는 3000(control_base).
   토글 id 는 /config/infos 의 등록목록 → 없으면 toolbox(전체)에서 capability 매칭으로 해석.
@@ -41,6 +44,7 @@
   - Reconnect()                      -> scar.sh 백그라운드 spawn + 20s 대기
   - Setup()                          -> netns VLAN 구성 (수동 재실행 가능)
   - NetnsStatus()                    -> docker exec scar ip netns 출력
+  - SetCapabilities(caps, force)     -> POST /config {capabilities} (Bench Capabilities 최초 셋업)
   - ListUiVersions()                 -> GET /list/ends (선택 가능 버전)
   - SelectVersion(version)           -> POST /config {ends} (UI 버전 선택)
   - ListBenchToggles()               -> GET /config/infos (등록된 토글 id/name)
@@ -55,6 +59,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from typing import Optional
 
@@ -81,6 +86,13 @@ def _split_csv(s: str) -> list[str]:
     if not s:
         return []
     return [tok.strip() for tok in s.split(",") if tok.strip()]
+
+
+def _csv_str(v) -> str:
+    """multiselect(list/tuple) → 'a,b', CSV/문자열 → strip. 폼이 배열·CSV 어느 쪽을 줘도 허용."""
+    if isinstance(v, (list, tuple)):
+        return ",".join(str(x).strip() for x in v if str(x).strip())
+    return str(v or "").strip()
 
 
 class SCAR:
@@ -113,7 +125,8 @@ class SCAR:
         # 주의: UI 정적 프론트는 8081(api_base), 실제 제어 REST 는 3000(control_base).
         #       버전 선택(/config {ends})·bench 토글(/bencontrol/buttons/<id>)은 3000 으로 간다.
         control_base: str = "http://localhost:3000",  # scar-server.js 제어 API
-        post_connect = True,                     # Connect 끝에 버전선택+bench토글 자동 실행
+        post_connect = True,                     # Connect 끝에 capabilities+버전선택+bench토글 자동 실행
+        capabilities: str = "",                  # Bench Capabilities (CSV, 예: "Multiverse,Without PCU HW") — 최초 셋업
         ui_version: str = "",                    # UI 에서 선택할 ENDS 버전 (빈 칸 = 건너뜀)
         start_services = None,                   # 토글 전 자동 start: [{ecu, service}, ...] 또는 JSON
         bench_toggle: str = "",                  # 활성화할 Bench IO 토글 이름/ID (빈 칸 = 건너뜀)
@@ -154,6 +167,7 @@ class SCAR:
         self.launch_scar = _as_bool(launch_scar)
         # 연결 직후 UI 자동화
         self.post_connect = _as_bool(post_connect)
+        self.capabilities = _csv_str(capabilities)   # multiselect(list) 또는 CSV 문자열 허용
         self.ui_version = (ui_version or "").strip()
         self.start_services = self._parse_services(start_services)
         self.bench_toggle = (bench_toggle or "").strip()
@@ -187,7 +201,7 @@ class SCAR:
 
         # ── 연결 직후 UI 자동화 (버전 선택 + bench 토글) ──────
         # setup 이 성공(_setup_done)했고 할 일이 있을 때만. 실패해도 등록 자체는 유지(경고만).
-        if self.post_connect and self._setup_done and (self.ui_version or self.ends or self.start_services or self.bench_toggle):
+        if self.post_connect and self._setup_done and (self.capabilities or self.ui_version or self.ends or self.start_services or self.bench_toggle):
             pc = self._post_connect()
             msg = f"{msg}\n{pc}"
             self._setup_last_msg = msg
@@ -567,6 +581,52 @@ class SCAR:
                 return v
         return norm
 
+    @staticmethod
+    def _compute_cap_id(name: str) -> str:
+        """capability 표시이름 → 서버 id. UI check_capabilities.compute_id 와 동일.
+
+        규칙: 소문자화 + 연속 공백 → '_'. 이미 id 형태('without_pcu_hw')면 그대로 통과.
+          'Without PCU HW' → 'without_pcu_hw',  'Multiverse' → 'multiverse'
+        """
+        return re.sub(r"\s+", "_", str(name).strip().lower())
+
+    def _fetch_capabilities(self):
+        """현재 서버에 설정된 capabilities 리스트. 미설정/실패 시 None."""
+        data = self._fetch_infos()
+        if data is None:
+            return None
+        caps = data.get("capabilities")
+        return caps if isinstance(caps, list) and caps else None
+
+    def SetCapabilities(self, caps: str = "", force: bool = False) -> str:
+        """POST /config {capabilities:[...]} — Bench Capabilities 최초 셋업.
+
+        8081 'Select Bench Capabilities' 최초 화면 등가. 이 단계가 빠지면 서버 benchConfig 에
+        capabilities/benchcontrol 키가 생기지 않아, 토글이 scar-server.js 에서
+        'Cannot read property length of undefined' 로 죽는다(/bencontrol/buttons → 500).
+        caps: CSV/리스트 표시이름·ID (예: 'Multiverse,Without PCU HW'). 미지정 시 생성자 capabilities.
+        force=False 면 이미 설정돼 있으면 건너뜀(UI 의 `if(!res.capabilities)` 와 동일).
+        """
+        raw = _csv_str(caps) or self.capabilities
+        if not raw:
+            return "FAIL: no capabilities given (capabilities 비어있음)"
+        ids = [self._compute_cap_id(c) for c in _split_csv(raw)]
+        if not ids:
+            return "FAIL: no valid capability ids"
+        if not force:
+            existing = self._fetch_capabilities()
+            if existing:
+                return f"skip: capabilities already set ({existing})"
+        resp = self._control.post(
+            self._control.base_url + "/config",
+            data={"capabilities": ids},
+        )
+        if resp is None:
+            return "FAIL: control API(3000) POST /config (capabilities) failed"
+        if resp.status_code != 200:
+            return f"FAIL: /config capabilities status={resp.status_code} {resp.text[:256]}"
+        return f"ok: capabilities={ids} selected"
+
     def SelectVersion(self, version: str = "") -> str:
         """POST /config {ends:<version>} — UI 버전(ENDS) 선택.
 
@@ -768,8 +828,12 @@ class SCAR:
         """
         log = [f"[post-connect] UI 자동화 (control={self._control.base_url})"]
         if not self._control_ready():
-            log.append("  FAIL: 제어 백엔드(3000) 미응답 — 버전/서비스/토글 건너뜀")
+            log.append("  FAIL: 제어 백엔드(3000) 미응답 — capabilities/버전/서비스/토글 건너뜀")
             return "\n".join(log)
+        # Bench Capabilities: 최초 셋업(8081 'Select Bench Capabilities'). 버전/토글보다 먼저 —
+        # 이게 없으면 benchcontrol 키가 안 생겨 토글이 서버에서 .length undefined 로 죽는다.
+        if self.capabilities:
+            log.append("  [caps]    " + self.SetCapabilities())
         # UI 버전: 명시 ui_version 우선, 없으면 상단 ENDS 버전(self.ends)에서 도출.
         ui_ver = self.ui_version or self._resolve_ui_version()
         if ui_ver:
@@ -789,6 +853,7 @@ class SCAR:
             f"api_base      = {self._api.base_url}",
             f"control_base  = {self._control.base_url}",
             f"post_connect  = {self.post_connect}",
+            f"capabilities  = {self.capabilities or '(unset → skip)'}",
             f"ui_version    = {self.ui_version or '(unset → skip)'}",
             f"start_services= {[s['service'] + '@' + s['ecu'] for s in self.start_services] or '(none)'}",
             f"bench_toggle  = {self.bench_toggle or '(unset → skip)'} state={self.bench_state}",

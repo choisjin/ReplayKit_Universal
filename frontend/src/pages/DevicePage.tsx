@@ -14,7 +14,7 @@ const { Option } = Select;
 interface ConnectField {
   name: string;
   label: string;
-  type: 'text' | 'number' | 'select' | 'object_list' | 'password' | 'folder';
+  type: 'text' | 'number' | 'select' | 'multiselect' | 'object_list' | 'password' | 'folder';
   default?: string;
   options?: string[];
   // object_list 전용: 각 row의 sub-field 정의
@@ -1346,6 +1346,19 @@ export default function DevicePage() {
             value={values[f.name] ?? f.default}
             onChange={(v) => onChange({ ...values, [f.name]: v })}
           />
+        ) : f.type === 'multiselect' && f.options ? (
+          <Select
+            mode="multiple"
+            allowClear
+            style={{ width: '100%' }}
+            placeholder="중복 선택 가능"
+            value={Array.isArray(values[f.name])
+              ? values[f.name]
+              : String(values[f.name] ?? f.default ?? '').split(',').map(s => s.trim()).filter(Boolean)}
+            onChange={(v) => onChange({ ...values, [f.name]: v })}
+          >
+            {f.options.map(o => <Option key={o} value={o}>{o}</Option>)}
+          </Select>
         ) : f.type === 'select' && f.options ? (
           <Select
             style={{ width: '100%' }}
