@@ -931,6 +931,22 @@
           "encoding": "Encoding (default: utf-8)",
           "append_newline": "Auto-append newline. true/false (default: true)"
         }
+      },
+      "Monitor_pass_on_keyword": {
+        "description": "WITHOUT sending any command (no write), PASS if keyword is found in the log. If include_past=True, first scans logs captured so far, then monitors new lines for `time` seconds; PASS on first match. Sends nothing (not even a newline), so it does not disturb a webcam on the same USB hub.",
+        "params": {
+          "keyword": "Keyword to PASS on (substring match)",
+          "time": "Seconds to wait for future log lines. Default 5. 0 = scan past buffer only",
+          "include_past": "Whether to also scan logs captured so far. true/false (default true)"
+        }
+      },
+      "Monitor_fail_on_keyword": {
+        "description": "WITHOUT sending any command (no write), FAIL if keyword is found in the log. For monitoring abnormal keywords (ERROR/crash). Scans past buffer (if include_past) and new lines for `time` seconds, accumulating all matches.",
+        "params": {
+          "keyword": "Keyword that triggers FAIL (substring match)",
+          "time": "Seconds to monitor future log lines. Default 5. 0 = scan past buffer only",
+          "include_past": "Whether to also scan logs captured so far. true/false (default true)"
+        }
       }
     }
   },

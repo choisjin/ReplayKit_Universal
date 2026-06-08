@@ -670,6 +670,158 @@ class SerialLogging:
         return f"FAIL: keyword '{keyword}' not detected within {float(time):g}s after command"
 
     # ------------------------------------------------------------------
+    # 명령 전송 없이 로그만 판독 (수동 모니터링)
+    #   - 시리얼로 아무것도 쓰지 않으므로(write 없음) 디바이스 리셋/USB 전류 스파이크가
+    #     없어, 같은 USB 허브에 물린 웹캠 녹화 등 다른 장치에 영향을 주지 않는다.
+    #   - 이미 캡처된 버퍼(과거) + 앞으로 time초 동안 들어오는 라인을 함께 검사한다.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _current_step_context() -> tuple[Optional[int], int]:
+        """현재 재생 스텝 컨텍스트(parent_step_id, repeat_index). 재생 외이면 (None, 1)."""
+        try:
+            from backend.app.services.playback_service import get_current_step_context
+            return get_current_step_context()
+        except Exception:
+            return None, 1
+
+    def Monitor_pass_on_keyword(self, keyword: str, time: float = 5,
+                                 include_past: bool = True) -> str:
+        """**명령을 전송하지 않고** 로그에서 keyword를 찾으면 PASS 판정.
+
+        SendCommand_pass_on_keyword와 달리 시리얼 포트로 아무것도 쓰지 않는다
+        (write로 인한 디바이스 리셋/USB 전류 스파이크가 없어 같은 허브의 웹캠 녹화 등
+        다른 장치에 영향을 주지 않음). 캡처 세션은 StartLogging 또는 디바이스 Connect로
+        이미 돌고 있어야 한다.
+
+        검사 범위:
+          1) include_past=True(기본): **현재까지 캡처된 버퍼 전체**를 먼저 스캔 —
+             이미 출력된 로그에 keyword가 있으면 즉시 PASS.
+          2) 이후 time초 동안 새로 들어오는 라인을 폴링하며 검사 — 발견 즉시 PASS.
+          3) time초 안에 못 찾으면 fail row 1건 누적 후 FAIL.
+             (time=0 이면 과거 버퍼만 1회 검사하고 끝.)
+
+        Args:
+            keyword: PASS를 만족할 키워드 (substring match)
+            time: 미래 로그 대기 시간(초). 기본 5. 0이면 과거 버퍼만 검사.
+            include_past: 현재까지 캡처된 로그(과거)도 검사할지 (기본 True)
+        """
+        import time as _time_mod
+        if not keyword:
+            return "ERROR: keyword가 비어 있습니다"
+
+        # 1) 과거 버퍼 스캔(옵션) + 미래 검사 시작 인덱스 결정
+        with self._lock:
+            check_idx = 0 if include_past else len(self._logs)
+            snapshot_logs = self._logs[check_idx:]
+        for ln in snapshot_logs:
+            if keyword in ln:
+                return f"PASS: keyword '{keyword}' detected — {ln.strip()[:120]}"
+        check_idx += len(snapshot_logs)
+
+        logger.info("[SerialLogging] Monitor_pass_on_keyword: kw='%s' time=%.1fs include_past=%s",
+                    keyword, float(time), include_past)
+
+        # 2) 미래 라인 폴링
+        deadline = _time_mod.time() + max(0.0, float(time))
+        while _time_mod.time() < deadline:
+            with self._lock:
+                snapshot_logs = self._logs[check_idx:]
+            check_idx += len(snapshot_logs)
+            for ln in snapshot_logs:
+                if keyword in ln:
+                    return f"PASS: keyword '{keyword}' detected — {ln.strip()[:120]}"
+            _time_mod.sleep(0.1)
+
+        # 3) 최종 확인 — deadline 직전 도착 라인 누락 방지
+        with self._lock:
+            tail_logs = self._logs[check_idx:]
+        for ln in tail_logs:
+            if keyword in ln:
+                return f"PASS: keyword '{keyword}' detected — {ln.strip()[:120]}"
+
+        # 타임아웃 — fail row 1건 보고
+        parent_step_id, parent_repeat_index = self._current_step_context()
+        fail_ts = _time_mod.time()
+        fail_line = f"(timeout: '{keyword}' not found in serial log)"
+        try:
+            from backend.app.services.playback_service import report_runtime_fail
+            report_runtime_fail(
+                "SerialLogging", keyword, fail_ts, fail_line, reason="missing",
+                repeat_index=parent_repeat_index, parent_step_id=parent_step_id,
+            )
+        except Exception:
+            pass
+        return f"FAIL: keyword '{keyword}' not detected within {float(time):g}s"
+
+    def Monitor_fail_on_keyword(self, keyword: str, time: float = 5,
+                                 include_past: bool = True) -> str:
+        """**명령을 전송하지 않고** 로그에서 keyword가 발견되면 FAIL 판정.
+
+        'ERROR'/'crash' 등 비정상 키워드를 write 없이 모니터링. include_past=True면
+        현재까지의 버퍼도 검사하고, time초 동안 들어오는 라인도 검사하여, 매칭된 모든
+        라인을 fail row로 누적한다(결과 표에 인라인 표시).
+
+        Args:
+            keyword: FAIL을 일으킬 검출 키워드 (substring match)
+            time: 미래 로그 모니터링 시간(초). 기본 5. 0이면 과거 버퍼만 검사.
+            include_past: 현재까지 캡처된 로그(과거)도 검사할지 (기본 True)
+        """
+        import time as _time_mod
+        if not keyword:
+            return "ERROR: keyword가 비어 있습니다"
+
+        parent_step_id, parent_repeat_index = self._current_step_context()
+        hits: list[tuple[float, str]] = []
+
+        # 1) 과거 버퍼 스캔(옵션)
+        with self._lock:
+            check_idx = 0 if include_past else len(self._logs)
+            snapshot_logs = self._logs[check_idx:]
+            snapshot_ts = self._log_capture_ts[check_idx:check_idx + len(snapshot_logs)]
+        for ln, ts in zip(snapshot_logs, snapshot_ts):
+            if keyword in ln:
+                hits.append((ts, ln))
+        check_idx += len(snapshot_logs)
+
+        logger.info("[SerialLogging] Monitor_fail_on_keyword: kw='%s' time=%.1fs include_past=%s",
+                    keyword, float(time), include_past)
+
+        # 2) 미래 라인 폴링
+        deadline = _time_mod.time() + max(0.0, float(time))
+        while _time_mod.time() < deadline:
+            with self._lock:
+                snapshot_logs = self._logs[check_idx:]
+                snapshot_ts = self._log_capture_ts[check_idx:check_idx + len(snapshot_logs)]
+            check_idx += len(snapshot_logs)
+            for ln, ts in zip(snapshot_logs, snapshot_ts):
+                if keyword in ln:
+                    hits.append((ts, ln))
+            _time_mod.sleep(0.1)
+
+        # 3) 최종 확인
+        with self._lock:
+            tail_logs = self._logs[check_idx:]
+            tail_ts = self._log_capture_ts[check_idx:check_idx + len(tail_logs)]
+        for ln, ts in zip(tail_logs, tail_ts):
+            if keyword in ln:
+                hits.append((ts, ln))
+
+        if hits:
+            try:
+                from backend.app.services.playback_service import report_runtime_fail
+                for ts_b, ln in hits:
+                    report_runtime_fail(
+                        "SerialLogging", keyword, ts_b, ln, reason="matched",
+                        repeat_index=parent_repeat_index, parent_step_id=parent_step_id,
+                    )
+            except Exception:
+                pass
+            return (f"FAIL: keyword '{keyword}' detected {len(hits)} time(s) — "
+                    f"{hits[0][1].strip()[:120]}")
+        return f"PASS: keyword '{keyword}' not detected within {float(time):g}s"
+
+    # ------------------------------------------------------------------
     # 상태 조회 (내부)
     # ------------------------------------------------------------------
 

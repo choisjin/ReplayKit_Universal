@@ -981,6 +981,22 @@
           "encoding": "인코딩 (기본 utf-8)",
           "append_newline": "개행 문자 자동 추가. true/false (기본 true)"
         }
+      },
+      "Monitor_pass_on_keyword": {
+        "description": "명령을 전송하지 않고(write 없음) 로그에서 keyword를 찾으면 PASS. include_past=True면 현재까지 캡처된 로그(과거)를 먼저 검사하고, 이후 time초 동안 새로 들어오는 로그도 검사하여 발견 즉시 PASS. 못 찾으면 FAIL. 빈 명령(\n)조차 보내지 않아 같은 USB 허브의 웹캠 녹화 등에 영향을 주지 않음.",
+        "params": {
+          "keyword": "PASS를 만족할 키워드 (부분 문자열 매칭). 예: '[3 to 4] SD_Reason 0'",
+          "time": "미래 로그 대기 시간(초). 기본 5. 0이면 과거 버퍼만 1회 검사",
+          "include_past": "현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)"
+        }
+      },
+      "Monitor_fail_on_keyword": {
+        "description": "명령을 전송하지 않고(write 없음) 로그에서 keyword가 발견되면 FAIL. 'ERROR'/'crash' 등 비정상 키워드 모니터링용. include_past=True면 과거 로그도 검사하고, time초 동안 들어오는 로그도 검사하여 매칭된 모든 라인을 fail로 누적. 발견 없으면 PASS.",
+        "params": {
+          "keyword": "FAIL을 일으킬 검출 키워드 (부분 문자열 매칭). 예: 'ERROR', 'crash'",
+          "time": "미래 로그 모니터링 시간(초). 기본 5. 0이면 과거 버퍼만 검사",
+          "include_past": "현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)"
+        }
       }
     }
   },
