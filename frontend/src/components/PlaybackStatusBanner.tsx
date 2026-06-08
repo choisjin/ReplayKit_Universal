@@ -60,7 +60,10 @@ export default function PlaybackStatusBanner() {
   const total = monitor.total_cycles || 1;
   const step = monitor.current_step || 0;
   const totalSteps = monitor.total_steps || 0;
-  const cyclePct = total > 0 ? Math.floor((cur / total) * 100) : 0;
+  // 전체 진행률 = (완료 회차 * 회차당 스텝 + 현재 스텝) / (전체 회차 * 회차당 스텝)
+  const totalUnits = total * totalSteps;
+  const doneUnits = Math.max(0, cur - 1) * totalSteps + step;
+  const cyclePct = totalUnits > 0 ? Math.min(100, Math.floor((doneUnits / totalUnits) * 100)) : 0;
   const name = monitor.scenario_name || '-';
   const passed = monitor.passed || 0;
   const failed = monitor.failed || 0;
