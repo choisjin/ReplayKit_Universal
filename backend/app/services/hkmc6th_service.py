@@ -374,8 +374,13 @@ class HKMC6thService:
         self.port = port
         self.device_id = device_id
         self.device_model = device_model
-        # CCRC 디바이스는 ccIC_Agent legacy 매핑 사용 (REAR_R=1, REAR_L=2)
-        self._is_ccrc_legacy_monitor = device_model == "ccRC"
+        # CCRC 디바이스는 ccIC_Agent legacy 매핑 사용 (REAR_R=1, REAR_L=2).
+        # device_model이 비어있거나 케이스가 다를 수 있어(예: device_id "CCRC_1"),
+        # device_model·device_id 양쪽을 대소문자 무시 substring으로 판별한다.
+        # (device_manager Gen5 자동 마이그레이션과 동일한 패턴 — line ~2525)
+        _ccrc_dm = (device_model or "").lower()
+        _ccrc_did = (device_id or "").lower()
+        self._is_ccrc_legacy_monitor = "ccrc" in _ccrc_dm or "ccrc" in _ccrc_did
         self._key_overrides: dict[str, dict] = dict(key_overrides or {})
 
         # 클러스터 SSH 캡처 설정 (legacy CLU_IMG_GET 호환). 기본 root/빈 패스워드(ICAS QNX 패턴).
