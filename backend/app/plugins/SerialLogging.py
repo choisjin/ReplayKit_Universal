@@ -725,43 +725,143 @@ class SerialLogging:
             self._capture_thread = None
 
     def _capture_loop(self):
-        """백그라운드 스레드: 시리얼 데이터를 줄 단위로 수신."""
-        while self._capturing and self._serial and self._serial.is_open:
+        """백그라운드 스레드: 시리얼 데이터를 줄 단위로 수신.
+
+        **장치가 껐다 켜지거나 USB가 재열거되어 read가 실패해도 스레드를 종료하지
+        않는다.** 끊긴 핸들을 정리하고 self._port로 재open을 반복 시도하여, 장치가
+        다시 올라오면 **같은 버퍼(self._logs)에 로그를 이어서 계속 캡처**한다.
+        이전 구현은 read 예외 한 번에 break → 스레드가 영구 종료되어 이후 라인이
+        한 줄도 안 잡히고(부분 저장) pass_on_keyword가 응답을 못 받아 오판하던 문제를
+        해결한다.
+
+        종료는 StopLogging/Disconnect가 self._capturing을 False로 만들 때만 일어난다.
+        끊김/재연결 구간은 마커 라인으로 로그에 가시화하여 결측 구간을 알 수 있게 한다.
+
+        주의(Linux): USB 재열거 시 디바이스 노드 번호가 바뀌면(ttyUSB0→ttyUSB1) 원래
+        경로 재open이 실패할 수 있다. 안정적인 by-id 심볼릭 경로(/dev/serial/by-id/...)
+        사용을 권장한다.
+        """
+        backoff = 0.5  # 재연결 실패 시 지수 backoff (최대 5초)
+        while self._capturing:
+            ser = self._serial
+            # 핸들이 없거나 닫혀 있으면 재연결 시도 (버퍼는 유지 → 이어서 기록)
+            if ser is None or not getattr(ser, "is_open", False):
+                if self._reconnect_serial():
+                    backoff = 0.5
+                    ser = self._serial
+                else:
+                    self._interruptible_sleep(backoff)
+                    backoff = min(backoff * 2, 5.0)
+                    continue
+
             try:
-                raw = self._serial.readline()
-                if not raw:
-                    continue
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line:
-                    continue
+                raw = ser.readline()
+            except Exception as e:
+                # 장치 분리/리셋 — 스레드를 죽이지 않고 핸들만 정리 후 재연결 루프로 진입
+                if self._capturing:
+                    logger.warning("[SerialLogging] read failed (%s) — reconnecting to %s",
+                                   e, self._port)
+                    self._emit_marker("serial disconnected — reconnecting")
+                self._safe_close_serial()
+                continue
 
-                cap_ts = time.time()
-                ts = time.strftime("%H:%M:%S", time.localtime(cap_ts))
-                stamped = f"[{ts}] {line}"
+            if not raw:
+                continue
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
 
-                with self._lock:
-                    self._logs.append(stamped)
-                    self._log_capture_ts.append(cap_ts)
-                    self._line_counter += 1
+            cap_ts = time.time()
+            ts = time.strftime("%H:%M:%S", time.localtime(cap_ts))
+            stamped = f"[{ts}] {line}"
 
-                # 파일 저장 중이면 기록
-                if self._save_file:
-                    try:
-                        self._save_file.write(stamped + "\n")
-                        self._save_file.flush()
-                    except Exception:
-                        pass
+            with self._lock:
+                self._logs.append(stamped)
+                self._log_capture_ts.append(cap_ts)
+                self._line_counter += 1
 
-                # 뷰어용 실시간 스트림으로 emit
+            # 파일 저장 중이면 기록
+            if self._save_file:
                 try:
-                    SERIAL_HUB.emit_log(self._session_id(), stamped)
+                    self._save_file.write(stamped + "\n")
+                    self._save_file.flush()
                 except Exception:
                     pass
 
-            except Exception as e:
-                if self._capturing:
-                    logger.error("[SerialLogging] Capture error: %s", e)
-                break
+            # 뷰어용 실시간 스트림으로 emit
+            try:
+                SERIAL_HUB.emit_log(self._session_id(), stamped)
+            except Exception:
+                pass
 
         self._capturing = False
         logger.info("[SerialLogging] Capture loop ended (logs=%d)", len(self._logs))
+
+    # ------------------------------------------------------------------
+    # 캡처 자가복구 헬퍼 (장치 off/on 시 재연결)
+    # ------------------------------------------------------------------
+
+    def _interruptible_sleep(self, seconds: float) -> None:
+        """self._capturing이 False가 되면 즉시 깨어나는 분할 sleep.
+
+        _stop_capture()의 join(timeout=3)이 재연결 backoff 대기 때문에 지연되지
+        않도록, 0.1초 단위로 쪼개 종료 플래그를 확인한다.
+        """
+        end = time.time() + max(0.0, seconds)
+        while self._capturing and time.time() < end:
+            time.sleep(0.1)
+
+    def _safe_close_serial(self) -> None:
+        """끊긴 시리얼 핸들을 조용히 닫고 self._serial을 비운다 (raise 안 함)."""
+        ser = self._serial
+        self._serial = None
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:
+                pass
+
+    def _reconnect_serial(self) -> bool:
+        """self._port를 다시 open. 성공 시 self._serial 설정 후 True.
+
+        **캡처 버퍼(self._logs)는 비우지 않는다** — 장치가 다시 올라오면 기존 로그에
+        이어서 기록하기 위함. 입력 버퍼만 비워 off 구간의 가비지를 버린다.
+        """
+        if not self._port:
+            return False
+        try:
+            import serial as pyserial
+            ser = pyserial.Serial(self._port, self._bps, timeout=1)
+        except Exception as e:
+            logger.debug("[SerialLogging] reconnect to %s failed: %s", self._port, e)
+            return False
+        try:
+            ser.reset_input_buffer()
+            ser.reset_output_buffer()
+        except Exception:
+            pass
+        self._serial = ser
+        logger.info("[SerialLogging] Reconnected to %s @ %d — resuming capture",
+                    self._port, self._bps)
+        self._emit_marker(f"serial reconnected to {self._port}")
+        return True
+
+    def _emit_marker(self, text: str) -> None:
+        """끊김/재연결 구간을 버퍼·파일·뷰어 스트림에 마커 라인 1건으로 남긴다."""
+        cap_ts = time.time()
+        ts = time.strftime("%H:%M:%S", time.localtime(cap_ts))
+        stamped = f"[{ts}] --- {text} ---"
+        with self._lock:
+            self._logs.append(stamped)
+            self._log_capture_ts.append(cap_ts)
+            self._line_counter += 1
+        if self._save_file:
+            try:
+                self._save_file.write(stamped + "\n")
+                self._save_file.flush()
+            except Exception:
+                pass
+        try:
+            SERIAL_HUB.emit_log(self._session_id(), stamped)
+        except Exception:
+            pass
