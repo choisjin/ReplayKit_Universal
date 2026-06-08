@@ -5213,31 +5213,49 @@ export default function RecordPage() {
                   notFoundContent={t('record.noMatchedDevice')}
                   options={moduleDevices.map(d => ({
                     value: d.id,
-                    label: `${d.name || d.id} ${d.info?.module}`,
+                    // 검색(optionFilterProp="label")이 디바이스 id·포트(address)로도 매칭되도록 포함
+                    label: `${d.name || d.id} ${d.id} ${d.address || ''} ${d.info?.module}`,
                     _device: d,
                   }))}
                   optionRender={(opt) => {
                     const dev = (opt.data as any)._device;
                     const groupName = dev?.name || dev?.id || '';
                     const moduleName = dev?.info?.module || '';
+                    const devId = dev?.id || '';
+                    const addr = dev?.address || '';
                     return (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                         <Tag color="purple" style={{ margin: 0 }}>{groupName}</Tag>
                         <span style={{ fontSize: 11, color: isDark ? '#8bb4e0' : '#1677ff' }}>
                           → {moduleName}
                         </span>
+                        {/* 디바이스 id — 같은 모듈(예: SerialLogging) 다중 연결 구분용 */}
+                        {devId && devId !== groupName && (
+                          <Tag color="default" style={{ margin: 0, fontSize: 10 }}>{devId}</Tag>
+                        )}
+                        {/* 시리얼 포트/주소 — 어떤 포트인지 명확히 */}
+                        {addr && (
+                          <span style={{ fontSize: 10, color: isDark ? '#888' : '#999' }}>{addr}</span>
+                        )}
                       </span>
                     );
                   }}
                   labelRender={(opt) => {
                     const dev = moduleDevices.find(d => d.id === opt.value);
                     if (!dev) return opt.label;
+                    const groupName = dev.name || dev.id;
+                    const devId = dev.id;
+                    const addr = dev.address || '';
+                    const extra = [devId !== groupName ? devId : '', addr].filter(Boolean).join(' · ');
                     return (
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                        <Tag color="purple" style={{ margin: 0 }}>{dev.name || dev.id}</Tag>
+                        <Tag color="purple" style={{ margin: 0 }}>{groupName}</Tag>
                         <span style={{ fontSize: 11, color: isDark ? '#8bb4e0' : '#1677ff' }}>
                           → {dev.info?.module || ''}
                         </span>
+                        {extra && (
+                          <span style={{ fontSize: 10, color: isDark ? '#888' : '#999' }}>{extra}</span>
+                        )}
                       </span>
                     );
                   }}
