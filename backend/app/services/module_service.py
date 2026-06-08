@@ -800,13 +800,53 @@ def get_module_functions(module_name: str) -> list[dict]:
     # Android: 네이티브 lge.auto.Android 함수들은 노출하지 않고
     # ReplayKit 자체 ADBService 기반의 Send_adb_command 단일 가상 함수만 제공
     if module_name == "Android":
-        functions = [{
-            "name": "Send_adb_command",
-            "params": [
-                {"name": "command", "required": True},
-                {"name": "serial", "required": False, "default": "''"},
-            ],
-        }]
+        functions = [
+            {
+                "name": "Send_adb_command",
+                "params": [
+                    {"name": "command", "required": True},
+                    {"name": "serial", "required": False, "default": "''"},
+                ],
+            },
+            {
+                "name": "StartLogging",
+                "params": [
+                    {"name": "serial", "required": False, "default": "''"},
+                    {"name": "clear", "required": False, "default": "True"},
+                ],
+            },
+            {
+                "name": "StopLogging",
+                "params": [
+                    {"name": "serial", "required": False, "default": "''"},
+                    {"name": "save_path", "required": False, "default": "''"},
+                ],
+            },
+            {
+                "name": "ClearLog",
+                "params": [
+                    {"name": "serial", "required": False, "default": "''"},
+                ],
+            },
+            {
+                "name": "Monitor_pass_on_keyword",
+                "params": [
+                    {"name": "keyword", "required": True},
+                    {"name": "time", "required": False, "default": "5"},
+                    {"name": "serial", "required": False, "default": "''"},
+                    {"name": "include_past", "required": False, "default": "True"},
+                ],
+            },
+            {
+                "name": "Monitor_fail_on_keyword",
+                "params": [
+                    {"name": "keyword", "required": True},
+                    {"name": "time", "required": False, "default": "5"},
+                    {"name": "serial", "required": False, "default": "''"},
+                    {"name": "include_past", "required": False, "default": "True"},
+                ],
+            },
+        ]
         # 가이드 병합 후 캐싱하고 즉시 반환
         guides = _load_guides()
         mod_guide = guides.get(module_name, {})
@@ -1240,6 +1280,29 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
             loop.close()
         return output if output is not None else "(no output)"
 
+    # Android logcat 캡처/판독 가상 함수 — LogcatService로 라우팅 (adb로 명령 push 안 함)
+    if module_name == "Android" and function_name in (
+        "StartLogging", "StopLogging", "ClearLog",
+        "Monitor_pass_on_keyword", "Monitor_fail_on_keyword",
+    ):
+        from .logcat_service import get_logcat_service
+        svc = get_logcat_service()
+        target_serial = (args.get("serial") or "").strip() or adb_serial
+        if not target_serial:
+            raise RuntimeError(f"Android.{function_name} requires an ADB device (serial missing)")
+        if function_name == "StartLogging":
+            return svc.start(target_serial, clear=_cast_arg(args.get("clear", True), bool))
+        if function_name == "StopLogging":
+            return svc.stop(target_serial, save_path=str(args.get("save_path") or ""))
+        if function_name == "ClearLog":
+            return svc.clear(target_serial)
+        keyword = str(args.get("keyword") or "")
+        time_s = _cast_arg(args.get("time", 5), float)
+        include_past = _cast_arg(args.get("include_past", True), bool)
+        if function_name == "Monitor_pass_on_keyword":
+            return svc.monitor_pass(target_serial, keyword, time_s, include_past)
+        return svc.monitor_fail(target_serial, keyword, time_s, include_past)
+
     instance = _get_instance(module_name, constructor_kwargs, shared_serial_conn, ssh_credentials)
 
     # SSHManager.send_command 특수 처리: SSHManager가 UTF-8로 강제 디코딩하면서
@@ -1624,6 +1687,13 @@ def cleanup_active_instances(reason: str = "") -> dict[str, str]:
         # 캐시 무효화 — 다음 사용 시 fresh 인스턴스로 시작
         _instances.pop(name, None)
         _auto_connected.discard(name)
+    # Android logcat 세션은 _instances가 아닌 별도 싱글톤(LogcatService)이 관리하므로
+    # 여기서 명시적으로 정리 — 진행 중인 캡처가 있으면 버퍼를 파일로 저장 후 종료.
+    try:
+        from .logcat_service import get_logcat_service
+        get_logcat_service().stop_all()
+    except Exception as e:
+        logger.warning("cleanup_active_instances: logcat stop_all failed: %s", e)
     if summary:
         logger.info("cleanup_active_instances(reason=%s): %s", reason or "-", summary)
     return summary

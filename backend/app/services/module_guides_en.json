@@ -1294,5 +1294,47 @@
         "params": {}
       }
     }
+  },
+  "Android": {
+    "functions": {
+      "StartLogging": {
+        "description": "Start capturing logcat for the given Android device (in-memory buffer). If clear=True, flushes the logcat ring buffer first. Auto-restarts logcat into the same buffer if the device reboots/disconnects.",
+        "params": {
+          "serial": "Target ADB device serial. Empty = derived from the step's device",
+          "clear": "Clear logcat buffer before starting. true/false (default true)"
+        }
+      },
+      "StopLogging": {
+        "description": "Stop logcat capture and save the buffer to a file ({run_dir}/logs/logcat_*.log during playback, results/Temp_logs/ for step tests).",
+        "params": {
+          "serial": "Target ADB device serial. Empty = derived from the step's device",
+          "save_path": "Save path. Empty = automatic path"
+        }
+      },
+      "ClearLog": {
+        "description": "Clear the device's logcat ring buffer (adb logcat -c).",
+        "params": {
+          "serial": "Target ADB device serial. Empty = derived from the step's device"
+        }
+      },
+      "Monitor_pass_on_keyword": {
+        "description": "PASS if keyword is found in the captured logcat. If include_past=True, scans logs captured so far first, then monitors new lines for `time` seconds. Requires StartLogging first.",
+        "params": {
+          "keyword": "Keyword to PASS on (substring match)",
+          "time": "Seconds to wait for future log lines. Default 5. 0 = past buffer only",
+          "serial": "Target ADB device serial. Empty = derived from the step's device",
+          "include_past": "Whether to also scan logs captured so far. true/false (default true)"
+        }
+      },
+      "Monitor_fail_on_keyword": {
+        "description": "FAIL if keyword is found in the captured logcat. For monitoring abnormal keywords (FATAL/ANR/Exception). Scans past buffer (if include_past) and new lines for `time` seconds.",
+        "params": {
+          "keyword": "Keyword that triggers FAIL (substring match)",
+          "time": "Seconds to monitor future log lines. Default 5. 0 = past buffer only",
+          "serial": "Target ADB device serial. Empty = derived from the step's device",
+          "include_past": "Whether to also scan logs captured so far. true/false (default true)"
+        }
+      }
+    }
   }
 }
