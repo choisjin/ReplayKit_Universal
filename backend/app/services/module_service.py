@@ -465,6 +465,11 @@ def list_available_modules() -> list[dict]:
               "default": "Multiverse, Without PCU HW",
               "options": ["RelayCard", "Multiverse", "Without PCU HW", "Without PCU HW but CF PCU",
                           "With PCU HW", "PCU DTOOL", "CAN Multiverse"]},
+             # ethernet_interfaces: SomeIP 모니터링/NETWORK_INTERFACES 용. 8081 auto-advance 3조건 중 하나
+             #   (ethernet_interfaces && benchcontrol && capabilities). 비우면 SCAR 가 iface(스캔값)로 대체.
+             #   유효값은 벤치의 GET :3000/setup/list/interfaces(=ls /sys/class/net, cvd/lo/docker 제외).
+             {"name": "ethernet_interfaces", "label": "Ethernet 인터페이스 (SomeIP, 콤마 구분 / 비우면 iface 사용)",
+              "type": "text", "default": ""},
              # 토글 전에 자동 start 할 SOME/IP 서비스 (UI 의 'Simulated ECU target' + 'Service to
              #   simulate/register' → Start 와 동일). bench 토글은 InfrastructureGotoSleep 등이 떠
              #   있어야 유지되므로 토글보다 먼저 순서대로 start. 해당 ECU 는 stub_ecus 에도 포함돼야 함.

@@ -26,6 +26,7 @@
   ── 연결 직후 UI 자동화 (설치 가이드 "3~4" UI 단계) ──
   post_connect=True 면 Connect() 끝에서 UI 제어 백엔드(port 3000)로:
     [0] POST /config {capabilities:[...]} (capabilities) -> Bench Capabilities 최초 셋업
+    [0b]POST /config {interfaces_ethernet:[...]}      -> SomeIP 모니터링 인터페이스(8081 auto-advance 조건)
     [1] POST /config {ends:<ui_version>}            -> UI 버전(ENDS) 선택
     [2] POST /start {service, ecu} (start_services)  -> 토글 의존 SOME/IP 서비스 기동
     [3] POST /bencontrol/buttons/<id> {state}       -> Bench IO 토글 ON
@@ -45,6 +46,7 @@
   - Setup()                          -> netns VLAN 구성 (수동 재실행 가능)
   - NetnsStatus()                    -> docker exec scar ip netns 출력
   - SetCapabilities(caps, force)     -> POST /config {capabilities} (Bench Capabilities 최초 셋업)
+  - SetEthernet(interfaces, force)   -> POST /config {interfaces_ethernet} (SomeIP 인터페이스)
   - ListUiVersions()                 -> GET /list/ends (선택 가능 버전)
   - SelectVersion(version)           -> POST /config {ends} (UI 버전 선택)
   - ListBenchToggles()               -> GET /config/infos (등록된 토글 id/name)
@@ -127,6 +129,7 @@ class SCAR:
         control_base: str = "http://localhost:3000",  # scar-server.js 제어 API
         post_connect = True,                     # Connect 끝에 capabilities+버전선택+bench토글 자동 실행
         capabilities: str = "",                  # Bench Capabilities (CSV, 예: "Multiverse,Without PCU HW") — 최초 셋업
+        ethernet_interfaces: str = "",           # SomeIP 모니터링/NETWORK_INTERFACES 용 (CSV, 빈 칸=iface 로 대체)
         ui_version: str = "",                    # UI 에서 선택할 ENDS 버전 (빈 칸 = 건너뜀)
         start_services = None,                   # 토글 전 자동 start: [{ecu, service}, ...] 또는 JSON
         bench_toggle: str = "",                  # 활성화할 Bench IO 토글 이름/ID (빈 칸 = 건너뜀)
@@ -168,6 +171,7 @@ class SCAR:
         # 연결 직후 UI 자동화
         self.post_connect = _as_bool(post_connect)
         self.capabilities = _csv_str(capabilities)   # multiselect(list) 또는 CSV 문자열 허용
+        self.ethernet_interfaces = _csv_str(ethernet_interfaces)
         self.ui_version = (ui_version or "").strip()
         self.start_services = self._parse_services(start_services)
         self.bench_toggle = (bench_toggle or "").strip()
@@ -201,7 +205,7 @@ class SCAR:
 
         # ── 연결 직후 UI 자동화 (버전 선택 + bench 토글) ──────
         # setup 이 성공(_setup_done)했고 할 일이 있을 때만. 실패해도 등록 자체는 유지(경고만).
-        if self.post_connect and self._setup_done and (self.capabilities or self.ui_version or self.ends or self.start_services or self.bench_toggle):
+        if self.post_connect and self._setup_done and (self.capabilities or self.ethernet_interfaces or self.ui_version or self.ends or self.start_services or self.bench_toggle):
             pc = self._post_connect()
             msg = f"{msg}\n{pc}"
             self._setup_last_msg = msg
@@ -534,15 +538,24 @@ class SCAR:
 
     @staticmethod
     def _cap_ok(button_caps, bench_caps) -> bool:
-        """버튼 capability 가 벤치 capability 에 모두 포함되면 적용 가능.
+        """버튼이 이 벤치에 적용 가능한지 — UI setup.js showPopupPluginsBtns 와 동일 규칙.
 
+        규칙: 버튼의 모든 capability 가 '어떤 벤치 capability 의 접두사' 이면 적용 가능.
+          item.capability.every(cap => benchCaps.some(bc => bc.startsWith(cap)))
+        ⚠️ 버튼 capability 는 짧은 형태('with_pcu'/'without_pcu'), 벤치는 긴 형태
+          ('with_pcu_hw'/'without_pcu_hw') 라 동등/부분집합(issubset) 비교로는 절대 안 맞는다.
+          예) 'Wake up/Sleep minimal CDC/SA' = sleep_mini_power_sequence_no_pcu(capability
+          ['multiverse','without_pcu']) → 벤치 ['multiverse','without_pcu_hw'] 와 startswith 로만 매칭.
         벤치 capability 정보가 없으면(미구성) 판별 불가 → True(필터 안 함).
         """
         if not bench_caps:
             return True
-        want = {str(c).strip().lower() for c in (button_caps or [])}
-        have = {str(c).strip().lower() for c in bench_caps}
-        return want.issubset(have)
+        have = [str(c).strip().lower() for c in bench_caps]
+        for cap in (button_caps or []):
+            c = str(cap).strip().lower()
+            if not any(bc.startswith(c) for bc in have):
+                return False
+        return True
 
     def ListUiVersions(self) -> str:
         """GET /list/ends — UI 에서 선택 가능한 ENDS 버전 목록."""
@@ -626,6 +639,41 @@ class SCAR:
         if resp.status_code != 200:
             return f"FAIL: /config capabilities status={resp.status_code} {resp.text[:256]}"
         return f"ok: capabilities={ids} selected"
+
+    def _fetch_ethernet(self):
+        """현재 서버에 설정된 ethernet_interfaces 리스트. 미설정/실패 시 None."""
+        data = self._fetch_infos()
+        if data is None:
+            return None
+        eth = data.get("ethernet_interfaces")
+        return eth if isinstance(eth, list) and eth else None
+
+    def SetEthernet(self, interfaces: str = "", force: bool = False) -> str:
+        """POST /config {interfaces_ethernet:[...]} — SomeIP 모니터링/NETWORK_INTERFACES 인터페이스.
+
+        8081 'ethernet interface 선택' 단계 등가. 이게 비면 8081 이 최초 화면을 안 벗어난다
+        (auto-advance 조건: ethernet_interfaces && benchcontrol && capabilities 모두 필요).
+        interfaces: CSV/리스트. 미지정 시 생성자 ethernet_interfaces → 그것도 없으면 self.iface 로 대체
+        (스캔된 SCAR 네트워크 인터페이스). 유효값은 서버 GET /setup/list/interfaces(=ls /sys/class/net).
+        force=False 면 이미 설정돼 있으면 건너뜀.
+        """
+        raw = _csv_str(interfaces) or self.ethernet_interfaces or (self.iface or "").strip()
+        if not raw:
+            return "FAIL: no ethernet interface given (ethernet_interfaces/iface 비어있음)"
+        ifaces = _split_csv(raw)
+        if not force:
+            existing = self._fetch_ethernet()
+            if existing:
+                return f"skip: ethernet_interfaces already set ({existing})"
+        resp = self._control.post(
+            self._control.base_url + "/config",
+            data={"interfaces_ethernet": ifaces},
+        )
+        if resp is None:
+            return "FAIL: control API(3000) POST /config (interfaces_ethernet) failed"
+        if resp.status_code != 200:
+            return f"FAIL: /config interfaces_ethernet status={resp.status_code} {resp.text[:256]}"
+        return f"ok: ethernet_interfaces={ifaces} selected"
 
     def SelectVersion(self, version: str = "") -> str:
         """POST /config {ends:<version>} — UI 버전(ENDS) 선택.
@@ -834,6 +882,9 @@ class SCAR:
         # 이게 없으면 benchcontrol 키가 안 생겨 토글이 서버에서 .length undefined 로 죽는다.
         if self.capabilities:
             log.append("  [caps]    " + self.SetCapabilities())
+        # ethernet_interfaces: 8081 auto-advance 3조건 중 하나. 명시값 없으면 iface 로 대체.
+        if self.ethernet_interfaces or self.iface:
+            log.append("  [eth]     " + self.SetEthernet())
         # UI 버전: 명시 ui_version 우선, 없으면 상단 ENDS 버전(self.ends)에서 도출.
         ui_ver = self.ui_version or self._resolve_ui_version()
         if ui_ver:
@@ -854,6 +905,7 @@ class SCAR:
             f"control_base  = {self._control.base_url}",
             f"post_connect  = {self.post_connect}",
             f"capabilities  = {self.capabilities or '(unset → skip)'}",
+            f"ethernet_ifs  = {self.ethernet_interfaces or '(unset → iface 대체)'}",
             f"ui_version    = {self.ui_version or '(unset → skip)'}",
             f"start_services= {[s['service'] + '@' + s['ecu'] for s in self.start_services] or '(none)'}",
             f"bench_toggle  = {self.bench_toggle or '(unset → skip)'} state={self.bench_state}",
