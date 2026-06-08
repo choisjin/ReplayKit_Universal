@@ -136,17 +136,17 @@ PRESS_LONG   = 0x46
 DIAL_ACTION  = 0x80
 
 # 다이얼 방향
-CLOCK      = 0x00
-ANTI_CLOCK = 0x01
+CLOCK      = 0x01  # 시계 방향 (+1)
+ANTI_CLOCK = 0x80  # 반시계 방향 (-1)
 
 # HKEY 키 코드
-HKEY_FMAM              = 0x11
+HKEY_RADIO             = 0x11  # (기존 HKEY_FMAM)
 HKEY_MEDIA             = 0x12
 HKEY_SEEK              = 0x13
 HKEY_TRACK             = 0x14
-HKEY_MAPVOICE          = 0x15
+HKEY_MAP               = 0x15  # (기존 HKEY_MAPVOICE)
 HKEY_NAV               = 0x16
-HKEY_EJECT             = 0x17
+HKEY_CUSTOM            = 0x17  # (기존 HKEY_EJECT, CUSTOM ☆)
 HKEY_SETUP             = 0x18
 HKEY_TUNE_CENTER          = 0x1C
 HKEY_TUNE_DIAL            = 0xA0  # dial (encoder)
@@ -289,13 +289,13 @@ HKMC5TH_WIDE_KEYS: dict[str, dict] = {
     "CALL_END":     {"cmd": CMD_CALLEND_KEY,     "msg": True},
 
     # ── HKEY (CMD_HKEY=0x60) — keyExt int 방식 ────────────────────────────
-    "HKEY_FMAM":              {"cmd": CMD_HKEY, "key": HKEY_FMAM},
+    "HKEY_RADIO":             {"cmd": CMD_HKEY, "key": HKEY_RADIO},
     "HKEY_MEDIA":             {"cmd": CMD_HKEY, "key": HKEY_MEDIA},
     "HKEY_SEEK":              {"cmd": CMD_HKEY, "key": HKEY_SEEK},
     "HKEY_TRACK":             {"cmd": CMD_HKEY, "key": HKEY_TRACK},
-    "HKEY_MAPVOICE":          {"cmd": CMD_HKEY, "key": HKEY_MAPVOICE},
+    "HKEY_MAP":               {"cmd": CMD_HKEY, "key": HKEY_MAP},
     "HKEY_NAV":               {"cmd": CMD_HKEY, "key": HKEY_NAV},
-    "HKEY_EJECT":             {"cmd": CMD_HKEY, "key": HKEY_EJECT},
+    "HKEY_CUSTOM_☆":          {"cmd": CMD_HKEY, "key": HKEY_CUSTOM},  # CUSTOM ☆ 요청에 대한 직관적 별칭
     "HKEY_SETUP":             {"cmd": CMD_HKEY, "key": HKEY_SETUP},
     "HKEY_TUNE_CENTER":       {"cmd": CMD_HKEY, "key": HKEY_TUNE_CENTER},
     "HKEY_TUNE_CLOCK":        {"cmd": CMD_HKEY, "key": HKEY_TUNE_DIAL, "dial": True, "direction": CLOCK},
