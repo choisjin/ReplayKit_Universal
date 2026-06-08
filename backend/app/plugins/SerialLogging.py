@@ -246,13 +246,21 @@ class SerialLogging:
         logger.info("[SerialLogging] Disconnected")
 
     def IsConnected(self) -> bool:
-        """포트가 실제로 열려 있는지 보고.
+        """포트가 열려 있거나, 캡처 세션이 살아 있으면(일시적 USB 드롭 + 자동 재연결 중) True.
 
         module_service._is_connected가 이 메서드를 우선 호출하여 디바이스 status를
-        결정한다. 따라서 정확한 포트 상태를 반환해야 보조 디바이스 '연결' 직후
-        Send_Packet 등이 즉시 사용 가능한지 UI에 올바로 반영된다.
+        결정한다. 그리고 _get_instance는 _is_connected가 False면 **인스턴스를 폐기하고
+        새로 생성**한다 — 이 경우 캡처 버퍼(self._logs)가 통째로 유실되어, 뷰어에는
+        (hub 세션 공유로) 로그가 계속 보여도 StopLogging이 저장하는 버퍼는 비게 된다.
+
+        따라서 캡처 세션이 진행 중(self._capturing=True)이면 포트가 잠시 닫혀
+        재연결 중이더라도 '연결됨'으로 보고하여 인스턴스(=버퍼)가 보존되도록 한다.
+        세션이 없을 때(StopLogging 이후 등)는 실제 포트 상태를 그대로 반영해
+        보조 디바이스 '연결' 직후 Send_Packet 등의 사용 가능 여부를 UI에 올바로 알린다.
         """
-        return bool(self._serial and getattr(self._serial, "is_open", False))
+        if self._serial and getattr(self._serial, "is_open", False):
+            return True
+        return bool(self._capturing)
 
     def Connect(self) -> str:
         """모듈 표준 연결 인터페이스 — 보조 디바이스 '연결' 클릭 시 자동 호출됨.
