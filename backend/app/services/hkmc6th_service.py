@@ -1068,14 +1068,21 @@ class HKMC6thService:
         """rear_left/rear_right일 때만 LCD 패킷에 monitor 바이트 포함.
         front_center는 None 반환 → 레거시 agent와의 호환성 유지.
 
-        터치 monitor 바이트는 캡처(SCREEN_CAPTURE_MAP)와 동일하게 LEFT=1/RIGHT=2로
-        송신한다. 과거 ccRC를 legacy ccIC_Agent(REAR_R=1, REAR_L=2)로 간주해 좌우를
-        swap했으나, 현행 ccRC/HKMC Agent에서는 화면 출력이 LEFT=1/RIGHT=2로 정상인데
-        터치만 swap되어 좌우가 반대로 동작하는 회귀가 확인되어 swap을 제거한다
-        (화면=터치 모니터 매핑 일치).
+        ccRC(legacy ccIC_Agent) 펌웨어는 monitor 바이트를 REAR_L=2 / REAR_R=1 로
+        해석한다 — CMD_LCDTOUCH(0x69) 터치와 CMD_CCRC(0x93) 하드키가 **동일** 규약.
+        따라서 ccRC 디바이스는 터치도 좌우를 swap해야 화면(SCREEN_CAPTURE_MAP)·
+        하드키(send_key_by_name)와 라우팅이 일치한다.
+
+        주의(회귀 이력): 과거 "터치만 화면 매핑(LEFT=1/RIGHT=2)에 맞추고 swap 제거"한
+        커밋이 있었으나, ccRC 실기에서 Rear Left 터치가 Rear Right로 입력되는 좌우
+        반전이 재발 → swap을 복원한다. 터치/하드키 monitor 해석은 같은 펌웨어상
+        동일하므로 ccRC면 둘 다 swap이 맞다 (일반 HKMC 6th 디바이스는 swap 없음).
         """
         if screen_type not in ("rear_left", "rear_right"):
             return None
+        if self._is_ccrc_legacy_monitor:
+            # REAR_L↔REAR_R swap (legacy: byte 1=RIGHT, 2=LEFT)
+            screen_type = "rear_right" if screen_type == "rear_left" else "rear_left"
         return SCREEN_TOUCH_MAP.get(screen_type)
 
 
