@@ -95,19 +95,25 @@ def _spawn_ffmpeg_writer(output_path: Path, width: int, height: int, fps: float)
         logger.warning("ffmpeg not found — falling back to OpenCV mp4v writer (browser playback may fail)")
         return None
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    fps_val = fps if fps and fps > 0 else 30.0
+    # VFR(가변 프레임레이트) + 벽시계 타임스탬프로 인코딩:
+    #  - 입력에 고정 -r 을 주지 않고 -use_wallclock_as_timestamps 1 로 "프레임이 파이프에
+    #    도착한 실제 시각"을 PTS 로 사용하고, 출력 -vsync vfr 로 그 타이밍을 그대로 보존한다.
+    #  → 카메라가 30fps 라고 보고하지만 실제로 14fps 만 들어오던 경우의 '2배속/끊김' 문제가
+    #    사라지고, 영상 길이가 실제 녹화(시나리오) 시간과 1:1 로 일치한다. 프레임 스킵/점프가
+    #    생겨도 그 간격이 영상에 그대로 반영된다(최대 fps 로 캡처하되 레이트를 강제하지 않음).
     cmd = [
         ffmpeg, "-y",
         "-f", "rawvideo",
         "-vcodec", "rawvideo",
         "-s", f"{int(width)}x{int(height)}",
         "-pix_fmt", "bgr24",
-        "-r", f"{fps_val:.3f}",
+        "-use_wallclock_as_timestamps", "1",
         "-i", "-",  # stdin
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-crf", "23",
         "-pix_fmt", "yuv420p",
+        "-vsync", "vfr",
         "-movflags", "+faststart",
         "-an",  # 오디오 없음
         str(output_path),
@@ -121,7 +127,7 @@ def _spawn_ffmpeg_writer(output_path: Path, width: int, height: int, fps: float)
             creationflags=creationflags,
             bufsize=0,  # stdin은 unbuffered — 프레임 즉시 전송
         )
-        logger.info("ffmpeg writer spawned: %s (%dx%d @%.1ffps)", output_path, width, height, fps_val)
+        logger.info("ffmpeg writer spawned: %s (%dx%d, VFR/wallclock)", output_path, width, height)
         return _FfmpegProc(proc)
     except Exception as e:
         logger.warning("Failed to spawn ffmpeg writer: %s", e)
@@ -303,6 +309,12 @@ class WebcamService:
             return False
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        # 카메라의 최대 fps 를 요청 — 드라이버가 지원 최댓값으로 클램프한다.
+        # (실제 녹화 타이밍은 VFR/벽시계가 보존하므로, 이 값은 보고용/폴백용 힌트일 뿐이다)
+        try:
+            cap.set(cv2.CAP_PROP_FPS, 120.0)
+        except Exception:
+            pass
         actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or width
         actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or height
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -336,9 +348,12 @@ class WebcamService:
         logger.info("Webcam closed")
 
     def _capture_loop(self) -> None:
-        """백그라운드 스레드: 프레임을 계속 읽어 최신본 유지 + 녹화 중이면 writer에 기록."""
-        frame_interval = 1.0 / max(1.0, self._actual_fps)
-        next_deadline = time.monotonic()
+        """백그라운드 스레드: 카메라가 주는 대로(=최대 fps) 프레임을 읽어 최신본 유지 + 녹화 중이면 기록.
+
+        cap.read() 가 하드웨어 프레임 도착까지 블로킹하므로 인위적 pacing 없이도 busy-spin 이
+        아니다. 프레임 타이밍 보존은 ffmpeg(VFR, 벽시계 PTS)이 담당하므로 여기서 레이트를
+        고정하지 않는다 — 이렇게 해야 카메라 최대 fps 가 그대로 살아난다.
+        """
         while not self._stop_flag.is_set():
             cap = self._cap
             if cap is None or not cap.isOpened():
@@ -355,14 +370,6 @@ class WebcamService:
             with self._recording_lock:
                 if (self._ffmpeg_proc is not None or self._cv_writer is not None) and not self._recording_paused:
                     self._write_frame_unlocked(frame)
-            # 간이 frame pacing (과도한 CPU 방지)
-            now = time.monotonic()
-            next_deadline += frame_interval
-            sleep_s = next_deadline - now
-            if sleep_s > 0:
-                time.sleep(sleep_s)
-            else:
-                next_deadline = now  # 드리프트 리셋
 
     # ------------------------------------------------------------
     # Preview
@@ -469,7 +476,9 @@ class WebcamService:
             except Exception as e:
                 logger.warning("VideoWriter release error: %s", e)
 
-        logger.info("Webcam recording stopped: %s frames=%d duration=%.1fs", path, frames, duration)
+        avg_fps = (frames / duration) if duration > 0 else 0.0
+        logger.info("Webcam recording stopped: %s frames=%d duration=%.1fs (avg %.1ffps, VFR)",
+                    path, frames, duration, avg_fps)
         return str(path) if path else None
 
     def pause_recording(self) -> None:

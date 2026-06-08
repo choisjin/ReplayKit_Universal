@@ -934,6 +934,30 @@ def _is_connected(instance) -> bool:
     return True  # no known indicator → assume OK
 
 
+def _instance_key(module_name: str, constructor_kwargs: Optional[dict] = None) -> str:
+    """캐시 키 — 같은 모듈이라도 물리 엔드포인트(port/host)가 다르면 별도 인스턴스로 관리.
+
+    멀티 시리얼(예: SerialLogging 을 /dev/ttyUSB2 캡처 + /dev/ttyACM1 명령송신으로 동시 사용)
+    환경에서, 과거에는 단일 'SerialLogging' 키를 공유하다가 포트가 바뀔 때마다 활성 캡처
+    인스턴스를 pop → 버퍼(self._logs) 고아화(저장 빈 파일 / Monitor 판독 실패) + 같은 포트
+    이중 open 으로 인한 재연결 폭주가 발생했다. 포트/호스트를 키에 포함시켜 근본 차단한다.
+    """
+    if constructor_kwargs:
+        port = constructor_kwargs.get("port")
+        if port:
+            return f"{module_name}@{port}"
+        host = constructor_kwargs.get("host")
+        if host:
+            return f"{module_name}@{host}"
+    return module_name
+
+
+def _keys_for(module_name: str) -> list[str]:
+    """해당 module_name 에 속한 모든 캐시 키(포트/호스트별 인스턴스 포함)."""
+    prefix = module_name + "@"
+    return [k for k in list(_instances.keys()) if k == module_name or k.startswith(prefix)]
+
+
 def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
                   shared_serial_conn=None, ssh_credentials: Optional[dict] = None) -> Any:
     """Get or create a singleton instance of the module class.
@@ -949,32 +973,18 @@ def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
     if module_name == "SSHManager":
         _instances.pop(module_name, None)
         _auto_connected.discard(module_name)
-    # host/port가 변경된 경우 기존 인스턴스 무효화
-    if module_name in _instances and constructor_kwargs:
-        existing = _instances[module_name]
-        # port 변경 감지
-        existing_port = getattr(existing, "_port", None)
-        new_port = constructor_kwargs.get("port")
-        if new_port and existing_port and str(new_port) != str(existing_port):
-            logger.info("Port changed for %s (%s → %s), recreating instance",
-                        module_name, existing_port, new_port)
-            _instances.pop(module_name, None)
-        # host 변경 감지
-        existing_host = getattr(existing, "_host", None) or getattr(existing, "host", None)
-        new_host = constructor_kwargs.get("host")
-        if new_host and existing_host and new_host != existing_host:
-            logger.info("Host changed for %s (%s → %s), recreating instance",
-                        module_name, existing_host, new_host)
-            _instances.pop(module_name, None)
+    # 캐시 키 — 포트/호스트가 다르면 다른 키가 되어 같은 모듈의 다른 엔드포인트끼리
+    # 서로를 덮어쓰지 않는다. (포트 변경 시 pop 하던 파괴적 로직 제거 — 그게 버퍼 고아화 버그였다)
+    key = _instance_key(module_name, constructor_kwargs)
 
     # 기존 인스턴스가 연결 끊어진 경우 재생성
-    if module_name in _instances:
-        if not _is_connected(_instances[module_name]):
-            logger.info("Connection lost for %s, recreating instance", module_name)
-            _instances.pop(module_name, None)
-            _auto_connected.discard(module_name)
+    if key in _instances:
+        if not _is_connected(_instances[key]):
+            logger.info("Connection lost for %s, recreating instance", key)
+            _instances.pop(key, None)
+            _auto_connected.discard(key)
 
-    if module_name not in _instances:
+    if key not in _instances:
         cls = _import_module_class(module_name)
         if cls is None:
             # 진단 정보 포함 — lge.auto 미설치 / DLL 로드 실패 등 실제 원인을
@@ -1009,7 +1019,7 @@ def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
                 if shared_serial_conn and hasattr(instance, "_conn"):
                     # device_manager가 이미 열어둔 시리얼 연결 주입
                     instance._conn = shared_serial_conn
-                    _auto_connected.add(module_name)
+                    _auto_connected.add(key)
                     logger.info("Injected shared serial conn into %s (_conn)", module_name)
                 else:
                     # Serial modules (e.g. IVIQEBenchIOClient): constructor sets port/bps
@@ -1027,14 +1037,14 @@ def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
                                     if isinstance(result, str) and result.upper() in ("ERROR", "FAIL", "FAILED"):
                                         logger.warning("Auto-connect %s.%s() returned %s", module_name, method_name, result)
                                     else:
-                                        _auto_connected.add(module_name)
+                                        _auto_connected.add(key)
                             except Exception as e:
                                 logger.warning("Auto-connect %s.%s() failed: %s", module_name, method_name, e)
                             break
-                _instances[module_name] = instance
+                _instances[key] = instance
                 # 연결 실패한 인스턴스는 다음 호출 시 재생성되도록 auto_connected에 등록
-                if module_name not in _auto_connected and _is_connected(instance):
-                    _auto_connected.add(module_name)
+                if key not in _auto_connected and _is_connected(instance):
+                    _auto_connected.add(key)
             else:
                 # Constructor doesn't accept the provided kwargs (e.g. BENCH, CANAT)
                 # Create instance normally, then try auto-connect/init
@@ -1076,16 +1086,16 @@ def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
                                 init_args["log_path"] = str(default_log)
                             result = init_fn(**init_args)
                             logger.info("Auto-called %s.init(%s) → %s", module_name, init_args, result)
-                            _auto_connected.add(module_name)
+                            _auto_connected.add(key)
                         except Exception as e:
                             logger.warning("Auto-init %s.init() failed: %s", module_name, e)
-                _instances[module_name] = instance
+                _instances[key] = instance
         else:
-            _instances[module_name] = cls()
+            _instances[key] = cls()
 
     # SSHManager: 디바이스 자격증명으로 공식 create_ssh_client 호출 (매 호출마다)
     if module_name == "SSHManager" and ssh_credentials is not None:
-        instance = _instances[module_name]
+        instance = _instances[key]
         host = ssh_credentials.get("host", "")
         username = ssh_credentials.get("username", "")
         password = ssh_credentials.get("password", "")
@@ -1095,13 +1105,13 @@ def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
                 instance.create_ssh_client(host, username, password, key_file)
             else:
                 instance.create_ssh_client(host, username, password)
-            _auto_connected.add(module_name)
+            _auto_connected.add(key)
             logger.info("SSHManager.create_ssh_client(%s@%s) OK", username, host)
         except Exception as e:
             logger.error("SSHManager.create_ssh_client(%s@%s) failed: %s", username, host, e)
             raise
 
-    return _instances[module_name]
+    return _instances[key]
 
 
 def _cast_arg(val: Any, target_type: type) -> Any:
@@ -1534,9 +1544,13 @@ MODULES_NO_STARTUP_AUTOCONNECT = {"SCAR", "TH"}
 
 
 def reset_instance(module_name: str) -> None:
-    """Remove cached instance (단순 무효화 — 재생성용. teardown 호출 안 함)."""
-    _instances.pop(module_name, None)
-    _auto_connected.discard(module_name)
+    """Remove cached instance (단순 무효화 — 재생성용. teardown 호출 안 함).
+
+    포트별 키(module@port)로 분리 관리되므로, 해당 모듈의 모든 엔드포인트 인스턴스를 제거한다.
+    """
+    for key in _keys_for(module_name):
+        _instances.pop(key, None)
+        _auto_connected.discard(key)
 
 
 def disconnect_instance(module_name: str):
@@ -1549,20 +1563,22 @@ def disconnect_instance(module_name: str):
     Returns:
         teardown 메서드 반환값(문자열) 또는 None(해당 메서드 없음/인스턴스 없음).
     """
-    inst = _instances.get(module_name)
     result = None
-    if inst is not None:
-        for method_name in ("Disconnect", "disconnect", "Close", "close"):
-            method = getattr(inst, method_name, None)
-            if callable(method):
-                try:
-                    ret = method()
-                    result = str(ret) if ret is not None else "ok"
-                except Exception as e:
-                    result = f"error: {e}"
-                break
-    _instances.pop(module_name, None)
-    _auto_connected.discard(module_name)
+    # 포트별 키(module@port)로 분리되므로 해당 모듈의 모든 엔드포인트 인스턴스를 정리한다.
+    for key in _keys_for(module_name):
+        inst = _instances.get(key)
+        if inst is not None:
+            for method_name in ("Disconnect", "disconnect", "Close", "close"):
+                method = getattr(inst, method_name, None)
+                if callable(method):
+                    try:
+                        ret = method()
+                        result = str(ret) if ret is not None else "ok"
+                    except Exception as e:
+                        result = f"error: {e}"
+                    break
+        _instances.pop(key, None)
+        _auto_connected.discard(key)
     return result
 
 
