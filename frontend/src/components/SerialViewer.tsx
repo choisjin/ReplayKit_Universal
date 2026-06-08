@@ -4,9 +4,10 @@ import { CloseOutlined, DownloadOutlined, ClearOutlined } from '@ant-design/icon
 import { useTranslation } from '../i18n';
 
 export interface SerialSessionInfo {
-  session_id: string;     // "{port}@{bps}" 형식
+  session_id: string;     // Serial: "{port}@{bps}", Logcat: device serial
   port?: string;
   bps?: number;
+  serial?: string;
   save_path?: string;
   started_at?: number;
 }
@@ -16,6 +17,12 @@ export interface SerialViewerProps {
   onClose?: () => void;
   mode?: 'modal' | 'card';
   theme?: 'light' | 'dark';
+  /** 실시간 스트림 WS 경로 prefix (`/ws/{wsPath}/{session_id}`). 기본 'serial-log'. */
+  wsPath?: string;
+  /** 헤더 제목. 기본 'Serial 로그 뷰어'. */
+  title?: string;
+  /** 다운로드 파일명 prefix. 기본 'serial'. */
+  downloadPrefix?: string;
 }
 
 const MAX_LOG_LINES = 50000;
@@ -27,7 +34,10 @@ const MAX_LOG_LINES = 50000;
  * - 각 세션 탭 선택 시 /ws/serial-log/{session_id} 구독
  * - AutoScroll 토글, 라인 ring buffer(MAX_LOG_LINES)
  */
-const SerialViewer: React.FC<SerialViewerProps> = ({ sessions, onClose, mode = 'modal', theme = 'dark' }) => {
+const SerialViewer: React.FC<SerialViewerProps> = ({
+  sessions, onClose, mode = 'modal', theme = 'dark',
+  wsPath = 'serial-log', title = 'Serial 로그 뷰어', downloadPrefix = 'serial',
+}) => {
   const { t } = useTranslation();
 
   const [activeSid, setActiveSid] = useState<string | null>(sessions[0]?.session_id ?? null);
@@ -61,7 +71,7 @@ const SerialViewer: React.FC<SerialViewerProps> = ({ sessions, onClose, mode = '
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const encodedSid = encodeURIComponent(activeSid);
-    const url = `${protocol}//${window.location.host}/ws/serial-log/${encodedSid}`;
+    const url = `${protocol}//${window.location.host}/ws/${wsPath}/${encodedSid}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
@@ -107,7 +117,7 @@ const SerialViewer: React.FC<SerialViewerProps> = ({ sessions, onClose, mode = '
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `serial_${activeSid.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.log`;
+    a.download = `${downloadPrefix}_${activeSid.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.log`;
     a.click();
     URL.revokeObjectURL(url);
   }, [activeSid, currentLogs]);
@@ -122,11 +132,11 @@ const SerialViewer: React.FC<SerialViewerProps> = ({ sessions, onClose, mode = '
     return (
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, width: '100%', height: '100%', background: bg, padding: 13 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontWeight: 600 }}>{'Serial 로그 뷰어'}</span>
+          <span style={{ fontWeight: 600 }}>{title}</span>
           {onClose && <Button size="small" icon={<CloseOutlined />} onClick={onClose} />}
         </div>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#888' }}>
-          {'활성 Serial 세션이 없습니다.'}
+          {'활성 세션이 없습니다.'}
         </div>
       </div>
     );
@@ -147,7 +157,7 @@ const SerialViewer: React.FC<SerialViewerProps> = ({ sessions, onClose, mode = '
       }}
     >
       <div style={{ padding: '8px 12px', borderBottom: `1px solid ${borderColor}`, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontWeight: 600 }}>{'Serial 로그 뷰어'}</span>
+        <span style={{ fontWeight: 600 }}>{title}</span>
         <Tag color="processing">{sessions.length} {t('dltViewer.sessions') || '세션'}</Tag>
         <div style={{ flex: 1 }} />
         <Tooltip title={t('dltViewer.autoScroll') || 'AutoScroll'}>

@@ -12,7 +12,7 @@ import type { TranslationKey } from '../i18n/translations';
 import DLTViewer from '../components/DLTViewer';
 import SerialViewer from '../components/SerialViewer';
 import { useDLTSessions } from '../hooks/useDLTSessions';
-import { useSerialSessions } from '../hooks/useSerialSessions';
+import { useSerialSessions, useLogcatSessions } from '../hooks/useSerialSessions';
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -341,13 +341,15 @@ export default function RecordPage() {
   // DLT/Serial 뷰어 — 세션 시작 시 자동 오픈, 모달 안에서 탭으로 구분
   const dltSessionHook = useDLTSessions();
   const serialSessionHook = useSerialSessions();
+  const logcatSessionHook = useLogcatSessions();
   const [dltModalOpen, setDltModalOpen] = useState(false);
-  const [logViewerTab, setLogViewerTab] = useState<'dlt' | 'serial'>('dlt');
+  const [logViewerTab, setLogViewerTab] = useState<'dlt' | 'serial' | 'logcat'>('dlt');
   // 자동 오픈된 session_id 추적 — WS 재연결 시 백엔드가 활성 세션을 session_started로
   // backfill 재전송하므로, 사용자가 닫은 모달이 즉시 다시 열리는 race를 방지.
   // 같은 session_id에 대해서는 첫 1회만 자동 오픈, session_stopped 시 추적 해제.
   const autoOpenedDltRef = useRef<Set<string>>(new Set());
   const autoOpenedSerialRef = useRef<Set<string>>(new Set());
+  const autoOpenedLogcatRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const e = dltSessionHook.lastEvent;
     if (e?.type === 'session_started' && e.session_id) {
@@ -376,6 +378,19 @@ export default function RecordPage() {
       autoOpenedSerialRef.current.delete(e.session_id);
     }
   }, [serialSessionHook.lastEvent]);
+  useEffect(() => {
+    const e = logcatSessionHook.lastEvent;
+    if (e?.type === 'session_started' && e.session_id) {
+      if (e.scenario_playback) return;
+      if (!autoOpenedLogcatRef.current.has(e.session_id)) {
+        autoOpenedLogcatRef.current.add(e.session_id);
+        setLogViewerTab('logcat');
+        setDltModalOpen(true);
+      }
+    } else if (e?.type === 'session_stopped' && e.session_id) {
+      autoOpenedLogcatRef.current.delete(e.session_id);
+    }
+  }, [logcatSessionHook.lastEvent]);
   // session_stopped 이벤트로 모든 세션이 비면 모달 자동 종료 — StopLogging이 시나리오
   // 재생 중단 또는 정상 종료로 호출됐을 때 사용자가 X 버튼을 누르지 않아도 닫히도록.
   // (step test는 짧아서 거의 인지되지 않았지만 시나리오 재생에선 명확하게 보였음)
@@ -383,18 +398,29 @@ export default function RecordPage() {
     const e = dltSessionHook.lastEvent;
     if (e?.type === 'session_stopped'
         && dltSessionHook.sessions.length === 0
-        && serialSessionHook.sessions.length === 0) {
+        && serialSessionHook.sessions.length === 0
+        && logcatSessionHook.sessions.length === 0) {
       setDltModalOpen(false);
     }
-  }, [dltSessionHook.lastEvent, dltSessionHook.sessions.length, serialSessionHook.sessions.length]);
+  }, [dltSessionHook.lastEvent, dltSessionHook.sessions.length, serialSessionHook.sessions.length, logcatSessionHook.sessions.length]);
   useEffect(() => {
     const e = serialSessionHook.lastEvent;
     if (e?.type === 'session_stopped'
         && dltSessionHook.sessions.length === 0
-        && serialSessionHook.sessions.length === 0) {
+        && serialSessionHook.sessions.length === 0
+        && logcatSessionHook.sessions.length === 0) {
       setDltModalOpen(false);
     }
-  }, [serialSessionHook.lastEvent, dltSessionHook.sessions.length, serialSessionHook.sessions.length]);
+  }, [serialSessionHook.lastEvent, dltSessionHook.sessions.length, serialSessionHook.sessions.length, logcatSessionHook.sessions.length]);
+  useEffect(() => {
+    const e = logcatSessionHook.lastEvent;
+    if (e?.type === 'session_stopped'
+        && dltSessionHook.sessions.length === 0
+        && serialSessionHook.sessions.length === 0
+        && logcatSessionHook.sessions.length === 0) {
+      setDltModalOpen(false);
+    }
+  }, [logcatSessionHook.lastEvent, dltSessionHook.sessions.length, serialSessionHook.sessions.length, logcatSessionHook.sessions.length]);
 
   // Wait step insertion
   const [waitDurationMs, setWaitDurationMs] = useState(1000);
@@ -6663,7 +6689,7 @@ export default function RecordPage() {
         <Tabs
           size="small"
           activeKey={logViewerTab}
-          onChange={(k) => setLogViewerTab(k as 'dlt' | 'serial')}
+          onChange={(k) => setLogViewerTab(k as 'dlt' | 'serial' | 'logcat')}
           tabBarStyle={{ padding: '0 12px', margin: 0 }}
           items={[
             {
@@ -6673,6 +6699,10 @@ export default function RecordPage() {
             {
               key: 'serial',
               label: <span>Serial <Tag style={{ marginLeft: 4 }} color={serialSessionHook.sessions.length > 0 ? 'processing' : 'default'}>{serialSessionHook.sessions.length}</Tag></span>,
+            },
+            {
+              key: 'logcat',
+              label: <span>Logcat <Tag style={{ marginLeft: 4 }} color={logcatSessionHook.sessions.length > 0 ? 'processing' : 'default'}>{logcatSessionHook.sessions.length}</Tag></span>,
             },
           ]}
         />
@@ -6684,19 +6714,29 @@ export default function RecordPage() {
               theme={settings.theme}
               onClose={() => setDltModalOpen(false)}
             />
-          ) : (
+          ) : logViewerTab === 'serial' ? (
             <SerialViewer
               sessions={serialSessionHook.sessions}
               mode="modal"
               theme={settings.theme}
               onClose={() => setDltModalOpen(false)}
             />
+          ) : (
+            <SerialViewer
+              sessions={logcatSessionHook.sessions}
+              mode="modal"
+              theme={settings.theme}
+              onClose={() => setDltModalOpen(false)}
+              wsPath="logcat-log"
+              title="Android logcat 뷰어"
+              downloadPrefix="logcat"
+            />
           )}
         </div>
       </Modal>
 
       {/* 모달 닫혔지만 활성 세션이 있으면 floating 버튼으로 재오픈 */}
-      {!dltModalOpen && (dltSessionHook.sessions.length > 0 || serialSessionHook.sessions.length > 0) && (
+      {!dltModalOpen && (dltSessionHook.sessions.length > 0 || serialSessionHook.sessions.length > 0 || logcatSessionHook.sessions.length > 0) && (
         <Button
           type="primary"
           size="small"
@@ -6711,7 +6751,7 @@ export default function RecordPage() {
             paddingInline: 12,
           }}
         >
-          Log Viewer · DLT {dltSessionHook.sessions.length} / Serial {serialSessionHook.sessions.length}
+          Log Viewer · DLT {dltSessionHook.sessions.length} / Serial {serialSessionHook.sessions.length} / Logcat {logcatSessionHook.sessions.length}
         </Button>
       )}
     </div>

@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { SerialSessionInfo } from '../components/SerialViewer';
 
 /**
- * /ws/serial-lifecycle 를 구독하여 현재 활성 Serial 세션 목록을 유지하는 훅.
+ * /ws/{lifecyclePath} 를 구독하여 현재 활성 로깅 세션 목록을 유지하는 범용 훅.
+ * Serial('serial-lifecycle')과 Android logcat('logcat-lifecycle')이 공유한다.
  * useDLTSessions와 동일 패턴.
  */
-export function useSerialSessions() {
+export function useLogSessions(lifecyclePath: string, tag: string = 'Log') {
   const [sessions, setSessions] = useState<SerialSessionInfo[]>([]);
   const [lastEvent, setLastEvent] = useState<any>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -17,15 +18,15 @@ export function useSerialSessions() {
     const connect = () => {
       if (closed) return;
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${protocol}//${window.location.host}/ws/serial-lifecycle`;
+      const url = `${protocol}//${window.location.host}/ws/${lifecyclePath}`;
       // eslint-disable-next-line no-console
-      console.log('[Serial WS] connecting:', url);
+      console.log(`[${tag} WS] connecting:`, url);
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
       ws.onopen = () => {
         // eslint-disable-next-line no-console
-        console.log('[Serial WS] OPEN');
+        console.log(`[${tag} WS] OPEN`);
       };
 
       ws.onmessage = (ev) => {
@@ -33,7 +34,7 @@ export function useSerialSessions() {
           const msg = JSON.parse(ev.data);
           if (msg.type === 'ping') return;
           // eslint-disable-next-line no-console
-          console.log('[Serial WS] msg:', msg.type, msg.session_id ?? '');
+          console.log(`[${tag} WS] msg:`, msg.type, msg.session_id ?? '');
           setLastEvent(msg);
           if (msg.type === 'session_started' && msg.session_id) {
             setSessions((prev) => {
@@ -43,6 +44,7 @@ export function useSerialSessions() {
                 session_id: msg.session_id,
                 port: msg.port,
                 bps: msg.bps,
+                serial: msg.serial,
                 save_path: msg.save_path,
                 started_at: msg.started_at,
               }];
@@ -55,13 +57,13 @@ export function useSerialSessions() {
 
       ws.onclose = (e) => {
         // eslint-disable-next-line no-console
-        console.warn('[Serial WS] CLOSE code=', e.code);
+        console.warn(`[${tag} WS] CLOSE code=`, e.code);
         if (closed) return;
         reconnectTimerRef.current = window.setTimeout(connect, 2000);
       };
       ws.onerror = (e) => {
         // eslint-disable-next-line no-console
-        console.warn('[Serial WS] ERROR', e);
+        console.warn(`[${tag} WS] ERROR`, e);
       };
     };
 
@@ -72,7 +74,17 @@ export function useSerialSessions() {
       try { wsRef.current?.close(); } catch { /* ignore */ }
       wsRef.current = null;
     };
-  }, []);
+  }, [lifecyclePath, tag]);
 
   return { sessions, lastEvent };
+}
+
+/** /ws/serial-lifecycle 구독 — 활성 Serial 세션 목록. */
+export function useSerialSessions() {
+  return useLogSessions('serial-lifecycle', 'Serial');
+}
+
+/** /ws/logcat-lifecycle 구독 — 활성 Android logcat 세션 목록. */
+export function useLogcatSessions() {
+  return useLogSessions('logcat-lifecycle', 'Logcat');
 }

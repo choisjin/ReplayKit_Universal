@@ -516,6 +516,17 @@ class LogcatService:
         sess = self._sessions.get(serial)
         return sess.get_recent(limit) if sess else []
 
+    def session_snapshot(self, serial: str, limit: int = 1000) -> Optional[dict]:
+        """뷰어 백필용: 세션의 최근 로그 + 총 라인 수. 세션 없으면 None."""
+        sess = self._sessions.get(serial)
+        if sess is None:
+            return None
+        return {
+            "logs": sess.get_recent(limit),
+            "total": sess._line_counter,
+            "capturing": sess.is_capturing(),
+        }
+
     def stop_all(self) -> None:
         """재생 종료/cleanup 시 진행 중인 모든 logcat 세션을 저장·정리한다."""
         with self._lock:
