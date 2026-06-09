@@ -618,6 +618,11 @@ async def connect_device(req: ConnectRequest):
         _ssh_password = ef.get("ssh_password")
         if not _ssh_password and _is_ccic27:
             _ssh_password = "root"
+        # cluster 합성: ccIC27은 배경(Linux TCP) + 정보(QNX SSH, 검은배경)라 chroma가 정답.
+        # 미설정(off)이면 ccIC27에 한해 chroma 자동.
+        _composite_mode = str(ef.get("cluster_composite_mode") or "off")
+        if _is_ccic27 and _composite_mode == "off":
+            _composite_mode = "chroma"
         try:
             dev = await dm.add_hkmc6th_device(
                 req.address, req.port, device_id=custom_id,
@@ -631,9 +636,9 @@ async def connect_device(req: ConnectRequest):
                 ssh_port=(lambda p: 10022 if p in (0, 22) else p)(int(ef.get("ssh_port") or 0)),
                 cluster_resolution=str(ef.get("cluster_resolution") or "2720x720"),
                 cluster_display=_cluster_display,
-                # 클러스터 2-레이어 합성 (배경 + 알람/정보 오버레이). 미입력 시 off(기존 동작).
+                # 클러스터 합성: 배경(Linux TCP) + 정보(QNX SSH). ccIC27은 chroma 자동.
                 cluster_overlay_display=str(ef.get("cluster_overlay_display") or ""),
-                cluster_composite_mode=str(ef.get("cluster_composite_mode") or "off"),
+                cluster_composite_mode=_composite_mode,
                 cluster_overlay_key_color=str(ef.get("cluster_overlay_key_color") or "0,0,0"),
                 cluster_overlay_threshold=int(ef.get("cluster_overlay_threshold") or 24),
                 cluster_composite_live=bool(ef.get("cluster_composite_live", True)),

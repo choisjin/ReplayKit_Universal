@@ -2562,17 +2562,10 @@ export default function DevicePage() {
                           />
                         </Space>
                         <div style={{ marginTop: 6, fontSize: 11, color: '#888' }}>
-                          클러스터 합성 (선택): 배경 플레인 위에 알람/정보 오버레이 플레인을 합쳐 표시.
-                          오버레이 display를 비워두면 단일 플레인(기존 동작). 합성 모드는 알람이 검은 박스로 나오면 <b>chroma</b>로 전환.
+                          클러스터 합성: <b>배경(Linux, TCP)</b> + <b>정보(QNX SSH display, 검은 배경의 게이지/경고)</b> 를 합쳐 완성 cluster 표시.
+                          <b>ccIC27은 자동 chroma</b>. off면 정보 단독, chroma면 정보의 검정을 빼고 배경 위에 합성.
                         </div>
                         <Space wrap>
-                          <span style={{ fontSize: 11, color: '#888' }}>Overlay display:</span>
-                          <Input
-                            placeholder="(비활성) 예: 3"
-                            value={clusterOverlayDisplay}
-                            onChange={(e) => setClusterOverlayDisplay(e.target.value)}
-                            style={{ width: 130 }}
-                          />
                           <span style={{ fontSize: 11, color: '#888' }}>Composite:</span>
                           <Select
                             value={clusterCompositeMode}

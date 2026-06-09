@@ -110,92 +110,69 @@ def test_chroma_threshold_boundary():
     assert tuple(int(c) for c in out_lo[10, 20]) == (20, 0, 0), "threshold10: should overlay"
 
 
-class _FakeStd:
-    def __init__(self, data=b""):
-        self._data = data
-
-        class _Ch:
-            @staticmethod
-            def recv_exit_status():
-                return 0
-        self.channel = _Ch()
-
-    def read(self):
-        return self._data
-
-    def close(self):
-        pass
-
-
-class _FakeSSH:
-    def __init__(self):
-        self.commands = []
-
-    def exec_command(self, cmd, timeout=None):
-        self.commands.append(cmd)
-        return _FakeStd(), _FakeStd(b""), _FakeStd(b"")
-
-    def get_transport(self):
-        return object()
-
-
 def _make_svc(**kw):
     from app.services.hkmc6th_service import HKMC6thService
-    return HKMC6thService("1.2.3.4", 6655, device_id="T", ssh_username="root", **kw)
+    kw.setdefault("ssh_username", "root")
+    return HKMC6thService("1.2.3.4", 6655, device_id="T", **kw)
 
 
 def test_composite_enabled_flag():
-    svc = _make_svc(cluster_overlay_display="2", cluster_composite_mode="alpha")
+    # 합성 = mode가 alpha/chroma 이고 SSH 자격증명이 있을 때.
+    assert _make_svc(cluster_composite_mode="chroma")._composite_enabled is True
+    assert _make_svc(cluster_composite_mode="alpha")._composite_enabled is True
+    assert _make_svc(cluster_composite_mode="off")._composite_enabled is False
+    assert _make_svc()._composite_enabled is False
+    # 잘못된 mode → off 정규화 (생성자가 ssh_username은 항상 root로 보정하므로 SSH는 늘 있음)
+    assert _make_svc(cluster_composite_mode="bogus").cluster_composite_mode == "off"
+
+
+def test_cluster_composite_tcp_bg_plus_ssh_info():
+    # 배경 = TCP CMD_GETIMG cluster(회색), 정보 = QNX SSH display(검정 위 빨강) → chroma 합성.
+    svc = _make_svc(cluster_composite_mode="chroma", cluster_display="2")
     assert svc._composite_enabled is True
-    assert svc.cluster_composite_mode == "alpha"
-    svc_off = _make_svc()
-    assert svc_off._composite_enabled is False
-    # 오버레이 display는 있지만 mode=off면 비활성
-    svc_off2 = _make_svc(cluster_overlay_display="2", cluster_composite_mode="off")
-    assert svc_off2._composite_enabled is False
-    # 잘못된 mode는 off로 정규화
-    svc_bad = _make_svc(cluster_overlay_display="2", cluster_composite_mode="bogus")
-    assert svc_bad.cluster_composite_mode == "off"
+    seen = {}
 
+    def fake_tcp(screen_type, timeout):
+        seen["tcp"] = screen_type
+        return _bg()           # 회색 배경
 
-def test_ssh_two_plane_command_and_composite():
-    svc = _make_svc(cluster_overlay_display="2", cluster_composite_mode="alpha",
-                    cluster_resolution="40x20")
-    fake = _FakeSSH()
-    svc._get_cluster_ssh = lambda: fake
+    def fake_one_plane(disp, timeout):
+        seen["disp"] = disp
+        return _ov_chroma()    # 검정 배경 위 빨강 사각형(정보)
 
-    def fake_scp(transport, path, timeout):
-        return _ov_alpha() if path == "/CLU_OV.png" else _bg()
-    svc._scp_get_bytes = staticmethod(fake_scp)  # type: ignore
+    svc._capture_tcp_raw = fake_tcp
+    svc._capture_one_plane = fake_one_plane
 
-    out_bytes = svc._screencap_cluster_via_ssh(fmt="png", composite=True)
-    # 캡처 명령(첫 exec_command)에 screenshot 2회 + 올바른 display 인덱스
-    cap_cmd = fake.commands[0]
-    assert cap_cmd.count("screenshot") == 2, cap_cmd
-    assert "-display=1 -file=/CLU_BG.png" in cap_cmd, cap_cmd
-    assert "-display=2 -file=/CLU_OV.png" in cap_cmd, cap_cmd
-    # 결과 디코딩 → 합성 적용 확인 (사각형 중앙=빨강)
+    out_bytes = svc._capture_cluster_composite_bytes("png", 5.0)
+    assert seen["tcp"] == "cluster"
+    assert seen["disp"] == "2"          # SSH 정보는 cluster_display(2)
     out = cv2.imdecode(np.frombuffer(out_bytes, np.uint8), cv2.IMREAD_COLOR)
     assert out.shape == (H, W, 3)
-    assert tuple(int(c) for c in out[10, 20]) == RED
+    assert tuple(int(c) for c in out[10, 20]) == RED   # 정보(빨강) 합성됨
+    assert tuple(int(c) for c in out[1, 1]) == GRAY    # 배경(회색) 유지
 
 
-def test_ssh_single_plane_when_disabled():
-    svc = _make_svc(cluster_resolution="40x20")  # 합성 비활성
-    fake = _FakeSSH()
-    svc._get_cluster_ssh = lambda: fake
-    svc._scp_get_bytes = staticmethod(lambda transport, path, timeout: _bg())  # type: ignore
-    out_bytes = svc._screencap_cluster_via_ssh(fmt="png", composite=True)
-    cap_cmd = fake.commands[0]
-    assert cap_cmd.count("screenshot") == 1, cap_cmd
-    assert "-display=1 -file=/CLU_IMAGE.png" in cap_cmd, cap_cmd
-    out = cv2.imdecode(np.frombuffer(out_bytes, np.uint8), cv2.IMREAD_COLOR)
-    assert tuple(int(c) for c in out[10, 20]) == GRAY  # 배경 그대로
+def test_screencap_cluster_via_ssh_info_only():
+    # 합성 off + SSH creds → 정보 단독(SSH). cluster_display 인덱스 사용 확인.
+    svc = _make_svc(cluster_display="2")  # mode 기본 off
+    assert svc._composite_enabled is False
+    seen = {}
+
+    def fake_one_plane(disp, timeout):
+        seen["disp"] = disp
+        return _ov_chroma()
+
+    svc._capture_one_plane = fake_one_plane
+    out = svc._screencap_cluster_via_ssh(fmt="png", timeout=5.0)
+    assert seen["disp"] == "2"
+    img = cv2.imdecode(np.frombuffer(out, np.uint8), cv2.IMREAD_COLOR)
+    assert img.shape == (H, W, 3)
+    assert tuple(int(c) for c in img[10, 20]) == RED  # 정보 그대로(검정 배경)
 
 
 def test_ssh_failure_cooldown():
     import time as _t
-    svc = _make_svc(cluster_overlay_display="2", cluster_composite_mode="alpha")
+    svc = _make_svc(cluster_composite_mode="chroma")
     # 초기엔 cooldown 아님
     assert svc._cluster_ssh_in_cooldown() is False
     # 인증 실패 → 긴 cooldown
