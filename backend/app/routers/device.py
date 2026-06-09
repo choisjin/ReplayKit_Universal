@@ -614,8 +614,9 @@ async def connect_device(req: ConnectRequest):
                 # 클러스터 SSH 캡처용 자격증명. 미입력 시 root/빈 패스워드 fallback.
                 ssh_username=(ef.get("ssh_username") or "root"),
                 ssh_password=(ef.get("ssh_password") or ""),
-                # QNX 클러스터 SSH는 dropbear 포트 10022 (legacy QNX_INIT). 일반 22 아님.
-                ssh_port=int(ef.get("ssh_port") or 10022),
+                # QNX 클러스터 SSH는 dropbear 포트 10022 (legacy QNX_INIT). 일반 22는 잘못된
+                # 포트라 10022로 강제(구버전 프론트가 22를 보내도 보정).
+                ssh_port=(lambda p: 10022 if p in (0, 22) else p)(int(ef.get("ssh_port") or 0)),
                 cluster_resolution=str(ef.get("cluster_resolution") or "2720x720"),
                 cluster_display=str(ef.get("cluster_display") or "1"),
                 # 클러스터 2-레이어 합성 (배경 + 알람/정보 오버레이). 미입력 시 off(기존 동작).

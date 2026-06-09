@@ -1091,6 +1091,9 @@ class HKMC6thService:
 
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            logger.info("HKMC cluster SSH connecting: %s@%s:%d (pw=%s)",
+                        self.ssh_username, self.host, self.ssh_port,
+                        "set" if self.ssh_password else "EMPTY")
             ssh.connect(
                 hostname=self.host,
                 port=self.ssh_port,
