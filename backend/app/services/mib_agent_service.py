@@ -95,14 +95,43 @@ def _validate_png_file(path: str) -> bool:
             sig = f.read(8)
             if sig != b"\x89PNG\r\n\x1a\n":
                 return False
-            # 마지막 12 bytes는 IEND chunk: 4byte length(0) + 'IEND' + 4byte CRC
-            f.seek(-12, 2)
-            tail = f.read(12)
-            if len(tail) < 12 or tail[4:8] != b"IEND":
+            # IEND chunk가 파일 정확히 끝에 오는 게 정상이지만, 일부 LayerManagerControl dump
+            # 구현은 IEND 뒤에 패딩/잔여 바이트를 남긴다. 끝에서 일정 구간을 뒤져 IEND 존재를 확인
+            # (정확히 마지막 12바이트만 보면 멀쩡한 PNG도 truncated로 오판 → 캡처 전체 폐기됨).
+            scan = min(size, 4096)
+            f.seek(-scan, 2)
+            tail = f.read(scan)
+            if b"IEND" not in tail:
                 return False
         return True
     except Exception:
         return False
+
+
+def _read_png_ihdr_size(path: str) -> Optional[tuple[int, int]]:
+    """PNG IHDR(첫 청크)에서 실제 width/height를 읽는다.
+
+    파일 끝이 truncated/corrupt 되어 IEND가 없어도 IHDR은 파일 맨 앞(byte 16~24)에
+    위치하므로 디바이스 실제 화면 해상도를 신뢰성 있게 얻을 수 있다. 캡처 디코딩 성공
+    여부와 무관하게 터치 좌표 스케일링(_x_mult/_y_mult)을 보정하기 위함.
+    반환: (width, height) 또는 실패 시 None.
+    """
+    try:
+        with open(path, "rb") as f:
+            header = f.read(24)
+        if len(header) < 24:
+            return None
+        if header[:8] != b"\x89PNG\r\n\x1a\n":
+            return None
+        if header[12:16] != b"IHDR":
+            return None
+        width = int.from_bytes(header[16:20], "big")
+        height = int.from_bytes(header[20:24], "big")
+        if width <= 0 or height <= 0:
+            return None
+        return width, height
+    except Exception:
+        return None
 
 
 def _rm_tree(path: str) -> None:
@@ -1468,6 +1497,19 @@ class MIBAgentService:
                                             "MIB HU scp %s: PNG truncated/corrupt (size=%d)",
                                             remote, os.path.getsize(local),
                                         )
+                                        # 디코딩(IDAT/IEND)은 깨졌어도 IHDR(파일 앞부분)은 대개 온전 →
+                                        # 실제 해상도만이라도 추출해 터치 좌표 스케일링을 보정한다. 캡처가
+                                        # 계속 실패해도 터치는 실제 해상도에 맞게 동작하도록 분리.
+                                        # crop 모드에서는 등록 해상도 우선이므로 자동 갱신 skip.
+                                        if not crop_to_registered:
+                                            dims = _read_png_ihdr_size(local)
+                                            if dims:
+                                                try:
+                                                    self._maybe_autoupdate_resolution(dims[0], dims[1])
+                                                except Exception as _re:
+                                                    logger.debug(
+                                                        "MIB IHDR resolution auto-correct skipped: %s", _re
+                                                    )
                                         if debug_dump:
                                             self._log_dump_diagnostics(ssh, idx, local)
                                 if not ok:
