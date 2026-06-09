@@ -1454,7 +1454,14 @@ class MIBAgentService:
             dump_timeout = float(os.environ.get("MIB_DUMP_TIMEOUT_S", "8") or 8)
         except Exception:
             dump_timeout = 8.0
-        crop_to_registered = os.environ.get("MIB_CROP_TO_REGISTERED", "").strip() in ("1", "true", "yes")
+        # 기본값 ON: 등록 해상도(= 디바이스 실제 화면/터치 좌표 공간)를 권위로 삼아 dump 버퍼의
+        # 우/하단 black margin을 잘라낸다. LayerManagerControl dump는 compositor가 할당한 layer
+        # 버퍼 전체(예: 1560x878)를 뜨는데, 실제 렌더된 UI viewport(예: 1560x700)보다 커서 우/하단에
+        # 미사용 black 영역이 남는다. 이 버퍼 크기로 해상도를 자동 갱신하면 프론트 좌표 매핑이 어긋나
+        # 터치가 틀어진다(regression 4dd181c). 따라서 등록 해상도를 신뢰하고 자동 갱신은 하지 않는 게
+        # 기본. 자동 해상도 감지로 회귀하려면 MIB_CROP_TO_REGISTERED=0.
+        _crop_env = os.environ.get("MIB_CROP_TO_REGISTERED", "").strip().lower()
+        crop_to_registered = _crop_env not in ("0", "false", "no")
         registered_w, registered_h = self._res_x, self._res_y
 
         def _phase_log(label: str, t0: float) -> None:
