@@ -1109,7 +1109,7 @@ class DeviceManager:
 
     async def add_hkmc6th_device(self, host: str, port: int, device_id: str = "", name: str = "", device_model: str = "",
                                  ssh_username: str = "root", ssh_password: str = "",
-                                 ssh_port: int = 22,
+                                 ssh_port: int = 10022,
                                  cluster_resolution: str = "2720x720",
                                  cluster_display: str = "1",
                                  cluster_overlay_display: str = "",
@@ -1130,7 +1130,7 @@ class DeviceManager:
         # 클러스터 SSH 캡처 설정 — 항상 저장(기본 root/빈 패스워드).
         info["ssh_username"] = ssh_username if ssh_username else "root"
         info["ssh_password"] = ssh_password if ssh_password is not None else ""
-        info["ssh_port"] = int(ssh_port) if ssh_port else 22
+        info["ssh_port"] = int(ssh_port) if ssh_port else 10022
         info["cluster_resolution"] = cluster_resolution or "2720x720"
         info["cluster_display"] = str(cluster_display) if cluster_display is not None else "1"
         # 클러스터 2-레이어 합성 설정 (배경 + 알람/정보 오버레이 플레인).
@@ -1684,7 +1684,7 @@ class DeviceManager:
                                          device_model=dev.info.get("device_model", ""),
                                          ssh_username=dev.info.get("ssh_username", ""),
                                          ssh_password=dev.info.get("ssh_password", ""),
-                                         ssh_port=int(dev.info.get("ssh_port", 22) or 22),
+                                         ssh_port=int(dev.info.get("ssh_port", 10022) or 10022),
                                          cluster_resolution=dev.info.get("cluster_resolution", "2720x720"),
                                          cluster_display=str(dev.info.get("cluster_display", "1") or "1"),
                                          cluster_overlay_display=str(dev.info.get("cluster_overlay_display", "") or ""),
@@ -2379,7 +2379,7 @@ class DeviceManager:
                                          device_model=dev.info.get("device_model", ""),
                                          ssh_username=dev.info.get("ssh_username", ""),
                                          ssh_password=dev.info.get("ssh_password", ""),
-                                         ssh_port=int(dev.info.get("ssh_port", 22) or 22),
+                                         ssh_port=int(dev.info.get("ssh_port", 10022) or 10022),
                                          cluster_resolution=dev.info.get("cluster_resolution", "2720x720"),
                                          cluster_display=str(dev.info.get("cluster_display", "1") or "1"),
                                          cluster_overlay_display=str(dev.info.get("cluster_overlay_display", "") or ""),
@@ -2643,7 +2643,7 @@ class DeviceManager:
                                          device_model=dev.info.get("device_model", ""),
                                          ssh_username=dev.info.get("ssh_username", ""),
                                          ssh_password=dev.info.get("ssh_password", ""),
-                                         ssh_port=int(dev.info.get("ssh_port", 22) or 22),
+                                         ssh_port=int(dev.info.get("ssh_port", 10022) or 10022),
                                          cluster_resolution=dev.info.get("cluster_resolution", "2720x720"),
                                          cluster_display=str(dev.info.get("cluster_display", "1") or "1"),
                                          cluster_overlay_display=str(dev.info.get("cluster_overlay_display", "") or ""),

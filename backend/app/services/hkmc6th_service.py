@@ -425,7 +425,7 @@ class HKMC6thService:
                  key_overrides: Optional[dict[str, dict]] = None,
                  device_model: str = "",
                  ssh_username: str = "root", ssh_password: str = "",
-                 ssh_port: int = 22, cluster_resolution: str = "2720x720",
+                 ssh_port: int = 10022, cluster_resolution: str = "2720x720",
                  cluster_display: str = "1",
                  cluster_overlay_display: str = "",
                  cluster_composite_mode: str = "off",
@@ -442,7 +442,8 @@ class HKMC6thService:
                 반대(legacy ccIC_Agent: monitor=1=RIGHT, 2=LEFT)이므로 SCREEN_TOUCH_MAP을
                 swap한 결과로 라우팅한다.
             ssh_username/ssh_password/ssh_port: 클러스터 캡처용 QNX SSH 자격증명.
-                기본값은 ICAS QNX와 동일한 `root` / 빈 패스워드 / 22.
+                기본값은 legacy CLU_IMG_GET(QNX_INIT)와 동일한 `root` / 빈 패스워드 / 10022.
+                (QNX 클러스터 SSH는 dropbear 포트 10022 — 일반 22 아님.)
                 cluster screen_type 캡처 시 `screenshot -size=WxH -display=N`을
                 SSH로 실행하고 SCP로 BMP를 가져온다. SSH 실패 시 TCP CMD_GETIMG 자동 폴백.
             cluster_resolution: "WxH" 형식 (legacy CLU_IMG_GET 기본 2720x720).
@@ -481,7 +482,7 @@ class HKMC6thService:
         if not self.ssh_username:
             self.ssh_username = "root"
         self.ssh_password = ssh_password if ssh_password is not None else ""
-        self.ssh_port = int(ssh_port) if ssh_port else 22
+        self.ssh_port = int(ssh_port) if ssh_port else 10022
         try:
             cw_s, ch_s = str(cluster_resolution).lower().split("x")
             self.cluster_width = int(cw_s)

@@ -770,7 +770,8 @@ export default function DevicePage() {
         extra = extra || {};
         extra.ssh_username = (sshUser && sshUser.trim()) || 'root';
         extra.ssh_password = sshPass || '';
-        extra.ssh_port = sshPort || 22;
+        // QNX 클러스터 SSH는 dropbear 포트 10022 (legacy QNX_INIT). 22는 잘못된 포트라 10022로 매핑.
+        extra.ssh_port = (!sshPort || sshPort === 22) ? 10022 : sshPort;
         extra.cluster_resolution = '2720x720';
         extra.cluster_display = '1';
         // 클러스터 2-레이어 합성. 오버레이 디스플레이 인덱스가 비어있거나 mode=off면 비활성.
@@ -881,7 +882,22 @@ export default function DevicePage() {
       // (Gen6/cc* 등 다른 모델은 기존 hkmc_agent 유지)
       const isGen5 = /gen5/i.test(deviceModel || '');
       const devType: 'hkmc_agent' | 'hkmc5th_wide_agent' = isGen5 ? 'hkmc5th_wide_agent' : 'hkmc_agent';
-      const result = await connectDevice(devType, ip, undefined, '', 'primary', undefined, undefined, undefined, '', port, deviceModel || undefined);
+      // 스캔 연결도 클러스터 SSH 자격증명/포트를 전달해야 cluster 캡처가 동작한다.
+      // (기존엔 extra=undefined로 보내 root/빈비번/22 기본값이 강제돼 인증 실패했음)
+      let extra: Record<string, any> | undefined;
+      if (devType === 'hkmc_agent') {
+        extra = {
+          ssh_username: (sshUser && sshUser.trim()) || 'root',
+          ssh_password: sshPass || '',
+          // QNX 클러스터 SSH는 dropbear 포트 10022 (legacy QNX_INIT). 22는 10022로 매핑.
+          ssh_port: (!sshPort || sshPort === 22) ? 10022 : sshPort,
+          cluster_resolution: '2720x720',
+          cluster_display: '1',
+          cluster_overlay_display: (clusterOverlayDisplay && clusterOverlayDisplay.trim()) || '',
+          cluster_composite_mode: clusterCompositeMode || 'off',
+        };
+      }
+      const result = await connectDevice(devType, ip, undefined, '', 'primary', undefined, undefined, extra, '', port, deviceModel || undefined);
       message.success(result);
       closeAddModal();
     } catch (e: any) {
@@ -2507,7 +2523,7 @@ export default function DevicePage() {
                           />
                         </div>
                         <div style={{ marginTop: 6, fontSize: 11, color: '#888' }}>
-                          클러스터 캡처용 SSH (cluster screen은 QNX SSH+screenshot+SCP). 비워두면 기본값 <b>root / 빈 패스워드 / 22</b> 사용 (ICAS QNX 패턴).
+                          클러스터 캡처용 SSH (cluster screen은 QNX SSH+screenshot+SCP). 비워두면 <b>root / 빈 패스워드</b>, 포트는 <b>10022</b>(QNX dropbear). 비밀번호가 있는 디바이스는 아래에 입력하세요(예: ccIC = root/root).
                         </div>
                         <Space wrap>
                           <Input
