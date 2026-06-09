@@ -1081,14 +1081,18 @@ class HKMC6thService:
         import cv2
         import numpy as np
 
+        # 합성은 캡처 2회(TCP 배경 + SSH 정보)라 라이브의 빡빡한 timeout(3s)으론 부족.
+        # 디바이스 캡처가 프레임당 ~1초대라 각 소스에 넉넉한 하한을 둔다.
+        cap_timeout = max(timeout, 8.0)
+
         # 1) 배경 = TCP CMD_GETIMG cluster (Linux surface)
-        bg_bmp = self._capture_tcp_raw("cluster", timeout)
+        bg_bmp = self._capture_tcp_raw("cluster", cap_timeout)
         bg = cv2.imdecode(np.frombuffer(bg_bmp, dtype=np.uint8), cv2.IMREAD_COLOR)
         if bg is None:
             raise RuntimeError("cluster TCP background decode failed")
 
         # 2) 정보 = QNX SSH screenshot display=cluster_display (검은 배경 위 정보)
-        info_png = self._capture_one_plane(self.cluster_display, timeout)
+        info_png = self._capture_one_plane(self.cluster_display, cap_timeout)
         read_flag = cv2.IMREAD_UNCHANGED if self.cluster_composite_mode == "alpha" else cv2.IMREAD_COLOR
         ov = cv2.imdecode(np.frombuffer(info_png, dtype=np.uint8), read_flag) if info_png else None
 
