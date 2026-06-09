@@ -606,19 +606,31 @@ async def connect_device(req: ConnectRequest):
         if not req.address or not req.port:
             raise HTTPException(status_code=400, detail="HKMC6th requires address (IP) and port (TCP port)")
         ef = req.extra_fields or {}
+        _is_ccic27 = "ccic27" in (req.device_model or "").lower()
+        # cluster display 인덱스: ccIC27은 QNX screenshot의 display=1이 없고 display=2가
+        # 정답이라, 명시값이 없거나 legacy 기본('1')이면 ccIC27 모델에 한해 '2'로 보정한다.
+        # (구버전 프론트가 '1'을 하드코딩해 보내도 cluster가 동작하도록 하는 안전망)
+        _cluster_display = str(ef.get("cluster_display") or "1")
+        if _is_ccic27 and _cluster_display in ("", "1"):
+            _cluster_display = "2"
+        # cluster SSH 비밀번호: ccIC27 QNX(포트 10022)는 root/root. 비워두면 자동 root로 보정해
+        # 비밀번호 입력 없이 cluster 캡처가 동작하게 한다. 명시값이 있으면 그대로 사용.
+        _ssh_password = ef.get("ssh_password")
+        if not _ssh_password and _is_ccic27:
+            _ssh_password = "root"
         try:
             dev = await dm.add_hkmc6th_device(
                 req.address, req.port, device_id=custom_id,
                 name=req.name or "",
                 device_model=req.device_model or "",
-                # 클러스터 SSH 캡처용 자격증명. 미입력 시 root/빈 패스워드 fallback.
+                # 클러스터 SSH 캡처용 자격증명. 미입력 시 root/빈 패스워드 fallback(ccIC27은 root/root).
                 ssh_username=(ef.get("ssh_username") or "root"),
-                ssh_password=(ef.get("ssh_password") or ""),
+                ssh_password=(_ssh_password or ""),
                 # QNX 클러스터 SSH는 dropbear 포트 10022 (legacy QNX_INIT). 일반 22는 잘못된
                 # 포트라 10022로 강제(구버전 프론트가 22를 보내도 보정).
                 ssh_port=(lambda p: 10022 if p in (0, 22) else p)(int(ef.get("ssh_port") or 0)),
                 cluster_resolution=str(ef.get("cluster_resolution") or "2720x720"),
-                cluster_display=str(ef.get("cluster_display") or "1"),
+                cluster_display=_cluster_display,
                 # 클러스터 2-레이어 합성 (배경 + 알람/정보 오버레이). 미입력 시 off(기존 동작).
                 cluster_overlay_display=str(ef.get("cluster_overlay_display") or ""),
                 cluster_composite_mode=str(ef.get("cluster_composite_mode") or "off"),

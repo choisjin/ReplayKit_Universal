@@ -328,6 +328,8 @@ export default function DevicePage() {
   const [sshPort, setSshPort] = useState(22);
   const [sshUser, setSshUser] = useState('');
   const [sshPass, setSshPass] = useState('');
+  // 클러스터 배경 플레인 display 인덱스 (QNX screenshot -display=N). legacy ccIC=1, ccIC27=2.
+  const [clusterDisplay, setClusterDisplay] = useState('1');
   // 클러스터 2-레이어 합성 (배경 + 알람/정보 오버레이 플레인).
   // 빈 오버레이 디스플레이 또는 mode=off면 합성 비활성(기존 단일 플레인 동작).
   const [clusterOverlayDisplay, setClusterOverlayDisplay] = useState('');
@@ -773,7 +775,7 @@ export default function DevicePage() {
         // QNX 클러스터 SSH는 dropbear 포트 10022 (legacy QNX_INIT). 22는 잘못된 포트라 10022로 매핑.
         extra.ssh_port = (!sshPort || sshPort === 22) ? 10022 : sshPort;
         extra.cluster_resolution = '2720x720';
-        extra.cluster_display = '1';
+        extra.cluster_display = (clusterDisplay && clusterDisplay.trim()) || '1';
         // 클러스터 2-레이어 합성. 오버레이 디스플레이 인덱스가 비어있거나 mode=off면 비활성.
         extra.cluster_overlay_display = (clusterOverlayDisplay && clusterOverlayDisplay.trim()) || '';
         extra.cluster_composite_mode = clusterCompositeMode || 'off';
@@ -892,7 +894,7 @@ export default function DevicePage() {
           // QNX 클러스터 SSH는 dropbear 포트 10022 (legacy QNX_INIT). 22는 10022로 매핑.
           ssh_port: (!sshPort || sshPort === 22) ? 10022 : sshPort,
           cluster_resolution: '2720x720',
-          cluster_display: '1',
+          cluster_display: (clusterDisplay && clusterDisplay.trim()) || '1',
           cluster_overlay_display: (clusterOverlayDisplay && clusterOverlayDisplay.trim()) || '',
           cluster_composite_mode: clusterCompositeMode || 'off',
         };
@@ -2523,7 +2525,7 @@ export default function DevicePage() {
                           />
                         </div>
                         <div style={{ marginTop: 6, fontSize: 11, color: '#888' }}>
-                          클러스터 캡처용 SSH (cluster screen은 QNX SSH+screenshot+SCP). 비워두면 <b>root / 빈 패스워드</b>, 포트는 <b>10022</b>(QNX dropbear). 비밀번호가 있는 디바이스는 아래에 입력하세요(예: ccIC = root/root).
+                          클러스터 캡처용 SSH (cluster screen은 QNX SSH+screenshot+SCP). <b>ccIC27은 비워두면 자동으로 root/root·포트10022·display2</b> 적용 — 입력 불필요. 다른 디바이스만 필요 시 아래에 자격증명을 입력하세요.
                         </div>
                         <Space wrap>
                           <Input
@@ -2547,13 +2549,26 @@ export default function DevicePage() {
                           />
                         </Space>
                         <div style={{ marginTop: 6, fontSize: 11, color: '#888' }}>
-                          클러스터 합성 (선택): 배경 플레인(display 1) 위에 알람/정보 오버레이 플레인을 합쳐 표시.
+                          클러스터 캡처 display 인덱스 (QNX <code>screenshot -display=N</code>). <b>legacy ccIC=1, ccIC27=2</b>.
+                          "no displays" 에러가 나면 이 값을 바꾸세요.
+                        </div>
+                        <Space wrap>
+                          <span style={{ fontSize: 11, color: '#888' }}>Cluster display:</span>
+                          <Input
+                            placeholder="예: 2 (ccIC27)"
+                            value={clusterDisplay}
+                            onChange={(e) => setClusterDisplay(e.target.value)}
+                            style={{ width: 110 }}
+                          />
+                        </Space>
+                        <div style={{ marginTop: 6, fontSize: 11, color: '#888' }}>
+                          클러스터 합성 (선택): 배경 플레인 위에 알람/정보 오버레이 플레인을 합쳐 표시.
                           오버레이 display를 비워두면 단일 플레인(기존 동작). 합성 모드는 알람이 검은 박스로 나오면 <b>chroma</b>로 전환.
                         </div>
                         <Space wrap>
                           <span style={{ fontSize: 11, color: '#888' }}>Overlay display:</span>
                           <Input
-                            placeholder="(비활성) 예: 2"
+                            placeholder="(비활성) 예: 3"
                             value={clusterOverlayDisplay}
                             onChange={(e) => setClusterOverlayDisplay(e.target.value)}
                             style={{ width: 130 }}
