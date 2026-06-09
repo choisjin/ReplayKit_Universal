@@ -110,10 +110,14 @@ def _validate_png_file(path: str) -> bool:
             sig = f.read(8)
             if sig != b"\x89PNG\r\n\x1a\n":
                 return False
-            # 마지막 12 bytes는 IEND chunk: 4byte length(0) + 'IEND' + 4byte CRC
-            f.seek(-12, 2)
-            tail = f.read(12)
-            if len(tail) < 12 or tail[4:8] != b"IEND":
+            # IEND chunk가 파일 정확히 끝에 오는 게 정상이지만, 일부 LayerManagerControl dump
+            # 구현은 IEND 뒤에 패딩/잔여 바이트를 남긴다. 끝에서 일정 구간을 뒤져 IEND 존재를 확인
+            # (정확히 마지막 12바이트만 보면 멀쩡한 PNG도 truncated로 오판 → 캡처 전체 폐기되어
+            # 'No HU screenshot captured'가 무한 반복되고 backoff 재연결이 폭주함).
+            scan = min(size, 4096)
+            f.seek(-scan, 2)
+            tail = f.read(scan)
+            if b"IEND" not in tail:
                 return False
         return True
     except Exception:
@@ -1001,23 +1005,26 @@ class ICASAgentService:
                 return files
 
             local_files: list[str] = []
-            with self._ssh_lock:
-                # 연속 실패 누적 시 sshd에 회복 시간 제공 — backoff 후 SSH 재연결.
-                # 폭주 재연결이 sshd MaxStartups를 초과해 더 깊이 죽는 악순환 방지.
-                if self._consecutive_capture_failures >= self._consecutive_capture_failures_threshold:
-                    backoff = min(2.0, 0.3 * self._consecutive_capture_failures)
-                    logger.info(
-                        "ICAS HU capture backoff %.1fs after %d consecutive failures",
-                        backoff, self._consecutive_capture_failures,
-                    )
-                    time.sleep(backoff)
-                    # 강제 SSH 폐기 — 다음 _get_shared_ssh가 새 연결
+            # 연속 실패 누적 시 sshd에 회복 시간 제공 — backoff 후 SSH 재연결.
+            # 폭주 재연결이 sshd MaxStartups를 초과해 더 깊이 죽는 악순환 방지.
+            # 주의: backoff sleep은 _ssh_lock 밖에서 수행한다. 락 안에서 자면 같은 락을 쓰는
+            # 터치/하드키(_shell_run)가 매 실패 사이클마다 최대 2초씩 블록되어 입력이 먹통이 됨.
+            if self._consecutive_capture_failures >= self._consecutive_capture_failures_threshold:
+                backoff = min(2.0, 0.3 * self._consecutive_capture_failures)
+                logger.info(
+                    "ICAS HU capture backoff %.1fs after %d consecutive failures",
+                    backoff, self._consecutive_capture_failures,
+                )
+                time.sleep(backoff)
+                # 강제 SSH 폐기 — 다음 _get_shared_ssh가 새 연결 (close만 락으로 보호)
+                with self._ssh_lock:
                     if self._ssh_client is not None:
                         try:
                             self._ssh_client.close()
                         except Exception:
                             pass
                         self._ssh_client = None
+            with self._ssh_lock:
                 try:
                     ssh = self._get_shared_ssh()
                     local_files = _do_capture(ssh)
