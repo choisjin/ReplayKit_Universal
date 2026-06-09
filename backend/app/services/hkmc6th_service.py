@@ -1283,7 +1283,8 @@ class HKMC6thService:
         except ImportError as e:
             raise RuntimeError("scp module required: pip install scp") from e
 
-        raw = self._capture_one_plane(self.cluster_display, timeout)
+        # QNX screenshot + SCP(수MB)는 라이브의 빡빡한 timeout(3s)으론 부족 → 하한 8s.
+        raw = self._capture_one_plane(self.cluster_display, max(timeout, 8.0))
         if not raw:
             raise RuntimeError("Empty cluster screenshot from QNX")
         return self._encode_cluster_raw(raw, fmt)

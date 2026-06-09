@@ -618,9 +618,12 @@ async def connect_device(req: ConnectRequest):
         _ssh_password = ef.get("ssh_password")
         if not _ssh_password and _is_ccic27:
             _ssh_password = "root"
-        # cluster 합성 모드: off=TCP 배경 단독(front 방식), chroma=배경+QNX정보 합성.
-        # 현재는 기본 off(TCP 배경)로 두고, 합성은 UI/설정에서 chroma 선택 시 활성화.
+        # cluster 캡처 모드: ccIC27은 TCP cluster(CMD_GETIMG bits=1) 미지원(실측 TIMEOUT)이라
+        # QNX SSH screenshot(display=2)로 표시한다. off=TCP, ssh=QNX SSH, chroma=배경+정보 합성.
+        # 미설정 ccIC27 → ssh 자동.
         _composite_mode = str(ef.get("cluster_composite_mode") or "off")
+        if _is_ccic27 and _composite_mode == "off":
+            _composite_mode = "ssh"
         try:
             dev = await dm.add_hkmc6th_device(
                 req.address, req.port, device_id=custom_id,
