@@ -363,11 +363,12 @@
 <!-- Sidebar / TOC -->
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-logo">&#x1F4CB; ReplayKit</div>
-  <div class="sidebar-version">User Guide v1.0</div>
+  <div class="sidebar-version">User Guide v1.1</div>
   <nav id="toc">
     <a href="#intro" class="toc-h2">Introduction</a>
     <a href="#overview" class="toc-h3">System Overview</a>
     <a href="#workflow" class="toc-h3">Core Workflow</a>
+    <a href="#layout" class="toc-h3">Screen Layout &amp; Sidebar</a>
     <a href="#supported-avn" class="toc-h3">Supported AVN Models</a>
     <a href="#supported-device" class="toc-h3">Supported Devices</a>
 
@@ -382,6 +383,8 @@
     <a href="#device-primary" class="toc-h3">Primary Device</a>
     <a href="#device-auxiliary" class="toc-h3">Auxiliary Device</a>
     <a href="#device-actions" class="toc-h3">Device Actions</a>
+    <a href="#device-scan-settings" class="toc-h3">Scan Settings</a>
+    <a href="#device-logviewer" class="toc-h3">Log Viewers (DLT/Serial/Logcat)</a>
 
     <a href="#record" class="toc-h2">Recording</a>
     <a href="#record-start" class="toc-h3">Starting a Recording</a>
@@ -392,6 +395,8 @@
     <a href="#record-edit" class="toc-h3">Step Editing</a>
     <a href="#record-wait" class="toc-h3">Wait Step</a>
     <a href="#record-conditional" class="toc-h3">Conditional Jump</a>
+    <a href="#record-imagetap" class="toc-h3">Image Tap</a>
+    <a href="#record-mirror" class="toc-h3">Live Mirroring</a>
 
     <a href="#scenario" class="toc-h2">Scenario Management</a>
     <a href="#scenario-list" class="toc-h3">Scenario List</a>
@@ -409,6 +414,9 @@
     <a href="#settings" class="toc-h2">Settings</a>
 
     <a href="#webcam" class="toc-h2">Webcam PiP</a>
+    <a href="#webcam-compositor" class="toc-h3">Composite Recording (Compositor)</a>
+
+    <a href="#changelog" class="toc-h2">Changelog</a>
 
     <a href="#tips" class="toc-h2">Tips &amp; Troubleshooting</a>
     <a href="#tips-faq" class="toc-h3">FAQ</a>
@@ -521,17 +529,55 @@
 </div>
 
 
+<!-- ============================== Screen Layout ============================== -->
+<h3 id="layout">Screen Layout &amp; Sidebar</h3>
+<p>The ReplayKit screen consists of a left <strong>sidebar</strong> and a right <strong>work area</strong>. The top of the sidebar holds the main menu; the bottom holds auxiliary tool buttons.</p>
+
+<h4>Main Menu</h4>
+<table>
+  <tr><th>Menu</th><th>Description</th></tr>
+  <tr><td><strong>Devices</strong></td><td>Register, connect, and manage test devices</td></tr>
+  <tr><td><strong>Record</strong></td><td>Create scenarios by recording actions on the device screen</td></tr>
+  <tr><td><strong>Scenarios</strong></td><td>Manage and play saved scenarios/groups</td></tr>
+  <tr><td><strong>Test Results</strong></td><td>Review playback results and generate reports</td></tr>
+  <tr><td><strong>Settings</strong></td><td>Theme, language, save paths, similarity thresholds, etc.</td></tr>
+  <tr><td><strong>Changelog</strong> <span class="badge badge-blue">New</span></td><td>View the program's change history (commit log) &rarr; see <a href="#changelog">Changelog</a></td></tr>
+</table>
+
+<h4>Sidebar Bottom Buttons</h4>
+<table>
+  <tr><th>Button</th><th>Function</th></tr>
+  <tr><td><strong>Webcam</strong></td><td>Toggle the Webcam PiP window &rarr; <a href="#webcam">Webcam PiP</a></td></tr>
+  <tr><td><strong>Launch DLT Viewer</strong> <span class="badge badge-blue">New</span></td><td>Launches the external DLT Viewer GUI app (DLT Viewer SDK required)</td></tr>
+  <tr><td><strong>Update</strong></td><td>Update to the latest version (git pull) and restart the server &rarr; <a href="#install-update">Updates</a></td></tr>
+  <tr><td><strong>User Guide</strong></td><td>Opens this document in the browser</td></tr>
+  <tr><td><strong>Module Guide</strong> <span class="badge badge-blue">New</span></td><td>Opens the module function reference document</td></tr>
+  <tr><td><strong>Open Results Folder</strong> <span class="badge badge-blue">New</span></td><td>Opens the results folder in the file explorer</td></tr>
+  <tr><td><strong>Contact</strong> <span class="badge badge-blue">New</span></td><td>Shows how to submit requests/inquiries</td></tr>
+</table>
+<p>The very bottom of the sidebar shows a <strong>disk usage</strong> gauge and the <strong>current version</strong>. When the server is updated or restarted, the page refreshes automatically.</p>
+
+<div class="callout callout-info">
+  <strong>💡 Viewing Launcher/Backend Logs</strong>
+  Click the <strong>ReplayKit</strong> logo at the top-left <strong>5 times in a row</strong> to open the log window.
+  Use the top dropdown to choose <strong>Backend</strong> / <strong>Launcher</strong> logs and browse them by date.
+</div>
+
+
 <!-- ============================== Supported Devices ============================== -->
 <h3 id="supported-avn">Supported AVN Models</h3>
 <p>The following models are supported out of the box for connection, recording, and playback. The Agent column indicates the communication type to select when registering the device.</p>
 <table>
   <tr><th>Project</th><th>Model</th><th>Agent</th></tr>
-  <tr><td rowspan="6"><strong>HKMC</strong></td><td>ccRC</td><td>HKMC Agent</td></tr>
+  <tr><td rowspan="9"><strong>HKMC</strong></td><td>ccRC</td><td>HKMC Agent</td></tr>
   <tr><td>ccIC</td><td>HKMC Agent</td></tr>
   <tr><td>ccIC27</td><td>HKMC Agent</td></tr>
   <tr><td>Connect Wide</td><td>iSAP Agent</td></tr>
   <tr><td>CCU2</td><td>HKMC Agent</td></tr>
   <tr><td>Gen6 Premium</td><td>HKMC Agent</td></tr>
+  <tr><td>Gen5 Standard (Wide)</td><td>HKMC5thWide Agent</td></tr>
+  <tr><td>Gen5 Standard</td><td>HKMC5thWide Agent</td></tr>
+  <tr><td>Gen5 Premium</td><td>HKMC5thWide Agent</td></tr>
   <tr><td><strong>GM</strong></td><td>GVM</td><td>ADB</td></tr>
   <tr><td rowspan="4"><strong>Nissan</strong></td><td>CDC_High</td><td>ADB</td></tr>
   <tr><td>CDC_STD</td><td>ADB</td></tr>
@@ -541,13 +587,18 @@
   <tr><td>EGG</td><td>ADB</td></tr>
   <tr><td>AUB</td><td>ADB</td></tr>
   <tr><td>CDC</td><td>ADB</td></tr>
-  <tr><td rowspan="2"><strong>VW</strong></td><td>VW EU</td><td>MIB Agent</td></tr>
-  <tr><td>ICAS EU</td><td>ICAS Agent</td></tr>
+  <tr><td><strong>VW</strong></td><td>VW EU</td><td>MIB Agent</td></tr>
+  <tr><td><strong>ICAS</strong></td><td>ICAS EU</td><td>ICAS Agent</td></tr>
+  <tr><td><strong>ICAS3</strong></td><td>ICAS3 CN</td><td>ICAS Agent</td></tr>
   <tr><td rowspan="2"><strong>Camera</strong></td><td>WebCam</td><td>Webcam</td></tr>
   <tr><td>VisionCamera</td><td>VisionCamera</td></tr>
   <tr><td rowspan="2"><strong>General</strong></td><td>Android</td><td>ADB</td></tr>
   <tr><td>Phone</td><td>ADB</td></tr>
 </table>
+<div class="callout callout-info">
+  <strong>💡 The model list can be adjusted by an administrator</strong>
+  The supported model/agent list depends on the device catalog, and some models may be disabled and hidden depending on the environment.
+</div>
 
 <h3 id="supported-device">Supported Devices</h3>
 <p>Auxiliary devices (power, CAN, logging, etc.) that can be used together with recording/playback scenarios.</p>
@@ -560,6 +611,9 @@
   <tr><td>WoohyunBench</td></tr>
   <tr><td rowspan="2"><strong>Video</strong></td><td>VisionCamera</td></tr>
   <tr><td>Webcam</td></tr>
+  <tr><td rowspan="3"><strong>Logging</strong> <span class="badge badge-blue">New</span></td><td>DLTLogging (DLT logs)</td></tr>
+  <tr><td>SerialLogging (serial logs)</td></tr>
+  <tr><td>Logcat (Android logs)</td></tr>
   <tr><td rowspan="3"><strong>Console Based Devices</strong></td><td>Serial</td></tr>
   <tr><td>SSH</td></tr>
   <tr><td>Android</td></tr>
@@ -688,9 +742,10 @@ On startup, git pull runs automatically to update to the latest version.</p>
 </div>
 
 <div class="callout callout-info">
-  <strong>&#x1F4A1; Launcher Logs</strong>
-  Click the <strong>ReplayKit</strong> logo in the top-left of the web interface <strong>5 times consecutively</strong>
-  to open the launcher log window, where you can view server startup/sync/update logs.
+  <strong>&#x1F4A1; Logs (Backend / Launcher)</strong>
+  Click the <strong>ReplayKit</strong> logo in the top-left of the web interface <strong>5 times consecutively</strong> to open the log window.
+  Use the top dropdown to choose <strong>Backend</strong> / <strong>Launcher</strong> logs and browse by date to review
+  server startup/sync/update activity.
 </div>
 
 
@@ -722,11 +777,34 @@ On startup, git pull runs automatically to update to the latest version.</p>
     </td>
   </tr>
   <tr>
-    <td><span class="badge badge-green">HKMC</span></td>
+    <td><span class="badge badge-green">HKMC Agent</span></td>
     <td>TCP Socket</td>
     <td>
-      HKMC 6th generation IVI system. Connect via IP and TCP port (default 5000).<br>
+      HKMC 6th generation IVI (ccRC, ccIC, ccIC27, CCU2, Gen6 Premium). Connect via IP and TCP port (default 5000).<br>
       Screen type selectable: Front Center, Rear Left, Rear Right, Cluster
+    </td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-green">HKMC5thWide Agent</span></td>
+    <td>TCP Socket</td>
+    <td>Dedicated agent for HKMC 5th generation Wide/Standard/Premium systems.</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-green">iSAP Agent</span></td>
+    <td>TCP Socket</td>
+    <td>HKMC Connect Wide. Ports 20000 (front), 20003 (cluster), 20004 (HUD).</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-green">ICAS Agent</span></td>
+    <td>SSH</td>
+    <td>VW ICAS EU / ICAS3 CN. Connects via SSH (default port 22) to capture the screen.</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-green">MIB Agent</span></td>
+    <td>SSH</td>
+    <td>
+      VW MIB family. Connects via SSH. Select the screen size (10.0&Prime;~15.0&Prime;, etc.) from a preset,
+      or use <strong>Auto-detect Resolution</strong> in the edit modal to capture once and set it automatically.
     </td>
   </tr>
   <tr>
@@ -849,6 +927,37 @@ The scan results display the camera's current IP along with the PC network inter
 </div>
 
 
+<h3 id="device-scan-settings">Scan Settings <span class="badge badge-blue">New</span></h3>
+<p>Click the <strong>⚙ Scan Settings</strong> button at the top of the device list to configure which kinds of devices are discovered during a scan.</p>
+<ul>
+  <li><strong>Built-in scan items</strong> &mdash; Toggle built-in scanners (ADB, HKMC, iSAP, Vision Camera, Webcam, Serial, DLT, Bench, etc.) with checkboxes. Turning off unnecessary scans speeds up scanning.</li>
+  <li><strong>Add custom scan</strong> &mdash; Add your own TCP/UDP scan items by specifying a custom label, port, and module.</li>
+</ul>
+<div class="callout callout-info">
+  <strong>💡 Scanning is manual</strong>
+  For security reasons (to avoid IDS false positives), network auto-scan runs only when you explicitly click the <strong>Scan</strong> button.
+</div>
+
+<h3 id="device-logviewer">Log Viewers (DLT/Serial/Logcat) <span class="badge badge-blue">New</span></h3>
+<p>
+  When a log-capture module is registered as an <strong>Auxiliary Device</strong>, real-time <strong>log viewers</strong>
+  appear as tabs on the recording screen and the scenario playback screen.
+</p>
+<table>
+  <tr><th>Viewer</th><th>Target</th><th>Description</th></tr>
+  <tr><td><strong>DLT</strong></td><td>Vehicle diagnostic logs</td><td>Receives DLT logs in real time over TCP (default 3490). Find keywords with <strong>Search All</strong> or <strong>Search Section</strong> (a specific step range).</td></tr>
+  <tr><td><strong>Serial</strong></td><td>Serial port logs</td><td>Displays raw COM port data in real time.</td></tr>
+  <tr><td><strong>Logcat</strong></td><td>Android logs</td><td>Displays the logcat stream of an ADB device in real time.</td></tr>
+</table>
+<p>Each viewer provides <strong>auto-scroll</strong> toggle, <strong>Clear</strong>, and <strong>Download (.txt)</strong> buttons; recent logs are retained on screen (long logs trim older lines automatically).</p>
+<div class="callout callout-info">
+  <strong>💡 Judge by logs via module functions</strong>
+  In a <code>module_command</code> step, calling logging-module functions such as <code>StartLogging</code> / <code>StopLogging</code> /
+  <code>Monitor_*_on_keyword</code> lets you determine Pass/Fail by whether a keyword appears.
+  See the <a href="module-guide-en.html">Module Guide</a> for details.
+</div>
+
+
 <!-- ============================== Recording ============================== -->
 <h2 id="record">Recording</h2>
 <p>
@@ -904,6 +1013,11 @@ The scan results display the camera's current IP along with the PC network inter
   <tr><td>Long click</td><td><strong>Long Press</strong></td><td>Coordinates + duration (ms)</td></tr>
   <tr><td>Drag</td><td><strong>Swipe</strong></td><td>Start coordinates &rarr; End coordinates</td></tr>
 </table>
+<div class="callout callout-info">
+  <strong>💡 Multi-touch &amp; Smart Swipe</strong>
+  Enabling <strong>2~3 finger multi-touch mode</strong> in the on-screen tools records pinch zoom (in/out) as a <code>multi_touch</code> step.
+  On ADB devices, <strong>Smart Swipe</strong> records the drag path as a curve.
+</div>
 
 <h3 id="record-steps">Step Types</h3>
 <p>In addition to gestures, various steps can be added manually:</p>
@@ -919,9 +1033,12 @@ The scan results display the camera's current IP along with the PC network inter
   <tr><td><code>adb_command</code></td><td>Execute ADB shell command</td><td>Force-stop app, change settings</td></tr>
   <tr><td><code>serial_command</code></td><td>Send serial data</td><td>Hardware control commands</td></tr>
   <tr><td><code>module_command</code></td><td>Call a module function (includes Windows shell commands via the CMD module)</td><td>Send CAN message, power control, ping check</td></tr>
-  <tr><td><code>hkmc_touch</code></td><td>HKMC IVI touch</td><td>Touch IVI screen</td></tr>
-  <tr><td><code>hkmc_swipe</code></td><td>HKMC IVI swipe</td><td>Swipe IVI screen</td></tr>
-  <tr><td><code>hkmc_key</code></td><td>HKMC hardware key</td><td>Physical button control</td></tr>
+  <tr><td><code>multi_touch</code> <span class="badge badge-blue">New</span></td><td>2~3 finger multi-touch (including pinch zoom in/out)</td><td>Map zoom in/out</td></tr>
+  <tr><td><code>repeat_tap</code> <span class="badge badge-blue">New</span></td><td>Repeatedly tap the same position</td><td>Rapid input</td></tr>
+  <tr><td><code>image_tap</code> <span class="badge badge-blue">New</span></td><td>Find a template image on screen and tap its location &rarr; <a href="#record-imagetap">Image Tap</a></td><td>Auto-click buttons that move</td></tr>
+  <tr><td><code>all_random</code> <span class="badge badge-blue">New</span></td><td>Stress test combining hard keys, touch (SK), and drag randomly</td><td>Monkey test</td></tr>
+  <tr><td><code>hkmc_touch</code> / <code>hkmc_swipe</code> / <code>hkmc_long_press</code> / <code>hkmc_key</code></td><td>HKMC IVI touch/swipe/long-press/hardware key</td><td>IVI screen/physical button control</td></tr>
+  <tr><td><code>icas_touch</code> / <code>icas_swipe</code> / <code>icas_long_press</code> / <code>icas_key</code> <span class="badge badge-blue">New</span></td><td>Touch/swipe/long-press/key for ICAS/MIB devices</td><td>ICAS/MIB screen control</td></tr>
 </table>
 
 <h4>Adding Steps Manually</h4>
@@ -941,10 +1058,11 @@ The scan results display the camera's current IP along with the PC network inter
   <li>Click the &#x1F4F7; <strong>camera icon</strong> on the right side of the step list</li>
   <li>A comparison mode selection popup appears:
     <ul>
-      <li><strong>Full Screen</strong> &mdash; Capture the current screen immediately</li>
+      <li><strong>Full Screen</strong> &mdash; The <em>default</em> applied when capturing without choosing a mode (compares the entire current screen)</li>
       <li><strong>Single Crop</strong> &mdash; Opens the crop editor modal</li>
       <li><strong>Exclude Region</strong> &mdash; Opens the exclusion region editor modal</li>
       <li><strong>Multi Crop</strong> &mdash; Opens the multi-crop editor modal</li>
+      <li><strong>Match Crop</strong> <span class="badge badge-blue">New</span> &mdash; Searches the screen for the cropped region regardless of position</li>
     </ul>
   </li>
   <li>After capture, a tag like <span class="badge badge-green">&#x1F4F7; FULL</span> or <span class="badge badge-green">&#x1F4F7; CROP</span> appears on the right side of the step's second row</li>
@@ -959,7 +1077,7 @@ The scan results display the camera's current IP along with the PC network inter
 </div>
 
 <h3 id="record-compare">Image Comparison Modes</h3>
-<p>Four modes are available for comparing expected images with actual screenshots:</p>
+<p>Five modes are available for comparing expected images with actual screenshots:</p>
 
 <table>
   <tr><th>Mode</th><th>Icon</th><th>Description</th><th>Use Case</th></tr>
@@ -986,6 +1104,12 @@ The scan results display the camera's current IP along with the PC network inter
     <td><code>MULTI_CROP</code></td>
     <td>Compare multiple regions individually (all must pass)</td>
     <td>When verifying multiple UI elements simultaneously</td>
+  </tr>
+  <tr>
+    <td><strong>Match Crop</strong> <span class="badge badge-blue">New</span></td>
+    <td><code>MATCH_CROP</code></td>
+    <td>Search the whole screen for the cropped image regardless of position and judge by match score</td>
+    <td>When an icon/button appears at a different position each time</td>
   </tr>
 </table>
 
@@ -1120,6 +1244,35 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
   When setting conditional jumps, be careful not to create circular references that jump back to earlier steps.
 </div>
 
+<h3 id="record-imagetap">Image Tap <span class="badge badge-blue">New</span></h3>
+<p>
+  On screens where a button or icon appears at a <strong>different position</strong> each time, use
+  <strong>Image Tap</strong> instead of a fixed-coordinate tap. During playback, ReplayKit finds the pre-selected
+  template image on screen and automatically taps its center.
+</p>
+<ol class="numbered-steps">
+  <li>While recording, click the <strong>Image Tap</strong> button in the on-screen tools to capture the current screen</li>
+  <li>Drag to select the target (button/icon) region as the <strong>template</strong></li>
+  <li>Adjust the <strong>similarity</strong> if needed (default 85%)</li>
+  <li>An <code>image_tap</code> step is added. During playback, it searches for the template on screen and taps the matched location</li>
+</ol>
+
+<h3 id="record-mirror">Live Mirroring <span class="badge badge-blue">New</span></h3>
+<p>
+  The live device video shown on the recording/playback screen is transmitted using the optimal method for each device type.
+</p>
+<ul>
+  <li><strong>H.264 streaming</strong> &mdash; ADB devices stream <code>scrcpy</code>-based H.264 video, decoded smoothly via the browser's WebCodecs (older browsers fall back automatically).</li>
+  <li><strong>JPEG streaming</strong> &mdash; HKMC/iSAP/ICAS/Vision Camera/Webcam, etc. are shown via periodic JPEG capture. The current <strong>FPS</strong> is shown at the top-right of the screen.</li>
+  <li><strong>Viewport crop</strong> &mdash; Use the scissors button to crop the view and enlarge only the area of interest (no effect on coordinate accuracy).</li>
+  <li><strong>Disconnect indicator</strong> &mdash; If the mirror disconnects, a notice is shown; for ADB you can attempt recovery with the <strong>Restart ADB</strong> button.</li>
+</ul>
+<div class="callout callout-info">
+  <strong>💡 Mirror paused during playback</strong>
+  During scenario playback, the live mirror may automatically pause to reduce device load.
+  This does not affect the accuracy of playback results.
+</div>
+
 
 <!-- ============================== Scenario ============================== -->
 <h2 id="scenario">Scenario Management</h2>
@@ -1139,8 +1292,12 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
 </ul>
 
 <h3 id="scenario-list">Scenario List (Left Panel)</h3>
-<p>All saved scenarios are displayed in a list. They can be viewed by group tabs or the All tab.</p>
-<p>Clicking a scenario displays its step details in the right panel.</p>
+<p>The left panel is split into an <strong>All Scenarios</strong> tab and a <strong>Groups</strong> tab. Clicking a scenario displays its step details in the right panel.</p>
+<p><span class="badge badge-blue">New</span> Scenarios and groups can be organized in a <strong>folder tree</strong>:</p>
+<ul>
+  <li><strong>Create folder</strong> &mdash; Create a folder with the add-folder button, then <strong>drag</strong> scenarios/groups into it (multi-select with Ctrl/Shift)</li>
+  <li><strong>Right-click menu</strong> &mdash; Right-click a scenario/group/folder for Copy, Rename, Move to folder, and Delete actions</li>
+</ul>
 
 <h3 id="scenario-detail">Scenario Details (Right Panel)</h3>
 <p>The selected scenario's step list is displayed as a table. Management and playback buttons are in the title area:</p>
@@ -1148,6 +1305,7 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
   <li><strong>Rename</strong> &mdash; Modify the scenario name</li>
   <li><strong>Copy</strong> &mdash; Copy with a new name</li>
   <li><strong>Repeat Count</strong> &mdash; Set playback repeat count (default: 1)</li>
+  <li><strong>Until Time</strong> <span class="badge badge-blue">New</span> &mdash; Automatically end playback when the specified date/time is reached (useful for long-running repeat tests)</li>
   <li><strong>Play</strong> &mdash; Run the scenario (error message shown if device not connected)</li>
   <li><strong>Webcam Recording</strong> &mdash; Record webcam during playback</li>
   <li><strong>Delete</strong> &mdash; Remove the scenario and its associated screenshots</li>
@@ -1232,6 +1390,12 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
   Results from completed cycles are saved.
 </div>
 
+<div class="callout callout-info">
+  <strong>&#x1F4A1; Logs &amp; Webcam During Playback</strong>
+  When a log-capture module or webcam is also running, you can watch the
+  <a href="#device-logviewer">DLT/Serial/Logcat log viewers</a> and the webcam PiP footage in real time on the playback screen.
+</div>
+
 <h3 id="scenario-group">Group Management</h3>
 <p>
   Multiple scenarios can be organized into <strong>groups</strong> for sequential execution.
@@ -1304,6 +1468,16 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
 <p>If results from previous versions with a flat file structure remain, a <strong>Legacy Cleanup</strong> button appears.
   Click it to clean up old result files and migrate to the new structure.</p>
 
+<h4>Result Bundle Export (ZIP) <span class="badge badge-blue">New</span></h4>
+<p>Selected results can be exported as a <strong>ZIP file</strong> including screenshots, metadata, and webcam footage.
+  Use this to hand results to another PC or to archive them long-term.</p>
+
+<div class="callout callout-info">
+  <strong>&#x1F4A1; Background Command Results</strong>
+  Background commands such as <code>RunCapture</code>/<code>CheckCapture</code> keep updating (polling) their status and output
+  on the results screen until execution finishes, reflecting the final Pass/Fail when done.
+</div>
+
 <h3 id="results-detail">Result Details</h3>
 <p>Clicking a result shows detailed information for each step.
   Use the filters at the top to display only specific results:</p>
@@ -1360,26 +1534,34 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
 <table>
   <tr><th>Setting</th><th>Description</th></tr>
   <tr>
-    <td><strong>UI Theme</strong></td>
-    <td>Switch between Light mode / Dark mode</td>
-  </tr>
-  <tr>
     <td><strong>Language</strong></td>
     <td>Switch between Korean / English</td>
   </tr>
   <tr>
-    <td><strong>Webcam Recording Save Path</strong></td>
-    <td>Auto-save location for webcam videos. If empty, uses browser download</td>
+    <td><strong>UI Theme</strong></td>
+    <td>Switch between Light mode / Dark mode</td>
   </tr>
   <tr>
     <td><strong>Excel Export Save Path</strong></td>
     <td>Auto-save location for Excel reports. If empty, uses browser download</td>
   </tr>
   <tr>
-    <td><strong>Scenario Export Save Path</strong></td>
+    <td><strong>Scenario/Group Export Save Path</strong></td>
     <td>Auto-save location for scenario/group ZIP files. If empty, uses browser download</td>
   </tr>
+  <tr>
+    <td><strong>Monitor Server</strong> <span class="badge badge-blue">New</span></td>
+    <td>Enter the integrated monitor server URL to send this ReplayKit's status in real time. Leave empty to disable.</td>
+  </tr>
+  <tr>
+    <td><strong>Image Comparison Thresholds</strong> <span class="badge badge-blue">New</span></td>
+    <td>Default threshold per compare mode (Full Screen / Single Crop / Exclude Region / Multi Crop), 0.0~1.0. Applied automatically when capturing a new expected image; can be overridden per step.</td>
+  </tr>
 </table>
+<div class="callout callout-warning">
+  <strong>&#x26A0;&#xFE0F; Webcam Save Path Setting Moved</strong>
+  The previous <strong>Webcam Recording Save Path</strong> setting has been removed. Webcam footage is now saved automatically alongside its result folder.
+</div>
 
 <div class="callout callout-info">
   <strong>&#x1F4A1; Folder Selection</strong>
@@ -1400,7 +1582,8 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
   <tr><th>Item</th><th>Description</th></tr>
   <tr><td>Camera Selection</td><td>Select from webcams connected to the PC</td></tr>
   <tr><td>Resolution</td><td>Selectable from QVGA (320x240) to 4K (3840x2160)</td></tr>
-  <tr><td>Brightness / Contrast / Sharpness / Exposure</td><td>Adjustable if supported by the webcam</td></tr>
+  <tr><td>Exposure</td><td>Switch auto/manual, then adjust the exposure value with a slider (if supported by the webcam)</td></tr>
+  <tr><td>Timestamp Overlay <span class="badge badge-blue">New</span></td><td>Display the time on the video. Choose position (top/bottom × left/right, or off), color, and font size; it is burned into both the preview and the recorded file</td></tr>
 </table>
 
 <h4>Webcam Recording Flow</h4>
@@ -1410,6 +1593,37 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
   <li>Webcam recording automatically stops when playback ends and is linked to the results</li>
   <li>Alternatively, you can manually use the <strong>Record</strong> / <strong>Stop Recording</strong> buttons</li>
 </ol>
+
+<h3 id="webcam-compositor">Composite Recording (Compositor) <span class="badge badge-blue">New</span></h3>
+<p>
+  When you need to record <strong>multiple sources composed into one frame</strong> rather than a single webcam,
+  use the <strong>Compositor</strong>. Open the editor from the composite-recording button in the Webcam PiP window.
+</p>
+<ul>
+  <li><strong>Multiple source layout</strong> &mdash; Place several webcams and PC windows on a single canvas and adjust position, size, crop, opacity, and layer order</li>
+  <li><strong>Canvas settings</strong> &mdash; Output resolution, FPS, background color, timestamp visibility/position</li>
+  <li><strong>Presets</strong> &mdash; Save a configured layout and load it again</li>
+  <li><strong>Live preview &amp; recording</strong> &mdash; Start/stop recording while previewing the composite result</li>
+</ul>
+
+
+<!-- ============================== Changelog ============================== -->
+<h2 id="changelog">Changelog <span class="badge badge-blue">New</span></h2>
+<p>
+  The <strong>Changelog</strong> tab in the left menu shows the program's change history (commit log).
+  See at a glance which features were added or fixed and when.
+</p>
+<ul>
+  <li><strong>Change list</strong> &mdash; Shows date, change description, author, and hash, newest first</li>
+  <li><strong>Type tags</strong> &mdash; Color-codes prefixes such as <code>feat</code> (new feature) / <code>fix</code> (bug fix) / <code>refactor</code> / <code>docs</code></li>
+  <li><strong>Search</strong> &mdash; Filter by description, hash, or author</li>
+  <li><strong>Refresh</strong> &mdash; Reload the latest history (attempts a remote sync)</li>
+  <li><strong>Branch &amp; tags</strong> &mdash; Shows the current branch name and applied version tags</li>
+</ul>
+<div class="callout callout-info">
+  <strong>&#x1F4A1; Offline Display</strong>
+  When there is no network or remote sync fails, the change history may be shown from an <strong>offline snapshot</strong> bundled at build time (may not be real-time).
+</div>
 
 
 <!-- ============================== Tips & Troubleshooting ============================== -->
@@ -1494,9 +1708,13 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
   <tr><td><code>adb_command</code></td><td>ADB</td><td><code>command</code> (shell command)</td></tr>
   <tr><td><code>serial_command</code></td><td>Serial</td><td><code>data</code> (send data)</td></tr>
   <tr><td><code>module_command</code></td><td>Module</td><td><code>function</code>, <code>args</code></td></tr>
-  <tr><td><code>hkmc_touch</code></td><td>HKMC</td><td><code>x</code>, <code>y</code>, <code>screen_type</code></td></tr>
-  <tr><td><code>hkmc_swipe</code></td><td>HKMC</td><td><code>x1</code>, <code>y1</code>, <code>x2</code>, <code>y2</code>, <code>screen_type</code></td></tr>
-  <tr><td><code>hkmc_key</code></td><td>HKMC</td><td><code>key_name</code>, <code>group</code></td></tr>
+  <tr><td><code>multi_touch</code></td><td>ADB</td><td><code>points</code>, <code>action</code> (zoom_in/out)</td></tr>
+  <tr><td><code>repeat_tap</code></td><td>ADB</td><td><code>x</code>, <code>y</code>, <code>count</code>, <code>interval</code></td></tr>
+  <tr><td><code>image_tap</code></td><td>ADB / HKMC</td><td><code>template</code>, <code>similarity</code></td></tr>
+  <tr><td><code>all_random</code></td><td>HKMC / ADB</td><td><code>repeat_count</code>, <code>interval_ms</code>, <code>hk_keys</code>, <code>sk_region</code>, <code>drag_region</code></td></tr>
+  <tr><td><code>hkmc_touch</code> / <code>hkmc_swipe</code> / <code>hkmc_long_press</code></td><td>HKMC</td><td><code>x</code>, <code>y</code> (/<code>x1,y1,x2,y2</code>), <code>screen_type</code></td></tr>
+  <tr><td><code>hkmc_key</code></td><td>HKMC</td><td><code>key_name</code>, <code>sub_cmd</code>, <code>screen_type</code></td></tr>
+  <tr><td><code>icas_touch</code> / <code>icas_swipe</code> / <code>icas_long_press</code> / <code>icas_key</code></td><td>ICAS / MIB</td><td><code>x</code>, <code>y</code> (/<code>x1,y1,x2,y2</code>), <code>screen_type</code></td></tr>
 </table>
 
 <div class="callout callout-info">
@@ -1526,6 +1744,11 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
     <td><code>MULTI_CROP</code></td>
     <td>Independent comparison for each of multiple crops</td>
     <td>All crops' similarity &ge; their respective thresholds &rarr; Pass</td>
+  </tr>
+  <tr>
+    <td><code>MATCH_CROP</code></td>
+    <td>Template-match the crop image across the whole screen regardless of position</td>
+    <td>Best match score &ge; threshold &rarr; Pass</td>
   </tr>
 </table>
 
@@ -1557,7 +1780,7 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
 <br>
 <hr style="border:none; border-top:1px solid var(--border); margin: 40px 0;">
 <p style="text-align:center; color:var(--text-muted); font-size:13px;">
-  ReplayKit User Guide v1.0 &mdash; For questions, contact Sejin Choi (VS TC Design/Verification Automation Team)
+  ReplayKit User Guide v1.1 &mdash; For questions, contact Sejin Choi (VS TC Design/Verification Automation Team)
 </p>
 
 </main>

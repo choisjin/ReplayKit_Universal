@@ -363,11 +363,12 @@
 <!-- Sidebar / TOC -->
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-logo">📋 ReplayKit</div>
-  <div class="sidebar-version">사용자 가이드 v1.0</div>
+  <div class="sidebar-version">사용자 가이드 v1.1</div>
   <nav id="toc">
     <a href="#intro" class="toc-h2">소개</a>
     <a href="#overview" class="toc-h3">시스템 개요</a>
     <a href="#workflow" class="toc-h3">핵심 워크플로우</a>
+    <a href="#layout" class="toc-h3">화면 구성 &amp; 사이드바</a>
     <a href="#supported-avn" class="toc-h3">지원 AVN 모델</a>
     <a href="#supported-device" class="toc-h3">지원 디바이스</a>
 
@@ -382,6 +383,8 @@
     <a href="#device-primary" class="toc-h3">주 디바이스</a>
     <a href="#device-auxiliary" class="toc-h3">보조 디바이스</a>
     <a href="#device-actions" class="toc-h3">디바이스 작업</a>
+    <a href="#device-scan-settings" class="toc-h3">스캔 설정</a>
+    <a href="#device-logviewer" class="toc-h3">로그 뷰어 (DLT/Serial/Logcat)</a>
 
     <a href="#record" class="toc-h2">녹화</a>
     <a href="#record-start" class="toc-h3">녹화 시작하기</a>
@@ -392,6 +395,8 @@
     <a href="#record-edit" class="toc-h3">스텝 편집</a>
     <a href="#record-wait" class="toc-h3">Wait 스텝 (대기)</a>
     <a href="#record-conditional" class="toc-h3">조건부 이동</a>
+    <a href="#record-imagetap" class="toc-h3">이미지 탭 (Image Tap)</a>
+    <a href="#record-mirror" class="toc-h3">실시간 미러링</a>
 
     <a href="#scenario" class="toc-h2">시나리오 관리</a>
     <a href="#scenario-list" class="toc-h3">시나리오 목록</a>
@@ -409,6 +414,9 @@
     <a href="#settings" class="toc-h2">설정</a>
 
     <a href="#webcam" class="toc-h2">웹캠 PiP</a>
+    <a href="#webcam-compositor" class="toc-h3">합성 녹화 (Compositor)</a>
+
+    <a href="#changelog" class="toc-h2">업데이트 내역</a>
 
     <a href="#tips" class="toc-h2">팁 & 문제 해결</a>
     <a href="#tips-faq" class="toc-h3">자주 묻는 질문</a>
@@ -521,17 +529,55 @@
 </div>
 
 
+<!-- ============================== 화면 구성 ============================== -->
+<h3 id="layout">화면 구성 &amp; 사이드바</h3>
+<p>ReplayKit 화면은 좌측 <strong>사이드바</strong>와 우측 <strong>작업 영역</strong>으로 구성됩니다. 사이드바 상단에는 주요 메뉴가, 하단에는 보조 도구 버튼이 배치됩니다.</p>
+
+<h4>주요 메뉴</h4>
+<table>
+  <tr><th>메뉴</th><th>설명</th></tr>
+  <tr><td><strong>디바이스</strong></td><td>테스트에 사용할 장치를 등록·연결·관리</td></tr>
+  <tr><td><strong>녹화</strong></td><td>디바이스 화면을 보며 조작을 기록해 시나리오 생성</td></tr>
+  <tr><td><strong>시나리오</strong></td><td>저장된 시나리오/그룹 관리 및 재생</td></tr>
+  <tr><td><strong>테스트 결과</strong></td><td>재생 결과 확인 및 리포트 생성</td></tr>
+  <tr><td><strong>설정</strong></td><td>테마, 언어, 저장 경로, 유사도 임계값 등</td></tr>
+  <tr><td><strong>업데이트 내역</strong> <span class="badge badge-blue">신규</span></td><td>프로그램의 변경 이력(커밋 로그) 확인 → <a href="#changelog">업데이트 내역</a> 참조</td></tr>
+</table>
+
+<h4>사이드바 하단 버튼</h4>
+<table>
+  <tr><th>버튼</th><th>기능</th></tr>
+  <tr><td><strong>웹캠</strong></td><td>웹캠 PiP 창을 켜고 끕니다 → <a href="#webcam">웹캠 PiP</a></td></tr>
+  <tr><td><strong>DLT Viewer 실행</strong> <span class="badge badge-blue">신규</span></td><td>외부 DLT Viewer GUI 앱을 실행합니다 (DLT Viewer SDK 설치 필요)</td></tr>
+  <tr><td><strong>업데이트</strong></td><td>최신 버전으로 업데이트(git pull) 후 서버 재시작 → <a href="#install-update">업데이트</a></td></tr>
+  <tr><td><strong>사용자 가이드</strong></td><td>본 문서를 브라우저로 엽니다</td></tr>
+  <tr><td><strong>모듈 가이드</strong> <span class="badge badge-blue">신규</span></td><td>모듈 함수 레퍼런스 문서를 엽니다</td></tr>
+  <tr><td><strong>Results 폴더 열기</strong> <span class="badge badge-blue">신규</span></td><td>결과가 저장되는 폴더를 파일 탐색기로 엽니다</td></tr>
+  <tr><td><strong>문의하기</strong> <span class="badge badge-blue">신규</span></td><td>문의/요청 등록 방법 안내를 표시합니다</td></tr>
+</table>
+<p>사이드바 최하단에는 <strong>디스크 사용량</strong> 게이지와 <strong>현재 버전</strong>이 표시됩니다. 서버가 업데이트되거나 재시작되면 화면이 자동으로 새로고침됩니다.</p>
+
+<div class="callout callout-info">
+  <strong>💡 런처/백엔드 로그 보기</strong>
+  좌측 상단의 <strong>ReplayKit</strong> 로고를 <strong>5번 연속 클릭</strong>하면 로그 창이 열립니다.
+  상단 드롭다운에서 <strong>Backend</strong> / <strong>Launcher</strong> 로그를 선택하고, 날짜별로 조회할 수 있습니다.
+</div>
+
+
 <!-- ============================== 지원 디바이스 ============================== -->
 <h3 id="supported-avn">지원 AVN 모델</h3>
 <p>아래 모델은 ReplayKit이 별도 추가 작업 없이 즉시 연결·녹화·재생을 지원합니다. 에이전트 컬럼은 디바이스 등록 시 선택해야 하는 통신 방식입니다.</p>
 <table>
   <tr><th>프로젝트</th><th>모델명</th><th>에이전트</th></tr>
-  <tr><td rowspan="6"><strong>HKMC</strong></td><td>ccRC</td><td>HKMC Agent</td></tr>
+  <tr><td rowspan="9"><strong>HKMC</strong></td><td>ccRC</td><td>HKMC Agent</td></tr>
   <tr><td>ccIC</td><td>HKMC Agent</td></tr>
   <tr><td>ccIC27</td><td>HKMC Agent</td></tr>
   <tr><td>Connect Wide</td><td>iSAP Agent</td></tr>
   <tr><td>CCU2</td><td>HKMC Agent</td></tr>
   <tr><td>Gen6 Premium</td><td>HKMC Agent</td></tr>
+  <tr><td>Gen5 Standard (Wide)</td><td>HKMC5thWide Agent</td></tr>
+  <tr><td>Gen5 Standard</td><td>HKMC5thWide Agent</td></tr>
+  <tr><td>Gen5 Premium</td><td>HKMC5thWide Agent</td></tr>
   <tr><td><strong>GM</strong></td><td>GVM</td><td>ADB</td></tr>
   <tr><td rowspan="4"><strong>Nissan</strong></td><td>CDC_High</td><td>ADB</td></tr>
   <tr><td>CDC_STD</td><td>ADB</td></tr>
@@ -541,13 +587,18 @@
   <tr><td>EGG</td><td>ADB</td></tr>
   <tr><td>AUB</td><td>ADB</td></tr>
   <tr><td>CDC</td><td>ADB</td></tr>
-  <tr><td rowspan="2"><strong>VW</strong></td><td>VW EU</td><td>MIB Agent</td></tr>
-  <tr><td>ICAS EU</td><td>ICAS Agent</td></tr>
+  <tr><td><strong>VW</strong></td><td>VW EU</td><td>MIB Agent</td></tr>
+  <tr><td><strong>ICAS</strong></td><td>ICAS EU</td><td>ICAS Agent</td></tr>
+  <tr><td><strong>ICAS3</strong></td><td>ICAS3 CN</td><td>ICAS Agent</td></tr>
   <tr><td rowspan="2"><strong>Camera</strong></td><td>WebCam</td><td>Webcam</td></tr>
   <tr><td>VisionCamera</td><td>VisionCamera</td></tr>
   <tr><td rowspan="2"><strong>General</strong></td><td>Android</td><td>ADB</td></tr>
   <tr><td>Phone</td><td>ADB</td></tr>
 </table>
+<div class="callout callout-info">
+  <strong>💡 모델 목록은 관리자가 조정할 수 있습니다</strong>
+  지원 모델·에이전트 목록은 디바이스 카탈로그에 따라 달라지며, 일부 모델은 환경에 따라 비활성화되어 보이지 않을 수 있습니다.
+</div>
 
 <h3 id="supported-device">지원 디바이스</h3>
 <p>녹화/재생 시나리오에서 보조 장비(전원, CAN, 로그 등)로 함께 사용할 수 있는 디바이스 목록입니다.</p>
@@ -560,6 +611,9 @@
   <tr><td>WoohyunBench</td></tr>
   <tr><td rowspan="2"><strong>Video</strong></td><td>VisionCamera</td></tr>
   <tr><td>Webcam</td></tr>
+  <tr><td rowspan="3"><strong>Logging</strong> <span class="badge badge-blue">신규</span></td><td>DLTLogging (DLT 로그)</td></tr>
+  <tr><td>SerialLogging (시리얼 로그)</td></tr>
+  <tr><td>Logcat (Android 로그)</td></tr>
   <tr><td rowspan="3"><strong>Console Based Devices</strong></td><td>Serial</td></tr>
   <tr><td>SSH</td></tr>
   <tr><td>Android</td></tr>
@@ -688,9 +742,10 @@ npm run dev</code></pre>
 </div>
 
 <div class="callout callout-info">
-  <strong>💡 런처 로그 확인</strong>
-  웹 화면 좌측 상단의 <strong>ReplayKit</strong> 로고를 <strong>5번 연속 클릭</strong>하면
-  런처 로그 창이 나타나 서버 시작/동기화/업데이트 과정의 로그를 확인할 수 있습니다.
+  <strong>💡 로그 확인 (Backend / Launcher)</strong>
+  웹 화면 좌측 상단의 <strong>ReplayKit</strong> 로고를 <strong>5번 연속 클릭</strong>하면 로그 창이 나타납니다.
+  상단 드롭다운에서 <strong>Backend</strong> / <strong>Launcher</strong> 로그를 선택하고 날짜별로 조회하여
+  서버 시작/동기화/업데이트 과정을 확인할 수 있습니다.
 </div>
 
 
@@ -722,11 +777,34 @@ npm run dev</code></pre>
     </td>
   </tr>
   <tr>
-    <td><span class="badge badge-green">HKMC</span></td>
+    <td><span class="badge badge-green">HKMC Agent</span></td>
     <td>TCP 소켓</td>
     <td>
-      HKMC 6세대 IVI 시스템. IP와 TCP 포트(기본 5000)로 연결.<br>
+      HKMC 6세대 IVI(ccRC, ccIC, ccIC27, CCU2, Gen6 Premium). IP와 TCP 포트(기본 5000)로 연결.<br>
       화면 유형 선택 가능: Front Center, Rear Left, Rear Right, Cluster
+    </td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-green">HKMC5thWide Agent</span></td>
+    <td>TCP 소켓</td>
+    <td>HKMC 5세대 Wide/Standard/Premium 시스템 전용 에이전트.</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-green">iSAP Agent</span></td>
+    <td>TCP 소켓</td>
+    <td>HKMC Connect Wide. 포트 20000(전석)/20003(클러스터)/20004(HUD).</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-green">ICAS Agent</span></td>
+    <td>SSH</td>
+    <td>VW ICAS EU / ICAS3 CN. SSH(기본 포트 22)로 연결하여 화면을 캡처합니다.</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-green">MIB Agent</span></td>
+    <td>SSH</td>
+    <td>
+      VW MIB 계열. SSH로 연결하며 화면 크기(10.0&Prime;~15.0&Prime; 등)를 프리셋에서 선택하거나
+      편집 모달의 <strong>해상도 자동 감지</strong>로 1회 캡처해 자동 설정할 수 있습니다.
     </td>
   </tr>
   <tr>
@@ -849,6 +927,37 @@ npm run dev</code></pre>
 </div>
 
 
+<h3 id="device-scan-settings">스캔 설정 <span class="badge badge-blue">신규</span></h3>
+<p>디바이스 목록 상단의 <strong>⚙ 스캔 설정</strong> 버튼을 누르면, 스캔 시 어떤 종류의 장치를 탐색할지 설정할 수 있습니다.</p>
+<ul>
+  <li><strong>기본 스캔 항목</strong> — ADB, HKMC, iSAP, Vision Camera, Webcam, Serial, DLT, 벤치 등 내장 스캐너를 체크박스로 켜고 끕니다. 불필요한 스캔을 끄면 스캔 속도가 빨라집니다.</li>
+  <li><strong>커스텀 스캔 추가</strong> — 사용자 정의 라벨/포트/모듈을 지정해 TCP·UDP 스캔 항목을 직접 추가할 수 있습니다.</li>
+</ul>
+<div class="callout callout-info">
+  <strong>💡 스캔은 수동 실행입니다</strong>
+  네트워크 자동 스캔은 보안 정책(IDS 오탐 방지)상 사용자가 <strong>스캔</strong> 버튼을 직접 눌렀을 때만 수행됩니다.
+</div>
+
+<h3 id="device-logviewer">로그 뷰어 (DLT/Serial/Logcat) <span class="badge badge-blue">신규</span></h3>
+<p>
+  로그 캡처 모듈을 <strong>보조 디바이스</strong>로 등록하면, 녹화 화면과 시나리오 재생 화면에서
+  실시간 <strong>로그 뷰어</strong>가 탭으로 표시됩니다.
+</p>
+<table>
+  <tr><th>뷰어</th><th>대상</th><th>설명</th></tr>
+  <tr><td><strong>DLT</strong></td><td>차량 진단 로그</td><td>TCP(기본 3490)로 DLT 로그를 실시간 수신. <strong>전체 검색</strong> 또는 <strong>구간 검색</strong>(특정 스텝 범위)으로 키워드를 찾을 수 있습니다.</td></tr>
+  <tr><td><strong>Serial</strong></td><td>시리얼 포트 로그</td><td>COM 포트의 raw 데이터를 실시간 표시.</td></tr>
+  <tr><td><strong>Logcat</strong></td><td>Android 로그</td><td>ADB 디바이스의 logcat 스트림을 실시간 표시.</td></tr>
+</table>
+<p>각 뷰어는 공통으로 <strong>자동 스크롤</strong> 토글, <strong>지우기(Clear)</strong>, <strong>다운로드(.txt)</strong> 버튼을 제공하며, 화면에는 최근 로그가 유지됩니다(긴 로그는 자동으로 오래된 줄부터 정리).</p>
+<div class="callout callout-info">
+  <strong>💡 모듈 함수로 로그 판정</strong>
+  <code>module_command</code> 스텝에서 로깅 모듈의 <code>StartLogging</code> / <code>StopLogging</code> /
+  <code>Monitor_*_on_keyword</code> 같은 함수를 호출하면, 특정 키워드 출현 여부로 Pass/Fail을 판정할 수 있습니다.
+  자세한 함수는 <a href="module-guide.html">모듈 가이드</a> 참조.
+</div>
+
+
 <!-- ============================== 녹화 ============================== -->
 <h2 id="record">녹화</h2>
 <p>
@@ -904,6 +1013,11 @@ npm run dev</code></pre>
   <tr><td>길게 클릭</td><td><strong>길게 누르기 (Long Press)</strong></td><td>좌표 + 지속 시간 (ms)</td></tr>
   <tr><td>드래그</td><td><strong>스와이프 (Swipe)</strong></td><td>시작 좌표 → 끝 좌표</td></tr>
 </table>
+<div class="callout callout-info">
+  <strong>💡 멀티터치 &amp; 스마트 스와이프</strong>
+  화면 위 도구에서 <strong>2~3 손가락 멀티터치 모드</strong>를 켜면 핀치 줌(확대/축소)이 <code>multi_touch</code> 스텝으로 기록됩니다.
+  ADB 디바이스에서는 <strong>스마트 스와이프</strong>로 드래그 경로를 곡선 그대로 기록할 수 있습니다.
+</div>
 
 <h3 id="record-steps">스텝 유형</h3>
 <p>제스처 외에도 다양한 스텝을 수동으로 추가할 수 있습니다:</p>
@@ -919,9 +1033,12 @@ npm run dev</code></pre>
   <tr><td><code>adb_command</code></td><td>ADB 셸 명령 실행</td><td>앱 강제 종료, 설정 변경</td></tr>
   <tr><td><code>serial_command</code></td><td>시리얼 데이터 전송</td><td>하드웨어 제어 명령</td></tr>
   <tr><td><code>module_command</code></td><td>모듈 함수 호출 (CMD 모듈로 Windows 명령 실행 포함)</td><td>CAN 메시지 전송, 전원 제어, ping 검증</td></tr>
-  <tr><td><code>hkmc_touch</code></td><td>HKMC IVI 터치</td><td>IVI 화면 터치</td></tr>
-  <tr><td><code>hkmc_swipe</code></td><td>HKMC IVI 스와이프</td><td>IVI 화면 스와이프</td></tr>
-  <tr><td><code>hkmc_key</code></td><td>HKMC 하드웨어 키</td><td>물리 버튼 제어</td></tr>
+  <tr><td><code>multi_touch</code> <span class="badge badge-blue">신규</span></td><td>2~3 손가락 멀티터치 (핀치 줌 인/아웃 포함)</td><td>지도 확대/축소</td></tr>
+  <tr><td><code>repeat_tap</code> <span class="badge badge-blue">신규</span></td><td>같은 위치를 반복 탭</td><td>연타 입력</td></tr>
+  <tr><td><code>image_tap</code> <span class="badge badge-blue">신규</span></td><td>템플릿 이미지를 화면에서 찾아 그 위치를 탭 → <a href="#record-imagetap">이미지 탭</a></td><td>위치가 바뀌는 버튼 자동 클릭</td></tr>
+  <tr><td><code>all_random</code> <span class="badge badge-blue">신규</span></td><td>하드키·터치(SK)·드래그를 무작위 조합한 스트레스 테스트</td><td>몽키 테스트</td></tr>
+  <tr><td><code>hkmc_touch</code> / <code>hkmc_swipe</code> / <code>hkmc_long_press</code> / <code>hkmc_key</code></td><td>HKMC IVI 터치·스와이프·롱프레스·하드웨어 키</td><td>IVI 화면/물리 버튼 제어</td></tr>
+  <tr><td><code>icas_touch</code> / <code>icas_swipe</code> / <code>icas_long_press</code> / <code>icas_key</code> <span class="badge badge-blue">신규</span></td><td>ICAS/MIB 디바이스용 터치·스와이프·롱프레스·키</td><td>ICAS/MIB 화면 제어</td></tr>
 </table>
 
 <h4>수동 스텝 추가</h4>
@@ -941,10 +1058,11 @@ npm run dev</code></pre>
   <li>스텝 목록 우측의 📷 <strong>카메라 아이콘</strong>을 클릭합니다</li>
   <li>비교 모드 선택 팝업이 나타납니다:
     <ul>
-      <li><strong>전체화면</strong> — 현재 화면을 즉시 캡처</li>
+      <li><strong>전체화면</strong> — 별도 모드를 고르지 않고 캡처할 때 적용되는 <em>기본값</em> (현재 화면 전체를 비교)</li>
       <li><strong>단일크롭</strong> — 크롭 편집 모달이 열림</li>
       <li><strong>영역제외</strong> — 제외 영역 편집 모달이 열림</li>
       <li><strong>멀티크롭</strong> — 복수 크롭 편집 모달이 열림</li>
+      <li><strong>매치크롭</strong> <span class="badge badge-blue">신규</span> — 크롭한 영역을 화면에서 위치에 상관없이 검색해 비교</li>
     </ul>
   </li>
   <li>캡처 완료 후 스텝 2행 우측에 <span class="badge badge-green">📷 FULL</span>, <span class="badge badge-green">📷 CROP</span> 등의 태그가 표시됩니다</li>
@@ -959,7 +1077,7 @@ npm run dev</code></pre>
 </div>
 
 <h3 id="record-compare">이미지 비교 모드</h3>
-<p>기대 이미지와 실제 스크린샷을 비교하는 4가지 모드를 제공합니다:</p>
+<p>기대 이미지와 실제 스크린샷을 비교하는 5가지 모드를 제공합니다:</p>
 
 <table>
   <tr><th>모드</th><th>아이콘</th><th>설명</th><th>사용 상황</th></tr>
@@ -986,6 +1104,12 @@ npm run dev</code></pre>
     <td><code>MULTI_CROP</code></td>
     <td>여러 영역을 각각 비교 (모두 통과해야 Pass)</td>
     <td>여러 UI 요소를 동시에 확인할 때</td>
+  </tr>
+  <tr>
+    <td><strong>매치크롭</strong> <span class="badge badge-blue">신규</span></td>
+    <td><code>MATCH_CROP</code></td>
+    <td>크롭 이미지를 화면에서 위치에 상관없이 검색해 매칭 점수로 판정</td>
+    <td>아이콘·버튼이 매번 다른 위치에 나타날 때</td>
   </tr>
 </table>
 
@@ -1120,6 +1244,34 @@ npm run dev</code></pre>
   조건부 이동을 설정할 때, 이전 스텝으로 돌아가는 순환 참조가 발생하지 않도록 주의하세요.
 </div>
 
+<h3 id="record-imagetap">이미지 탭 (Image Tap) <span class="badge badge-blue">신규</span></h3>
+<p>
+  버튼이나 아이콘이 매번 <strong>다른 위치</strong>에 나타나는 화면에서는 고정 좌표 탭 대신
+  <strong>이미지 탭</strong>을 사용합니다. 미리 지정한 템플릿 이미지를 재생 시 화면에서 찾아 그 중심을 자동으로 탭합니다.
+</p>
+<ol class="numbered-steps">
+  <li>녹화 중 화면 위 도구의 <strong>이미지 탭</strong> 버튼을 클릭하면 현재 화면이 캡처됩니다</li>
+  <li>찾을 대상(버튼/아이콘) 영역을 드래그하여 <strong>템플릿</strong>으로 선택합니다</li>
+  <li>필요 시 <strong>유사도</strong>를 조정합니다 (기본 85%)</li>
+  <li><code>image_tap</code> 스텝이 추가됩니다. 재생 시 템플릿을 화면에서 검색해 매칭된 위치를 탭합니다</li>
+</ol>
+
+<h3 id="record-mirror">실시간 미러링 <span class="badge badge-blue">신규</span></h3>
+<p>
+  녹화·재생 화면에 표시되는 디바이스 실시간 영상은 디바이스 종류에 따라 최적의 방식으로 전송됩니다.
+</p>
+<ul>
+  <li><strong>H.264 스트리밍</strong> — ADB 디바이스는 <code>scrcpy</code> 기반 H.264 영상을 브라우저의 WebCodecs로 디코딩해 부드럽게 표시합니다. (구형 브라우저는 자동 폴백)</li>
+  <li><strong>JPEG 스트리밍</strong> — HKMC/iSAP/ICAS/Vision Camera/Webcam 등은 주기적 JPEG 캡처로 표시됩니다. 화면 우측 상단에 현재 <strong>FPS</strong>가 표시됩니다.</li>
+  <li><strong>뷰포트 크롭</strong> — 가위 버튼으로 표시 영역을 잘라 관심 영역만 크게 볼 수 있습니다 (좌표 정확도에는 영향 없음).</li>
+  <li><strong>연결 끊김 표시</strong> — 미러가 끊기면 안내가 표시되며, ADB는 <strong>ADB 재시작</strong> 버튼으로 복구를 시도할 수 있습니다.</li>
+</ul>
+<div class="callout callout-info">
+  <strong>💡 재생 중 미러 일시정지</strong>
+  시나리오 재생 중에는 디바이스 부하를 줄이기 위해 실시간 미러가 자동으로 일시정지될 수 있습니다.
+  재생 결과의 정확도에는 영향을 주지 않습니다.
+</div>
+
 
 <!-- ============================== 시나리오 ============================== -->
 <h2 id="scenario">시나리오 관리</h2>
@@ -1138,8 +1290,12 @@ npm run dev</code></pre>
 </ul>
 
 <h3 id="scenario-list">시나리오 목록 (좌측 패널)</h3>
-<p>저장된 모든 시나리오가 목록으로 표시됩니다. 그룹별 탭과 전체 탭으로 구분하여 볼 수 있습니다.</p>
-<p>시나리오를 클릭하면 우측 패널에 스텝 상세가 표시됩니다.</p>
+<p>좌측 패널은 <strong>전체 시나리오</strong> 탭과 <strong>그룹</strong> 탭으로 구분됩니다. 시나리오를 클릭하면 우측 패널에 스텝 상세가 표시됩니다.</p>
+<p><span class="badge badge-blue">신규</span> 시나리오와 그룹은 <strong>폴더 트리</strong>로 정리할 수 있습니다:</p>
+<ul>
+  <li><strong>폴더 만들기</strong> — 상단 폴더 추가 버튼으로 폴더를 만들고, 시나리오/그룹을 <strong>드래그</strong>해 폴더로 이동합니다 (Ctrl/Shift로 다중 선택)</li>
+  <li><strong>우클릭 메뉴</strong> — 시나리오/그룹/폴더를 우클릭하면 복사·이름 변경·폴더 이동·삭제 메뉴가 나타납니다</li>
+</ul>
 
 <h3 id="scenario-detail">시나리오 상세 (우측 패널)</h3>
 <p>선택한 시나리오의 스텝 목록이 테이블로 표시됩니다. 타이틀 영역에 관리 및 재생 버튼이 있습니다:</p>
@@ -1147,6 +1303,7 @@ npm run dev</code></pre>
   <li><strong>이름 변경</strong> — 시나리오 이름 수정</li>
   <li><strong>복사</strong> — 새 이름으로 복사</li>
   <li><strong>반복 횟수</strong> — 재생 반복 횟수 설정 (기본 1회)</li>
+  <li><strong>종료 시간</strong> <span class="badge badge-blue">신규</span> — 지정한 날짜·시각이 되면 재생을 자동 종료 (장시간 반복 테스트에 유용)</li>
   <li><strong>재생</strong> — 시나리오 실행 (디바이스 미연결 시 오류 메시지 표시)</li>
   <li><strong>웹캠 녹화</strong> — 재생 중 웹캠으로 화면 녹화</li>
   <li><strong>삭제</strong> — 시나리오 및 관련 스크린샷을 함께 제거</li>
@@ -1230,6 +1387,12 @@ npm run dev</code></pre>
   완료된 사이클까지의 결과는 저장됩니다.
 </div>
 
+<div class="callout callout-info">
+  <strong>💡 재생 중 로그 &amp; 웹캠</strong>
+  로그 캡처 모듈이나 웹캠이 함께 동작 중이면, 재생 화면에서 <a href="#device-logviewer">DLT/Serial/Logcat 로그 뷰어</a>와
+  웹캠 PiP 영상을 실시간으로 함께 볼 수 있습니다.
+</div>
+
 <h3 id="scenario-group">그룹 관리</h3>
 <p>
   여러 시나리오를 <strong>그룹</strong>으로 묶어 순차적으로 실행할 수 있습니다.
@@ -1302,6 +1465,16 @@ npm run dev</code></pre>
 <p>이전 버전에서 생성된 플랫 파일 구조의 결과가 남아 있는 경우, <strong>레거시 정리</strong> 버튼이 표시됩니다.
   클릭하면 오래된 결과 파일을 정리하고 새 구조로 마이그레이션합니다.</p>
 
+<h4>결과 묶음 내보내기 (ZIP) <span class="badge badge-blue">신규</span></h4>
+<p>선택한 결과를 스크린샷·메타데이터·웹캠 영상까지 포함한 <strong>ZIP 파일</strong>로 묶어 내보낼 수 있습니다.
+  다른 PC로 결과를 전달하거나 장기 보관할 때 사용합니다.</p>
+
+<div class="callout callout-info">
+  <strong>💡 백그라운드 명령 결과</strong>
+  <code>RunCapture</code>/<code>CheckCapture</code> 같은 백그라운드 명령은 실행이 끝날 때까지 결과 화면에서
+  상태와 출력이 자동으로 갱신(폴링)되어, 완료 후 최종 Pass/Fail이 반영됩니다.
+</div>
+
 <h3 id="results-detail">결과 상세</h3>
 <p>결과를 클릭하면 각 스텝별 상세 정보를 볼 수 있습니다.
   상단의 필터를 사용하여 원하는 결과만 표시할 수 있습니다:</p>
@@ -1358,26 +1531,34 @@ npm run dev</code></pre>
 <table>
   <tr><th>설정 항목</th><th>설명</th></tr>
   <tr>
-    <td><strong>UI 테마</strong></td>
-    <td>라이트 모드 / 다크 모드 전환</td>
-  </tr>
-  <tr>
-    <td><strong>언어</strong></td>
+    <td><strong>언어 / Language</strong></td>
     <td>한국어 / English 전환</td>
   </tr>
   <tr>
-    <td><strong>웹캠 녹화 저장 경로</strong></td>
-    <td>웹캠 영상 자동 저장 위치. 비어있으면 브라우저 다운로드 사용</td>
+    <td><strong>UI 테마</strong></td>
+    <td>라이트 모드 / 다크 모드 전환</td>
   </tr>
   <tr>
     <td><strong>Excel 내보내기 저장 경로</strong></td>
     <td>Excel 리포트 자동 저장 위치. 비어있으면 브라우저 다운로드 사용</td>
   </tr>
   <tr>
-    <td><strong>시나리오 내보내기 저장 경로</strong></td>
+    <td><strong>시나리오/그룹 내보내기 저장 경로</strong></td>
     <td>시나리오/그룹 ZIP 자동 저장 위치. 비어있으면 브라우저 다운로드 사용</td>
   </tr>
+  <tr>
+    <td><strong>관제 서버 (Monitor Server)</strong> <span class="badge badge-blue">신규</span></td>
+    <td>통합 관제 서버 주소(URL)를 입력하면 이 ReplayKit의 상태가 실시간으로 전송됩니다. 비어있으면 연결하지 않습니다.</td>
+  </tr>
+  <tr>
+    <td><strong>이미지 비교 유사도 임계값</strong> <span class="badge badge-blue">신규</span></td>
+    <td>비교 모드별(전체화면 / 단일크롭 / 영역제외 / 멀티크롭) 기본 임계값(0.0~1.0). 새 기대 이미지를 캡처할 때 해당 모드 값이 자동 적용되며, 스텝별 개별 수정도 가능합니다.</td>
+  </tr>
 </table>
+<div class="callout callout-warning">
+  <strong>⚠️ 웹캠 저장 경로 설정 위치 변경</strong>
+  이전 버전의 <strong>웹캠 녹화 저장 경로</strong> 설정 항목은 제거되었습니다. 웹캠 영상은 해당 결과 폴더에 자동으로 함께 저장됩니다.
+</div>
 
 <div class="callout callout-info">
   <strong>💡 폴더 선택</strong>
@@ -1398,7 +1579,8 @@ npm run dev</code></pre>
   <tr><th>항목</th><th>설명</th></tr>
   <tr><td>카메라 선택</td><td>PC에 연결된 웹캠 목록에서 선택</td></tr>
   <tr><td>해상도</td><td>QVGA(320×240) ~ 4K(3840×2160) 선택 가능</td></tr>
-  <tr><td>밝기 / 대비 / 선명도 / 노출</td><td>웹캠 지원 시 조절 가능</td></tr>
+  <tr><td>노출 (Exposure)</td><td>자동/수동 전환 후 슬라이더로 노출값 조절 (웹캠 지원 시)</td></tr>
+  <tr><td>타임스탬프 오버레이 <span class="badge badge-blue">신규</span></td><td>영상에 시각을 표시. 위치(상/하 × 좌/우, 끄기), 색상, 글자 크기를 선택할 수 있으며 미리보기·녹화 파일에 함께 새겨집니다</td></tr>
 </table>
 
 <h4>웹캠 녹화 흐름</h4>
@@ -1408,6 +1590,37 @@ npm run dev</code></pre>
   <li>재생이 끝나면 웹캠 녹화도 자동으로 종료되고 결과에 연동됩니다</li>
   <li>또는 수동으로 <strong>녹화</strong> / <strong>녹화 중지</strong> 버튼을 사용할 수도 있습니다</li>
 </ol>
+
+<h3 id="webcam-compositor">합성 녹화 (Compositor) <span class="badge badge-blue">신규</span></h3>
+<p>
+  웹캠 영상 한 개가 아니라 <strong>여러 소스를 한 화면에 합성</strong>해서 녹화해야 할 때 <strong>Compositor</strong>를 사용합니다.
+  웹캠 PiP 창의 합성 녹화 버튼으로 편집기를 엽니다.
+</p>
+<ul>
+  <li><strong>다중 소스 배치</strong> — 여러 대의 웹캠과 PC 창(window)을 하나의 캔버스에 올리고 위치·크기·크롭·투명도·레이어 순서를 조절</li>
+  <li><strong>캔버스 설정</strong> — 출력 해상도, FPS, 배경색, 타임스탬프 표시 여부/위치</li>
+  <li><strong>프리셋</strong> — 구성한 레이아웃을 저장하고 다시 불러오기</li>
+  <li><strong>실시간 미리보기 &amp; 녹화</strong> — 합성 결과를 미리보면서 녹화 시작/정지</li>
+</ul>
+
+
+<!-- ============================== 업데이트 내역 ============================== -->
+<h2 id="changelog">업데이트 내역 <span class="badge badge-blue">신규</span></h2>
+<p>
+  좌측 메뉴의 <strong>업데이트 내역</strong> 탭에서 프로그램의 변경 이력(커밋 로그)을 확인할 수 있습니다.
+  어떤 기능이 언제 추가·수정되었는지 한눈에 파악할 수 있습니다.
+</p>
+<ul>
+  <li><strong>변경 목록</strong> — 최신 커밋부터 날짜, 변경 내용, 작성자, 해시가 표시됩니다</li>
+  <li><strong>유형 태그</strong> — 변경 내용 앞의 <code>feat</code>(기능 추가) / <code>fix</code>(버그 수정) / <code>refactor</code> / <code>docs</code> 등을 색상 태그로 구분</li>
+  <li><strong>검색</strong> — 변경 내용·해시·작성자로 필터링</li>
+  <li><strong>새로고침</strong> — 최신 변경 이력을 다시 불러옵니다 (원격 동기화 시도)</li>
+  <li><strong>브랜치·태그</strong> — 현재 브랜치명과 적용된 버전 태그가 함께 표시됩니다</li>
+</ul>
+<div class="callout callout-info">
+  <strong>💡 오프라인 표시</strong>
+  네트워크가 없거나 원격 동기화에 실패하면, 빌드 시점에 포함된 <strong>오프라인 스냅샷</strong>으로 변경 이력을 보여줄 수 있습니다(실시간이 아닐 수 있음).
+</div>
 
 
 <!-- ============================== 팁 & 문제해결 ============================== -->
@@ -1492,9 +1705,13 @@ npm run dev</code></pre>
   <tr><td><code>adb_command</code></td><td>ADB</td><td><code>command</code> (셸 명령)</td></tr>
   <tr><td><code>serial_command</code></td><td>시리얼</td><td><code>data</code> (전송 데이터)</td></tr>
   <tr><td><code>module_command</code></td><td>모듈</td><td><code>function</code>, <code>args</code></td></tr>
-  <tr><td><code>hkmc_touch</code></td><td>HKMC</td><td><code>x</code>, <code>y</code>, <code>screen_type</code></td></tr>
-  <tr><td><code>hkmc_swipe</code></td><td>HKMC</td><td><code>x1</code>, <code>y1</code>, <code>x2</code>, <code>y2</code>, <code>screen_type</code></td></tr>
-  <tr><td><code>hkmc_key</code></td><td>HKMC</td><td><code>key_name</code>, <code>group</code></td></tr>
+  <tr><td><code>multi_touch</code></td><td>ADB</td><td><code>points</code>, <code>action</code> (zoom_in/out)</td></tr>
+  <tr><td><code>repeat_tap</code></td><td>ADB</td><td><code>x</code>, <code>y</code>, <code>count</code>, <code>interval</code></td></tr>
+  <tr><td><code>image_tap</code></td><td>ADB / HKMC</td><td><code>template</code>, <code>similarity</code></td></tr>
+  <tr><td><code>all_random</code></td><td>HKMC / ADB</td><td><code>repeat_count</code>, <code>interval_ms</code>, <code>hk_keys</code>, <code>sk_region</code>, <code>drag_region</code></td></tr>
+  <tr><td><code>hkmc_touch</code> / <code>hkmc_swipe</code> / <code>hkmc_long_press</code></td><td>HKMC</td><td><code>x</code>, <code>y</code>(/<code>x1,y1,x2,y2</code>), <code>screen_type</code></td></tr>
+  <tr><td><code>hkmc_key</code></td><td>HKMC</td><td><code>key_name</code>, <code>sub_cmd</code>, <code>screen_type</code></td></tr>
+  <tr><td><code>icas_touch</code> / <code>icas_swipe</code> / <code>icas_long_press</code> / <code>icas_key</code></td><td>ICAS / MIB</td><td><code>x</code>, <code>y</code>(/<code>x1,y1,x2,y2</code>), <code>screen_type</code></td></tr>
 </table>
 
 <div class="callout callout-info">
@@ -1524,6 +1741,11 @@ npm run dev</code></pre>
     <td><code>MULTI_CROP</code></td>
     <td>복수 크롭 각각 독립 비교</td>
     <td>모든 크롭의 유사도가 각각 임계값 이상 → Pass</td>
+  </tr>
+  <tr>
+    <td><code>MATCH_CROP</code></td>
+    <td>크롭 이미지를 화면 전체에서 위치 무관 템플릿 매칭</td>
+    <td>최고 매칭 점수 ≥ 임계값 → Pass</td>
   </tr>
 </table>
 
@@ -1555,7 +1777,7 @@ npm run dev</code></pre>
 <br>
 <hr style="border:none; border-top:1px solid var(--border); margin: 40px 0;">
 <p style="text-align:center; color:var(--text-muted); font-size:13px;">
-  ReplayKit 사용자 가이드 v1.0 &mdash; 문의사항이 있으면 최세진 선임연구원(VS TC설계/검증자동화팀)에게 연락해주세요.
+  ReplayKit 사용자 가이드 v1.1 &mdash; 문의사항이 있으면 최세진 선임연구원(VS TC설계/검증자동화팀)에게 연락해주세요.
 </p>
 
 </main>
