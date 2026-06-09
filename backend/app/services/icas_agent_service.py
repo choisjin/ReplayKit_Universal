@@ -908,6 +908,46 @@ class ICASAgentService:
                 pass
             time.sleep(poll_interval_s)
 
+    def _wait_remote_png_complete(self, ssh, remote_paths: list[str],
+                                  max_wait_s: float = 3.0,
+                                  poll_interval_s: float = 0.05) -> None:
+        """디바이스 PNG가 IEND(완성)까지 쓰여질 때까지 폴링한 뒤 SCP하도록 대기.
+
+        LayerManagerControl dump가 비동기로 파일을 쓰는 환경에서 size-stable 폴링은 writer가
+        1024-block 경계에서 잠깐 멈춘 순간을 'stable'로 오판해 partial을 SCP하게 되고, 전송 크기가
+        정확히 1024 배수로 잘린다(디바이스 파일은 완전한데 미완성 시점 캡처). IEND가 보일 때까지 대기.
+        busybox 호환: `tail -c 64 <f> | grep -q IEND`. Y=완성 / P=미완성 / X=파일없음.
+        """
+        if not remote_paths:
+            return
+        deadline = time.monotonic() + max_wait_s
+        pending = list(remote_paths)
+        while pending and time.monotonic() < deadline:
+            checks = " ; ".join(
+                f"if [ -s {rp} ]; then tail -c 64 {rp} 2>/dev/null | grep -q IEND "
+                f"&& echo Y || echo P; else echo X; fi"
+                for rp in pending
+            )
+            statuses: list[str] = []
+            try:
+                stdin, stdout, stderr = ssh.exec_command(checks, timeout=3)
+                try:
+                    stdin.close()
+                except Exception:
+                    pass
+                out = stdout.read().decode("utf-8", errors="replace")
+                statuses = [l.strip() for l in out.splitlines() if l.strip() in ("Y", "P", "X")]
+            except Exception:
+                statuses = []
+            if len(statuses) != len(pending):
+                time.sleep(poll_interval_s)
+                continue
+            new_pending = [rp for rp, st in zip(pending, statuses) if st == "P"]
+            if not new_pending:
+                return
+            pending = new_pending
+            time.sleep(poll_interval_s)
+
     def _screencap_hu(self, fmt: str = "png") -> bytes:
         import tempfile
         from PIL import Image, ImageFile
@@ -997,9 +1037,11 @@ class ICASAgentService:
                     # 호출자가 SSH 채널 리셋하도록 RuntimeError 신호.
                     raise RuntimeError(f"ICAS HU dump failed (exit={exit_status})")
 
-                # LayerManagerControl이 비동기로 PNG를 쓰는 환경 대응: 파일 크기가 안정될 때까지 폴링.
-                # 최대 1초 대기, 50ms 간격, 2회 연속 동일 크기여야 통과.
+                # LayerManagerControl이 비동기로 PNG를 쓰는 환경 대응: 크기 안정화 + IEND 완성 폴링.
+                # 디바이스 파일은 완전한데 writer가 1024-block append 중인 순간 SCP하면 정확히
+                # 1024 배수로 잘린 partial을 가져온다 → IEND 보일 때까지 기다린 뒤 SCP.
                 self._wait_remote_files_stable(ssh, [rp for rp, _ in remotes])
+                self._wait_remote_png_complete(ssh, [rp for rp, _ in remotes])
 
                 files: list[str] = []
                 try:

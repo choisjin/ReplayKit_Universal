@@ -709,6 +709,52 @@ class MIBAgentService:
                 pass
             time.sleep(poll_interval_s)
 
+    def _wait_remote_png_complete(self, ssh, remote_paths: list[str],
+                                  max_wait_s: float = 3.0,
+                                  poll_interval_s: float = 0.05) -> None:
+        """디바이스 PNG가 IEND(완성)까지 쓰여질 때까지 폴링한 뒤 SCP하도록 대기.
+
+        LayerManagerControl dump가 파일을 비동기로 쓰는 환경에서는 exec_command가 끝나도
+        writer가 1024-block 단위로 계속 append 중일 수 있다. 단순 size-stable 폴링은 writer가
+        블록 경계에서 잠깐 멈춘 순간을 'stable'로 오판해 partial을 SCP하게 되고, 전송 크기가
+        정확히 1024 배수로 잘린다(디바이스 파일은 완전한데 우리가 미완성 시점을 캡처 → 하단 row
+        손실로 화면 하단/홈·apps 바가 깜빡임). 파일 끝 IEND가 보일 때까지 기다린다.
+
+        busybox 호환: `tail -c 64 <f> | grep -q IEND`. 파일 상태를 한 SSH 호출로 일괄 조회:
+          Y=완성(IEND有) / P=존재하나 미완성 / X=파일없음(기다려도 무의미).
+        타임아웃 시 silent 진행 — partial은 상위에서 truncated-but-decodable로 수용된다.
+        """
+        if not remote_paths:
+            return
+        deadline = time.monotonic() + max_wait_s
+        pending = list(remote_paths)
+        while pending and time.monotonic() < deadline:
+            checks = " ; ".join(
+                f"if [ -s {rp} ]; then tail -c 64 {rp} 2>/dev/null | grep -q IEND "
+                f"&& echo Y || echo P; else echo X; fi"
+                for rp in pending
+            )
+            statuses: list[str] = []
+            try:
+                stdin, stdout, stderr = ssh.exec_command(checks, timeout=3)
+                try:
+                    stdin.close()
+                except Exception:
+                    pass
+                out = stdout.read().decode("utf-8", errors="replace")
+                statuses = [l.strip() for l in out.splitlines() if l.strip() in ("Y", "P", "X")]
+            except Exception:
+                statuses = []
+            if len(statuses) != len(pending):
+                time.sleep(poll_interval_s)
+                continue
+            # 아직 미완성(P)인 파일만 다음 라운드로
+            new_pending = [rp for rp, st in zip(pending, statuses) if st == "P"]
+            if not new_pending:
+                return
+            pending = new_pending
+            time.sleep(poll_interval_s)
+
     @staticmethod
     def _bitmask_to_bit_position(addr: str) -> Optional[str]:
         """0x80000000000 (=1<<43) 같은 단일-비트 bitmask를 '43'(bit position)으로 변환.
@@ -1548,9 +1594,12 @@ class MIBAgentService:
                     raise RuntimeError(f"MIB HU dump failed (exit={exit_status})")
 
                 # LayerManagerControl이 비동기 처리하는 경우 dump_cmd 종료 후에도 파일 쓰기가 진행 중일 수 있음.
-                # SCP 전 짧은 wait + 디바이스 측 파일 크기 폴링으로 안정화 확인 (최대 1초).
+                # 1차로 크기 안정화 폴링, 2차로 IEND(PNG 완성) 폴링. 디바이스 파일은 완전한데
+                # writer가 1024-block 단위로 append 중인 순간에 SCP하면 정확히 1024 배수로 잘린
+                # partial을 가져오는 증상이 있어, IEND가 보일 때까지 기다린 뒤 SCP한다.
                 t_wait = time.monotonic()
                 self._wait_remote_files_stable(ssh, [(idx, f"/tmp/{fname}") for idx, fname in file_map])
+                self._wait_remote_png_complete(ssh, [f"/tmp/{fname}" for _, fname in file_map])
                 _phase_log("wait_stable", t_wait)
 
                 files: list[str] = []
