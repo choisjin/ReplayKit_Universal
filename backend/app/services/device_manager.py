@@ -2877,6 +2877,14 @@ class DeviceManager:
                 stored_dst = dev.info.get("ksend_dst")
                 if stored_src and stored_dst:
                     svc.set_addr(str(stored_src), str(stored_dst))
+                # 저장된 터치 보정 오프셋 적용 (디바이스별 터치 원점 어긋남 보정)
+                _tox = dev.info.get("touch_x_offset")
+                _toy = dev.info.get("touch_y_offset")
+                if _tox is not None or _toy is not None:
+                    try:
+                        svc.set_touch_offsets(int(_tox or 0), int(_toy or 0))
+                    except Exception as e:
+                        logger.warning("MIB touch offset apply failed: %s", e)
                 ok = await svc.async_connect()
                 if ok:
                     self._mib_conns[dev.id] = svc

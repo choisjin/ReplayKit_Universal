@@ -1451,6 +1451,19 @@ async def update_device(req: UpdateDeviceRequest):
                     svc.resolution = dev.info["resolution_str"]
                 except Exception as e:
                     logger.warning("Failed to update live MIB resolution: %s", e)
+        # MIB 터치 보정 오프셋 라이브 반영 (touch_x_offset/touch_y_offset). reconnect 없이 캘리브레이션.
+        if dev.type == "mib_agent" and (
+            "touch_x_offset" in req.extra_fields or "touch_y_offset" in req.extra_fields
+        ):
+            svc = dm.get_mib_service(dev.id)
+            if svc is not None:
+                try:
+                    svc.set_touch_offsets(
+                        int(dev.info.get("touch_x_offset", 0) or 0),
+                        int(dev.info.get("touch_y_offset", 0) or 0),
+                    )
+                except Exception as e:
+                    logger.warning("Failed to update live MIB touch offsets: %s", e)
         # Reset cached module instance when connection params change
         module_name = dev.info.get("module")
         if module_name:

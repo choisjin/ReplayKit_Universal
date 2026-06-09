@@ -204,6 +204,17 @@ class MIBAgentService:
         # 적응형 리프레시(입력 없으면 10s, 입력 직후 2s×5회 burst)를 결정한다. 입력은 모두
         # _ksend/_ksend_many를 거치므로 그 진입점에서만 갱신하면 됨(캡처는 ksend를 안 씀).
         self.last_input_ts = 0.0
+        # 터치 좌표 보정 오프셋 (디바이스 좌표 공간, px). 일부 MIB 유닛은 dump 이미지의 원점과
+        # 터치 디지타이저의 원점이 일정하게 어긋난다(예: 상단 상태바 ~70px). 디바이스별로
+        # 캘리브레이션해 _touch_frame에서 모든 터치(tap/swipe/long_press)에 일괄 적용.
+        # 환경변수(MIB_TOUCH_X_OFFSET/MIB_TOUCH_Y_OFFSET)가 초기 기본값, set_touch_offsets()가 재정의.
+        def _env_int(name: str) -> int:
+            try:
+                return int(os.environ.get(name, "0") or 0)
+            except Exception:
+                return 0
+        self._touch_x_offset = _env_int("MIB_TOUCH_X_OFFSET")
+        self._touch_y_offset = _env_int("MIB_TOUCH_Y_OFFSET")
         # 캡처 전용 SSH 세션 — LayerManagerControl dump + SCP pull 용. 캡처 한 사이클은
         # 1초 가까이 걸리므로, 같은 락에 묶이면 그 사이 입력(ksend)이 블록됨.
         # 따라서 터치/하드키는 별도 _input_ssh_*에서 보내 캡처와 병렬화.
@@ -1138,11 +1149,31 @@ class MIBAgentService:
     # Touch (press/drag/release) — ref RemoteController.excutecmdTouch*
     # ------------------------------------------------------------------
     def _touch_frame(self, x: int, y: int, end_byte: int) -> str:
-        p1, p2, p3 = _encode_touch_xy(int(x), int(y), self._x_mult, self._y_mult)
+        # 디바이스별 터치 원점 보정 — 음수/해상도 초과를 클램프. 터치가 클릭보다 아래에
+        # 찍히면(상단 상태바 등) y_offset을 음수로 두어 위로 끌어올린다.
+        ax = min(max(0, int(x) + self._touch_x_offset), max(1, self._res_x))
+        ay = min(max(0, int(y) + self._touch_y_offset), max(1, self._res_y))
+        p1, p2, p3 = _encode_touch_xy(ax, ay, self._x_mult, self._y_mult)
         return (
             f"0x83 0x50 0x20 0x0b 0x00 0x00 0x00 0x00 0x00 0xa0 0x01 0x11 "
             f"0x{p1:02x} 0x{p2:02x} 0x{p3:02x} 0x{end_byte:02x}"
         )
+
+    def set_touch_offsets(self, x_offset: int = 0, y_offset: int = 0) -> None:
+        """터치 좌표 보정 오프셋 설정 (디바이스 좌표 px). 라이브 캘리브레이션용."""
+        try:
+            self._touch_x_offset = int(x_offset)
+        except Exception:
+            self._touch_x_offset = 0
+        try:
+            self._touch_y_offset = int(y_offset)
+        except Exception:
+            self._touch_y_offset = 0
+        logger.info("MIB touch offsets set: x=%d y=%d",
+                    self._touch_x_offset, self._touch_y_offset)
+
+    def get_touch_offsets(self) -> tuple[int, int]:
+        return (self._touch_x_offset, self._touch_y_offset)
 
     def _touch_press(self, x: int, y: int) -> None:
         self._ksend(self._touch_frame(x, y, 0xFD))
