@@ -626,11 +626,11 @@ async def connect_device(req: ConnectRequest):
         _composite_mode = str(ef.get("cluster_composite_mode") or "off")
         if _is_ccic and _composite_mode == "off":
             _composite_mode = "ssh"
-        # cluster crop "x1,y1,x2,y2": ccIC/ccIC27 QNX display=2의 실제 내용은 882x535,
-        # 우측·하단이 비어 있어 좌상단 882x535만 잘라낸다.
+        # cluster crop "x1,y1,x2,y2": ccIC/ccIC27 QNX display=2 캡처(2720x720)의 실제 cluster는
+        # 좌측 1920x720(에이전트 보고 크기). 우측 빈공간 800px만 잘라낸다.
         _cluster_crop = str(ef.get("cluster_crop") or "")
         if _is_ccic and not _cluster_crop:
-            _cluster_crop = "0,0,882,535"  # 좌상단 882x535만(우측·하단 빈공간 제거)
+            _cluster_crop = "0,0,1920,720"  # 좌측 1920x720만(우측 빈공간 제거)
         try:
             dev = await dm.add_hkmc6th_device(
                 req.address, req.port, device_id=custom_id,
