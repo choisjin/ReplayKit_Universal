@@ -163,8 +163,8 @@ SWC_VOLUME_DOWN        = 0x04
 SWC_VOLUME_UP          = 0x05
 SWC_MUTE               = 0x06
 SWC_MODE               = 0x07
-SWC_SEEK_DOWN          = 0x08
-SWC_SEEK_UP            = 0x09
+SWC_SEEK_DOWN          = 0x09
+SWC_SEEK_UP            = 0x08
 SWC_VOLUME_SCROLL_DOWN = 0x10
 SWC_VOLUME_SCROLL_UP   = 0x11
 
