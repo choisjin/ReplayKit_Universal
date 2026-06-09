@@ -500,8 +500,9 @@ class HKMC6thService:
         self.cluster_display = str(cluster_display) if cluster_display is not None else "1"
         # 클러스터 2-레이어 합성 (배경 플레인 + 알람/정보 오버레이 플레인).
         self.cluster_overlay_display = str(cluster_overlay_display or "").strip()
+        # off=TCP 배경 단독(front 방식), chroma/alpha=배경+정보 합성, ssh=정보 단독(legacy).
         _mode = str(cluster_composite_mode or "off").strip().lower()
-        if _mode not in ("off", "alpha", "chroma"):
+        if _mode not in ("off", "alpha", "chroma", "ssh"):
             _mode = "off"
         self.cluster_composite_mode = _mode
         self.cluster_overlay_key_color = _parse_bgr(cluster_overlay_key_color, (0, 0, 0))
@@ -987,10 +988,11 @@ class HKMC6thService:
         while self._input_pending > 0 and time.monotonic() < _yield_deadline:
             time.sleep(0.02)
 
-        # cluster 캡처 전략 (composite=True 일 때만 SSH/합성을 시도):
-        #   - 합성 ON  : 배경(TCP CMD_GETIMG cluster) + 정보(QNX SSH display) chroma/alpha 합성
-        #   - 합성 OFF + SSH creds : 정보만 (QNX SSH 단독)
-        #   - 그 외(SSH 없음/cooldown/composite=False) : 배경 단독 (TCP CMD_GETIMG)
+        # cluster 캡처 전략 (cluster_composite_mode):
+        #   - "chroma"/"alpha" : 배경(TCP CMD_GETIMG cluster) + 정보(QNX SSH display) 합성
+        #   - "ssh"            : 정보만 (QNX SSH 단독, legacy ccIC 등)
+        #   - "off"(기본)      : 배경 단독 (TCP CMD_GETIMG, front_center와 동일 경로)
+        # composite=False(라이브 토글) 또는 cooldown 중이면 SSH/합성을 건너뛴다.
         if screen_type == "cluster" and composite and not self._cluster_ssh_in_cooldown():
             if self._composite_enabled:
                 try:
@@ -1000,7 +1002,7 @@ class HKMC6thService:
                 except Exception as e:
                     self._note_cluster_ssh_failure(e)
                     logger.warning("HKMC cluster composite failed, falling back to TCP bg: %s", e)
-            elif self.ssh_username:
+            elif self.cluster_composite_mode == "ssh" and self.ssh_username:
                 try:
                     data = self._screencap_cluster_via_ssh(fmt=fmt, timeout=timeout)
                     self._cluster_ssh_fail_until = 0.0
@@ -1009,7 +1011,7 @@ class HKMC6thService:
                     self._note_cluster_ssh_failure(e)
                     logger.warning("HKMC cluster SSH capture failed, falling back to TCP: %s", e)
 
-        # TCP 경로 (cluster 배경 단독, 또는 front_center/rear_*)
+        # TCP 경로 (cluster 배경 단독 = front_center와 동일 방식, 또는 front_center/rear_*)
         bmp_bytes = self._capture_tcp_raw(screen_type, timeout)
         return self._encode_tcp_bmp(bmp_bytes, fmt)
 
