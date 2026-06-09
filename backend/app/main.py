@@ -593,6 +593,44 @@ async def websocket_screen_mirror(websocket: WebSocket):
     # WS 세션 진입 시 ADB 분기에 한 번만 dispatch 의도를 INFO 로그로 출력
     adb_dispatch_logged = False
 
+    # ── MIB/ICAS 적응형 화면 리프레시 페이싱 ──
+    # SSH+scp 캡처(LayerManagerControl dump)는 디바이스 부하가 커서 무한 폴링하면
+    # /tmp 압박·PNG truncation·반응성 저하를 악화시킨다. 그래서:
+    #   - 입력(터치/하드키)이 없으면: 10초에 한 번만 갱신 (idle)
+    #   - 입력이 있으면: 2초 간격으로 5회 갱신(burst) 후 다시 idle로 복귀
+    # 입력 감지는 서비스의 last_input_ts(_ksend에서 갱신)를 폴링해 판단하며,
+    # idle 대기 중 입력이 들어오면 즉시 깨어나 burst로 전환한다.
+    SSH_REFRESH_IDLE_S = 10.0
+    SSH_REFRESH_BURST_S = 2.0
+    SSH_REFRESH_BURST_N = 5
+    # 최초엔 burst로 시작 — 연결 직후 초기 화면을 빠르게 채운 뒤 idle로 가라앉는다.
+    _ssh_burst_remaining = SSH_REFRESH_BURST_N
+    _ssh_seen_input_ts = -1.0
+
+    async def _adaptive_ssh_pace(svc) -> None:
+        """방금 1프레임을 보낸 뒤 다음 캡처까지 입력 유무에 따라 대기.
+
+        새 입력이 감지되면 burst(2초×5회)를 (재)시작하고, idle 대기 중에도 입력이 들어오면
+        0.2초 안에 깨어나 즉시 burst로 전환한다.
+        """
+        nonlocal _ssh_burst_remaining, _ssh_seen_input_ts
+        cur_ts = getattr(svc, "last_input_ts", 0.0)
+        if cur_ts > _ssh_seen_input_ts:
+            _ssh_seen_input_ts = cur_ts
+            _ssh_burst_remaining = SSH_REFRESH_BURST_N
+        if _ssh_burst_remaining > 0:
+            _ssh_burst_remaining -= 1
+            interval = SSH_REFRESH_BURST_S
+        else:
+            interval = SSH_REFRESH_IDLE_S
+        waited = 0.0
+        step = 0.2
+        while waited < interval:
+            await asyncio.sleep(step)
+            waited += step
+            if getattr(svc, "last_input_ts", 0.0) > _ssh_seen_input_ts:
+                return  # 새 입력 → 즉시 다음 캡처로 (다음 호출에서 burst 재시작)
+
     try:
         await websocket.send_json({"mode": "jpeg"})
 
@@ -636,6 +674,9 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                 screen_type=screen_type, fmt="jpeg"
                             )
                             await websocket.send_bytes(jpeg_bytes)
+                            # 적응형 리프레시: idle 10s, 입력 직후 2s×5회 burst
+                            await _adaptive_ssh_pace(icas)
+                            continue
                         except Exception as ce:
                             # 캡처 실패 원인을 진단하기 위해 warning 레벨로 기록.
                             # 일부 예외(paramiko ChannelException 등)는 str()이 비어있어 type을 함께 출력.
@@ -655,6 +696,9 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                 screen_type=screen_type, fmt="jpeg"
                             )
                             await websocket.send_bytes(jpeg_bytes)
+                            # 적응형 리프레시: idle 10s, 입력 직후 2s×5회 burst
+                            await _adaptive_ssh_pace(mib)
+                            continue
                         except WebSocketDisconnect:
                             break
                         except Exception as ce:

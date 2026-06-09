@@ -134,6 +134,25 @@ def _read_png_ihdr_size(path: str) -> Optional[tuple[int, int]]:
         return None
 
 
+def _png_partially_decodable(path: str) -> bool:
+    """IEND까지 완전하진 않아도 LOAD_TRUNCATED_IMAGES로 디코딩 가능한 PNG인지 확인.
+
+    디바이스 LayerManagerControl dump가 PNG를 끝까지 못 쓰는 환경(예: /tmp tmpfs 부족,
+    dump 중단)에서 파일이 truncated 되어도, 첫 IDAT 일부만 온전하면 PIL이 하단을 회색으로
+    채워 디코딩한다. 화면 표시·해상도 감지·터치 좌표 스케일링에는 충분하므로, 캡처를 통째로
+    버려 화면이 영영 안 뜨는 것보다 부분 이미지라도 사용하는 편이 낫다.
+    """
+    try:
+        from PIL import Image, ImageFile
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        with Image.open(path) as im:
+            im.load()  # 실제 디코딩 강제 — truncated면 LOAD_TRUNCATED_IMAGES가 하단을 채움
+            w, h = im.size
+        return w > 0 and h > 0
+    except Exception:
+        return False
+
+
 def _rm_tree(path: str) -> None:
     try:
         import shutil
@@ -181,6 +200,10 @@ class MIBAgentService:
 
         self._connected = False
         self.agent_version = "MIB Agent"
+        # 마지막 입력(터치/하드키) 시각 (time.monotonic). 화면 미러 루프가 이 값을 읽어
+        # 적응형 리프레시(입력 없으면 10s, 입력 직후 2s×5회 burst)를 결정한다. 입력은 모두
+        # _ksend/_ksend_many를 거치므로 그 진입점에서만 갱신하면 됨(캡처는 ksend를 안 씀).
+        self.last_input_ts = 0.0
         # 캡처 전용 SSH 세션 — LayerManagerControl dump + SCP pull 용. 캡처 한 사이클은
         # 1초 가까이 걸리므로, 같은 락에 묶이면 그 사이 입력(ksend)이 블록됨.
         # 따라서 터치/하드키는 별도 _input_ssh_*에서 보내 캡처와 병렬화.
@@ -1010,6 +1033,7 @@ class MIBAgentService:
         기본 모드(invoke_shell): 빠르지만 stderr/exit를 알 수 없어 silent fail 가능.
         MIB_KSEND_VERBOSE=1 환경변수: exec_command 모드 + ksend -v 옵션 + 결과 로깅.
         """
+        self.last_input_ts = time.monotonic()
         verbose = os.environ.get("MIB_KSEND_VERBOSE", "").strip() in ("1", "true", "yes")
         v_flag = " -v " if verbose else " "
         cmd = f'/lge/app_ro/bin/ksend{v_flag}-s {self.src_addr} -d {self.dst_addr} -b "{data_bytes}"'
@@ -1020,6 +1044,7 @@ class MIBAgentService:
 
     def _ksend_many(self, data_list: list[str], interval_s: float = 0.1) -> None:
         """ksend 명령 여러 개를 공유 shell 채널에서 순차 송신."""
+        self.last_input_ts = time.monotonic()
         verbose = os.environ.get("MIB_KSEND_VERBOSE", "").strip() in ("1", "true", "yes")
         v_flag = " -v " if verbose else " "
         cmds = [
@@ -1488,30 +1513,40 @@ class MIBAgentService:
                                 ok = False
                                 if os.path.exists(local) and os.path.getsize(local) > 0:
                                     # PNG 무결성 1차 검증 — 시그니처 + IEND chunk 존재 여부
-                                    if _validate_png_file(local):
+                                    # 완전한 PNG(IEND 존재)면 그대로, 아니면 truncated여도 PIL이
+                                    # 디코딩 가능하면 부분 이미지로 수용한다. 디바이스 dump가 PNG를
+                                    # 끝까지 안 써주는 환경에서 캡처를 통째로 버리지 않기 위함.
+                                    usable = _validate_png_file(local) or _png_partially_decodable(local)
+                                    if usable:
                                         files.append(local)
                                         self._screen_fail_count[idx] = 0
                                         ok = True
+                                        # truncated 수용 시에는 원인 추적용으로 1회 안내 (성공 카운트는 유지).
+                                        if not _validate_png_file(local):
+                                            logger.warning(
+                                                "MIB HU scp %s: PNG truncated but decodable, using partial "
+                                                "(size=%d; device dump likely not writing full PNG — check /tmp space)",
+                                                remote, os.path.getsize(local),
+                                            )
                                     else:
                                         logger.warning(
-                                            "MIB HU scp %s: PNG truncated/corrupt (size=%d)",
+                                            "MIB HU scp %s: PNG corrupt/undecodable (size=%d)",
                                             remote, os.path.getsize(local),
                                         )
-                                        # 디코딩(IDAT/IEND)은 깨졌어도 IHDR(파일 앞부분)은 대개 온전 →
-                                        # 실제 해상도만이라도 추출해 터치 좌표 스케일링을 보정한다. 캡처가
-                                        # 계속 실패해도 터치는 실제 해상도에 맞게 동작하도록 분리.
-                                        # crop 모드에서는 등록 해상도 우선이므로 자동 갱신 skip.
-                                        if not crop_to_registered:
-                                            dims = _read_png_ihdr_size(local)
-                                            if dims:
-                                                try:
-                                                    self._maybe_autoupdate_resolution(dims[0], dims[1])
-                                                except Exception as _re:
-                                                    logger.debug(
-                                                        "MIB IHDR resolution auto-correct skipped: %s", _re
-                                                    )
-                                        if debug_dump:
-                                            self._log_dump_diagnostics(ssh, idx, local)
+                                    # 디코딩 성공 여부와 무관하게 IHDR(파일 앞부분)은 대개 온전 →
+                                    # 실제 해상도를 추출해 터치 좌표 스케일링(_x_mult/_y_mult)을 보정.
+                                    # crop 모드에서는 등록 해상도 우선이므로 자동 갱신 skip.
+                                    if not crop_to_registered:
+                                        dims = _read_png_ihdr_size(local)
+                                        if dims:
+                                            try:
+                                                self._maybe_autoupdate_resolution(dims[0], dims[1])
+                                            except Exception as _re:
+                                                logger.debug(
+                                                    "MIB IHDR resolution auto-correct skipped: %s", _re
+                                                )
+                                    if not usable and debug_dump:
+                                        self._log_dump_diagnostics(ssh, idx, local)
                                 if not ok:
                                     self._screen_fail_count[idx] = self._screen_fail_count.get(idx, 0) + 1
                                     self._maybe_disable_screen(idx)

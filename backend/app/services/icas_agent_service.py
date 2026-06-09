@@ -124,6 +124,25 @@ def _validate_png_file(path: str) -> bool:
         return False
 
 
+def _png_partially_decodable(path: str) -> bool:
+    """IEND까지 완전하진 않아도 LOAD_TRUNCATED_IMAGES로 디코딩 가능한 PNG인지 확인.
+
+    디바이스 LayerManagerControl dump가 PNG를 끝까지 못 쓰는 환경(예: /tmp tmpfs 부족,
+    dump 중단)에서 파일이 truncated 되어도, 첫 IDAT 일부만 온전하면 PIL이 하단을 회색으로
+    채워 디코딩한다. 화면 표시에는 충분하므로, 캡처를 통째로 버려 화면이 영영 안 뜨고
+    backoff 재연결이 폭주하는 것보다 부분 이미지라도 사용하는 편이 낫다.
+    """
+    try:
+        from PIL import Image, ImageFile
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        with Image.open(path) as im:
+            im.load()
+            w, h = im.size
+        return w > 0 and h > 0
+    except Exception:
+        return False
+
+
 class ICASAgentService:
     """SSH 기반 ICAS HU 제어 서비스.
 
@@ -167,6 +186,10 @@ class ICASAgentService:
 
         self._connected = False
         self.agent_version = "ICAS Agent"
+        # 마지막 입력(터치/하드키) 시각 (time.monotonic). 화면 미러 루프가 이 값을 읽어
+        # 적응형 리프레시(입력 없으면 10s, 입력 직후 2s×5회 burst)를 결정한다. 입력은 모두
+        # _ksend/_ksend_many를 거치므로 그 진입점에서만 갱신하면 됨(캡처는 ksend를 안 씀).
+        self.last_input_ts = 0.0
         # 공유 SSH 세션 — 액션마다 재연결하지 않고 keep-alive로 재사용하여 인증 오버헤드(80ms/call) 제거.
         # 터치/하드키/스크린샷 등 모든 액션이 동일 클라이언트를 공유하므로 _ssh_lock으로 직렬화.
         self._ssh_client = None
@@ -609,6 +632,7 @@ class ICASAgentService:
           - icas (EU): invoke_shell 공유 채널 (저오버헤드, 빠름)
           - icas3 (CN): exec_command 채널 (안정성 우선 — invoke_shell이 ClientDisconnected 유발)
         """
+        self.last_input_ts = time.monotonic()
         cmd = f'/lge/app_ro/bin/ksend -s {self.src_addr} -d {self.dst_addr} -b "{data_bytes}"'
         if self.variant == "icas3":
             self._ksend_exec([cmd])
@@ -617,6 +641,7 @@ class ICASAgentService:
 
     def _ksend_many(self, data_list: list[str], interval_s: float = 0.1) -> None:
         """ksend 명령 여러 개를 순차 송신. variant 분기 동일."""
+        self.last_input_ts = time.monotonic()
         cmds = [
             f'/lge/app_ro/bin/ksend -s {self.src_addr} -d {self.dst_addr} -b "{data}"'
             for data in data_list
@@ -985,11 +1010,21 @@ class ICASAgentService:
                             local = os.path.join(tmp_dir, fname)
                             try:
                                 scp.get(remote, local)
+                                # 완전한 PNG(IEND)면 그대로, truncated여도 PIL이 디코딩 가능하면
+                                # 부분 이미지로 수용 — 디바이스 dump가 PNG를 끝까지 안 써주는 환경에서
+                                # 캡처를 통째로 버려 화면이 안 뜨고 재연결이 폭주하는 것을 방지.
                                 if _validate_png_file(local):
                                     files.append(local)
+                                elif _png_partially_decodable(local):
+                                    files.append(local)
+                                    logger.warning(
+                                        "ICAS HU %s: PNG truncated but decodable, using partial "
+                                        "(size=%d; device dump likely not writing full PNG — check /tmp space)",
+                                        fname, os.path.getsize(local) if os.path.exists(local) else 0,
+                                    )
                                 else:
                                     size = os.path.getsize(local) if os.path.exists(local) else 0
-                                    logger.debug("ICAS HU %s invalid/truncated PNG (size=%d), skipping",
+                                    logger.debug("ICAS HU %s corrupt/undecodable PNG (size=%d), skipping",
                                                  fname, size)
                             except Exception as ee:
                                 logger.debug("ICAS HU scp %s failed: %s", remote, ee)
