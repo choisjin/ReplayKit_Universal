@@ -1468,7 +1468,8 @@ class PlaybackService:
                                           cluster_composite_mode=str(dev.info.get("cluster_composite_mode", "off") or "off"),
                                           cluster_overlay_key_color=str(dev.info.get("cluster_overlay_key_color", "0,0,0") or "0,0,0"),
                                           cluster_overlay_threshold=int(dev.info.get("cluster_overlay_threshold", 24) or 24),
-                                          cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)))
+                                          cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)),
+                                          cluster_crop=str(dev.info.get("cluster_crop", "") or ""))
                     ok = await svc.async_connect()
                     if ok:
                         self.dm._hkmc_conns[dev.id] = svc
@@ -1552,7 +1553,8 @@ class PlaybackService:
                                                cluster_composite_mode=str(dev.info.get("cluster_composite_mode", "off") or "off"),
                                                cluster_overlay_key_color=str(dev.info.get("cluster_overlay_key_color", "0,0,0") or "0,0,0"),
                                                cluster_overlay_threshold=int(dev.info.get("cluster_overlay_threshold", 24) or 24),
-                                               cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)))
+                                               cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)),
+                                               cluster_crop=str(dev.info.get("cluster_crop", "") or ""))
                         ok = await svc.async_connect()
                         if ok:
                             self.dm._hkmc_conns[dev.id] = svc

@@ -170,6 +170,25 @@ def test_screencap_cluster_via_ssh_info_only():
     assert tuple(int(c) for c in img[10, 20]) == RED  # 정보 그대로(검정 배경)
 
 
+def test_cluster_crop():
+    from app.services.hkmc6th_service import _parse_crop
+    assert _parse_crop("0,0,845,0") == (0, 0, 845, 0)
+    assert _parse_crop("") is None
+    assert _parse_crop("bad") is None
+    # x2/y2<=0 = 끝까지: 2720x720 → x≤845 crop = 845x720
+    svc = _make_svc(cluster_composite_mode="ssh", cluster_crop="0,0,845,0")
+    img = np.zeros((720, 2720, 3), dtype=np.uint8)
+    out = svc._apply_cluster_crop(img)
+    assert out.shape == (720, 845, 3)
+    # crop 미설정이면 원본 그대로
+    svc2 = _make_svc(cluster_composite_mode="ssh")
+    assert svc2.cluster_crop is None
+    assert svc2._apply_cluster_crop(img).shape == (720, 2720, 3)
+    # 경계 클램프: x2가 폭보다 크면 끝까지
+    svc3 = _make_svc(cluster_crop="0,0,9999,0")
+    assert svc3._apply_cluster_crop(img).shape == (720, 2720, 3)
+
+
 def test_ssh_failure_cooldown():
     import time as _t
     svc = _make_svc(cluster_composite_mode="chroma")

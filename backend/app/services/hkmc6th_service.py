@@ -352,6 +352,20 @@ def _parse_bgr(value, default=(0, 0, 0)):
     return default
 
 
+def _parse_crop(value):
+    """"x1,y1,x2,y2" 문자열을 (x1,y1,x2,y2) int 튜플로 파싱. 빈값/실패 시 None.
+    x2/y2<=0 이면 이미지 끝까지를 의미(crop 적용 시 해석)."""
+    if not value:
+        return None
+    try:
+        parts = [int(p.strip()) for p in str(value).split(",")]
+        if len(parts) == 4:
+            return tuple(parts)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
 def _composite_layers_bgr(bg, ov, mode="alpha", key_color=(0, 0, 0), threshold=24):
     """배경 bg(BGR ndarray) 위에 오버레이 ov(decoded ndarray: BGR/BGRA/gray)를 합성.
 
@@ -439,7 +453,8 @@ class HKMC6thService:
                  cluster_composite_mode: str = "off",
                  cluster_overlay_key_color: str = "0,0,0",
                  cluster_overlay_threshold: int = 24,
-                 cluster_composite_live: bool = True):
+                 cluster_composite_live: bool = True,
+                 cluster_crop: str = ""):
         """
         Args:
             key_overrides: 디바이스별 키 오버라이드.
@@ -511,6 +526,9 @@ class HKMC6thService:
         except (TypeError, ValueError):
             self.cluster_overlay_threshold = 24
         self.cluster_composite_live = bool(cluster_composite_live)
+        # cluster crop "x1,y1,x2,y2" (x2/y2<=0 = 끝까지). 빈값=crop 없음.
+        # ccIC27 QNX display=2는 좌측에만 내용이 있고 우측이 비어 우측을 잘라낸다.
+        self.cluster_crop = _parse_crop(cluster_crop)
         # cluster 합성: 배경(TCP CMD_GETIMG cluster, Linux) + 정보(QNX SSH screenshot
         # display=cluster_display). mode가 alpha/chroma이고 SSH 자격증명이 있으면 활성화.
         self._composite_enabled = (
@@ -1102,7 +1120,7 @@ class HKMC6thService:
         img = _composite_layers_bgr(bg, ov, self.cluster_composite_mode,
                                     self.cluster_overlay_key_color,
                                     self.cluster_overlay_threshold)
-        return self._encode_bgr(img, fmt)
+        return self._encode_bgr(self._apply_cluster_crop(img), fmt)
 
     # ------------------------------------------------------------------
     # Cluster screenshot via SSH+SCP (legacy CLU_IMG_GET 호환)
@@ -1240,6 +1258,21 @@ class HKMC6thService:
                 pass
         return data
 
+    def _apply_cluster_crop(self, img):
+        """self.cluster_crop=(x1,y1,x2,y2)로 BGR 이미지를 잘라낸다. x2/y2<=0=끝까지.
+        crop 미설정/이미지 None이면 원본 반환."""
+        if img is None or not self.cluster_crop:
+            return img
+        h, w = img.shape[:2]
+        x1, y1, x2, y2 = self.cluster_crop
+        x1 = max(0, min(x1, w))
+        y1 = max(0, min(y1, h))
+        x2 = w if (x2 <= 0 or x2 > w) else x2
+        y2 = h if (y2 <= 0 or y2 > h) else y2
+        if x2 <= x1 or y2 <= y1:
+            return img
+        return img[y1:y2, x1:x2]
+
     @staticmethod
     def _encode_bgr(img, fmt: str) -> bytes:
         """BGR ndarray → 요청 fmt(jpeg/png) bytes."""
@@ -1287,6 +1320,16 @@ class HKMC6thService:
         raw = self._capture_one_plane(self.cluster_display, max(timeout, 8.0))
         if not raw:
             raise RuntimeError("Empty cluster screenshot from QNX")
+        # crop이 설정돼 있으면 디코딩 후 잘라서 인코딩, 아니면 기존 raw 변환 경로.
+        if self.cluster_crop:
+            try:
+                import cv2
+                import numpy as np
+                img = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if img is not None:
+                    return self._encode_bgr(self._apply_cluster_crop(img), fmt)
+            except Exception:
+                pass
         return self._encode_cluster_raw(raw, fmt)
 
     # ------------------------------------------------------------------

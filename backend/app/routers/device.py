@@ -624,6 +624,10 @@ async def connect_device(req: ConnectRequest):
         _composite_mode = str(ef.get("cluster_composite_mode") or "off")
         if _is_ccic27 and _composite_mode == "off":
             _composite_mode = "ssh"
+        # cluster crop "x1,y1,x2,y2": ccIC27 QNX display=2는 우측이 비어 x≤845만 표시.
+        _cluster_crop = str(ef.get("cluster_crop") or "")
+        if _is_ccic27 and not _cluster_crop:
+            _cluster_crop = "0,0,845,0"  # 좌측 845폭만(우측 빈공간 제거), 높이는 끝까지
         try:
             dev = await dm.add_hkmc6th_device(
                 req.address, req.port, device_id=custom_id,
@@ -643,6 +647,7 @@ async def connect_device(req: ConnectRequest):
                 cluster_overlay_key_color=str(ef.get("cluster_overlay_key_color") or "0,0,0"),
                 cluster_overlay_threshold=int(ef.get("cluster_overlay_threshold") or 24),
                 cluster_composite_live=bool(ef.get("cluster_composite_live", True)),
+                cluster_crop=_cluster_crop,
             )
             return {
                 "result": f"HKMC connected: {dev.name} (ID: {dev.id})",

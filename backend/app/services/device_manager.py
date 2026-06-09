@@ -1116,7 +1116,8 @@ class DeviceManager:
                                  cluster_composite_mode: str = "off",
                                  cluster_overlay_key_color: str = "0,0,0",
                                  cluster_overlay_threshold: int = 24,
-                                 cluster_composite_live: bool = True) -> ManagedDevice:
+                                 cluster_composite_live: bool = True,
+                                 cluster_crop: str = "") -> ManagedDevice:
         """HKMC 디바이스 등록만 (연결은 connect_device_by_id로 별도 수행).
 
         클러스터 캡처는 legacy CLU_IMG_GET와 동일한 SSH+screenshot+SCP 경로를 사용한다.
@@ -1139,6 +1140,7 @@ class DeviceManager:
         info["cluster_overlay_key_color"] = str(cluster_overlay_key_color or "0,0,0")
         info["cluster_overlay_threshold"] = int(cluster_overlay_threshold) if cluster_overlay_threshold else 24
         info["cluster_composite_live"] = bool(cluster_composite_live)
+        info["cluster_crop"] = str(cluster_crop or "")
 
         dev = ManagedDevice(
             id=final_id,
@@ -1691,7 +1693,8 @@ class DeviceManager:
                                          cluster_composite_mode=str(dev.info.get("cluster_composite_mode", "off") or "off"),
                                          cluster_overlay_key_color=str(dev.info.get("cluster_overlay_key_color", "0,0,0") or "0,0,0"),
                                          cluster_overlay_threshold=int(dev.info.get("cluster_overlay_threshold", 24) or 24),
-                                         cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)))
+                                         cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)),
+                                         cluster_crop=str(dev.info.get("cluster_crop", "") or ""))
                         ok = await svc.async_connect()
                         if ok:
                             self._hkmc_conns[dev.id] = svc
@@ -2386,7 +2389,8 @@ class DeviceManager:
                                          cluster_composite_mode=str(dev.info.get("cluster_composite_mode", "off") or "off"),
                                          cluster_overlay_key_color=str(dev.info.get("cluster_overlay_key_color", "0,0,0") or "0,0,0"),
                                          cluster_overlay_threshold=int(dev.info.get("cluster_overlay_threshold", 24) or 24),
-                                         cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)))
+                                         cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)),
+                                         cluster_crop=str(dev.info.get("cluster_crop", "") or ""))
                     ok = await svc.async_connect()
                     if ok:
                         self._hkmc_conns[dev.id] = svc
@@ -2650,7 +2654,8 @@ class DeviceManager:
                                          cluster_composite_mode=str(dev.info.get("cluster_composite_mode", "off") or "off"),
                                          cluster_overlay_key_color=str(dev.info.get("cluster_overlay_key_color", "0,0,0") or "0,0,0"),
                                          cluster_overlay_threshold=int(dev.info.get("cluster_overlay_threshold", 24) or 24),
-                                         cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)))
+                                         cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)),
+                                         cluster_crop=str(dev.info.get("cluster_crop", "") or ""))
                 ok = await svc.async_connect()
                 if ok:
                     self._hkmc_conns[dev.id] = svc
