@@ -508,6 +508,9 @@ class HKMC6thService:
         )
         self._cluster_ssh = None  # paramiko.SSHClient (lazy)
         self._cluster_ssh_lock = threading.Lock()
+        # SSH 캡처 인증/연결 실패 시 매 프레임 재시도 폭주를 막는 cooldown 데드라인(monotonic).
+        # 이 시각 전에는 SSH를 건너뛰고 바로 TCP CMD_GETIMG로 캡처한다.
+        self._cluster_ssh_fail_until = 0.0
 
         self._socket: Optional[socket.socket] = None
         self._connected = False
@@ -932,17 +935,19 @@ class HKMC6thService:
 
         Returns the output path on success, raises on failure.
         """
-        if screen_type == "cluster" and self.ssh_username:
+        if screen_type == "cluster" and self.ssh_username and not self._cluster_ssh_in_cooldown():
             # SSH 경로: bytes를 받아 파일로 저장
             ext = os.path.splitext(output_path)[1].lower().lstrip(".") or "png"
             fmt = "jpeg" if ext in ("jpg", "jpeg") else "png"
             try:
                 data = self._screencap_cluster_via_ssh(fmt=fmt, timeout=timeout,
                                                         composite=composite)
+                self._cluster_ssh_fail_until = 0.0  # 성공 → cooldown 해제
                 with open(output_path, "wb") as f:
                     f.write(data)
                 return output_path
             except Exception as e:
+                self._note_cluster_ssh_failure(e)
                 logger.warning("HKMC cluster SSH screencap failed, falling back to TCP: %s", e)
 
         w, h = self.get_screen_size(screen_type)
@@ -977,11 +982,14 @@ class HKMC6thService:
         while self._input_pending > 0 and time.monotonic() < _yield_deadline:
             time.sleep(0.02)
 
-        if screen_type == "cluster" and self.ssh_username:
+        if screen_type == "cluster" and self.ssh_username and not self._cluster_ssh_in_cooldown():
             try:
-                return self._screencap_cluster_via_ssh(fmt=fmt, timeout=timeout,
-                                                       composite=composite)
+                data = self._screencap_cluster_via_ssh(fmt=fmt, timeout=timeout,
+                                                        composite=composite)
+                self._cluster_ssh_fail_until = 0.0  # 성공 → cooldown 해제
+                return data
             except Exception as e:
+                self._note_cluster_ssh_failure(e)
                 logger.warning("HKMC cluster SSH capture failed, falling back to TCP: %s", e)
 
         with self._capture_lock:
@@ -1041,6 +1049,26 @@ class HKMC6thService:
     # ------------------------------------------------------------------
     # Cluster screenshot via SSH+SCP (legacy CLU_IMG_GET 호환)
     # ------------------------------------------------------------------
+    def _cluster_ssh_in_cooldown(self) -> bool:
+        """SSH 캡처 실패 cooldown 중이면 True (이 동안 SSH 건너뛰고 TCP 사용)."""
+        return time.monotonic() < self._cluster_ssh_fail_until
+
+    def _note_cluster_ssh_failure(self, exc) -> None:
+        """SSH 캡처 실패를 기록하고 cooldown을 설정해 매 프레임 재시도 폭주를 방지.
+
+        - 인증 실패(자격증명 문제): 비밀번호를 고쳐 재연결하기 전엔 회복 불가 →
+          긴 cooldown(120s). 재연결 시 새 인스턴스가 생성되어 상태가 초기화된다.
+        - 그 외(타임아웃/네트워크): 짧은 cooldown(10s)으로 일시 장애에 빠르게 회복.
+        """
+        msg = str(exc)
+        is_auth = ("Authentication" in msg) or ("authentication" in msg.lower())
+        cooldown = 120.0 if is_auth else 10.0
+        self._cluster_ssh_fail_until = time.monotonic() + cooldown
+        if is_auth:
+            logger.warning(
+                "HKMC cluster SSH 인증 실패 — %.0fs 동안 SSH를 건너뛰고 TCP로 캡처합니다. "
+                "SSH 자격증명(사용자/비밀번호)을 확인하고 재연결하세요.", cooldown)
+
     def _get_cluster_ssh(self):
         """Lazy paramiko SSHClient — keepalive로 재인증 방지. 죽었으면 재연결."""
         import paramiko

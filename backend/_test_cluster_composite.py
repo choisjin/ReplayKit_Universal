@@ -193,6 +193,26 @@ def test_ssh_single_plane_when_disabled():
     assert tuple(int(c) for c in out[10, 20]) == GRAY  # 배경 그대로
 
 
+def test_ssh_failure_cooldown():
+    import time as _t
+    svc = _make_svc(cluster_overlay_display="2", cluster_composite_mode="alpha")
+    # 초기엔 cooldown 아님
+    assert svc._cluster_ssh_in_cooldown() is False
+    # 인증 실패 → 긴 cooldown
+    svc._note_cluster_ssh_failure(Exception("Authentication failed."))
+    assert svc._cluster_ssh_in_cooldown() is True
+    auth_until = svc._cluster_ssh_fail_until
+    assert auth_until - _t.monotonic() > 60  # 120s급
+    # 일반 오류 → 짧은 cooldown
+    svc._cluster_ssh_fail_until = 0.0
+    svc._note_cluster_ssh_failure(Exception("timed out"))
+    assert svc._cluster_ssh_in_cooldown() is True
+    other_until = svc._cluster_ssh_fail_until
+    assert other_until - _t.monotonic() < 30  # 10s급
+    # 인증 실패 cooldown이 일반 오류보다 훨씬 길다
+    assert auth_until > other_until
+
+
 def test_parse_bgr():
     assert _parse_bgr("0,0,0") == (0, 0, 0)
     assert _parse_bgr("10,20,30") == (10, 20, 30)
