@@ -617,6 +617,12 @@ async def connect_device(req: ConnectRequest):
                 ssh_port=int(ef.get("ssh_port") or 22),
                 cluster_resolution=str(ef.get("cluster_resolution") or "2720x720"),
                 cluster_display=str(ef.get("cluster_display") or "1"),
+                # 클러스터 2-레이어 합성 (배경 + 알람/정보 오버레이). 미입력 시 off(기존 동작).
+                cluster_overlay_display=str(ef.get("cluster_overlay_display") or ""),
+                cluster_composite_mode=str(ef.get("cluster_composite_mode") or "off"),
+                cluster_overlay_key_color=str(ef.get("cluster_overlay_key_color") or "0,0,0"),
+                cluster_overlay_threshold=int(ef.get("cluster_overlay_threshold") or 24),
+                cluster_composite_live=bool(ef.get("cluster_composite_live", True)),
             )
             return {
                 "result": f"HKMC connected: {dev.name} (ID: {dev.id})",

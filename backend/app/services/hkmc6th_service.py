@@ -341,6 +341,79 @@ def resolve_device_variant(device_model: str) -> str:
     return "navi"
 
 
+def _parse_bgr(value, default=(0, 0, 0)):
+    """"B,G,R" 문자열을 (B,G,R) int 튜플로 파싱. 실패 시 default 반환."""
+    try:
+        parts = [int(p.strip()) for p in str(value).split(",")]
+        if len(parts) == 3:
+            return tuple(max(0, min(255, p)) for p in parts)
+    except (TypeError, ValueError):
+        pass
+    return default
+
+
+def composite_cluster_layers(bg_png: bytes, ov_png: bytes,
+                             mode: str = "alpha",
+                             key_color=(0, 0, 0),
+                             threshold: int = 24):
+    """배경 PNG 위에 오버레이 PNG를 합성해 BGR(np.ndarray)를 반환.
+
+    HKMC 계기판(cluster)은 QNX 상에서 여러 디스플레이 플레인으로 렌더링된다:
+    배경(게이지/기본 UI) 위에 오버레이(알람/경고 팝업/정보 인디케이터)가 그려진다.
+    이 함수는 두 플레인을 합쳐 하나의 cluster 이미지를 만든다.
+
+    mode:
+      "alpha"  - 오버레이를 IMREAD_UNCHANGED로 디코딩. 4채널(RGBA)이면 alpha-over,
+                 알파가 없으면 chroma 경로로 폴백.
+      "chroma" - 오버레이가 key_color(B,G,R)와 threshold 이상 차이나는 픽셀만 덮음.
+
+    안전장치:
+      - 배경 디코딩 실패 → None 반환 (호출자가 raw 폴백 처리).
+      - 오버레이 디코딩 실패/빈값 → 배경 단독 반환 (cluster 이미지를 깨뜨리지 않음).
+      - 오버레이 크기가 다르면 배경 크기로 resize.
+    """
+    import cv2
+    import numpy as np
+
+    bg_arr = np.frombuffer(bg_png, dtype=np.uint8)
+    bg = cv2.imdecode(bg_arr, cv2.IMREAD_COLOR)
+    if bg is None:
+        return None
+    if not ov_png:
+        return bg
+
+    read_flag = cv2.IMREAD_UNCHANGED if mode == "alpha" else cv2.IMREAD_COLOR
+    ov_arr = np.frombuffer(ov_png, dtype=np.uint8)
+    ov = cv2.imdecode(ov_arr, read_flag)
+    if ov is None:
+        return bg
+
+    bh, bw = bg.shape[:2]
+
+    # alpha-over 경로 (오버레이가 RGBA 4채널일 때).
+    if mode == "alpha" and ov.ndim == 3 and ov.shape[2] == 4:
+        if ov.shape[0] != bh or ov.shape[1] != bw:
+            ov = cv2.resize(ov, (bw, bh), interpolation=cv2.INTER_AREA)
+        ov_bgr = ov[:, :, :3].astype(np.float32)
+        alpha = (ov[:, :, 3].astype(np.float32) / 255.0)[:, :, None]
+        out = bg.astype(np.float32) * (1.0 - alpha) + ov_bgr * alpha
+        return out.astype(np.uint8)
+
+    # chroma 경로 (mode=="chroma" 이거나 alpha 채널이 없는 경우 폴백).
+    if ov.ndim == 2:
+        ov = cv2.cvtColor(ov, cv2.COLOR_GRAY2BGR)
+    elif ov.shape[2] == 4:
+        ov = ov[:, :, :3]
+    if ov.shape[0] != bh or ov.shape[1] != bw:
+        ov = cv2.resize(ov, (bw, bh), interpolation=cv2.INTER_AREA)
+    key = np.array(key_color, dtype=np.int16)  # (B,G,R) — cv2와 동일 채널 순서
+    diff = np.abs(ov.astype(np.int16) - key).max(axis=2)
+    mask = diff > int(threshold)
+    out = bg.copy()
+    out[mask] = ov[mask]
+    return out
+
+
 class HKMC6thService:
     """TCP socket client for HKMC 6th generation IVI devices.
 
@@ -353,7 +426,12 @@ class HKMC6thService:
                  device_model: str = "",
                  ssh_username: str = "root", ssh_password: str = "",
                  ssh_port: int = 22, cluster_resolution: str = "2720x720",
-                 cluster_display: str = "1"):
+                 cluster_display: str = "1",
+                 cluster_overlay_display: str = "",
+                 cluster_composite_mode: str = "off",
+                 cluster_overlay_key_color: str = "0,0,0",
+                 cluster_overlay_threshold: int = 24,
+                 cluster_composite_live: bool = True):
         """
         Args:
             key_overrides: 디바이스별 키 오버라이드.
@@ -369,6 +447,21 @@ class HKMC6thService:
                 SSH로 실행하고 SCP로 BMP를 가져온다. SSH 실패 시 TCP CMD_GETIMG 자동 폴백.
             cluster_resolution: "WxH" 형식 (legacy CLU_IMG_GET 기본 2720x720).
             cluster_display: QNX `screenshot -display=N`의 N (legacy default 1).
+                = 배경 플레인(게이지/기본 UI) 디스플레이 인덱스.
+            cluster_overlay_display: 오버레이 플레인(알람/경고/정보) 디스플레이 인덱스.
+                빈 문자열이면 합성 비활성 → 단일 플레인(기존 동작) 유지.
+            cluster_composite_mode: "off"|"alpha"|"chroma".
+                - "off"(기본): 오버레이 무시, 배경 단일 플레인만 캡처.
+                - "alpha": 오버레이를 RGBA로 받아 alpha-over (알람 없는 곳이 투명한 경우).
+                - "chroma": 오버레이가 key_color와 threshold 이상 차이나는 픽셀만 덮음
+                  (알람 없는 곳이 단색(예: 검정)으로 채워지는 경우).
+                실디바이스 동작이 미지수이므로 두 모드를 모두 지원한다. "alpha"부터
+                시도하고 알람이 검은 박스로 나오면 "chroma"+키=검정으로 전환한다.
+            cluster_overlay_key_color: chroma 모드의 키 색 "B,G,R" (기본 "0,0,0"=검정).
+            cluster_overlay_threshold: chroma 모드 키 색 허용 오차 (기본 24).
+            cluster_composite_live: 라이브 미러링에서도 합성할지 여부 (기본 True).
+                False면 라이브 경로는 배경 단일 플레인만 캡처(프레임당 SSH 왕복 절약),
+                결과/비교 캡처는 계속 합성한다.
         """
         self.host = host
         self.port = port
@@ -396,6 +489,23 @@ class HKMC6thService:
         except Exception:
             self.cluster_width, self.cluster_height = 2720, 720
         self.cluster_display = str(cluster_display) if cluster_display is not None else "1"
+        # 클러스터 2-레이어 합성 (배경 플레인 + 알람/정보 오버레이 플레인).
+        self.cluster_overlay_display = str(cluster_overlay_display or "").strip()
+        _mode = str(cluster_composite_mode or "off").strip().lower()
+        if _mode not in ("off", "alpha", "chroma"):
+            _mode = "off"
+        self.cluster_composite_mode = _mode
+        self.cluster_overlay_key_color = _parse_bgr(cluster_overlay_key_color, (0, 0, 0))
+        try:
+            self.cluster_overlay_threshold = int(cluster_overlay_threshold)
+        except (TypeError, ValueError):
+            self.cluster_overlay_threshold = 24
+        self.cluster_composite_live = bool(cluster_composite_live)
+        # overlay display가 지정되고 mode가 alpha/chroma일 때만 합성 활성화.
+        self._composite_enabled = (
+            bool(self.cluster_overlay_display)
+            and self.cluster_composite_mode in ("alpha", "chroma")
+        )
         self._cluster_ssh = None  # paramiko.SSHClient (lazy)
         self._cluster_ssh_lock = threading.Lock()
 
@@ -812,11 +922,13 @@ class HKMC6thService:
             self._make_send_packet(CMD_GETIMG, 0, 0, data)
 
     def screencap(self, output_path: str, screen_type: str = "front_center",
-                  timeout: float = 10.0) -> str:
+                  timeout: float = 10.0, composite: bool = True) -> str:
         """Capture a screenshot and save to output_path.
 
         cluster + SSH 자격증명이 있으면 SSH 경로로 캡처 후 파일에 저장.
         그 외는 TCP CMD_GETIMG (BMP).
+
+        composite: cluster 2-레이어 합성 적용 여부 (설정 시에만 유효).
 
         Returns the output path on success, raises on failure.
         """
@@ -825,7 +937,8 @@ class HKMC6thService:
             ext = os.path.splitext(output_path)[1].lower().lstrip(".") or "png"
             fmt = "jpeg" if ext in ("jpg", "jpeg") else "png"
             try:
-                data = self._screencap_cluster_via_ssh(fmt=fmt, timeout=timeout)
+                data = self._screencap_cluster_via_ssh(fmt=fmt, timeout=timeout,
+                                                        composite=composite)
                 with open(output_path, "wb") as f:
                     f.write(data)
                 return output_path
@@ -847,7 +960,8 @@ class HKMC6thService:
         return output_path
 
     def screencap_bytes(self, screen_type: str = "front_center",
-                        fmt: str = "png", timeout: float = 10.0) -> bytes:
+                        fmt: str = "png", timeout: float = 10.0,
+                        composite: bool = True) -> bytes:
         """Capture screenshot and return as PNG/JPEG bytes.
 
         cluster screen_type + SSH 자격증명이 설정되어 있으면 legacy CLU_IMG_GET와
@@ -865,7 +979,8 @@ class HKMC6thService:
 
         if screen_type == "cluster" and self.ssh_username:
             try:
-                return self._screencap_cluster_via_ssh(fmt=fmt, timeout=timeout)
+                return self._screencap_cluster_via_ssh(fmt=fmt, timeout=timeout,
+                                                       composite=composite)
             except Exception as e:
                 logger.warning("HKMC cluster SSH capture failed, falling back to TCP: %s", e)
 
@@ -967,93 +1082,124 @@ class HKMC6thService:
                         self.ssh_username, self.host, self.ssh_port)
             return ssh
 
-    def _screencap_cluster_via_ssh(self, fmt: str = "png", timeout: float = 10.0) -> bytes:
-        """Legacy CLU_IMG_GET와 동일한 흐름:
-          1) `mount -o remount -rw /` (이미 rw면 no-op)
-          2) `screenshot -size=WxH -display=N -file=/CLU_IMAGE.png`
-          3) SCP로 /CLU_IMAGE.png 받기
-          4) `rm /CLU_IMAGE.png`
-          5) BMP/PNG → 요청 fmt로 변환
-        """
+    @staticmethod
+    def _exec_and_log(ssh, cmd: str, timeout: float) -> None:
+        """SSH 명령 실행 후 exit status가 0이 아니면 stderr를 경고 로깅."""
+        stdin, stdout, stderr = ssh.exec_command(cmd, timeout=timeout)
         try:
-            from scp import SCPClient
-        except ImportError as e:
-            raise RuntimeError("scp module required: pip install scp") from e
+            stdin.close()
+        except Exception:
+            pass
+        try:
+            exit_status = stdout.channel.recv_exit_status()
+        except Exception:
+            exit_status = -1
+        if exit_status != 0:
+            err = ""
+            try:
+                err = stderr.read().decode("utf-8", errors="replace")[:200]
+            except Exception:
+                pass
+            logger.warning("HKMC cluster screenshot exit=%d stderr=%r",
+                           exit_status, err)
 
+    @staticmethod
+    def _scp_get_bytes(transport, remote_path: str, timeout: float) -> bytes:
+        """SCP로 원격 파일을 메모리(bytes)로 받는다. 일부 scp 버전은 file-like
+        local_path를 지원하지 않으므로 임시 파일 폴백."""
+        from scp import SCPClient
+        buf = io.BytesIO()
+        try:
+            with SCPClient(transport, socket_timeout=timeout) as scp:
+                scp.get(remote_path, local_path=buf)
+            return buf.getvalue()
+        except TypeError:
+            import tempfile, os
+            tmp_dir = tempfile.mkdtemp(prefix="hkmc_cluster_")
+            local = os.path.join(tmp_dir, os.path.basename(remote_path) or "CLU_IMAGE.png")
+            try:
+                with SCPClient(transport, socket_timeout=timeout) as scp:
+                    scp.get(remote_path, local)
+                with open(local, "rb") as f:
+                    return f.read()
+            finally:
+                try:
+                    os.remove(local)
+                except Exception:
+                    pass
+                try:
+                    os.rmdir(tmp_dir)
+                except Exception:
+                    pass
+
+    def _capture_one_plane(self, display, timeout: float) -> bytes:
+        """단일 디스플레이 플레인을 캡처해 raw(PNG) bytes 반환."""
+        remote_path = "/CLU_IMAGE.png"
         with self._capture_lock:
             ssh = self._get_cluster_ssh()
-            remote_path = "/CLU_IMAGE.png"
             cmd = (
                 "mount -o remount -rw / 2>/dev/null; "
                 f"rm -f {remote_path}; "
                 f"screenshot -size={self.cluster_width}x{self.cluster_height} "
-                f"-display={self.cluster_display} -file={remote_path}"
+                f"-display={display} -file={remote_path}"
             )
-            stdin, stdout, stderr = ssh.exec_command(cmd, timeout=timeout)
-            try:
-                stdin.close()
-            except Exception:
-                pass
-            try:
-                exit_status = stdout.channel.recv_exit_status()
-            except Exception:
-                exit_status = -1
-            if exit_status != 0:
-                err = ""
-                try:
-                    err = stderr.read().decode("utf-8", errors="replace")[:200]
-                except Exception:
-                    pass
-                logger.warning("HKMC cluster screenshot exit=%d stderr=%r",
-                               exit_status, err)
-
-            buf = io.BytesIO()
-            try:
-                with SCPClient(ssh.get_transport(), socket_timeout=timeout) as scp:
-                    scp.get(remote_path, local_path=buf)
-            except TypeError:
-                import tempfile, os
-                tmp_dir = tempfile.mkdtemp(prefix="hkmc_cluster_")
-                local = os.path.join(tmp_dir, "CLU_IMAGE.png")
-                try:
-                    with SCPClient(ssh.get_transport(), socket_timeout=timeout) as scp:
-                        scp.get(remote_path, local)
-                    with open(local, "rb") as f:
-                        buf = io.BytesIO(f.read())
-                finally:
-                    try:
-                        os.remove(local)
-                    except Exception:
-                        pass
-                    try:
-                        os.rmdir(tmp_dir)
-                    except Exception:
-                        pass
-
+            self._exec_and_log(ssh, cmd, timeout)
+            data = self._scp_get_bytes(ssh.get_transport(), remote_path, timeout)
             try:
                 ssh.exec_command(f"rm -f {remote_path}")
             except Exception:
                 pass
+        return data
 
-        raw = buf.getvalue()
-        if not raw:
-            raise RuntimeError("Empty cluster screenshot from QNX")
+    def _capture_two_planes(self, timeout: float):
+        """배경 + 오버레이 두 플레인을 한 번의 SSH 왕복으로 캡처해 (bg_raw, ov_raw) 반환.
+        오버레이 SCP 실패 시 ov_raw는 b"" (배경 단독 폴백)."""
+        bg_remote = "/CLU_BG.png"
+        ov_remote = "/CLU_OV.png"
+        size = f"{self.cluster_width}x{self.cluster_height}"
+        with self._capture_lock:
+            ssh = self._get_cluster_ssh()
+            cmd = (
+                "mount -o remount -rw / 2>/dev/null; "
+                f"rm -f {bg_remote} {ov_remote}; "
+                f"screenshot -size={size} -display={self.cluster_display} -file={bg_remote}; "
+                f"screenshot -size={size} -display={self.cluster_overlay_display} -file={ov_remote}"
+            )
+            self._exec_and_log(ssh, cmd, timeout)
+            bg = self._scp_get_bytes(ssh.get_transport(), bg_remote, timeout)
+            ov = b""
+            try:
+                ov = self._scp_get_bytes(ssh.get_transport(), ov_remote, timeout)
+            except Exception as e:
+                logger.warning("HKMC cluster overlay SCP failed, background only: %s", e)
+            try:
+                ssh.exec_command(f"rm -f {bg_remote} {ov_remote}")
+            except Exception:
+                pass
+        return bg, ov
 
-        # 원본 파일이 PNG로 저장되지만, 형식 변환은 항상 통과시켜 fmt 일관성 유지.
+    @staticmethod
+    def _encode_bgr(img, fmt: str) -> bytes:
+        """BGR ndarray → 요청 fmt(jpeg/png) bytes."""
+        import cv2
+        if fmt == "jpeg":
+            _, b = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        else:
+            _, b = cv2.imencode(".png", img)
+        return b.tobytes()
+
+    @staticmethod
+    def _encode_cluster_raw(raw: bytes, fmt: str) -> bytes:
+        """캡처 raw(PNG/BMP) bytes → 요청 fmt로 변환. cv2 실패 시 PIL, 그래도 실패면 raw."""
         try:
             import cv2
             import numpy as np
             arr = np.frombuffer(raw, dtype=np.uint8)
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if img is not None:
-                if fmt == "jpeg":
-                    _, b = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
-                else:
-                    _, b = cv2.imencode(".png", img)
-                return b.tobytes()
+                return HKMC6thService._encode_bgr(img, fmt)
         except Exception:
             pass
-
         try:
             from PIL import Image
             pil = Image.open(io.BytesIO(raw))
@@ -1062,8 +1208,51 @@ class HKMC6thService:
             return bio.getvalue()
         except Exception:
             pass
-
         return raw
+
+    def _screencap_cluster_via_ssh(self, fmt: str = "png", timeout: float = 10.0,
+                                   composite: bool = True) -> bytes:
+        """Legacy CLU_IMG_GET와 동일한 흐름:
+          1) `mount -o remount -rw /` (이미 rw면 no-op)
+          2) `screenshot -size=WxH -display=N -file=/CLU_IMAGE.png`
+          3) SCP로 받기
+          4) `rm`
+          5) BMP/PNG → 요청 fmt로 변환
+
+        composite=True 이고 오버레이 합성이 설정(_composite_enabled)되어 있으면
+        배경 플레인 + 오버레이 플레인을 한 번의 SSH 왕복으로 캡처해 합성한다.
+        그 외에는 기존 단일 플레인 경로(바이트 단위 동일)를 그대로 사용한다.
+        """
+        try:
+            from scp import SCPClient  # noqa: F401  (가용성 확인)
+        except ImportError as e:
+            raise RuntimeError("scp module required: pip install scp") from e
+
+        do_composite = composite and self._composite_enabled
+
+        if do_composite:
+            bg_raw, ov_raw = self._capture_two_planes(timeout)
+            if not bg_raw:
+                raise RuntimeError("Empty cluster screenshot from QNX")
+            try:
+                img = composite_cluster_layers(
+                    bg_raw, ov_raw,
+                    mode=self.cluster_composite_mode,
+                    key_color=self.cluster_overlay_key_color,
+                    threshold=self.cluster_overlay_threshold,
+                )
+                if img is not None:
+                    return self._encode_bgr(img, fmt)
+            except Exception as e:
+                logger.warning("HKMC cluster composite failed, background only: %s", e)
+            # 합성 실패 → 배경 단독 인코딩 (cluster 이미지를 깨뜨리지 않음).
+            return self._encode_cluster_raw(bg_raw, fmt)
+
+        # 단일 플레인 경로 (기존 동작 — 바이트 단위 동일).
+        raw = self._capture_one_plane(self.cluster_display, timeout)
+        if not raw:
+            raise RuntimeError("Empty cluster screenshot from QNX")
+        return self._encode_cluster_raw(raw, fmt)
 
     # ------------------------------------------------------------------
     # Touch input
@@ -1495,14 +1684,17 @@ class HKMC6thService:
         await loop.run_in_executor(None, self.disconnect)
 
     async def async_screencap(self, output_path: str, screen_type: str = "front_center",
-                              timeout: float = 10.0) -> str:
+                              timeout: float = 10.0, composite: bool = True) -> str:
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.screencap, output_path, screen_type, timeout)
+        return await loop.run_in_executor(None, self.screencap, output_path, screen_type,
+                                          timeout, composite)
 
     async def async_screencap_bytes(self, screen_type: str = "front_center",
-                                    fmt: str = "png", timeout: float = 10.0) -> bytes:
+                                    fmt: str = "png", timeout: float = 10.0,
+                                    composite: bool = True) -> bytes:
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.screencap_bytes, screen_type, fmt, timeout)
+        return await loop.run_in_executor(None, self.screencap_bytes, screen_type, fmt,
+                                          timeout, composite)
 
     async def async_tap(self, x: int, y: int, screen_type: str = "front_center") -> None:
         loop = asyncio.get_event_loop()

@@ -1111,7 +1111,12 @@ class DeviceManager:
                                  ssh_username: str = "root", ssh_password: str = "",
                                  ssh_port: int = 22,
                                  cluster_resolution: str = "2720x720",
-                                 cluster_display: str = "1") -> ManagedDevice:
+                                 cluster_display: str = "1",
+                                 cluster_overlay_display: str = "",
+                                 cluster_composite_mode: str = "off",
+                                 cluster_overlay_key_color: str = "0,0,0",
+                                 cluster_overlay_threshold: int = 24,
+                                 cluster_composite_live: bool = True) -> ManagedDevice:
         """HKMC 디바이스 등록만 (연결은 connect_device_by_id로 별도 수행).
 
         클러스터 캡처는 legacy CLU_IMG_GET와 동일한 SSH+screenshot+SCP 경로를 사용한다.
@@ -1128,6 +1133,12 @@ class DeviceManager:
         info["ssh_port"] = int(ssh_port) if ssh_port else 22
         info["cluster_resolution"] = cluster_resolution or "2720x720"
         info["cluster_display"] = str(cluster_display) if cluster_display is not None else "1"
+        # 클러스터 2-레이어 합성 설정 (배경 + 알람/정보 오버레이 플레인).
+        info["cluster_overlay_display"] = str(cluster_overlay_display or "").strip()
+        info["cluster_composite_mode"] = str(cluster_composite_mode or "off").strip().lower()
+        info["cluster_overlay_key_color"] = str(cluster_overlay_key_color or "0,0,0")
+        info["cluster_overlay_threshold"] = int(cluster_overlay_threshold) if cluster_overlay_threshold else 24
+        info["cluster_composite_live"] = bool(cluster_composite_live)
 
         dev = ManagedDevice(
             id=final_id,
@@ -1675,7 +1686,12 @@ class DeviceManager:
                                          ssh_password=dev.info.get("ssh_password", ""),
                                          ssh_port=int(dev.info.get("ssh_port", 22) or 22),
                                          cluster_resolution=dev.info.get("cluster_resolution", "2720x720"),
-                                         cluster_display=str(dev.info.get("cluster_display", "1") or "1"))
+                                         cluster_display=str(dev.info.get("cluster_display", "1") or "1"),
+                                         cluster_overlay_display=str(dev.info.get("cluster_overlay_display", "") or ""),
+                                         cluster_composite_mode=str(dev.info.get("cluster_composite_mode", "off") or "off"),
+                                         cluster_overlay_key_color=str(dev.info.get("cluster_overlay_key_color", "0,0,0") or "0,0,0"),
+                                         cluster_overlay_threshold=int(dev.info.get("cluster_overlay_threshold", 24) or 24),
+                                         cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)))
                         ok = await svc.async_connect()
                         if ok:
                             self._hkmc_conns[dev.id] = svc
@@ -2365,7 +2381,12 @@ class DeviceManager:
                                          ssh_password=dev.info.get("ssh_password", ""),
                                          ssh_port=int(dev.info.get("ssh_port", 22) or 22),
                                          cluster_resolution=dev.info.get("cluster_resolution", "2720x720"),
-                                         cluster_display=str(dev.info.get("cluster_display", "1") or "1"))
+                                         cluster_display=str(dev.info.get("cluster_display", "1") or "1"),
+                                         cluster_overlay_display=str(dev.info.get("cluster_overlay_display", "") or ""),
+                                         cluster_composite_mode=str(dev.info.get("cluster_composite_mode", "off") or "off"),
+                                         cluster_overlay_key_color=str(dev.info.get("cluster_overlay_key_color", "0,0,0") or "0,0,0"),
+                                         cluster_overlay_threshold=int(dev.info.get("cluster_overlay_threshold", 24) or 24),
+                                         cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)))
                     ok = await svc.async_connect()
                     if ok:
                         self._hkmc_conns[dev.id] = svc
@@ -2624,7 +2645,12 @@ class DeviceManager:
                                          ssh_password=dev.info.get("ssh_password", ""),
                                          ssh_port=int(dev.info.get("ssh_port", 22) or 22),
                                          cluster_resolution=dev.info.get("cluster_resolution", "2720x720"),
-                                         cluster_display=str(dev.info.get("cluster_display", "1") or "1"))
+                                         cluster_display=str(dev.info.get("cluster_display", "1") or "1"),
+                                         cluster_overlay_display=str(dev.info.get("cluster_overlay_display", "") or ""),
+                                         cluster_composite_mode=str(dev.info.get("cluster_composite_mode", "off") or "off"),
+                                         cluster_overlay_key_color=str(dev.info.get("cluster_overlay_key_color", "0,0,0") or "0,0,0"),
+                                         cluster_overlay_threshold=int(dev.info.get("cluster_overlay_threshold", 24) or 24),
+                                         cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)))
                 ok = await svc.async_connect()
                 if ok:
                     self._hkmc_conns[dev.id] = svc

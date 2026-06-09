@@ -608,9 +608,12 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     hkmc = None
                 isap = device_manager.get_isap_service(target_device_id) if is_isap else None
                 if hkmc and hkmc.is_connected:
-                    jpeg_bytes = await hkmc.async_screencap_bytes(
-                        screen_type=screen_type, fmt="jpeg", timeout=3.0
-                    )
+                    _cap_kwargs = {"screen_type": screen_type, "fmt": "jpeg", "timeout": 3.0}
+                    # HKMC6th cluster 2-레이어 합성: 라이브 토글(cluster_composite_live)을 존중.
+                    # 속성이 있는 6th 서비스만 composite 인자를 전달(5thWide는 미지원).
+                    if hasattr(hkmc, "cluster_composite_live"):
+                        _cap_kwargs["composite"] = hkmc.cluster_composite_live
+                    jpeg_bytes = await hkmc.async_screencap_bytes(**_cap_kwargs)
                     await websocket.send_bytes(jpeg_bytes)
                 elif is_hkmc:
                     # HKMC 재연결 대기 중 — 빈 프레임 대신 잠시 대기

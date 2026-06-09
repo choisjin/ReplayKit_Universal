@@ -1457,7 +1457,18 @@ class PlaybackService:
                 if dev.type == "hkmc_agent":
                     from .hkmc6th_service import HKMC6thService
                     svc = HKMC6thService(dev.address, port, device_id=dev.id,
-                                          key_overrides=dev.info.get("hkmc_keys"))
+                                          key_overrides=dev.info.get("hkmc_keys"),
+                                          device_model=dev.info.get("device_model", ""),
+                                          ssh_username=dev.info.get("ssh_username", ""),
+                                          ssh_password=dev.info.get("ssh_password", ""),
+                                          ssh_port=int(dev.info.get("ssh_port", 22) or 22),
+                                          cluster_resolution=dev.info.get("cluster_resolution", "2720x720"),
+                                          cluster_display=str(dev.info.get("cluster_display", "1") or "1"),
+                                          cluster_overlay_display=str(dev.info.get("cluster_overlay_display", "") or ""),
+                                          cluster_composite_mode=str(dev.info.get("cluster_composite_mode", "off") or "off"),
+                                          cluster_overlay_key_color=str(dev.info.get("cluster_overlay_key_color", "0,0,0") or "0,0,0"),
+                                          cluster_overlay_threshold=int(dev.info.get("cluster_overlay_threshold", 24) or 24),
+                                          cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)))
                     ok = await svc.async_connect()
                     if ok:
                         self.dm._hkmc_conns[dev.id] = svc
@@ -1530,7 +1541,18 @@ class PlaybackService:
                             # 직접 호출하면 event loop를 최대 3초 블록 → uvicorn WS ping 예산을 까먹음.
                             await hkmc.async_disconnect()
                         svc = HKMC6thService(dev.address, port, device_id=dev.id,
-                                               key_overrides=dev.info.get("hkmc_keys"))
+                                               key_overrides=dev.info.get("hkmc_keys"),
+                                               device_model=dev.info.get("device_model", ""),
+                                               ssh_username=dev.info.get("ssh_username", ""),
+                                               ssh_password=dev.info.get("ssh_password", ""),
+                                               ssh_port=int(dev.info.get("ssh_port", 22) or 22),
+                                               cluster_resolution=dev.info.get("cluster_resolution", "2720x720"),
+                                               cluster_display=str(dev.info.get("cluster_display", "1") or "1"),
+                                               cluster_overlay_display=str(dev.info.get("cluster_overlay_display", "") or ""),
+                                               cluster_composite_mode=str(dev.info.get("cluster_composite_mode", "off") or "off"),
+                                               cluster_overlay_key_color=str(dev.info.get("cluster_overlay_key_color", "0,0,0") or "0,0,0"),
+                                               cluster_overlay_threshold=int(dev.info.get("cluster_overlay_threshold", 24) or 24),
+                                               cluster_composite_live=bool(dev.info.get("cluster_composite_live", True)))
                         ok = await svc.async_connect()
                         if ok:
                             self.dm._hkmc_conns[dev.id] = svc

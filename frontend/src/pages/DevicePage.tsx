@@ -328,6 +328,10 @@ export default function DevicePage() {
   const [sshPort, setSshPort] = useState(22);
   const [sshUser, setSshUser] = useState('');
   const [sshPass, setSshPass] = useState('');
+  // 클러스터 2-레이어 합성 (배경 + 알람/정보 오버레이 플레인).
+  // 빈 오버레이 디스플레이 또는 mode=off면 합성 비활성(기존 단일 플레인 동작).
+  const [clusterOverlayDisplay, setClusterOverlayDisplay] = useState('');
+  const [clusterCompositeMode, setClusterCompositeMode] = useState<'off' | 'alpha' | 'chroma'>('off');
   const [sshKeyFile, setSshKeyFile] = useState('');
   const [modalTabKey, setModalTabKey] = useState('scan');
   const [deviceProject, setDeviceProject] = useState('');
@@ -769,6 +773,9 @@ export default function DevicePage() {
         extra.ssh_port = sshPort || 22;
         extra.cluster_resolution = '2720x720';
         extra.cluster_display = '1';
+        // 클러스터 2-레이어 합성. 오버레이 디스플레이 인덱스가 비어있거나 mode=off면 비활성.
+        extra.cluster_overlay_display = (clusterOverlayDisplay && clusterOverlayDisplay.trim()) || '';
+        extra.cluster_composite_mode = clusterCompositeMode || 'off';
       }
       const result = await connectDevice(devType, connectAddress.trim(), baudrate, '', modalCategory, selectedModule, moduleConnType, extra, '', tcpPort, model);
       message.success(result);
@@ -2522,6 +2529,29 @@ export default function DevicePage() {
                             min={1} max={65535}
                             style={{ width: 90 }}
                           />
+                        </Space>
+                        <div style={{ marginTop: 6, fontSize: 11, color: '#888' }}>
+                          클러스터 합성 (선택): 배경 플레인(display 1) 위에 알람/정보 오버레이 플레인을 합쳐 표시.
+                          오버레이 display를 비워두면 단일 플레인(기존 동작). 합성 모드는 알람이 검은 박스로 나오면 <b>chroma</b>로 전환.
+                        </div>
+                        <Space wrap>
+                          <span style={{ fontSize: 11, color: '#888' }}>Overlay display:</span>
+                          <Input
+                            placeholder="(비활성) 예: 2"
+                            value={clusterOverlayDisplay}
+                            onChange={(e) => setClusterOverlayDisplay(e.target.value)}
+                            style={{ width: 130 }}
+                          />
+                          <span style={{ fontSize: 11, color: '#888' }}>Composite:</span>
+                          <Select
+                            value={clusterCompositeMode}
+                            onChange={(v) => setClusterCompositeMode(v)}
+                            style={{ width: 120 }}
+                          >
+                            <Option value="off">off</Option>
+                            <Option value="alpha">alpha</Option>
+                            <Option value="chroma">chroma</Option>
+                          </Select>
                         </Space>
                       </>
                     )}
