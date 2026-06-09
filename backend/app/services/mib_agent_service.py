@@ -1109,13 +1109,58 @@ class MIBAgentService:
 
     def tap(self, x: int, y: int, screen_type: str = "HU",
             dp: float = 0.2, dr: float = 0.0) -> None:
-        """단일 탭. press → (dp초 대기) → release."""
+        """단일 탭. press → (dp초 대기) → release.
+
+        진단: MIB_TOUCH_DST_SWEEP=1 이면 1회 탭이 후보 dst(1-63)를 차례로 훑는
+        sweep으로 동작한다. 비표준 ksend variant에서 터치 입력 핸들러의 KIPC id를
+        모를 때, 알려진 버튼 위를 한 번 탭하고 화면이 반응하는 순간의 dst를 로그에서
+        찾기 위함. (정상 동작 시에는 이 환경변수를 끌 것)
+        """
+        if os.environ.get("MIB_TOUCH_DST_SWEEP", "").strip() in ("1", "true", "yes"):
+            self.sweep_touch_dst(x, y)
+            return
         self._touch_press(x, y)
         if dp > 0:
             time.sleep(dp)
         self._touch_release(x, y)
         if dr > 0:
             time.sleep(dr)
+
+    def sweep_touch_dst(self, x: int, y: int, dwell_s: Optional[float] = None,
+                        candidates: Optional[list[str]] = None) -> None:
+        """진단용 터치 dst 스윕 — 동일 좌표에 후보 dst마다 1회씩 탭을 보낸다.
+
+        사용법: MIB_TOUCH_DST_SWEEP=1 로 백엔드를 띄우고, 화면에서 '눌리면 확실히
+        바뀌는' 버튼(예: 메뉴 진입) 위를 한 번 탭한다. 그러면 dst=1..63 을 순서대로
+        시도하며 각 시도를 WARNING 로그로 남기므로, 화면이 반응한 시점의 dst를 찾을 수 있다.
+        찾은 값은 dev.info 의 ksend_dst 로 고정하면 된다.
+
+        dwell_s: 각 dst 사이 대기(초). 기본 1.2s (MIB_TOUCH_DST_SWEEP_DWELL 로 조정).
+        """
+        if dwell_s is None:
+            try:
+                dwell_s = float(os.environ.get("MIB_TOUCH_DST_SWEEP_DWELL", "1.2") or 1.2)
+            except Exception:
+                dwell_s = 1.2
+        if candidates is None:
+            candidates = [str(i) for i in range(1, 64)]
+        saved_dst = self.dst_addr
+        logger.warning(
+            "MIB TOUCH DST SWEEP start: (%d,%d) candidates=%d dwell=%.1fs "
+            "— watch the screen; note the dst when it reacts",
+            x, y, len(candidates), dwell_s,
+        )
+        try:
+            for d in candidates:
+                self.dst_addr = d
+                logger.warning("MIB TOUCH DST SWEEP: dst=%s  tap(%d,%d)", d, x, y)
+                self._touch_press(x, y)
+                time.sleep(0.15)
+                self._touch_release(x, y)
+                time.sleep(max(0.2, dwell_s))
+        finally:
+            self.dst_addr = saved_dst
+            logger.warning("MIB TOUCH DST SWEEP done — dst restored to %s", saved_dst)
 
     def long_press(self, x: int, y: int, duration_ms: int = 3000,
                    screen_type: str = "HU") -> None:
