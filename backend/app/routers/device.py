@@ -606,31 +606,30 @@ async def connect_device(req: ConnectRequest):
         if not req.address or not req.port:
             raise HTTPException(status_code=400, detail="HKMC6th requires address (IP) and port (TCP port)")
         ef = req.extra_fields or {}
-        # ccIC / ccIC27 동일 QNX 클러스터 플랫폼 — 둘 다 매칭("ccic" 부분문자열).
-        # ccRC/Gen6/Connect 등 다른 모델은 제외.
-        _is_ccic = "ccic" in (req.device_model or "").lower()
-        # cluster display 인덱스: ccIC/ccIC27은 QNX screenshot의 display=1이 없고 display=2가
-        # 정답이라, 명시값이 없거나 legacy 기본('1')이면 해당 모델에 한해 '2'로 보정한다.
-        # (구버전 프론트가 '1'을 하드코딩해 보내도 cluster가 동작하도록 하는 안전망)
+        # ccIC / ccIC27 동일 QNX 클러스터 플랫폼(QNX SSH 포트10022). "ccic" 부분문자열로 매칭.
+        # ccRC/Gen6/Connect 등 다른 모델은 제외. ccIC27은 "ccic27"로 더 좁게 구분.
+        _model_l = (req.device_model or "").lower()
+        _is_ccic = "ccic" in _model_l        # ccIC + ccIC27 공통
+        _is_ccic27 = "ccic27" in _model_l    # ccIC27 전용
+        # cluster display 인덱스: reference 기준 ccIC(기본)=display1(ccIC.py), ccIC27=display2.
+        # 명시값 없거나 legacy 기본('1')일 때만 모델 기본 적용(구버전 프론트 '1' 하드코딩 보정).
         _cluster_display = str(ef.get("cluster_display") or "1")
         if _is_ccic and _cluster_display in ("", "1"):
-            _cluster_display = "2"
-        # cluster SSH 비밀번호: ccIC27 QNX(포트 10022)는 root/root. 비워두면 자동 root로 보정해
-        # 비밀번호 입력 없이 cluster 캡처가 동작하게 한다. 명시값이 있으면 그대로 사용.
+            _cluster_display = "2" if _is_ccic27 else "1"
+        # cluster SSH 비밀번호: ccIC/ccIC27 QNX(포트 10022)는 root/root. 비워두면 자동 root로 보정.
         _ssh_password = ef.get("ssh_password")
         if not _ssh_password and _is_ccic:
             _ssh_password = "root"
-        # cluster 캡처 모드: ccIC27은 TCP cluster(CMD_GETIMG bits=1) 미지원(실측 TIMEOUT)이라
-        # QNX SSH screenshot(display=2)로 표시한다. off=TCP, ssh=QNX SSH, chroma=배경+정보 합성.
-        # 미설정 ccIC27 → ssh 자동.
+        # cluster 캡처 모드: ccIC/ccIC27은 TCP cluster(bits=1) 미지원이라 QNX SSH screenshot로 표시.
+        # off=TCP, ssh=QNX SSH, chroma=배경+정보 합성. 미설정 ccIC/ccIC27 → ssh 자동.
         _composite_mode = str(ef.get("cluster_composite_mode") or "off")
         if _is_ccic and _composite_mode == "off":
             _composite_mode = "ssh"
-        # cluster crop "x1,y1,x2,y2": ccIC/ccIC27 QNX display=2 캡처(2720x720)의 실제 cluster는
-        # 좌측 1920x720(에이전트 보고 크기). 우측 빈공간 800px만 잘라낸다.
+        # cluster crop: ccIC/ccIC27 모두 QNX 캡처(2720x720)의 실제 cluster는 좌측 1920x720
+        # (reference CLU_IMG_GET crop=0,0,1920,720). 우측 빈공간만 제거.
         _cluster_crop = str(ef.get("cluster_crop") or "")
         if _is_ccic and not _cluster_crop:
-            _cluster_crop = "0,0,1920,720"  # 좌측 1920x720만(우측 빈공간 제거)
+            _cluster_crop = "0,0,1920,720"
         try:
             dev = await dm.add_hkmc6th_device(
                 req.address, req.port, device_id=custom_id,
