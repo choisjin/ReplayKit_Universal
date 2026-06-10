@@ -3744,6 +3744,8 @@ export default function RecordPage() {
 
   // --- Step command edit modal ---
   const editScreenshotRef = useRef<string>('');
+  // 편집 스크린샷이 비동기로 도착하면 캔버스를 다시 그리기 위한 트리거.
+  const [editShotTick, setEditShotTick] = useState(0);
 
   const openEditStepModal = useCallback(async (index: number) => {
     const s = steps[index];
@@ -3777,17 +3779,29 @@ export default function RecordPage() {
       setImageTapModalOpen(true);
       return;
     }
-    // 스냅샷을 먼저 캡처 (모달 열기 전에 완료)
-    editScreenshotRef.current = await snapshotScreenshot();
+    // 모달을 먼저 즉시 연다 — 백엔드 screencap(snapshotScreenshot)이 느린 기기(예: 네트워크 adb
+    // 의 CDC/RBVM, 로그에 wm size/dumpsys 10s 타임아웃)에서 모달이 수~십 초 늦게 뜨던 문제 방지.
+    // 스크린샷/함수목록은 비동기로 로드한다.
+    editScreenshotRef.current = '';
     setEditStepIndex(index);
     setEditStepParams({ ...s.params });
-    // module_command 편집 시 해당 모듈의 함수 가이드 로딩
-    if (s.type === 'module_command' && s.params?.module) {
-      deviceApi.getModuleFunctions(s.params.module).then(res => {
-        setModuleFunctions(res.data.functions || []);
-        setModuleDescription(res.data.module_description || '');
-      }).catch(() => {});
+
+    if (s.type === 'module_command') {
+      // 좌표 캔버스가 없는 스텝 — 스크린샷 자체가 불필요. 함수 가이드만 로드.
+      if (s.params?.module) {
+        deviceApi.getModuleFunctions(s.params.module).then(res => {
+          setModuleFunctions(res.data.functions || []);
+          setModuleDescription(res.data.module_description || '');
+        }).catch(() => {});
+      }
+      return;
     }
+
+    // 좌표 편집(tap/swipe 등) 스텝만 스크린샷이 필요 — 비동기로 캡처 후 캔버스 재그리기 트리거.
+    snapshotScreenshot().then(shot => {
+      editScreenshotRef.current = shot;
+      setEditShotTick((v) => v + 1);
+    }).catch(() => {});
   }, [steps, snapshotScreenshot, scenarioName, screenshotDeviceId, t]);
 
   const drawEditCanvas = useCallback(() => {
@@ -3802,6 +3816,11 @@ export default function RecordPage() {
     };
     img.src = src;
   }, []);
+
+  // 편집 스크린샷이 비동기로 도착하면(editShotTick) 캔버스를 다시 그린다. (모달은 이미 열려 있음)
+  useEffect(() => {
+    if (editStepIndex != null) drawEditCanvas();
+  }, [editShotTick, editStepIndex, drawEditCanvas]);
 
   const editCanvasToDevice = useCallback((canvas: HTMLCanvasElement, clientX: number, clientY: number) => {
     const rect = canvas.getBoundingClientRect();
