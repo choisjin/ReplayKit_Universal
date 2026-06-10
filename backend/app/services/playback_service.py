@@ -662,6 +662,15 @@ class PlaybackService:
             skip_ensure = False
             if step.type == StepType.MODULE_COMMAND:
                 requested_module = (step.params or {}).get("module", "") if step.params else ""
+                # logcat 버퍼만 판독/저장하는 Android 함수는 디바이스 연결과 무관하다 — StartLogging 이
+                # 띄운 캡처 스레드의 버퍼를 읽을 뿐이다. 전원 사이클(suspend) 시나리오에서 기기가
+                # 의도적으로 꺼져 있어도 즉시 판독해야 하므로 ensure(재연결 대기)를 건너뛴다.
+                # (안 그러면 꺼진 adb 기기를 _ensure_device_connected 가 24×5s 재시도하며 ~2분 낭비)
+                _buffn = (step.params or {}).get("function", "")
+                if requested_module == "Android" and _buffn in (
+                    "Monitor_pass_on_keyword", "Monitor_fail_on_keyword", "StopLogging",
+                ):
+                    skip_ensure = True
                 if action_device_id:
                     dev_check = self.dm.get_device(action_device_id)
                     has_matching_module = bool(
