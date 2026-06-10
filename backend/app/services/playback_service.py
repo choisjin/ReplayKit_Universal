@@ -1413,6 +1413,12 @@ class PlaybackService:
         elif step.type == StepType.WIN_DOUBLE_CLICK:
             tgt = p.get("process_name") or p.get("window_title") or ""
             return f"win_double_click ({p.get('x', 0)}, {p.get('y', 0)}) [{tgt}]"
+        elif step.type == StepType.WIN_REPEAT_TAP:
+            tgt = p.get("process_name") or p.get("window_title") or ""
+            btn = p.get("button", "left")
+            btn_tag = "" if btn == "left" else f" [{btn}]"
+            return (f"win_repeat_tap{btn_tag} ({p.get('x', 0)}, {p.get('y', 0)}) "
+                    f"×{p.get('count', 5)} @{p.get('interval_ms', 100)}ms [{tgt}]")
         elif step.type == StepType.WIN_LONG_PRESS:
             tgt = p.get("process_name") or p.get("window_title") or ""
             btn = p.get("button", "left")
@@ -2089,7 +2095,8 @@ class PlaybackService:
         # WIN_* 스텝은 항상 WinControl에서 캡처 — step.device_id가 ADB 기기를 가리키더라도
         # (녹화 시 활성 primary가 ADB였으면 그렇게 저장됨) 액션은 WinControl에서 실행되므로
         # 검증 캡처도 같은 윈도우에서 떠야 함. 그렇지 않으면 ADB 화면이 actual로 잡혀 비교가 무의미.
-        if step.type in (StepType.WIN_TAP, StepType.WIN_DOUBLE_CLICK, StepType.WIN_LONG_PRESS,
+        if step.type in (StepType.WIN_TAP, StepType.WIN_DOUBLE_CLICK, StepType.WIN_REPEAT_TAP,
+                          StepType.WIN_LONG_PRESS,
                           StepType.WIN_SWIPE, StepType.WIN_INPUT_TEXT, StepType.WIN_KEY,
                           StepType.WIN_KEY_COMBO):
             wc_dev = None
@@ -2774,6 +2781,7 @@ class PlaybackService:
                         })
                         next_progress = elapsed + PROGRESS_INTERVAL_S
         elif step.type in (StepType.WIN_TAP, StepType.WIN_DOUBLE_CLICK,
+                           StepType.WIN_REPEAT_TAP,
                            StepType.WIN_LONG_PRESS, StepType.WIN_SWIPE,
                            StepType.WIN_INPUT_TEXT, StepType.WIN_KEY,
                            StepType.WIN_KEY_COMBO):
@@ -2818,6 +2826,13 @@ class PlaybackService:
                 await loop.run_in_executor(None,
                     functools.partial(wc.send_double_click,
                                       int(params["x"]), int(params["y"])))
+            elif step.type == StepType.WIN_REPEAT_TAP:
+                await loop.run_in_executor(None,
+                    functools.partial(wc.send_repeat_tap,
+                                      int(params["x"]), int(params["y"]),
+                                      int(params.get("count", 5)),
+                                      int(params.get("interval_ms", 100)),
+                                      params.get("button", "left")))
             elif step.type == StepType.WIN_LONG_PRESS:
                 await loop.run_in_executor(None,
                     functools.partial(wc.send_long_press,

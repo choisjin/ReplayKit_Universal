@@ -31,6 +31,7 @@ class StepType(str, Enum):
     # WinControl 스텝 (Windows 임베드 프로세스 조작)
     WIN_TAP = "win_tap"
     WIN_DOUBLE_CLICK = "win_double_click"
+    WIN_REPEAT_TAP = "win_repeat_tap"  # 같은 위치 연속 클릭 (횟수 지정 — 드롭다운 등 1회 클릭만으로 닫히는 컨트롤 대응)
     WIN_LONG_PRESS = "win_long_press"
     WIN_SWIPE = "win_swipe"
     WIN_INPUT_TEXT = "win_input_text"

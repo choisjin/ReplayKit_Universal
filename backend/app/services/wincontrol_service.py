@@ -1659,6 +1659,35 @@ class WinControlService:
         finally:
             self._restore_context(ctx)
 
+    def send_repeat_tap(self, x: int, y: int, count: int = 5,
+                        interval_ms: int = 100, button: str = "left") -> None:
+        """같은 위치를 count 회 연속 클릭. 클릭 사이 간격 interval_ms.
+
+        드롭다운처럼 1회 클릭으로 펼쳐졌다 다음 클릭에서 다시 접히는 컨트롤이나,
+        한 번에 인식되지 않아 여러 번 눌러야 하는 토글 등에 사용.
+        focus/context 저장은 1회만 하고 클릭만 반복 — send_double_click 과 동일한
+        패턴이되 횟수/간격을 호출자가 지정한다.
+        """
+        self._check()
+        n = max(1, int(count))
+        gap = max(0.0, int(interval_ms) / 1000.0)
+        ctx = self._save_context()
+        try:
+            self._focus()
+            sx, sy = self._client_to_screen(int(x), int(y))
+            self._send_input_mouse_move(sx, sy)
+            time.sleep(0.10)
+            for i in range(n):
+                self._send_input_button(button, True)
+                time.sleep(0.06)
+                self._send_input_button(button, False)
+                # 마지막 클릭 뒤에는 간격 대기 불필요.
+                if i < n - 1 and gap > 0:
+                    time.sleep(gap)
+            time.sleep(0.12)
+        finally:
+            self._restore_context(ctx)
+
     def send_long_press(self, x: int, y: int, duration_ms: int = 500, button: str = "left") -> None:
         """버튼을 누른 채로 duration_ms 만큼 유지 후 떼기.
 

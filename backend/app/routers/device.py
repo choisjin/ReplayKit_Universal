@@ -1136,7 +1136,8 @@ async def device_input(req: InputRequest):
                     )
             return {"result": "ok"}
 
-        if req.action in ("win_tap", "win_double_click", "win_long_press", "win_swipe",
+        if req.action in ("win_tap", "win_double_click", "win_repeat_tap",
+                          "win_long_press", "win_swipe",
                           "win_input_text", "win_key", "win_key_combo") and dev and dev.type == "wincontrol":
             wc = dm.get_wincontrol_service()
             if not wc.is_available():
@@ -1185,6 +1186,11 @@ async def device_input(req: InputRequest):
                     wc.send_tap(int(p["x"]), int(p["y"]), p.get("button", "left"))
                 elif req.action == "win_double_click":
                     wc.send_double_click(int(p["x"]), int(p["y"]))
+                elif req.action == "win_repeat_tap":
+                    wc.send_repeat_tap(int(p["x"]), int(p["y"]),
+                                       int(p.get("count", 5)),
+                                       int(p.get("interval_ms", 100)),
+                                       p.get("button", "left"))
                 elif req.action == "win_long_press":
                     wc.send_long_press(int(p["x"]), int(p["y"]),
                                        int(p.get("duration_ms", 500)),

@@ -443,6 +443,12 @@ export default function RecordPage() {
   // 텍스트 입력 대기 모드 — '입력' 버튼 클릭 시 보낼 텍스트가 여기에 저장되고,
   // 다음 캔버스 클릭이 win_tap → win_input_text 시퀀스로 처리됨.
   const [wcPendingText, setWcPendingText] = useState<string | null>(null);
+  // 연속클릭 — 횟수(count)와 간격(ms)을 지정. '연속클릭' 버튼을 누르면 wcPendingRepeat가
+  // true가 되고, 다음 캔버스 좌클릭 좌표를 count회 연속 클릭(win_repeat_tap)한다.
+  // 드롭다운처럼 단일 클릭만으로는 펼침이 유지되지 않는 컨트롤 대응.
+  const [wcRepeatCount, setWcRepeatCount] = useState(3);
+  const [wcRepeatInterval, setWcRepeatInterval] = useState(100);
+  const [wcPendingRepeat, setWcPendingRepeat] = useState(false);
   const wcCanvasRef = useRef<HTMLCanvasElement>(null);
   // button: 'left' | 'right' — 좌/우 클릭 모두 동일 제스처 흐름 처리.
   const wcGestureRef = useRef<{ startX: number; startY: number; startTime: number; active: boolean; button: 'left' | 'right' }>(
@@ -1413,7 +1419,7 @@ export default function RecordPage() {
   // win 액션 실행 + 녹화 중이면 step 추가 (executeAction의 wincontrol 전용 버전)
   // 모든 win_* 스텝은 임베드된 프로세스 정보를 params 에 함께 저장 — 재생/테스트 시
   // 프로세스가 실행 중이지 않으면 백엔드가 자동으로 실행 후 재임베드한다.
-  const wcExecuteAction = useCallback(async (action: 'win_tap' | 'win_double_click' | 'win_long_press' | 'win_swipe' | 'win_input_text' | 'win_key' | 'win_key_combo', params: Record<string, any>, desc: string) => {
+  const wcExecuteAction = useCallback(async (action: 'win_tap' | 'win_double_click' | 'win_repeat_tap' | 'win_long_press' | 'win_swipe' | 'win_input_text' | 'win_key' | 'win_key_combo', params: Record<string, any>, desc: string) => {
     if (!wcAttached?.attached) {
       message.warning(t('record.winControlNoAttach'));
       return;
@@ -1525,6 +1531,15 @@ export default function RecordPage() {
     const { startX, startY, startTime, button } = wcGestureRef.current;
     const dist = Math.hypot(c.x - startX, c.y - startY);
     const elapsed = Date.now() - startTime;
+    // 연속클릭 대기 모드 — 좌클릭(드래그 아님)으로 지정한 위치를 count회 연속 클릭.
+    // 한 번 실행하면 모드 해제 (win_input_text 대기 모드와 동일한 1회성 UX).
+    if (wcPendingRepeat && button === 'left' && dist <= 10) {
+      setWcPendingRepeat(false);
+      wcExecuteAction('win_repeat_tap',
+        { x: startX, y: startY, count: wcRepeatCount, interval_ms: wcRepeatInterval, button: 'left' },
+        `win_repeat_tap (${startX},${startY}) ×${wcRepeatCount} @${wcRepeatInterval}ms`);
+      return;
+    }
     // 우클릭 드래그(swipe) 는 일반적이지 않으므로 좌클릭일 때만 swipe 로 분기.
     if (button === 'left' && dist > 10) {
       const duration = Math.max(200, Math.min(elapsed, 3000));
@@ -1540,7 +1555,7 @@ export default function RecordPage() {
         { x: startX, y: startY, button },
         `win_tap${button === 'right' ? ' [right]' : ''} (${startX},${startY})`);
     }
-  }, [wcToWinCoords, wcExecuteAction, wcPendingText]);
+  }, [wcToWinCoords, wcExecuteAction, wcPendingText, wcPendingRepeat, wcRepeatCount, wcRepeatInterval]);
 
   const wcDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const c = wcToWinCoords(e.clientX, e.clientY);
@@ -1564,8 +1579,22 @@ export default function RecordPage() {
     if (!txt) return;
     setWcPendingText(txt);
     setWcInputText('');
+    setWcPendingRepeat(false);  // 텍스트 입력과 연속클릭 대기 모드는 상호 배타.
     message.info('입력 위치를 클릭하세요');
   }, [wcInputText, wcPendingText]);
+
+  // 연속클릭: '연속클릭' 버튼 → 대기 모드 진입. 다음 캔버스 좌클릭 위치를 count회 연속 클릭.
+  // 다시 누르면 토글 취소. 횟수/간격은 버튼 옆 입력값을 사용.
+  const wcStartRepeat = useCallback(() => {
+    if (wcPendingRepeat) {
+      setWcPendingRepeat(false);
+      message.info('연속클릭 취소됨');
+      return;
+    }
+    setWcPendingRepeat(true);
+    setWcPendingText(null);  // 텍스트 입력 대기 모드와 상호 배타.
+    message.info(`연속클릭 위치를 클릭하세요 — ${wcRepeatCount}회`);
+  }, [wcPendingRepeat, wcRepeatCount]);
 
   // 키 조합 전송 — modifier(ctrl/alt/shift/win) + 일반 키. 예: "ctrl+a", "ctrl+shift+f5".
   // 백엔드가 '+'/',' 분리 → 모든 modifier down → 일반 키 down/up → modifier up(역순).
@@ -5084,10 +5113,12 @@ export default function RecordPage() {
                         onContextMenu={(e) => e.preventDefault()}
                         style={{
                           maxWidth: '100%', maxHeight: '100%',
-                          // 텍스트 입력 대기 중이면 text 커서 + 노란 보더로 시각 안내.
+                          // 텍스트 입력 대기 중이면 text 커서 + 노란 보더, 연속클릭 대기 중이면 파란 보더로 시각 안내.
                           border: wcPendingText !== null
                             ? '2px solid #faad14'
-                            : (isDark ? '1px solid #333' : '1px solid #d9d9d9'),
+                            : wcPendingRepeat
+                              ? '2px solid #1677ff'
+                              : (isDark ? '1px solid #333' : '1px solid #d9d9d9'),
                           borderRadius: 4,
                           cursor: wcPendingText !== null ? 'text' : 'crosshair',
                           userSelect: 'none',
@@ -5168,6 +5199,48 @@ export default function RecordPage() {
                     {wcPendingText !== null && (
                       <Tag color="orange" style={{ alignSelf: 'flex-start' }}>
                         {`입력 위치를 클릭하세요 — "${wcPendingText.length > 30 ? wcPendingText.slice(0, 30) + '...' : wcPendingText}"`}
+                      </Tag>
+                    )}
+                    {/* 연속클릭: 같은 위치를 지정 횟수만큼 연속 클릭. 드롭다운 등 단일 클릭으로
+                        펼침이 유지되지 않는 컨트롤 대응. '연속클릭' → 캔버스 좌클릭으로 위치 지정. */}
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-start', width: '100%' }}>
+                      <span style={{ fontSize: 12, color: mutedTextColor }}>연속클릭:</span>
+                      <Tooltip title="연속 클릭 횟수">
+                        <InputNumber
+                          size="small"
+                          min={2}
+                          max={50}
+                          step={1}
+                          value={wcRepeatCount}
+                          onChange={(v) => { if (typeof v === 'number') setWcRepeatCount(v); }}
+                          addonAfter="회"
+                          style={{ width: 90 }}
+                        />
+                      </Tooltip>
+                      <Tooltip title="클릭 사이 간격(ms)">
+                        <InputNumber
+                          size="small"
+                          min={0}
+                          max={2000}
+                          step={10}
+                          value={wcRepeatInterval}
+                          onChange={(v) => { if (typeof v === 'number') setWcRepeatInterval(v); }}
+                          addonAfter="ms"
+                          style={{ width: 110 }}
+                        />
+                      </Tooltip>
+                      <Button
+                        size="small"
+                        type="primary"
+                        danger={wcPendingRepeat}
+                        onClick={wcStartRepeat}
+                      >
+                        {wcPendingRepeat ? '취소' : '연속클릭'}
+                      </Button>
+                    </div>
+                    {wcPendingRepeat && (
+                      <Tag color="blue" style={{ alignSelf: 'flex-start' }}>
+                        {`연속클릭 위치를 클릭하세요 — ${wcRepeatCount}회 @${wcRepeatInterval}ms`}
                       </Tag>
                     )}
                     {/* 단축키: 자주 쓰는 modifier 조합 버튼. 좌측 정렬.
