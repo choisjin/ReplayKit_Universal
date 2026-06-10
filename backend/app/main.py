@@ -276,6 +276,22 @@ async def _auto_connect_all():
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     # --- Startup ---
+    # Linux .deb 설치본: 실행 시작 시 LGE git(main) 최신 커밋을 확인해 자동 업데이트한다.
+    # 업데이트 버튼을 수동으로 누르지 않아도 실행하면 최신 코드가 반영된다. 변경 없음/오프라인이면
+    # 그대로 진행. 새 버전을 sync 하면 재시작을 트리거하므로, 그 경우 나머지 startup 은 진행하지
+    # 않고 곧 종료될 프로세스를 yield 로 넘긴다(launcher 가 새 코드로 respawn).
+    # ※ source clone(.git) 개발 환경에서는 reset --hard 로 작업이 날아가므로 절대 실행하지 않음
+    #   (REPLAYKIT_INSTALLED==1 게이트).
+    try:
+        if _sys.platform != "win32" and _os.environ.get("REPLAYKIT_INSTALLED") == "1":
+            from .routers.settings import run_startup_autoupdate
+            if await asyncio.to_thread(run_startup_autoupdate):
+                logger.info("[startup-update] 자동 업데이트 후 재시작 대기 — 나머지 startup 중단")
+                yield
+                return
+    except Exception as e:
+        logger.warning("[startup-update] 자동 업데이트 스킵: %s", e)
+
     # 라이브 미러링 백엔드 진단 (있으면 INFO, 없으면 INFO/WARNING).
     # 미설치라도 동작에는 영향 없음 — 자동 폴백 체인이 알아서 다음 단계로 넘어간다.
     try:

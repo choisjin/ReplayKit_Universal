@@ -759,8 +759,104 @@ def _deb_self_update(user_data: Path) -> tuple[bool, str]:
     if not synced:
         return False, "동기화할 파일이 없음 (cache 가 비었거나 build 산출물 누락)"
 
+    # 시작 자동 업데이트용 마커 갱신 — 방금 sync 한 커밋(cache HEAD)을 기록한다.
+    # 이게 없으면 수동 업데이트 후 재시작 → 다음 부팅의 startup 자동업데이트가 같은 커밋을
+    # "새 버전"으로 오인해 한 번 더 재시작(=2회 재시작)시킨다.
+    try:
+        rc_h, head, _ = _run(["git", "rev-parse", "HEAD"], cwd=str(cache), timeout=10)
+        if rc_h == 0 and head.strip():
+            (user_data / ".last_synced_commit").write_text(head.strip(), encoding="utf-8")
+    except Exception as e:
+        logger.debug("[update-restart] .last_synced_commit 마커 갱신 실패: %s", e)
+
     logger.info("[update-restart] synced from cache → %s: %s", user_data, synced)
     return True, f"updated: {', '.join(synced)}"
+
+
+def _deb_remote_head(timeout: int = 20) -> Optional[str]:
+    """LGE git(main)의 최신 커밋 해시를 git ls-remote로 빠르게 조회 (full fetch 없이).
+    네트워크/접근 실패 시 None 반환 — 시작을 막지 않는다."""
+    env = os.environ.copy()
+    env.pop("GIT_ASKPASS", None)
+    env.pop("SSH_ASKPASS", None)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    rc, out, err = _run(
+        ["git", "-c", "core.askPass=", "ls-remote", _DEPLOY_REMOTE_URL, "main"],
+        timeout=timeout, env=env,
+    )
+    if rc != 0:
+        logger.info("[startup-update] ls-remote 실패(오프라인/접근불가?): %s", (err or "").strip()[:200])
+        return None
+    parts = (out or "").split()
+    return parts[0] if parts else None
+
+
+def run_startup_autoupdate() -> bool:
+    """Linux .deb 실행 시작 시 자동 업데이트.
+
+    LGE git(main)의 최신 커밋을 ls-remote로 확인 → 마지막으로 sync한 커밋(마커)과 다르면
+    _deb_self_update로 새 코드를 $USER_DATA에 sync한 뒤 재시작을 트리거한다.
+    (업데이트 버튼을 수동으로 누르지 않아도 실행 시 최신 코드로 반영되도록.)
+
+    재시작 루프 방지: sync 성공 시에만 커밋 해시를 마커(.last_synced_commit)에 기록 →
+    다음 부팅 때 같으면 skip. 오프라인/변경없음/실패면 False를 반환하고 그대로 부팅한다.
+
+    호출 전제: 호출부(main.py lifespan)에서 비-Windows AND REPLAYKIT_INSTALLED==1 확인.
+    ※ source clone(.git working tree)에서는 reset --hard 로 작업이 날아가므로 호출하지 말 것.
+
+    Returns: True면 재시작이 트리거됨(곧 프로세스 종료). False면 그대로 진행.
+    """
+    # 설정으로 끌 수 있음 (기본 ON)
+    try:
+        if not _load().get("auto_update_on_start", True):
+            logger.info("[startup-update] auto_update_on_start=False — 자동 업데이트 스킵")
+            return False
+    except Exception:
+        pass
+
+    # 동기화 대상 = 백엔드가 실행되는 경로(_PROJECT_ROOT). update_and_restart 의 deb-sync 경로와
+    # 동일하게 맞춰 마커/파일이 어긋나지 않도록 한다(어긋나면 매 부팅 재시작 루프 위험).
+    target = _PROJECT_ROOT
+    marker = target / ".last_synced_commit"
+
+    remote = _deb_remote_head()
+    if not remote:
+        return False  # 오프라인/접근불가 — 그대로 부팅
+
+    try:
+        local = marker.read_text(encoding="utf-8").strip() if marker.exists() else ""
+    except Exception:
+        local = ""
+
+    if remote == local:
+        logger.info("[startup-update] 최신 (commit=%s) — 업데이트 없음", remote[:10])
+        return False
+
+    logger.info("[startup-update] 새 버전 감지 %s → %s — 자동 업데이트 시작",
+                (local[:10] or "(없음)"), remote[:10])
+    ok, msg = _deb_self_update(target)
+    logger.info("[startup-update] deb sync: ok=%s %s", ok, msg)
+    if not ok:
+        return False  # sync 실패 — 재시작 안 함(루프 방지). 다음 실행/수동 업데이트에서 재시도.
+
+    # 마커 기록 — 실패하면 재시작을 생략한다(같은 커밋으로 무한 재시작 루프 방지).
+    try:
+        marker.write_text(remote, encoding="utf-8")
+        if marker.read_text(encoding="utf-8").strip() != remote:
+            raise IOError("marker verify mismatch")
+    except Exception as e:
+        logger.warning("[startup-update] 마커 기록 실패 → 재시작 생략(루프 방지): %s", e)
+        return False
+
+    # 재시작 트리거 — 업데이트 버튼과 동일한 .restart 플래그 + launcher respawn 경로 재사용.
+    try:
+        _RESTART_FLAG.write_text("restart", encoding="utf-8")
+    except Exception as e:
+        logger.warning("[startup-update] .restart 플래그 기록 실패: %s", e)
+    import threading
+    threading.Thread(target=_linux_post_pull_restart, daemon=True).start()
+    logger.info("[startup-update] sync 완료 → 재시작 트리거 (launcher가 새 코드로 respawn)")
+    return True
 
 
 @router.get("/disk-usage")
