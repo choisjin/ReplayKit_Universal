@@ -448,6 +448,10 @@ def list_available_modules() -> list[dict]:
               "default": "True", "options": ["True", "False"], "hidden": True},
              {"name": "launch_scar", "label": "Setup 중 scar.sh 자동 기동", "type": "select",
               "default": "True", "options": ["True", "False"], "hidden": True},
+             {"name": "clean_container_on_connect", "label": "최초 연결 시 컨테이너 정리 후 연결 (scar.sh -c, 세션 1회)",
+              "type": "select", "default": "True", "options": ["True", "False"]},
+             {"name": "stop_container_on_disconnect", "label": "연결 해제 시 컨테이너도 정지 (완전 정리)",
+              "type": "select", "default": "False", "options": ["True", "False"]},
              # ── 컨테이너 내부 UI 재기동 (host scar.sh -it TTY 함정 우회) ──
              {"name": "ui_dir", "label": "컨테이너 안 start_ui.sh 디렉터리", "type": "text",
               "default": "/home/scar/ui", "hidden": True},

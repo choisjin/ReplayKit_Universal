@@ -125,6 +125,41 @@ class SCARDocker:
             logger.warning("Failed to start SCAR reconnect script (cwd=%r): %s", run_cwd, e)
             return False
 
+    # ─── stop (정리) ────────────────────────────────────
+    def stop_via_script(
+        self,
+        script: str,
+        tag: str = "2.2.0",
+        cwd: Optional[str] = None,
+        clear_logs: bool = True,
+        timeout: float = 120.0,
+    ) -> tuple[bool, str]:
+        """`./scar.sh -t <tag> -c` 로 scar 도커 컨테이너 정지 (설치 가이드 'To stop Scar').
+
+        -c 는 'Do you want to clear logs? [y/n] (default=y)' 프롬프트를 띄우므로 stdin 으로
+        답을 먹인다. start_via_script(기동, 백그라운드)와 달리 동기 실행 — 컨테이너가 실제로
+        내려갔는지 is_running() 으로 확인 후 반환.
+        """
+        if not script or not os.path.isfile(script):
+            return False, f"scar.sh 파일 없음: {script!r}"
+        run_cwd = cwd or (os.path.dirname(script) or None)
+        answer = ("y" if clear_logs else "n") + "\n"
+        try:
+            res = subprocess.run(
+                ["bash", script, "-t", tag, "-c"],
+                cwd=run_cwd,
+                input=answer,
+                capture_output=True, text=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return False, f"scar.sh -c 타임아웃 ({timeout}s)"
+        except (OSError, FileNotFoundError) as e:
+            return False, f"scar.sh -c 실행 실패: {e}"
+        tail = ((res.stdout or "") + (res.stderr or "")).strip()[-512:]
+        if not self.is_running():
+            return True, f"scar docker stopped\n{tail}"
+        return False, f"scar.sh -c rc={res.returncode}, 컨테이너 여전히 running\n{tail}"
+
     def restart_ui_in_container(
         self,
         ui_dir: str = "/home/scar/ui",

@@ -97,6 +97,11 @@ def _csv_str(v) -> str:
     return str(v or "").strip()
 
 
+# 이 ReplayKit 프로세스에서 SCAR 컨테이너를 "최초 연결 정리" 한 적 있는지 (프로세스당 1회).
+# 모듈 reload(=ReplayKit 재시작) 시 False 로 초기화되어 다음 최초 연결에서 다시 정리한다.
+_session_container_cleaned = False
+
+
 class SCAR:
     """Linux SCAR 플러그인."""
 
@@ -123,6 +128,8 @@ class SCAR:
         auto_setup = True,                       # 등록 직후 Setup() 자동 실행
         netns_clean = True,                      # apply 전에 --clean 먼저
         launch_scar = True,                      # Setup 중 컨테이너 미기동 시 scar.sh 기동
+        clean_container_on_connect = True,       # 세션 최초 연결 시 stale 컨테이너 정지(scar.sh -c) 후 새로 기동
+        stop_container_on_disconnect = False,    # 연결 해제 시 컨테이너도 정지(완전 정리). 기본 유지(빠른 재연결)
         # ── 연결 직후 UI 자동화 (port 3000 제어 백엔드) ──────
         # 주의: UI 정적 프론트는 8081(api_base), 실제 제어 REST 는 3000(control_base).
         #       버전 선택(/config {ends})·bench 토글(/bencontrol/buttons/<id>)은 3000 으로 간다.
@@ -168,6 +175,8 @@ class SCAR:
         self.auto_setup = _as_bool(auto_setup)
         self.netns_clean = _as_bool(netns_clean)
         self.launch_scar = _as_bool(launch_scar)
+        self.clean_container_on_connect = _as_bool(clean_container_on_connect)
+        self.stop_container_on_disconnect = _as_bool(stop_container_on_disconnect)
         # 연결 직후 UI 자동화
         self.post_connect = _as_bool(post_connect)
         self.capabilities = _csv_str(capabilities)   # multiselect(list) 또는 CSV 문자열 허용
@@ -248,6 +257,24 @@ class SCAR:
             return self._mark_fail("iface not configured (스캔으로 인터페이스 선택)", log)
         if not self._iface_exists(self.iface):
             return self._mark_fail(f"interface '{self.iface}' not in /sys/class/net/", log)
+
+        # ── [0] 최초 연결 시 컨테이너 정리 후 연결 ─────────────────────
+        # 이 ReplayKit 세션에서 SCAR 를 처음 연결할 때(프로세스당 1회), 이전 세션에서 남은
+        # stale 컨테이너를 먼저 정지(scar.sh -c)한다. 이후 [4]에서 깨끗하게 다시 기동된다.
+        # 재연결마다 매번 내렸다 올리면 느리므로 세션 1회만 수행. clean_container_on_connect 로 끔.
+        global _session_container_cleaned
+        if self.clean_container_on_connect and not _session_container_cleaned:
+            _session_container_cleaned = True  # 실패해도 매 연결 재시도 방지(세션 1회)
+            if self._docker.is_running():
+                _script, _tag, _cwd = self._scar_script_info()
+                if _script:
+                    ok, msg = self._docker.stop_via_script(_script, tag=_tag, cwd=_cwd)
+                    log.append(f"[0] 최초 연결 컨테이너 정리: {'ok' if ok else 'FAIL'} — "
+                               f"{(msg.splitlines()[0] if msg else '')}")
+                else:
+                    log.append("[0] 최초 연결 컨테이너 정리: skipped (scar.sh 경로 미설정)")
+            else:
+                log.append("[0] 최초 연결 컨테이너 정리: skipped (컨테이너 미기동)")
 
         # ── [1] clean ────────────────────────────────────
         if self.netns_clean:
@@ -445,6 +472,51 @@ class SCAR:
         header = f"rc={res.rc}"
         return f"{header}\n{tail}" if tail else header
 
+    def _scar_script_info(self):
+        """scar.sh 경로 / 버전 태그 / cwd 추출 (stop/clean 용). reconnect_* 설정에서 도출."""
+        script = self._health.reconnect_script
+        args = self._health.reconnect_args or []
+        cwd = self._health.reconnect_cwd
+        tag = "2.2.0"
+        for i, a in enumerate(args):
+            if a == "-t" and i + 1 < len(args):
+                tag = args[i + 1]
+                break
+        return script, tag, cwd
+
+    def StopContainer(self) -> str:
+        """scar.sh -t <tag> -c 로 scar 도커 컨테이너 정지 (설치 가이드 'To stop Scar')."""
+        script, tag, cwd = self._scar_script_info()
+        if not script:
+            return "FAIL: scar.sh 경로(reconnect_script) 미설정 — 컨테이너 정지 불가"
+        if not self._docker.is_running():
+            return "ok: 컨테이너가 이미 정지 상태"
+        ok, msg = self._docker.stop_via_script(script, tag=tag, cwd=cwd)
+        return f"ok: {msg}" if ok else f"FAIL: scar 컨테이너 정지\n{self._indent(msg)}"
+
+    def Cleanup(self) -> str:
+        """SCAR 완전 정리 — 컨테이너 정지(scar.sh -c) + netns 복원(호스트 인터넷 복구).
+
+        Disconnect 는 netns 만 복원하고 컨테이너는 유지하는데(빠른 재연결용), 이 메서드는
+        컨테이너까지 내려 완전히 정리한다. 시나리오 스텝 / 수동 정리용.
+        """
+        ok_all = True
+        parts: list[str] = []
+        cmsg = self.StopContainer()
+        if cmsg.startswith("FAIL"):
+            ok_all = False
+        parts.append("[container] " + cmsg.split("\n")[0])
+        if self._netns.is_available() and self.iface:
+            rc, msg = self._netns.clean(self.iface)
+            if rc != 0:
+                ok_all = False
+                parts.append(f"[netns] FAIL clean (iface={self.iface})")
+            else:
+                parts.append(f"[netns] ok clean (iface={self.iface})")
+        else:
+            parts.append("[netns] skipped (netns 미사용)")
+        return ("ok: " if ok_all else "FAIL: ") + " | ".join(parts)
+
     def Disconnect(self) -> str:
         """연결 해제/등록 삭제 시 netns VLAN 구성 복원 (호스트 인터넷 복구).
 
@@ -457,12 +529,20 @@ class SCAR:
         device_manager 의 연결 해제(disconnect_device_by_id) / 등록 삭제(remove_device)
         에서 module teardown 으로 호출된다.
         """
+        parts: list[str] = []
+        # netns 복원 (호스트 인터넷 복구)
         if not self._netns.is_available() or not self.iface:
-            return "ok: netns not in use (nothing to clean)"
-        rc, msg = self._netns.clean(self.iface)
-        if rc != 0:
-            return f"FAIL: netns clean (iface={self.iface})\n{self._indent(msg)}"
-        return f"ok: netns cleaned (iface={self.iface})"
+            parts.append("netns: not in use")
+        else:
+            rc, msg = self._netns.clean(self.iface)
+            parts.append(f"netns: cleaned (iface={self.iface})" if rc == 0
+                         else f"netns: FAIL clean (iface={self.iface})")
+        # 옵션: 컨테이너도 정지(완전 정리). 기본은 유지 — 다음 연결 시 재사용(빠른 재연결).
+        if self.stop_container_on_disconnect:
+            parts.append("container: " + self.StopContainer().split("\n")[0])
+        else:
+            parts.append("container: kept (stop_container_on_disconnect=False)")
+        return ("FAIL: " if any("FAIL" in p for p in parts) else "ok: ") + " | ".join(parts)
 
     def Reconnect(self) -> str:
         """원본 'Reconnect SCAR'. setsid 로 scar.sh 백그라운드 spawn + 20s 대기."""
