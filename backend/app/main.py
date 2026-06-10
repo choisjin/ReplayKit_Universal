@@ -1436,7 +1436,11 @@ async def _run_play_job(data: dict):
         global_step_seq = 0
         last_completed_iteration = 0
         iteration = 0  # 외부 스코프 보존 — 중단 시 finally/이후 처리에서 참조
-        _step_idx = 0  # 외부 스코프 보존 — 중단 시점의 step 번호
+        _step_idx = 0  # 외부 스코프 보존 — 중단 시점의 step 번호 (사이클마다 0으로 리셋됨)
+        # exec_seq 는 재생 세션 전체에서 monotonic 해야 한다(사이클 경계를 넘어 고유).
+        # _step_idx 는 매 사이클 0으로 리셋되므로(아래 1453행) exec_seq 로 쓰면 2회차부터 1회차와
+        # 충돌 → 프론트 dedup(prev.exec_seq===d.exec_seq)에 걸려 2회차 진행이 표시되지 않는다.
+        _exec_seq = 0
         for iteration in range(1, effective_repeat + 1):
             playback_service._monitor_state["current_cycle"] = iteration
             if _is_multi_cycle:
@@ -1459,6 +1463,7 @@ async def _run_play_job(data: dict):
             ):
                 if isinstance(item, dict) and item.get("_type") == "step_start":
                     _step_idx += 1
+                    _exec_seq += 1
                     playback_service._monitor_state["current_step"] = _step_idx
                     start_data = {k: v for k, v in item.items() if k != "_type"}
                     if _is_multi_cycle:
@@ -1466,11 +1471,11 @@ async def _run_play_job(data: dict):
                         _pending_seq = global_step_seq
                         start_data["step_id"] = _pending_seq
                         start_data["description"] = f"[Cycle {iteration}] {start_data.get('description', '')}"
-                    # exec_seq: 실행 단위 고유 ID — 조건부이동으로 같은 step_id를 재방문해도
-                    # 매 실행마다 새 값. 프론트는 이걸로 dedup해야 revisit 행이 누락되지 않음.
-                    # _step_idx는 _run_play_job 시작 시점에 0으로 초기화되어 한 재생 세션
-                    # 동안 monotonic하게 증가 → 버퍼 replay 시 동일 exec_seq로 정확히 매칭.
-                    start_data["exec_seq"] = _step_idx
+                    # exec_seq: 실행 단위 고유 ID — 조건부이동/사이클 반복으로 같은 step_id를 재실행해도
+                    # 매 실행마다 새 값. 프론트는 이걸로 dedup하므로 세션 전체에서 monotonic해야 한다
+                    # (_step_idx는 사이클마다 0으로 리셋되어 2회차부터 충돌 → 쓰면 안 됨).
+                    # 버퍼 replay 시에도 발행된 이벤트에 박힌 값 그대로 재전송되므로 안정적.
+                    start_data["exec_seq"] = _exec_seq
                     publish_event({
                         "type": "step_start",
                         "data": start_data,
@@ -1500,7 +1505,7 @@ async def _run_play_job(data: dict):
                         playback_service._monitor_state["error"] += 1
                     sr_data = step_result.model_dump()
                     # step_start와 동일 exec_seq를 부착 — 프론트가 placeholder 행과 매칭하기 위함
-                    sr_data["exec_seq"] = _step_idx
+                    sr_data["exec_seq"] = _exec_seq
                     publish_event({
                         "type": "step_result",
                         "data": sr_data,
