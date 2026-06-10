@@ -1738,7 +1738,6 @@ class PlaybackService:
             # 연결 안 됨 → 재연결 대기 (백그라운드 루프가 상태 갱신 중)
             adb_serial = dev.address
             self.dm.reset_reconnect_attempts(device_id)
-            server_reset_done = False
             for attempt in range(1, max_retries + 1):
                 if self._should_stop:
                     return
@@ -1754,17 +1753,24 @@ class PlaybackService:
                     elif found:
                         logger.info("Playback: ADB %s status=%s, waiting...", device_id, found.status)
                     else:
-                        # 디바이스 목록에 없으면 ADB 서버 리셋 시도 (1회만)
-                        if not server_reset_done:
-                            logger.info("Playback: ADB server reset for %s", device_id)
-                            try:
-                                await self.adb._run("kill-server")
-                                await asyncio.sleep(1)
-                                await self.adb._run("start-server")
-                                await asyncio.sleep(2)
-                            except Exception:
-                                pass
-                            server_reset_done = True
+                        # 디바이스 목록에 없음 → 해당 디바이스만 타겟 재연결. 글로벌 adb 서버는
+                        # 절대 건드리지 않는다.
+                        # ⚠️ adb kill-server 금지: 호스트 adb 서버를 통째로 죽이면 같은 호스트에서
+                        # 돌고 있는 다른 adb 연결까지 끊긴다. 특히 TH 로컬 CVD(0.0.0.0:6520) 위에서
+                        # `adb shell` 로 떠 있는 grpc_*_gateway 프로세스가 트랜스포트를 잃고 죽어
+                        # 브로커 토픽이 사라진다 → DUT 전원 OFF→ON 시나리오에서 이 경로가 트리거되어
+                        # 이후 TH 신호가 "Topic not found" 로 전부 실패하던 근본 원인.
+                        # 원본 ensure-adb.sh 도 kill-server 대신 'adb connect' 만 사용.
+                        logger.info("Playback: ADB targeted reconnect for %s (%s)", device_id, adb_serial)
+                        try:
+                            if ":" in adb_serial:
+                                # 네트워크 타겟(host:port) — 해당 엔드포인트만 재연결 (idempotent).
+                                await self.adb.connect_device(adb_serial)
+                            else:
+                                # USB 디바이스 — offline 트랜스포트만 재연결 (서버 유지).
+                                await self.adb._run("reconnect offline")
+                        except Exception:
+                            pass
                 except Exception as e:
                     logger.debug("Playback: ADB reconnect %s failed: %s", device_id, e)
                 if attempt < max_retries:
