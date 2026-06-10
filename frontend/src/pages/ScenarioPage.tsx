@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Button, Card, Checkbox, Col, Collapse, DatePicker, Descriptions, Divider, Dropdown, Image, Input, InputNumber, List, Modal, Radio, Row, Select, Space, Splitter, Table, Tabs, Tag, Tooltip, Tree, Upload, message } from 'antd';
+import { Button, Card, Checkbox, Col, Collapse, DatePicker, Descriptions, Divider, Dropdown, Image, Input, InputNumber, List, Modal, Radio, Row, Select, Space, Splitter, Table, Tabs, Tag, Tooltip, Tree, Upload, message, notification } from 'antd';
 import dayjs from 'dayjs';
 import type { TreeProps } from 'antd';
 import {
@@ -19,7 +19,6 @@ import { VideoCameraOutlined } from '@ant-design/icons';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
 import DLTViewer from '../components/DLTViewer';
-import SerialViewer from '../components/SerialViewer';
 import { useDLTSessions } from '../hooks/useDLTSessions';
 import { useSerialSessions, useLogcatSessions } from '../hooks/useSerialSessions';
 
@@ -227,19 +226,38 @@ export default function ScenarioPage() {
   const dltSessionHook = useDLTSessions();
   const serialSessionHook = useSerialSessions();
   const logcatSessionHook = useLogcatSessions();
-  const [scenarioLogTab, setScenarioLogTab] = useState<'dlt' | 'serial' | 'logcat'>('dlt');
-  // 새 세션이 시작되면 해당 탭으로 자동 전환 — SerialLogging 시작 시 Serial 탭이 하이라이트되도록
-  useEffect(() => {
-    if (dltSessionHook.lastEvent?.type === 'session_started') setScenarioLogTab('dlt');
-  }, [dltSessionHook.lastEvent]);
-  useEffect(() => {
-    if (serialSessionHook.lastEvent?.type === 'session_started') setScenarioLogTab('serial');
-  }, [serialSessionHook.lastEvent]);
-  useEffect(() => {
-    if (logcatSessionHook.lastEvent?.type === 'session_started') setScenarioLogTab('logcat');
-  }, [logcatSessionHook.lastEvent]);
   const { webcam, ensureWebcamOpen } = useWebcamContext();
   const { pauseScreenStream, resumeScreenStream, primaryDevices, auxiliaryDevices } = useDevice();
+  // 시나리오 재생 중 Serial/Logcat 은 라이브 뷰어를 띄우지 않는다 — 로그가 폭주하면(예: logcat
+  // 수십만 줄) 렌더링이 메인 스레드를 잡아먹어 PC 가 느려진다. 대신 StartLogging(session_started)
+  // 시 작은 노티로 "어떤 device 의 어떤 로그가 logging 중"인지만 알린다. 로그 파일 저장은
+  // 백엔드에서 그대로 수행되므로 영향 없음.
+  useEffect(() => {
+    const ev = serialSessionHook.lastEvent;
+    if (ev?.type !== 'session_started') return;
+    const port = ev.port || String(ev.session_id || '').split('@')[0];
+    const dev = [...primaryDevices, ...auxiliaryDevices].find((x: any) => x.address === port);
+    notification.info({
+      message: 'Logging 시작',
+      description: `${dev?.id || port} — Serial`,
+      placement: 'bottomRight',
+      duration: 3,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serialSessionHook.lastEvent]);
+  useEffect(() => {
+    const ev = logcatSessionHook.lastEvent;
+    if (ev?.type !== 'session_started') return;
+    const serial = ev.serial || ev.session_id;
+    const dev = [...primaryDevices, ...auxiliaryDevices].find((x: any) => x.address === serial);
+    notification.info({
+      message: 'Logging 시작',
+      description: `${dev?.id || serial} — Android logcat`,
+      placement: 'bottomRight',
+      duration: 3,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logcatSessionHook.lastEvent]);
   const [scenarios, setScenarios] = useState<string[]>([]);
   const [selectedScenario, setSelectedScenario] = useState<ScenarioDetail | null>(null);
   const [detailVisible, setDetailVisible] = useState(false);
@@ -1597,47 +1615,13 @@ export default function ScenarioPage() {
       </div>
       <Splitter style={{ flex: 1, minHeight: 0 }}>
       <Splitter.Panel defaultSize="40%" min="20%" max="60%" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {playing && (dltSessionHook.sessions.length > 0 || serialSessionHook.sessions.length > 0 || logcatSessionHook.sessions.length > 0) ? (
-        // 로그 활성 시 시나리오 카드를 완전 대체 — 패널 상단 50%만 차지(아래 50%는 웹캠 PiP 자리)
-        // DLT/Serial/Logcat 탭으로 구분하여 세 종류 세션을 한 영역에서 전환.
+      {playing && dltSessionHook.sessions.length > 0 ? (
+        // DLT 활성 시에만 시나리오 카드를 DLT 뷰어로 대체 — 패널 상단 50%만 차지(아래 50%는 웹캠 PiP 자리).
+        // Serial/Logcat 은 로그 폭주로 PC 가 느려져 라이브 뷰어를 띄우지 않고, StartLogging 시
+        // 작은 노티(어떤 device 의 어떤 로그가 logging 중)만 표시한다(위 useEffect 참고).
         // width:100% — Splitter.Panel 좌측을 가로로 가득 채움.
         <div style={{ width: '100%', height: '50%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <Tabs
-            size="small"
-            activeKey={scenarioLogTab}
-            onChange={(k) => setScenarioLogTab(k as 'dlt' | 'serial' | 'logcat')}
-            tabBarStyle={{ padding: '0 8px', margin: 0, flexShrink: 0 }}
-            items={[
-              {
-                key: 'dlt',
-                label: <span>DLT <Tag style={{ marginLeft: 4 }} color={dltSessionHook.sessions.length > 0 ? 'processing' : 'default'}>{dltSessionHook.sessions.length}</Tag></span>,
-              },
-              {
-                key: 'serial',
-                label: <span>Serial <Tag style={{ marginLeft: 4 }} color={serialSessionHook.sessions.length > 0 ? 'processing' : 'default'}>{serialSessionHook.sessions.length}</Tag></span>,
-              },
-              {
-                key: 'logcat',
-                label: <span>Logcat <Tag style={{ marginLeft: 4 }} color={logcatSessionHook.sessions.length > 0 ? 'processing' : 'default'}>{logcatSessionHook.sessions.length}</Tag></span>,
-              },
-            ]}
-          />
-          <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-            {scenarioLogTab === 'dlt' ? (
-              <DLTViewer sessions={dltSessionHook.sessions} mode="card" theme={settings.theme} />
-            ) : scenarioLogTab === 'serial' ? (
-              <SerialViewer sessions={serialSessionHook.sessions} mode="card" theme={settings.theme} />
-            ) : (
-              <SerialViewer
-                sessions={logcatSessionHook.sessions}
-                mode="card"
-                theme={settings.theme}
-                wsPath="logcat-log"
-                title="Android logcat 뷰어"
-                downloadPrefix="logcat"
-              />
-            )}
-          </div>
+          <DLTViewer sessions={dltSessionHook.sessions} mode="card" theme={settings.theme} />
         </div>
       ) : (
       <Card
