@@ -161,6 +161,11 @@ class WinControlService:
         # UWP AppUserModelID — 종료된 UWP 앱 재실행에 필요(.exe 직접 실행 불가).
         # 예: "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"
         self._aumid: str = ""
+        # 포커스 홀드 — 연속클릭(드롭다운 등) 용. 여러 send_* 호출(=여러 HTTP 요청)에
+        # 걸쳐 포어그라운드 복원을 지연시켜 타겟이 계속 활성 상태를 유지하게 한다.
+        # deferred_restore 는 단일 with 블록(요청) 범위인 반면 이건 begin/end 로 명시 제어.
+        self._hold_active: bool = False
+        self._hold_ctxs: list[dict] = []
 
     @staticmethod
     def is_available() -> bool:
@@ -560,6 +565,11 @@ class WinControlService:
 
     def detach(self) -> None:
         logger.info("WinControl detached: hwnd=%s", self._hwnd)
+        # 연속클릭 홀드가 남아있으면 해제 — 이전 활성 창 복원이 영영 안 되는 것 방지.
+        try:
+            self.end_focus_hold()
+        except Exception:
+            pass
         self._hwnd = None
         self._pid = None
         self._process_name = ""
@@ -1478,6 +1488,12 @@ class WinControlService:
         """
         if not ctx:
             return
+        # 포커스 홀드 중이면 요청 경계를 넘어 복원을 지연 (begin/end_focus_hold 가 제어).
+        # deferred_restore(단일 요청) 보다 우선 — 홀드가 활성이면 이 요청의 deferred 종료
+        # 시점에도 복원하지 않고 end_focus_hold 까지 미룬다.
+        if getattr(self, "_hold_active", False):
+            self._hold_ctxs.append(ctx)
+            return
         if getattr(self, "_defer_restore_active", False):
             self._deferred_restore_ctxs.append(ctx)
             return
@@ -1547,6 +1563,29 @@ class WinControlService:
             if ctxs:
                 # 가장 처음 저장된 ctx 가 진짜 prev_fg(우리 frontend), 나머지는 타겟 자신.
                 self._do_restore_context(ctxs[0])
+
+    def begin_focus_hold(self) -> None:
+        """연속클릭 시작 — 이후 send_* 의 포어그라운드 복원을 end_focus_hold 까지 지연.
+
+        여러 HTTP 요청에 걸쳐 타겟을 활성 상태로 유지 → 드롭다운 같은 일시 팝업이
+        클릭 사이에 닫히지 않는다. 이미 홀드 중이면 누적 컨텍스트를 보존(멱등).
+        """
+        if not getattr(self, "_hold_active", False):
+            self._hold_active = True
+            self._hold_ctxs = []
+
+    def end_focus_hold(self) -> None:
+        """연속클릭 종료 — 지연된 포어그라운드/커서 복원을 1회 수행 (최초 ctx = 우리 앱)."""
+        if not getattr(self, "_hold_active", False):
+            return
+        self._hold_active = False
+        ctxs = self._hold_ctxs
+        self._hold_ctxs = []
+        if ctxs:
+            self._do_restore_context(ctxs[0])
+
+    def is_focus_held(self) -> bool:
+        return bool(getattr(self, "_hold_active", False))
 
     def _client_to_screen(self, x: int, y: int) -> tuple[int, int]:
         """client 좌표 → screen 좌표.
@@ -1659,34 +1698,26 @@ class WinControlService:
         finally:
             self._restore_context(ctx)
 
-    def send_repeat_tap(self, x: int, y: int, count: int = 5,
-                        interval_ms: int = 100, button: str = "left") -> None:
-        """같은 위치를 count 회 연속 클릭. 클릭 사이 간격 interval_ms.
+    def send_click_sequence(self, points: list[dict], interval_ms: int = 150,
+                            button: str = "left") -> None:
+        """여러 위치를 포커스 유지한 채 순서대로 클릭 (재생용, 원자 실행).
 
-        드롭다운처럼 1회 클릭으로 펼쳐졌다 다음 클릭에서 다시 접히는 컨트롤이나,
-        한 번에 인식되지 않아 여러 번 눌러야 하는 토글 등에 사용.
-        focus/context 저장은 1회만 하고 클릭만 반복 — send_double_click 과 동일한
-        패턴이되 횟수/간격을 호출자가 지정한다.
+        points: [{"x": .., "y": ..}, ...]. 드롭다운 열기 → 항목 선택처럼 첫 클릭으로
+        뜬 일시 팝업이 다음 클릭 전에 닫히면 안 되는 경우 사용. deferred_restore 로
+        시퀀스 전체 동안 포어그라운드 복원을 미루고, 블록 종료 시 1회만 우리 앱으로 복원.
+        각 send_tap 의 _focus 가드(같은 프로세스가 이미 FG면 재포커스 안 함)가
+        팝업의 포커스를 보존한다.
         """
         self._check()
-        n = max(1, int(count))
+        pts = [p for p in (points or []) if p is not None]
+        if not pts:
+            return
         gap = max(0.0, int(interval_ms) / 1000.0)
-        ctx = self._save_context()
-        try:
-            self._focus()
-            sx, sy = self._client_to_screen(int(x), int(y))
-            self._send_input_mouse_move(sx, sy)
-            time.sleep(0.10)
-            for i in range(n):
-                self._send_input_button(button, True)
-                time.sleep(0.06)
-                self._send_input_button(button, False)
-                # 마지막 클릭 뒤에는 간격 대기 불필요.
-                if i < n - 1 and gap > 0:
+        with self.deferred_restore():
+            for i, pt in enumerate(pts):
+                self.send_tap(int(pt["x"]), int(pt["y"]), button)
+                if i < len(pts) - 1 and gap > 0:
                     time.sleep(gap)
-            time.sleep(0.12)
-        finally:
-            self._restore_context(ctx)
 
     def send_long_press(self, x: int, y: int, duration_ms: int = 500, button: str = "left") -> None:
         """버튼을 누른 채로 duration_ms 만큼 유지 후 떼기.

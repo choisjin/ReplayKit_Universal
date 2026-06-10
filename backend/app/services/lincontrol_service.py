@@ -139,6 +139,11 @@ class LinControlService:
         self._defer_restore_active = False
         self._deferred_restore_ctxs: list[dict] = []
 
+        # 포커스 홀드 — 연속클릭(드롭다운 등)용. 여러 send_* 호출(=여러 HTTP 요청)에
+        # 걸쳐 포어그라운드 복원을 지연. begin/end_focus_hold 로 명시 제어.
+        self._hold_active = False
+        self._hold_ctxs: list[dict] = []
+
         # attach 시점에 1회 떠두는 초기 캡처 — 첫 capture_window 호출에 의해 1회 소비.
         # 임베드 직후 z-order 를 즉시 복구하지만 첫 프레임은 활성 상태에서 잡은 정상 비트맵.
         self._initial_capture: Optional["Image.Image"] = None
@@ -566,6 +571,11 @@ class LinControlService:
 
     def detach(self) -> None:
         logger.info("LinControl detached: xid=%s", self._hwnd)
+        # 연속클릭 홀드가 남아있으면 해제 — 이전 활성 창 복원이 영영 안 되는 것 방지.
+        try:
+            self.end_focus_hold()
+        except Exception:
+            pass
         self._hwnd = None
         self._pid = None
         self._process_name = ""
@@ -1128,6 +1138,10 @@ class LinControlService:
     def _restore_context(self, ctx: dict) -> None:
         if not ctx:
             return
+        # 포커스 홀드 중이면 요청 경계를 넘어 복원 지연 (deferred_restore 보다 우선).
+        if getattr(self, "_hold_active", False):
+            self._hold_ctxs.append(ctx)
+            return
         if self._defer_restore_active:
             self._deferred_restore_ctxs.append(ctx)
             return
@@ -1163,6 +1177,25 @@ class LinControlService:
             self._deferred_restore_ctxs = []
             if ctxs:
                 self._do_restore_context(ctxs[0])
+
+    def begin_focus_hold(self) -> None:
+        """연속클릭 시작 — 이후 send_* 의 포어그라운드 복원을 end_focus_hold 까지 지연(멱등)."""
+        if not getattr(self, "_hold_active", False):
+            self._hold_active = True
+            self._hold_ctxs = []
+
+    def end_focus_hold(self) -> None:
+        """연속클릭 종료 — 지연된 복원을 1회 수행 (최초 ctx = 우리 앱)."""
+        if not getattr(self, "_hold_active", False):
+            return
+        self._hold_active = False
+        ctxs = self._hold_ctxs
+        self._hold_ctxs = []
+        if ctxs:
+            self._do_restore_context(ctxs[0])
+
+    def is_focus_held(self) -> bool:
+        return bool(getattr(self, "_hold_active", False))
 
     # ── 좌표 변환 ──────────────────────────────────────────
     def _client_to_screen(self, x: int, y: int) -> tuple[int, int]:
@@ -1328,32 +1361,24 @@ class LinControlService:
         finally:
             self._restore_context(ctx)
 
-    def send_repeat_tap(self, x: int, y: int, count: int = 5,
-                        interval_ms: int = 100, button: str = "left") -> None:
-        """같은 위치를 count 회 연속 클릭. 클릭 사이 간격 interval_ms.
+    def send_click_sequence(self, points: list[dict], interval_ms: int = 150,
+                            button: str = "left") -> None:
+        """여러 위치를 포커스 유지한 채 순서대로 클릭 (재생용, 원자 실행).
 
-        드롭다운처럼 1회 클릭으로 펼쳐졌다 다음 클릭에서 다시 접히는 컨트롤이나,
-        한 번에 인식되지 않아 여러 번 눌러야 하는 토글 등에 사용.
-        WinControlService.send_repeat_tap 과 인터페이스 동일 (OS 공용 디스패치).
+        드롭다운 열기 → 항목 선택처럼 첫 클릭으로 뜬 일시 팝업이 다음 클릭 전에
+        닫히면 안 되는 경우 사용. WinControlService.send_click_sequence 와 인터페이스
+        동일 (OS 공용 디스패치).
         """
         self._check()
-        n = max(1, int(count))
+        pts = [p for p in (points or []) if p is not None]
+        if not pts:
+            return
         gap = max(0.0, int(interval_ms) / 1000.0)
-        ctx = self._save_context()
-        try:
-            self._focus()
-            sx, sy = self._client_to_screen(int(x), int(y))
-            self._xtest_motion(sx, sy)
-            time.sleep(0.10)
-            for i in range(n):
-                self._xtest_button(button, True)
-                time.sleep(0.06)
-                self._xtest_button(button, False)
-                if i < n - 1 and gap > 0:
+        with self.deferred_restore():
+            for i, pt in enumerate(pts):
+                self.send_tap(int(pt["x"]), int(pt["y"]), button)
+                if i < len(pts) - 1 and gap > 0:
                     time.sleep(gap)
-            time.sleep(0.12)
-        finally:
-            self._restore_context(ctx)
 
     def send_long_press(self, x: int, y: int, duration_ms: int = 500, button: str = "left") -> None:
         self._check()

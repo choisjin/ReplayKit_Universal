@@ -443,12 +443,12 @@ export default function RecordPage() {
   // 텍스트 입력 대기 모드 — '입력' 버튼 클릭 시 보낼 텍스트가 여기에 저장되고,
   // 다음 캔버스 클릭이 win_tap → win_input_text 시퀀스로 처리됨.
   const [wcPendingText, setWcPendingText] = useState<string | null>(null);
-  // 연속클릭 — 횟수(count)와 간격(ms)을 지정. '연속클릭' 버튼을 누르면 wcPendingRepeat가
-  // true가 되고, 다음 캔버스 좌클릭 좌표를 count회 연속 클릭(win_repeat_tap)한다.
-  // 드롭다운처럼 단일 클릭만으로는 펼침이 유지되지 않는 컨트롤 대응.
-  const [wcRepeatCount, setWcRepeatCount] = useState(3);
-  const [wcRepeatInterval, setWcRepeatInterval] = useState(100);
-  const [wcPendingRepeat, setWcPendingRepeat] = useState(false);
+  // 연속클릭(시퀀스) — 포커스를 유지한 채 여러 위치를 순서대로 클릭(드롭다운 열기→항목 선택).
+  // '연속클릭' 시작 시 wcSeqMode=true, 캔버스 좌클릭마다 포커스 유지 클릭(win_tap+hold)을 실행하고
+  // 좌표를 wcSeqPoints에 누적. '완료'를 누르면 누적 좌표를 하나의 win_click_sequence 스텝으로 저장.
+  const [wcSeqMode, setWcSeqMode] = useState(false);
+  const [wcSeqPoints, setWcSeqPoints] = useState<{ x: number; y: number }[]>([]);
+  const [wcSeqInterval, setWcSeqInterval] = useState(150);
   const wcCanvasRef = useRef<HTMLCanvasElement>(null);
   // button: 'left' | 'right' — 좌/우 클릭 모두 동일 제스처 흐름 처리.
   const wcGestureRef = useRef<{ startX: number; startY: number; startTime: number; active: boolean; button: 'left' | 'right' }>(
@@ -1419,7 +1419,7 @@ export default function RecordPage() {
   // win 액션 실행 + 녹화 중이면 step 추가 (executeAction의 wincontrol 전용 버전)
   // 모든 win_* 스텝은 임베드된 프로세스 정보를 params 에 함께 저장 — 재생/테스트 시
   // 프로세스가 실행 중이지 않으면 백엔드가 자동으로 실행 후 재임베드한다.
-  const wcExecuteAction = useCallback(async (action: 'win_tap' | 'win_double_click' | 'win_repeat_tap' | 'win_long_press' | 'win_swipe' | 'win_input_text' | 'win_key' | 'win_key_combo', params: Record<string, any>, desc: string) => {
+  const wcExecuteAction = useCallback(async (action: 'win_tap' | 'win_double_click' | 'win_long_press' | 'win_swipe' | 'win_input_text' | 'win_key' | 'win_key_combo', params: Record<string, any>, desc: string) => {
     if (!wcAttached?.attached) {
       message.warning(t('record.winControlNoAttach'));
       return;
@@ -1495,6 +1495,41 @@ export default function RecordPage() {
     }
   }, [wcAttached, recording, delayMs, steps, t, wcRefreshImage]);
 
+  // 연속클릭(시퀀스) 중 캔버스 클릭 — 포커스 유지(hold=true) 클릭을 즉시 실행하고 좌표 누적.
+  // 백엔드가 포어그라운드 복원을 '완료'까지 미루므로 드롭다운 등 일시 팝업이 닫히지 않고,
+  // 응답 스크린샷(팝업 열린 상태)으로 캔버스를 갱신해 다음 클릭 위치를 고를 수 있다.
+  // 스텝은 여기서 저장하지 않음 — '완료' 시 하나의 win_click_sequence 로 저장.
+  const wcSeqClick = useCallback(async (x: number, y: number) => {
+    if (!wcAttached?.attached) return;
+    let actionRes: any = null;
+    try {
+      actionRes = await deviceApi.input('WinControl', 'win_tap', {
+        x, y, button: 'left', hold: true, capture_after_ms: 500,
+      });
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || t('record.inputFailed'));
+      return;
+    }
+    const b64 = actionRes?.data?.image as string | undefined;
+    if (b64) {
+      const img = new window.Image();
+      img.onload = () => {
+        wcImageRef.current = img;
+        const cv = wcCanvasRef.current;
+        if (cv) {
+          if (cv.width !== img.naturalWidth) cv.width = img.naturalWidth;
+          if (cv.height !== img.naturalHeight) cv.height = img.naturalHeight;
+          if (img.naturalHeight > 0) {
+            cv.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`;
+          }
+          cv.getContext('2d')?.drawImage(img, 0, 0);
+        }
+      };
+      img.src = `data:image/jpeg;base64,${b64}`;
+    }
+    setWcSeqPoints(prev => [...prev, { x, y }]);
+  }, [wcAttached, t]);
+
   const wcMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     // 좌(0)/우(2) 버튼만 처리 — 가운데 버튼은 무시.
     if (e.button !== 0 && e.button !== 2) return;
@@ -1531,13 +1566,10 @@ export default function RecordPage() {
     const { startX, startY, startTime, button } = wcGestureRef.current;
     const dist = Math.hypot(c.x - startX, c.y - startY);
     const elapsed = Date.now() - startTime;
-    // 연속클릭 대기 모드 — 좌클릭(드래그 아님)으로 지정한 위치를 count회 연속 클릭.
-    // 한 번 실행하면 모드 해제 (win_input_text 대기 모드와 동일한 1회성 UX).
-    if (wcPendingRepeat && button === 'left' && dist <= 10) {
-      setWcPendingRepeat(false);
-      wcExecuteAction('win_repeat_tap',
-        { x: startX, y: startY, count: wcRepeatCount, interval_ms: wcRepeatInterval, button: 'left' },
-        `win_repeat_tap (${startX},${startY}) ×${wcRepeatCount} @${wcRepeatInterval}ms`);
+    // 연속클릭(시퀀스) 모드 — 좌클릭(드래그 아님)마다 포커스 유지 클릭을 즉시 실행하고
+    // 좌표를 누적. '완료' 버튼을 누를 때까지 모드 유지 (드롭다운 열기 → 항목 선택).
+    if (wcSeqMode && button === 'left' && dist <= 10) {
+      wcSeqClick(startX, startY);
       return;
     }
     // 우클릭 드래그(swipe) 는 일반적이지 않으므로 좌클릭일 때만 swipe 로 분기.
@@ -1555,15 +1587,17 @@ export default function RecordPage() {
         { x: startX, y: startY, button },
         `win_tap${button === 'right' ? ' [right]' : ''} (${startX},${startY})`);
     }
-  }, [wcToWinCoords, wcExecuteAction, wcPendingText, wcPendingRepeat, wcRepeatCount, wcRepeatInterval]);
+  }, [wcToWinCoords, wcExecuteAction, wcPendingText, wcSeqMode, wcSeqClick]);
 
   const wcDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    // 연속클릭(시퀀스) 모드 — 두 번의 mouseup이 이미 개별 클릭으로 처리됐으므로 무시.
+    if (wcSeqMode) return;
     const c = wcToWinCoords(e.clientX, e.clientY);
     if (!c) return;
     // mouseDown/Up이 single tap을 먼저 보냈을 수 있어 무시 — Win32는 double_click 별도 처리.
     wcGestureRef.current.active = false;
     wcExecuteAction('win_double_click', { x: c.x, y: c.y }, `win_double_click (${c.x},${c.y})`);
-  }, [wcToWinCoords, wcExecuteAction]);
+  }, [wcToWinCoords, wcExecuteAction, wcSeqMode]);
 
   // 텍스트 보내기: 즉시 전송하지 않고 '입력 위치를 클릭하세요' 모드로 진입.
   // 사용자가 캔버스의 입력 컨트롤(에디트박스 등) 을 좌클릭하면, 백엔드가 해당 좌표를
@@ -1579,22 +1613,79 @@ export default function RecordPage() {
     if (!txt) return;
     setWcPendingText(txt);
     setWcInputText('');
-    setWcPendingRepeat(false);  // 텍스트 입력과 연속클릭 대기 모드는 상호 배타.
     message.info('입력 위치를 클릭하세요');
   }, [wcInputText, wcPendingText]);
 
-  // 연속클릭: '연속클릭' 버튼 → 대기 모드 진입. 다음 캔버스 좌클릭 위치를 count회 연속 클릭.
-  // 다시 누르면 토글 취소. 횟수/간격은 버튼 옆 입력값을 사용.
-  const wcStartRepeat = useCallback(() => {
-    if (wcPendingRepeat) {
-      setWcPendingRepeat(false);
-      message.info('연속클릭 취소됨');
-      return;
-    }
-    setWcPendingRepeat(true);
+  // 연속클릭(시퀀스) 시작 — 캔버스 클릭마다 포커스 유지 클릭 + 좌표 누적 모드 진입.
+  const wcSeqStart = useCallback(() => {
+    setWcSeqMode(true);
+    setWcSeqPoints([]);
     setWcPendingText(null);  // 텍스트 입력 대기 모드와 상호 배타.
-    message.info(`연속클릭 위치를 클릭하세요 — ${wcRepeatCount}회`);
-  }, [wcPendingRepeat, wcRepeatCount]);
+    message.info('연속클릭: 드롭다운 등 위치를 순서대로 클릭한 뒤 완료를 누르세요');
+  }, []);
+
+  // 연속클릭 완료 — 백엔드 포커스 홀드 해제(이전 활성 창 복원) 후,
+  // 누적 좌표를 하나의 win_click_sequence 스텝으로 저장 (녹화 중일 때만).
+  const wcSeqFinish = useCallback(async () => {
+    setWcSeqMode(false);
+    const pts = wcSeqPoints;
+    setWcSeqPoints([]);
+    try {
+      await deviceApi.input('WinControl', 'win_seq_end', {});
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || t('record.inputFailed'));
+    }
+    if (pts.length === 0) return;
+    const desc = `win_click_sequence ${pts.map(p => `(${p.x},${p.y})`).join(' → ')} @${wcSeqInterval}ms`;
+    if (!recording) return;
+    const enrichedParams: Record<string, any> = {
+      points: pts,
+      interval_ms: wcSeqInterval,
+      button: 'left',
+      process_name: wcAttached?.name || '',
+      exe_path: wcAttached?.exe_path || '',
+      window_title: wcAttached?.title || '',
+      window_class: wcAttached?.class_name || '',
+      process_aumid: wcAttached?.aumid || '',
+      window_width: wcAttached?.width || 0,
+      window_height: wcAttached?.height || 0,
+    };
+    const tempId = (steps[steps.length - 1]?.id || 0) + 1;
+    const optimisticStep: Step = {
+      id: tempId, type: 'win_click_sequence', device_id: 'WinControl',
+      params: enrichedParams, delay_after_ms: delayMs, description: desc, expected_image: null,
+    };
+    setSteps(prev => [...prev, optimisticStep]);
+    pendingStepsRef.current += 1;
+    setHasPendingSteps(true);
+    try {
+      const res = await scenarioApi.addStep({
+        type: 'win_click_sequence', device_id: 'WinControl', params: enrichedParams,
+        description: desc, delay_after_ms: delayMs, skip_execute: true,
+      });
+      setSteps(prev => prev.map(s => s === optimisticStep ? res.data.step : s));
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || t('record.stepRecordFailed'));
+      setSteps(prev => prev.filter(s => s !== optimisticStep));
+    } finally {
+      pendingStepsRef.current -= 1;
+      if (pendingStepsRef.current <= 0) {
+        pendingStepsRef.current = 0;
+        setHasPendingSteps(false);
+      }
+    }
+  }, [wcSeqPoints, wcSeqInterval, recording, wcAttached, steps, delayMs, t]);
+
+  // 연속클릭 취소 — 홀드만 해제하고 스텝은 저장하지 않음 (이미 실행된 클릭은 되돌릴 수 없음).
+  const wcSeqCancel = useCallback(async () => {
+    setWcSeqMode(false);
+    setWcSeqPoints([]);
+    try {
+      await deviceApi.input('WinControl', 'win_seq_end', {});
+    } catch {
+      // 홀드 해제 실패는 무시 — detach/재연결 시에도 자연 복구됨.
+    }
+  }, []);
 
   // 키 조합 전송 — modifier(ctrl/alt/shift/win) + 일반 키. 예: "ctrl+a", "ctrl+shift+f5".
   // 백엔드가 '+'/',' 분리 → 모든 modifier down → 일반 키 down/up → modifier up(역순).
@@ -5113,10 +5204,10 @@ export default function RecordPage() {
                         onContextMenu={(e) => e.preventDefault()}
                         style={{
                           maxWidth: '100%', maxHeight: '100%',
-                          // 텍스트 입력 대기 중이면 text 커서 + 노란 보더, 연속클릭 대기 중이면 파란 보더로 시각 안내.
+                          // 텍스트 입력 대기 중이면 text 커서 + 노란 보더, 연속클릭 진행 중이면 파란 보더로 시각 안내.
                           border: wcPendingText !== null
                             ? '2px solid #faad14'
-                            : wcPendingRepeat
+                            : wcSeqMode
                               ? '2px solid #1677ff'
                               : (isDark ? '1px solid #333' : '1px solid #d9d9d9'),
                           borderRadius: 4,
@@ -5201,46 +5292,42 @@ export default function RecordPage() {
                         {`입력 위치를 클릭하세요 — "${wcPendingText.length > 30 ? wcPendingText.slice(0, 30) + '...' : wcPendingText}"`}
                       </Tag>
                     )}
-                    {/* 연속클릭: 같은 위치를 지정 횟수만큼 연속 클릭. 드롭다운 등 단일 클릭으로
-                        펼침이 유지되지 않는 컨트롤 대응. '연속클릭' → 캔버스 좌클릭으로 위치 지정. */}
+                    {/* 연속클릭(시퀀스): 포커스를 유지한 채 여러 위치를 순서대로 클릭.
+                        드롭다운처럼 클릭 후 포커스 복원으로 닫히는 일시 팝업 대응.
+                        시작 → 캔버스에서 순서대로 클릭(즉시 실행) → 완료 시 하나의 스텝으로 저장. */}
                     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-start', width: '100%' }}>
                       <span style={{ fontSize: 12, color: mutedTextColor }}>연속클릭:</span>
-                      <Tooltip title="연속 클릭 횟수">
-                        <InputNumber
-                          size="small"
-                          min={2}
-                          max={50}
-                          step={1}
-                          value={wcRepeatCount}
-                          onChange={(v) => { if (typeof v === 'number') setWcRepeatCount(v); }}
-                          addonAfter="회"
-                          style={{ width: 90 }}
-                        />
-                      </Tooltip>
-                      <Tooltip title="클릭 사이 간격(ms)">
+                      <Tooltip title="재생 시 클릭 사이 간격(ms)">
                         <InputNumber
                           size="small"
                           min={0}
-                          max={2000}
-                          step={10}
-                          value={wcRepeatInterval}
-                          onChange={(v) => { if (typeof v === 'number') setWcRepeatInterval(v); }}
+                          max={5000}
+                          step={50}
+                          value={wcSeqInterval}
+                          onChange={(v) => { if (typeof v === 'number') setWcSeqInterval(v); }}
                           addonAfter="ms"
                           style={{ width: 110 }}
                         />
                       </Tooltip>
-                      <Button
-                        size="small"
-                        type="primary"
-                        danger={wcPendingRepeat}
-                        onClick={wcStartRepeat}
-                      >
-                        {wcPendingRepeat ? '취소' : '연속클릭'}
-                      </Button>
+                      {!wcSeqMode ? (
+                        <Button size="small" type="primary" onClick={wcSeqStart}>
+                          연속클릭 시작
+                        </Button>
+                      ) : (
+                        <>
+                          <Tag color="blue" style={{ margin: 0 }}>{wcSeqPoints.length}회 클릭됨</Tag>
+                          <Button size="small" type="primary" onClick={wcSeqFinish} disabled={wcSeqPoints.length === 0}>
+                            완료
+                          </Button>
+                          <Button size="small" danger onClick={wcSeqCancel}>
+                            취소
+                          </Button>
+                        </>
+                      )}
                     </div>
-                    {wcPendingRepeat && (
+                    {wcSeqMode && (
                       <Tag color="blue" style={{ alignSelf: 'flex-start' }}>
-                        {`연속클릭 위치를 클릭하세요 — ${wcRepeatCount}회 @${wcRepeatInterval}ms`}
+                        포커스 유지 중 — 드롭다운 등 위치를 순서대로 클릭한 뒤 완료를 누르세요
                       </Tag>
                     )}
                     {/* 단축키: 자주 쓰는 modifier 조합 버튼. 좌측 정렬.

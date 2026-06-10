@@ -1136,7 +1136,7 @@ async def device_input(req: InputRequest):
                     )
             return {"result": "ok"}
 
-        if req.action in ("win_tap", "win_double_click", "win_repeat_tap",
+        if req.action in ("win_tap", "win_double_click", "win_seq_end",
                           "win_long_press", "win_swipe",
                           "win_input_text", "win_key", "win_key_combo") and dev and dev.type == "wincontrol":
             wc = dm.get_wincontrol_service()
@@ -1180,17 +1180,22 @@ async def device_input(req: InputRequest):
             # 까지 한 사이클로 처리 → 이중 활성화/플리커 방지.
             capture_after_ms_raw = p.get("capture_after_ms")
             capture_after_ms = int(capture_after_ms_raw) if capture_after_ms_raw else 0
+            # 연속클릭(win_tap + hold) — 첫 클릭 전에 포커스 홀드 시작. 이후 클릭들은
+            # 포어그라운드 복원을 미뤄 드롭다운 등 일시 팝업이 닫히지 않는다(멱등).
+            if req.action == "win_tap" and p.get("hold"):
+                wc.begin_focus_hold()
+            # 시퀀스 종료는 클릭이 아니므로 캡처 사이클(deferred_restore 래핑) 불필요.
+            if req.action == "win_seq_end":
+                capture_after_ms = 0
 
             def _run_action():
                 if req.action == "win_tap":
                     wc.send_tap(int(p["x"]), int(p["y"]), p.get("button", "left"))
                 elif req.action == "win_double_click":
                     wc.send_double_click(int(p["x"]), int(p["y"]))
-                elif req.action == "win_repeat_tap":
-                    wc.send_repeat_tap(int(p["x"]), int(p["y"]),
-                                       int(p.get("count", 5)),
-                                       int(p.get("interval_ms", 100)),
-                                       p.get("button", "left"))
+                elif req.action == "win_seq_end":
+                    # 연속클릭 종료 — 지연했던 포어그라운드/커서 복원을 1회 수행.
+                    wc.end_focus_hold()
                 elif req.action == "win_long_press":
                     wc.send_long_press(int(p["x"]), int(p["y"]),
                                        int(p.get("duration_ms", 500)),

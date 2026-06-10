@@ -31,7 +31,10 @@ class StepType(str, Enum):
     # WinControl 스텝 (Windows 임베드 프로세스 조작)
     WIN_TAP = "win_tap"
     WIN_DOUBLE_CLICK = "win_double_click"
-    WIN_REPEAT_TAP = "win_repeat_tap"  # 같은 위치 연속 클릭 (횟수 지정 — 드롭다운 등 1회 클릭만으로 닫히는 컨트롤 대응)
+    # 포커스를 유지한 채 여러 위치를 연속 클릭 (드롭다운 열기→항목 선택 등).
+    # 일반 win_tap 은 클릭마다 포어그라운드를 원래 창으로 복원해서 드롭다운 같은
+    # 일시 팝업이 닫히지만, 이 스텝은 시퀀스 전체가 끝날 때 1회만 복원한다.
+    WIN_CLICK_SEQUENCE = "win_click_sequence"
     WIN_LONG_PRESS = "win_long_press"
     WIN_SWIPE = "win_swipe"
     WIN_INPUT_TEXT = "win_input_text"
