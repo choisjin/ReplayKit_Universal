@@ -229,35 +229,50 @@ export default function ScenarioPage() {
   const { webcam, ensureWebcamOpen } = useWebcamContext();
   const { pauseScreenStream, resumeScreenStream, primaryDevices, auxiliaryDevices } = useDevice();
   // 시나리오 재생 중 Serial/Logcat 은 라이브 뷰어를 띄우지 않는다 — 로그가 폭주하면(예: logcat
-  // 수십만 줄) 렌더링이 메인 스레드를 잡아먹어 PC 가 느려진다. 대신 StartLogging(session_started)
-  // 시 작은 노티로 "어떤 device 의 어떤 로그가 logging 중"인지만 알린다. 로그 파일 저장은
-  // 백엔드에서 그대로 수행되므로 영향 없음.
-  useEffect(() => {
-    const ev = serialSessionHook.lastEvent;
-    if (ev?.type !== 'session_started') return;
-    const port = ev.port || String(ev.session_id || '').split('@')[0];
-    const dev = [...primaryDevices, ...auxiliaryDevices].find((x: any) => x.address === port);
-    notification.info({
-      message: 'Logging 시작',
-      description: `${dev?.id || port} — Serial`,
-      placement: 'bottomRight',
-      duration: 3,
+  // 수십만 줄) 렌더링이 메인 스레드를 잡아먹어 PC 가 느려진다. 대신 "현재 logging 중"인 세션을
+  // 작은 노티로 **계속 유지** 표시하고, StopLogging(세션 종료) 시 해당 노티를 **닫는다**.
+  // → 사용자가 명시적으로 logging 상태를 파악 가능. 활성 세션 목록(sessions)에서 파생하므로
+  //   backfill/재연결에도 일관. 로그 파일 저장은 백엔드에서 그대로 수행되므로 영향 없음.
+  const _shownLogNotis = useRef<Set<string>>(new Set());
+  const _reconcileLogNotis = useCallback((
+    prefix: string,
+    label: string,
+    sessions: Array<{ session_id: string; port?: string; serial?: string }>,
+    addrOf: (s: { session_id: string; port?: string; serial?: string }) => string,
+  ) => {
+    const wanted = new Map<string, string>();
+    sessions.forEach((s) => {
+      const addr = addrOf(s);
+      const dev = [...primaryDevices, ...auxiliaryDevices].find((x: any) => x.address === addr);
+      wanted.set(`${prefix}:${s.session_id}`, `${dev?.id || addr} — ${label}`);
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serialSessionHook.lastEvent]);
-  useEffect(() => {
-    const ev = logcatSessionHook.lastEvent;
-    if (ev?.type !== 'session_started') return;
-    const serial = ev.serial || ev.session_id;
-    const dev = [...primaryDevices, ...auxiliaryDevices].find((x: any) => x.address === serial);
-    notification.info({
-      message: 'Logging 시작',
-      description: `${dev?.id || serial} — Android logcat`,
-      placement: 'bottomRight',
-      duration: 3,
+    // 활성 세션 → 노티 열기/유지 (같은 key 는 in-place 갱신, duration:0 = 자동닫힘 없음)
+    wanted.forEach((desc, key) => {
+      notification.open({ key, message: '🔴 Logging 중', description: desc, duration: 0, placement: 'bottomRight' });
+      _shownLogNotis.current.add(key);
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logcatSessionHook.lastEvent]);
+    // 더 이상 활성이 아닌(=StopLogging 된) 세션 노티는 닫기
+    Array.from(_shownLogNotis.current).forEach((key) => {
+      if (key.startsWith(`${prefix}:`) && !wanted.has(key)) {
+        notification.destroy(key);
+        _shownLogNotis.current.delete(key);
+      }
+    });
+  }, [primaryDevices, auxiliaryDevices]);
+
+  useEffect(() => {
+    _reconcileLogNotis('log-serial', 'Serial', serialSessionHook.sessions,
+      (s) => s.port || String(s.session_id || '').split('@')[0]);
+  }, [serialSessionHook.sessions, _reconcileLogNotis]);
+  useEffect(() => {
+    _reconcileLogNotis('log-logcat', 'Android logcat', logcatSessionHook.sessions,
+      (s) => s.serial || s.session_id);
+  }, [logcatSessionHook.sessions, _reconcileLogNotis]);
+  // 페이지 이탈 시 띄운 logging 노티 정리 (재진입하면 활성 세션에서 다시 표시됨)
+  useEffect(() => () => {
+    Array.from(_shownLogNotis.current).forEach((key) => notification.destroy(key));
+    _shownLogNotis.current.clear();
+  }, []);
   const [scenarios, setScenarios] = useState<string[]>([]);
   const [selectedScenario, setSelectedScenario] = useState<ScenarioDetail | null>(null);
   const [detailVisible, setDetailVisible] = useState(false);
