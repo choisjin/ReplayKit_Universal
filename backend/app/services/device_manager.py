@@ -2932,6 +2932,10 @@ class DeviceManager:
                 from ..routers.device import _build_constructor_kwargs
                 ctor_kwargs = _build_constructor_kwargs(dev)
                 shared_conn = self.get_serial_conn(dev.id)
+                # 장시간 Setup(SCAR 컨테이너 기동/TH CVD 부팅) 동안 UI 카드에 '연결 중' 표시.
+                # 진행 단계 문구는 플러그인이 connect_progress 레지스트리로 보고 →
+                # /device/list 가 connect_progress 필드로 노출.
+                dev.status = "reconnecting"
                 instance = await loop.run_in_executor(
                     None, functools.partial(_get_instance, module_name, ctor_kwargs, shared_conn),
                 )

@@ -248,6 +248,9 @@ export default function DevicePage() {
     const hideBooting = slowModule
       ? message.loading(t('device.connectModuleBooting', { name: dev?.info?.module }), 0)
       : null;
+    // 장시간 연결 동안 카드의 '연결 중' 상태 + 진행 단계(connect_progress)가 실시간으로
+    // 보이도록, 기본 10초 폴링과 별개로 2초 간격 고속 폴링을 돌린다.
+    const fastPoll = slowModule ? window.setInterval(() => { fetchDevices(); }, 2000) : null;
     try {
       const res = await deviceApi.connectRegistered([deviceId]);
       updateDeviceLists(res.data);
@@ -256,6 +259,7 @@ export default function DevicePage() {
     } catch (e: any) {
       message.error(e.response?.data?.detail || t('device.connectFailed'));
     }
+    if (fastPoll !== null) window.clearInterval(fastPoll);
     hideBooting?.();
     setConnectingIds(prev => {
       const next = new Set(prev);
@@ -1225,6 +1229,13 @@ export default function DevicePage() {
       {d.protected && <Tag color="gold" style={{ flexShrink: 0 }}>SYSTEM</Tag>}
       <span style={{ color: '#aaa', fontSize: 11, flexShrink: 0 }}>{d.address}</span>
       {d.info?.module && <Tag color="cyan" style={{ flexShrink: 0 }}>{d.info.module}</Tag>}
+      {/* 모듈 장시간 연결(SCAR 컨테이너 기동/TH CVD 부팅)의 현재 단계 — 백엔드 connect_progress */}
+      {d.status === 'reconnecting' && d.connect_progress && (
+        <span style={{ color: '#888', fontSize: 11, fontStyle: 'italic', flexShrink: 1,
+                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {d.connect_progress}
+        </span>
+      )}
       {extraModuleTags?.map(tag => <Tag key={tag} color="cyan" style={{ flexShrink: 0 }}>{tag}</Tag>)}
       {d.info?.baudrate && <Tag style={{ flexShrink: 0 }}>{d.info.baudrate}</Tag>}
       {d.info?.resolution && <Tag style={{ flexShrink: 0 }}>{d.info.resolution.width}x{d.info.resolution.height}</Tag>}

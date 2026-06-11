@@ -168,18 +168,37 @@ class TH:
         self._trigger_bytes = panel_trigger.encode("utf-8")
 
     # ── 자동 호출 (device_manager 가 등록 직후 호출) ──────────
+    def _report(self, text: str) -> None:
+        """연결 진행 단계 보고 — /device/list 의 connect_progress 로 카드에 표시.
+
+        장시간 Setup(CVD 부팅 대기 등) 동안 '아무것도 안 하는 것처럼' 보이지 않게.
+        실패해도 연결 자체에는 영향 없도록 조용히 무시.
+        """
+        try:
+            from ...services.connect_progress import set_progress
+            set_progress("TH", text)
+        except Exception:
+            pass
+
     def Connect(self) -> str:
         """device_manager 가 module 등록 직후 호출.
 
         auto_setup=True 이면 Setup() 실행 — connect_th.sh step 1-3 (네트워크 + ADB) 등가.
         auto_setup=False 면 setup 을 건너뛰고 즉시 ok (PanelClient 만 lazy 준비).
         """
-        if not self.auto_setup:
-            logger.info("TH.Connect: auto_setup disabled, skipping setup")
-            self._setup_done = True
-            self._setup_last_msg = "ok (auto_setup disabled)"
-            return self._setup_last_msg
-        return self.Setup()
+        try:
+            if not self.auto_setup:
+                logger.info("TH.Connect: auto_setup disabled, skipping setup")
+                self._setup_done = True
+                self._setup_last_msg = "ok (auto_setup disabled)"
+                return self._setup_last_msg
+            return self.Setup()
+        finally:
+            try:
+                from ...services.connect_progress import clear_progress
+                clear_progress("TH")
+            except Exception:
+                pass
 
     def IsConnected(self) -> bool:
         """device_manager._is_connected 가 호출. Setup 이 한 번 성공했으면 True."""
@@ -211,12 +230,14 @@ class TH:
         log: list[str] = []
 
         # ── [1] bridge 네트워크 ──────────────────────────
+        self._report("bridge 네트워크 구성 중")
         rc, msg = self._setup_bridge_network()
         log.append(f"[1] bridge network:\n{msg}")
         if rc != 0:
             return self._mark_fail("bridge network setup", log)
 
         # ── [2] host_ends_setup.sh ───────────────────────
+        self._report("host_ends_setup.sh 실행 중")
         rc, msg = self._run_setup_script(
             os.path.join(self.th_root, "host_ends_setup.sh"), [self.eth_if]
         )
@@ -228,6 +249,7 @@ class TH:
         # 사용자 환경 사례: adb 가 이미 RBVM 에 붙어있는데도 ensure-adb.sh 의
         # `adb connect localhost` 폴백이 hang 한 적 있음. 그래서 먼저 한 번 verify 해서
         # 이미 OK 면 스크립트 자체를 건너뛴다.
+        self._report("ADB 연결 확인/복구 중 (ensure-adb)")
         adb_rc, adb_msg = self._verify_adb()
         if adb_rc == 0:
             log.append("[3] ensure-adb.sh:\n  skipped — adb already connected to RBVM\n" + adb_msg)
@@ -247,6 +269,7 @@ class TH:
 
         # ── [5] launch_cvd (TH server) — 백그라운드 spawn ─
         if self.launch_cvd:
+            self._report("cuttlefish(launch_cvd) 기동 중")
             rc, msg = self._launch_cvd_background()
             log.append(f"[5] launch_cvd:\n{msg}")
             if rc != 0:
@@ -259,10 +282,12 @@ class TH:
         if self.run_microservice and self.microservice_gateways:
             # CVD 부팅 게이트 — [5] spawn 직후엔 booting(adb offline) 상태라 메뉴가 빈
             # 목록으로 나와 첫 연결이 항상 실패하던 원인. 'device' 상태까지 기다린 뒤 실행.
+            self._report(f"CVD 부팅 대기 중 (최대 {SETUP_CVD_BOOT_WAIT_S:g}s)")
             ok_boot, boot_msg = self._wait_cvd_adb(SETUP_CVD_BOOT_WAIT_S)
             if not ok_boot:
                 log.append(f"[6] microservice:\n{boot_msg}")
                 return self._mark_fail("CVD adb not ready (launch_cvd 부팅 지연/실패)", log)
+            self._report("게이트웨이 기동 중 (th_run_microservice)")
             rc, msg = self._run_microservice()
             if rc != 0 and "게이트웨이 번호 오류" in msg:
                 # 부팅 직후 스크립트의 'adbd root 재시작' 으로 잠깐 offline 이 끼면 메뉴가

@@ -25,6 +25,16 @@ def _with_protected_flag(devices: list) -> list[dict]:
     for d in devices:
         data = d.to_dict()
         data["protected"] = dm.is_protected_device(d.id)
+        # 모듈 연결 진행 단계(SCAR 컨테이너 기동/TH CVD 부팅 등 장시간 Setup) —
+        # 연결 중(reconnecting) 카드에 현재 단계 문구를 표시하기 위해 노출.
+        if d.type == "module" and d.status == "reconnecting":
+            try:
+                from ..services.connect_progress import get_progress
+                p = get_progress(d.info.get("module", ""))
+                if p:
+                    data["connect_progress"] = p
+            except Exception:
+                pass
         result.append(data)
     return result
 

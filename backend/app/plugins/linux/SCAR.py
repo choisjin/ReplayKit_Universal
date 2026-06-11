@@ -207,34 +207,54 @@ class SCAR:
         self._setup_last_msg = ""
 
     # ── 자동 호출 (device_manager 가 등록 직후 호출) ──────────
+    def _report(self, text: str) -> None:
+        """연결 진행 단계 보고 — /device/list 의 connect_progress 로 카드에 표시.
+
+        장시간 Setup(컨테이너 기동 등) 동안 '아무것도 안 하는 것처럼' 보이지 않게.
+        실패해도 연결 자체에는 영향 없도록 조용히 무시.
+        """
+        try:
+            from ...services.connect_progress import set_progress
+            set_progress("SCAR", text)
+        except Exception:
+            pass
+
     def Connect(self) -> str:
         """device_manager 가 module 등록 직후 호출.
 
         auto_setup=True 이면 Setup() 실행 — 설치 가이드 2단계(netns VLAN) 등가.
         auto_setup=False 면 setup 을 건너뛰고 readiness 만 확인.
         """
-        if not self.auto_setup:
-            logger.info("SCAR.Connect: auto_setup disabled, skipping netns setup")
-            mode = self.Ready()
-            self._setup_done = mode != "NONE"
-            msg = f"ok (auto_setup disabled, Ready={mode})"
-        else:
-            msg = self.Setup()
+        try:
+            if not self.auto_setup:
+                logger.info("SCAR.Connect: auto_setup disabled, skipping netns setup")
+                mode = self.Ready()
+                self._setup_done = mode != "NONE"
+                msg = f"ok (auto_setup disabled, Ready={mode})"
+            else:
+                msg = self.Setup()
 
-        # ── 연결 직후 UI 자동화 (버전 선택 + bench 토글) ──────
-        # setup 이 성공(_setup_done)했고 할 일이 있을 때만. 개별 항목 실패는 경고로 유지하되,
-        # 제어 백엔드(3000) 자체가 안 떠서 '전부' skip 된 경우는 connected 로 래치하지 않는다 —
-        # 래치되면 인스턴스가 캐시에 살아남아 이후 재연결이 아무것도 재시도하지 않는
-        # 영구 반설정(half-configured) 상태가 된다 (2026-06-11 cold-boot>폴링상한 사례).
-        if self.post_connect and self._setup_done and (self.capabilities or self.ethernet_interfaces or self.ui_version or self.ends or self.start_services or self.bench_toggle):
-            pc = self._post_connect()
-            msg = f"{msg}\n{pc}"
-            if "제어 백엔드(3000) 미응답" in pc:
-                self._setup_done = False
-                msg = ("FAIL: post-connect 미완료 — UI 제어 백엔드(3000) 미응답 "
-                       "(연결을 다시 시도하면 Setup+UI 자동화를 재실행합니다)\n" + msg)
-            self._setup_last_msg = msg
-        return msg
+            # ── 연결 직후 UI 자동화 (버전 선택 + bench 토글) ──────
+            # setup 이 성공(_setup_done)했고 할 일이 있을 때만. 개별 항목 실패는 경고로 유지하되,
+            # 제어 백엔드(3000) 자체가 안 떠서 '전부' skip 된 경우는 connected 로 래치하지 않는다 —
+            # 래치되면 인스턴스가 캐시에 살아남아 이후 재연결이 아무것도 재시도하지 않는
+            # 영구 반설정(half-configured) 상태가 된다 (2026-06-11 cold-boot>폴링상한 사례).
+            if self.post_connect and self._setup_done and (self.capabilities or self.ethernet_interfaces or self.ui_version or self.ends or self.start_services or self.bench_toggle):
+                self._report("UI 자동화 중 (capabilities/버전/서비스/토글)")
+                pc = self._post_connect()
+                msg = f"{msg}\n{pc}"
+                if "제어 백엔드(3000) 미응답" in pc:
+                    self._setup_done = False
+                    msg = ("FAIL: post-connect 미완료 — UI 제어 백엔드(3000) 미응답 "
+                           "(연결을 다시 시도하면 Setup+UI 자동화를 재실행합니다)\n" + msg)
+                self._setup_last_msg = msg
+            return msg
+        finally:
+            try:
+                from ...services.connect_progress import clear_progress
+                clear_progress("SCAR")
+            except Exception:
+                pass
 
     def IsConnected(self) -> bool:
         """device_manager._is_connected 가 호출. Setup 성공 또는 SCAR 가용이면 True."""
@@ -286,6 +306,7 @@ class SCAR:
         global _session_container_cleaned
         if self.clean_container_on_connect and not _session_container_cleaned:
             _session_container_cleaned = True  # 실패해도 매 연결 재시도 방지(세션 1회)
+            self._report("이전 세션 컨테이너 정리 중")
             if self._docker.is_running():
                 _script, _tag, _cwd = self._scar_script_info()
                 if _script:
@@ -299,6 +320,7 @@ class SCAR:
 
         # ── [1] clean ────────────────────────────────────
         if self.netns_clean:
+            self._report("netns 정리 중")
             rc, msg = self._netns.clean(self.iface)
             log.append(f"[1] netns clean:\n{self._indent(msg)}")
             if rc != 0:
@@ -330,6 +352,7 @@ class SCAR:
         log.append(f"[2] config:\n  {cfg_msg}\n{self._indent(json.dumps(config, indent=2))}")
 
         # ── [3] apply ────────────────────────────────────
+        self._report("netns 적용 중")
         rc, msg = self._netns.apply(cfg_path)
         log.append(f"[3] netns apply:\n{self._indent(msg)}")
         if rc != 0:
@@ -350,6 +373,7 @@ class SCAR:
             log.append("[4] UI launch: already running (container up, 8081 alive)")
         elif running and not api_alive:
             # (a) 컨테이너 안 UI 만 죽음 — 가장 흔한 재발 케이스.
+            self._report("UI 재기동(start_ui.sh) — 8081 대기 중")
             ok, msg = self._docker.restart_ui_in_container(self.ui_dir, self.ui_home)
             log.append(f"[4] UI restart (in-container start_ui.sh): {self._indent(msg).lstrip()}")
             if ok and self._wait_api_up(self._health.reconnect_wait_s):
@@ -362,6 +386,7 @@ class SCAR:
                 log.append("  → start_ui.sh 기동 실패 (위 출력/ui_dir·ui_home 확인)")
         elif self._health.reconnect_script:
             # (b) 컨테이너 down — host scar.sh 로 통째 기동 (start_via_script + 폴링).
+            self._report(f"컨테이너 기동(scar.sh) — 8081 대기 중 (최대 {self._health.reconnect_wait_s:g}s)")
             _t0 = time.time()
             ok = self._health._reconnect()  # noqa: SLF001
             _polled = time.time() - _t0
@@ -383,6 +408,7 @@ class SCAR:
                 # 죽는 함정(launch.log 'cannot attach stdin to a TTY...'). 컨테이너가 없을 때의
                 # 신규 기동은 UI 까지 올라오지만([0] 정리 후 재기동은 이 함정을 밟는다),
                 # 그 경우 branch (a) 와 동일한 in-container start_ui.sh 직접 기동으로 폴백.
+                self._report("start_ui.sh 폴백 — 8081 대기 중")
                 ok2, msg2 = self._docker.restart_ui_in_container(self.ui_dir, self.ui_home)
                 log.append(f"  → 8081 still down after {self._health.reconnect_wait_s:g}s "
                            f"(컨테이너는 running) — in-container start_ui.sh 폴백:\n"

@@ -12,6 +12,7 @@ export interface ManagedDevice {
   name: string;
   info: Record<string, any>;
   protected?: boolean;  // 시스템 기본 디바이스 (삭제/수정 불가)
+  connect_progress?: string;  // 모듈 연결 진행 단계 (SCAR/TH 장시간 Setup, status=reconnecting 일 때)
 }
 
 interface DeviceContextType {
