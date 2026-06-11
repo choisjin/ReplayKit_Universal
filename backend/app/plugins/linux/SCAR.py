@@ -362,9 +362,12 @@ class SCAR:
                 log.append("  → start_ui.sh 기동 실패 (위 출력/ui_dir·ui_home 확인)")
         elif self._health.reconnect_script:
             # (b) 컨테이너 down — host scar.sh 로 통째 기동 (start_via_script + 폴링).
+            _t0 = time.time()
             ok = self._health._reconnect()  # noqa: SLF001
+            _polled = time.time() - _t0
             if ok:
-                log.append(f"[4] scar launch: container start via scar.sh (polled {self._health.reconnect_wait_s}s)")
+                log.append(f"[4] scar launch: container start via scar.sh "
+                           f"(8081 대기 {_polled:.0f}s / 상한 {self._health.reconnect_wait_s:g}s)")
             else:
                 log.append(
                     f"[4] scar launch: FAILED (scar.sh 기동 실패)\n"

@@ -108,10 +108,12 @@ class SCARHealth:
                 # (TTY) 라 무TTY 환경에서 죽는다 → 8081 은 폴링 상한까지 기다려도 영영 안 온다.
                 # 기동 로그에서 그 시그니처가 보이면 조기 중단 — 호출자(Setup [4](b))가
                 # in-container start_ui.sh 폴백으로 즉시 넘어간다.
-                if self._launch_hit_tty_trap():
+                # 컨테이너 running 까지 함께 확인 — 시그니처만으로 끊으면 폴백(running 전제)이
+                # 못 돌고, start_via_script 의 사전 truncate 와 이중 안전장치가 된다.
+                if self._launch_hit_tty_trap() and self.docker.is_running():
                     logger.warning(
                         "SCAR launch hit no-TTY trap (scar.sh 'docker exec -it' UI step died); "
-                        "abort 8081 wait early")
+                        "abort 8081 wait early → start_ui.sh fallback")
                     break
                 time.sleep(min(2.0, self.reconnect_wait_s))
         return ok

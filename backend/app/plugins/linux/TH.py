@@ -559,7 +559,14 @@ class TH:
             return 1, f"  게이트웨이 번호 오류 (메뉴 범위 밖이거나 디바이스 목록과 불일치)\n{tail}"
         if "Script execution is completed." not in out:
             return 1, f"  게이트웨이 기동 미확인 (rc={proc.returncode})\n{tail}"
-        return 0, f"  ok — gateways [{self.microservice_gateways}] 기동\n{tail}"
+        # FqinAlreadyExists 패닉 = 이전 세션 게이트웨이가 CVD 안에 살아있어 identity 충돌.
+        # 기존 인스턴스가 토픽을 계속 서비스하므로 기능상 정상 — 단, 출력의 panic 텍스트가
+        # 연결 토스트에 실패처럼 보이니 설명을 붙인다. (해제 시 기본 정리로 재발 방지)
+        note = ""
+        if "FqinAlreadyExists" in out:
+            note = ("\n  note: 일부 게이트웨이는 이전 세션 것이 이미 기동 중(FqinAlreadyExists) — "
+                    "기존 인스턴스가 그대로 서비스하므로 동작 정상")
+        return 0, f"  ok — gateways [{self.microservice_gateways}] 기동{note}\n{tail}"
 
     # ── launch_cvd 백그라운드 ─────────────────────────────
     def _launch_cvd_background(self) -> tuple[int, str]:
@@ -744,8 +751,8 @@ class TH:
 
         매 연결마다 Setup[6] 이 게이트웨이를 재기동하면 SDV identity 충돌(FqinAlreadyExists)이
         나므로, 해제 시 게이트웨이를 정리해 다음 연결에서 깨끗이 재기동되게 한다.
-          - microservice_stop_cmd: 게이트웨이 정지 쉘 명령(벤치별). 비면 skip.
-            예) host: 'pkill -f grpc_.*_gateway'  /  device: 'adb -s 0.0.0.0:6520 shell pkill -f grpc_'
+          - microservice_stop_cmd: 게이트웨이 정지 쉘 명령(벤치별 커스텀). **비면 기본 정리** —
+            CVD 안 게이트웨이 pkill(`adb -s <th_adb> shell pkill -f grpc_.*_gateway`).
           - stop_cvd_on_disconnect=True 면 cuttlefish(launch_cvd)도 종료(기본 False — 재연결 빠르게).
         device_manager 가 module teardown(MODULES_WITH_DISCONNECT_TEARDOWN)으로 호출.
         """
@@ -765,7 +772,17 @@ class TH:
             except Exception as e:
                 parts.append(f"gateway stop: error {e}")
         else:
-            parts.append("gateway stop: skipped (microservice_stop_cmd 미설정)")
+            # 기본 정리 — 게이트웨이는 CVD(Android) 안에서 돈다(FqinAlreadyExists 패닉의
+            # binder/sdvVmName 으로 실증). 안 죽이면 다음 연결 [6] 재기동 때 identity 충돌
+            # 패닉이 난다. pkill 대상 없음(rc!=0)은 이미 깨끗한 상태라 실패 아님.
+            try:
+                res = subprocess.run(
+                    ["adb", "-s", self.th_adb, "shell", "pkill", "-f", "grpc_.*_gateway"],
+                    capture_output=True, text=True, timeout=SETUP_ADB_TIMEOUT_S,
+                )
+                parts.append(f"gateway stop (default, CVD pkill rc={res.returncode})")
+            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                parts.append(f"gateway stop: error {e}")
         # ── cuttlefish 정지 (옵션) ──
         if self.stop_cvd_on_disconnect:
             parts.append("cuttlefish: " + self.StopCvd())

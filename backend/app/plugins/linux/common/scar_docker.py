@@ -103,6 +103,14 @@ class SCARDocker:
         # 이미 떠 있는 컨테이너 안의 UI(start_ui.sh) 직접 재기동 — start_via_script 와 별개 경로.
         # (해당 메서드는 클래스 본문 아래쪽 restart_ui_in_container 로 정의)
 
+        # 이전 기동 로그를 '스폰 전에' 동기적으로 비운다 — 아래 bash 의 > truncate 는 백그라운드
+        # 프로세스가 뜬 뒤에야 일어나므로, 폴링(_launch_hit_tty_trap)이 그보다 먼저 읽으면 직전
+        # 실행의 TTY 에러를 현재 실행 것으로 오인해 폴링을 0초 만에 포기한다(2026-06-11 실측).
+        try:
+            open(SCAR_LAUNCH_LOG, "w").close()
+        except OSError:
+            pass
+
         # scar.sh 출력을 /dev/null 대신 로그 파일로 남긴다 — 컨테이너 미기동 원인 진단용.
         cmd_str = (
             " ".join(["setsid", script, *(args or [])])
