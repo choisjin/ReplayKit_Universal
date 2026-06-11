@@ -69,6 +69,13 @@ SETUP_CVD_VERIFY_S = 5.0
 # CVD 부팅이 늦으면 wait-for-device 에서 대기하므로 넉넉히.
 SETUP_MICROSERVICE_TIMEOUT_S = 120.0
 
+# Setup [6] 진입 전 CVD(th_adb) 부팅 완료 대기 상한 — cold boot 실측 ~40-60s.
+# [5] 의 5초 생존확인만 믿고 [6] 을 돌리면 offline 디바이스에서 게이트웨이 메뉴가
+# 빈 목록으로 나와 번호 주입이 전부 Invalid → "No service selected" 로 첫 연결이
+# 항상 실패한다 (스크립트 내부 wait-for-device 는 이를 막아주지 못함 — 실측).
+# 이미 부팅돼 있으면 첫 체크에서 즉시 통과하므로 재연결 비용은 없다.
+SETUP_CVD_BOOT_WAIT_S = 120.0
+
 # launch_cvd 백그라운드 프로세스 추적 파일
 LAUNCH_CVD_LOG = "/tmp/replaykit-launch_cvd.log"
 LAUNCH_CVD_PID_FILE = "/tmp/replaykit-launch_cvd.pid"
@@ -250,8 +257,20 @@ class TH:
         # ── [6] microservice 게이트웨이 (th_run_microservice.sh) ─
         # 게이트웨이가 떠 있어야 브로커에 토픽이 등록됨 → client.py 의 "Topic not found" 회피.
         if self.run_microservice and self.microservice_gateways:
+            # CVD 부팅 게이트 — [5] spawn 직후엔 booting(adb offline) 상태라 메뉴가 빈
+            # 목록으로 나와 첫 연결이 항상 실패하던 원인. 'device' 상태까지 기다린 뒤 실행.
+            ok_boot, boot_msg = self._wait_cvd_adb(SETUP_CVD_BOOT_WAIT_S)
+            if not ok_boot:
+                log.append(f"[6] microservice:\n{boot_msg}")
+                return self._mark_fail("CVD adb not ready (launch_cvd 부팅 지연/실패)", log)
             rc, msg = self._run_microservice()
-            log.append(f"[6] microservice:\n{msg}")
+            if rc != 0 and "게이트웨이 번호 오류" in msg:
+                # 부팅 직후 스크립트의 'adbd root 재시작' 으로 잠깐 offline 이 끼면 메뉴가
+                # 또 빈 목록이 될 수 있다 → 디바이스 복귀 재확인 후 1회만 재시도.
+                self._wait_cvd_adb(30.0)
+                rc, retry_msg = self._run_microservice()
+                msg = "  (1차 메뉴 불일치 — adbd 재시작 offline 추정 → 재시도)\n" + retry_msg
+            log.append(f"[6] microservice:\n{boot_msg}\n{msg}")
             if rc != 0:
                 return self._mark_fail("microservice gateways", log)
         else:
@@ -405,6 +424,42 @@ class TH:
         if not has_rbvm:
             return 1, f"  RBVM ({self.rbvm_ip}) not in adb devices\n" + diag
         return 0, diag
+
+    def _wait_cvd_adb(self, timeout_s: float, interval_s: float = 3.0) -> tuple[bool, str]:
+        """th_adb(CVD) 가 `adb devices` 에 'device'(offline 아님) 상태로 보일 때까지 폴링.
+
+        [5] launch_cvd 는 spawn 후 5초 생존확인만 하므로 실제 boot 완료(~40초+)는 여기서
+        기다린다. 이미 떠 있으면 첫 체크에서 즉시 통과. 반환: (ok, 진단 메시지).
+        """
+        start = time.monotonic()
+        last = "(not checked)"
+        while True:
+            try:
+                res = subprocess.run(
+                    ["adb", "devices"], capture_output=True, text=True,
+                    timeout=SETUP_ADB_TIMEOUT_S,
+                )
+                line = next(
+                    (ln for ln in res.stdout.splitlines()[1:] if self.th_adb in ln), None
+                )
+                if line is None:
+                    last = f"{self.th_adb} not in adb devices"
+                else:
+                    last = line.strip()
+                    if "\tdevice" in line:
+                        return True, (f"  cvd boot gate: ok — {self.th_adb} online "
+                                      f"({time.monotonic() - start:.0f}s 대기)")
+            except subprocess.TimeoutExpired:
+                last = "'adb devices' timeout"
+            except FileNotFoundError:
+                return False, "  cvd boot gate: adb command not found in PATH"
+            if time.monotonic() - start >= timeout_s:
+                return False, (
+                    f"  cvd boot gate: timeout ({timeout_s:.0f}s) — CVD({self.th_adb}) 미부팅"
+                    f" (last: {last})\n"
+                    f"  → launch_cvd 부팅 로그 확인: {LAUNCH_CVD_LOG}"
+                )
+            time.sleep(interval_s)
 
     # ── microservice 게이트웨이 기동 ──────────────────────
     def _run_microservice(self) -> tuple[int, str]:

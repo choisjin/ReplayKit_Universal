@@ -241,6 +241,13 @@ export default function DevicePage() {
   // 개별 연결
   const handleConnectOne = async (deviceId: string) => {
     setConnectingIds(prev => new Set(prev).add(deviceId));
+    // SCAR/TH 는 최초 연결 시 컨테이너·CVD 기동으로 분 단위가 걸린다 — 무응답으로
+    // 오인해 재클릭(중복 Setup)하지 않도록 진행 중 안내를 띄운다.
+    const dev = allDevices.find(d => d.id === deviceId);
+    const slowModule = dev?.type === 'module' && ['SCAR', 'TH'].includes(dev?.info?.module);
+    const hideBooting = slowModule
+      ? message.loading(t('device.connectModuleBooting', { name: dev?.info?.module }), 0)
+      : null;
     try {
       const res = await deviceApi.connectRegistered([deviceId]);
       updateDeviceLists(res.data);
@@ -249,6 +256,7 @@ export default function DevicePage() {
     } catch (e: any) {
       message.error(e.response?.data?.detail || t('device.connectFailed'));
     }
+    hideBooting?.();
     setConnectingIds(prev => {
       const next = new Set(prev);
       next.delete(deviceId);

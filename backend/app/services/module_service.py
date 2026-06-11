@@ -22,6 +22,14 @@ logger = logging.getLogger(__name__)
 # Cache: module_name -> class instance
 _instances: dict[str, Any] = {}
 
+# 인스턴스 키별 생성 락 — 생성+auto-Connect 가 수십 초 걸리는 모듈(SCAR 컨테이너 기동
+# ~60s, TH CVD 부팅 ~40s+)에서, 첫 Connect 가 끝나기 전에 들어온 두 번째 연결 요청이
+# 캐시 미스(_instances 에는 Connect 완료 후에야 등록)로 중복 인스턴스를 만들어
+# Setup(netns clean/apply, start_ui.sh)을 동시에 재실행하던 레이스를 차단한다.
+# 락을 기다린 요청은 더블체크로 먼저 만들어진 같은 인스턴스를 받는다.
+_instance_locks: dict[str, threading.Lock] = {}
+_instance_locks_guard = threading.Lock()
+
 # Tracks modules that went through auto-connect successfully
 _auto_connected: set[str] = set()
 
@@ -1002,6 +1010,12 @@ def _keys_for(module_name: str) -> list[str]:
     return [k for k in list(_instances.keys()) if k == module_name or k.startswith(prefix)]
 
 
+def _instance_lock(key: str) -> threading.Lock:
+    """키별 생성 락 반환 (없으면 생성). dict 갱신 자체는 guard 락으로 보호."""
+    with _instance_locks_guard:
+        return _instance_locks.setdefault(key, threading.Lock())
+
+
 def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
                   shared_serial_conn=None, ssh_credentials: Optional[dict] = None) -> Any:
     """Get or create a singleton instance of the module class.
@@ -1029,113 +1043,12 @@ def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
             _auto_connected.discard(key)
 
     if key not in _instances:
-        cls = _import_module_class(module_name)
-        if cls is None:
-            # 진단 정보 포함 — lge.auto 미설치 / DLL 로드 실패 등 실제 원인을
-            # UI(디바이스 연결 실패 토스트) 까지 노출시켜 사용자가 즉시 원인 파악.
-            reason = _last_import_error.get(module_name)
-            if reason:
-                raise ValueError(f"Module '{module_name}' not found ({reason})")
-            raise ValueError(f"Module '{module_name}' not found")
-        # Try to pass constructor kwargs (e.g. port, bps) if the class needs them
-        if constructor_kwargs:
-            sig = inspect.signature(cls.__init__)
-            ctor_args = {}
-            type_map = {"int": int, "float": float, "bool": bool, "str": str}
-            for pname, p in sig.parameters.items():
-                if pname == "self":
-                    continue
-                if pname in constructor_kwargs:
-                    val = constructor_kwargs[pname]
-                    # 타입 힌트에 맞게 캐스팅
-                    ann = p.annotation
-                    if ann is not inspect.Parameter.empty:
-                        if isinstance(ann, str):
-                            ann = type_map.get(ann, ann)
-                        if ann in (int, float, str) and not isinstance(val, ann):
-                            try:
-                                val = ann(val)
-                            except (ValueError, TypeError):
-                                pass
-                    ctor_args[pname] = val
-            if ctor_args:
-                instance = cls(**ctor_args)
-                if shared_serial_conn and hasattr(instance, "_conn"):
-                    # device_manager가 이미 열어둔 시리얼 연결 주입
-                    instance._conn = shared_serial_conn
-                    _auto_connected.add(key)
-                    logger.info("Injected shared serial conn into %s (_conn)", module_name)
-                else:
-                    # Serial modules (e.g. IVIQEBenchIOClient): constructor sets port/bps
-                    # but doesn't open the connection — call Connect() afterward
-                    for method_name in ("Connect", "connect"):
-                        connect_fn = getattr(instance, method_name, None)
-                        if callable(connect_fn):
-                            try:
-                                sig = inspect.signature(connect_fn)
-                                # Only call if it takes no args (besides self)
-                                non_self = [p for p in sig.parameters if p != "self"]
-                                if len(non_self) == 0:
-                                    result = connect_fn()
-                                    logger.info("Auto-called %s.%s() → %s", module_name, method_name, result)
-                                    if isinstance(result, str) and result.upper() in ("ERROR", "FAIL", "FAILED"):
-                                        logger.warning("Auto-connect %s.%s() returned %s", module_name, method_name, result)
-                                    else:
-                                        _auto_connected.add(key)
-                            except Exception as e:
-                                logger.warning("Auto-connect %s.%s() failed: %s", module_name, method_name, e)
-                            break
-                _instances[key] = instance
-                # 연결 실패한 인스턴스는 다음 호출 시 재생성되도록 auto_connected에 등록
-                if key not in _auto_connected and _is_connected(instance):
-                    _auto_connected.add(key)
-            else:
-                # Constructor doesn't accept the provided kwargs (e.g. BENCH, CANAT)
-                # Create instance normally, then try auto-connect/init
-                instance = cls()
-                connected = False
-                if "host" in constructor_kwargs:
-                    # Socket-based modules: auto-call connect method
-                    for method_name in ("socket_connect", "connect", "Connect"):
-                        connect_fn = getattr(instance, method_name, None)
-                        if callable(connect_fn):
-                            connect_fn(constructor_kwargs["host"])
-                            connected = True
-                            break
-                # init() 메서드가 있는 모듈 (e.g. CANAT): constructor_kwargs에서 매핑
-                if not connected:
-                    init_fn = getattr(instance, "init", None)
-                    if callable(init_fn):
-                        try:
-                            init_sig = inspect.signature(init_fn)
-                            init_args = {}
-                            # comport ← port 매핑
-                            kwarg_aliases = {"comport": "port", "port": "port"}
-                            for pname, p in init_sig.parameters.items():
-                                if pname == "self":
-                                    continue
-                                if pname in constructor_kwargs:
-                                    init_args[pname] = constructor_kwargs[pname]
-                                elif pname in kwarg_aliases and kwarg_aliases[pname] in constructor_kwargs:
-                                    init_args[pname] = constructor_kwargs[kwarg_aliases[pname]]
-                                elif p.default is not inspect.Parameter.empty:
-                                    pass  # 기본값 사용
-                                else:
-                                    # 필수 인자 없으면 빈 문자열로 채움
-                                    init_args[pname] = ""
-                            # log_path 기본값: {프로젝트루트}/results/CANAT_Log
-                            if "log_path" in init_args and not init_args["log_path"]:
-                                default_log = Path(__file__).resolve().parent.parent.parent / "results" / "CANAT_Log"
-                                default_log.mkdir(parents=True, exist_ok=True)
-                                init_args["log_path"] = str(default_log)
-                            result = init_fn(**init_args)
-                            logger.info("Auto-called %s.init(%s) → %s", module_name, init_args, result)
-                            _auto_connected.add(key)
-                        except Exception as e:
-                            logger.warning("Auto-init %s.init() failed: %s", module_name, e)
-                _instances[key] = instance
-        else:
-            _instances[key] = cls()
+        # 생성+auto-Connect 는 키별 락으로 직렬화 — Connect 가 오래 걸리는 모듈(SCAR/TH)에서
+        # 동시 연결 요청이 인스턴스를 중복 생성해 Setup 을 재실행하는 레이스 방지.
+        with _instance_lock(key):
+            # 락 대기 동안 다른 요청이 생성을 끝냈으면 그 인스턴스를 그대로 사용 (더블체크)
+            if key not in _instances:
+                _create_and_register(module_name, key, constructor_kwargs, shared_serial_conn)
 
     # SSHManager: 디바이스 자격증명으로 공식 create_ssh_client 호출 (매 호출마다)
     if module_name == "SSHManager" and ssh_credentials is not None:
@@ -1156,6 +1069,122 @@ def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
             raise
 
     return _instances[key]
+
+
+def _create_and_register(module_name: str, key: str, constructor_kwargs: Optional[dict],
+                         shared_serial_conn) -> None:
+    """인스턴스 생성 + auto-Connect/init + _instances[key] 등록.
+
+    반드시 _instance_lock(key) 안에서 호출 — _instances 에는 Connect 완료 후에야
+    등록되므로, 락 없이 부르면 장시간 Connect 중 중복 생성이 가능하다.
+    """
+    cls = _import_module_class(module_name)
+    if cls is None:
+        # 진단 정보 포함 — lge.auto 미설치 / DLL 로드 실패 등 실제 원인을
+        # UI(디바이스 연결 실패 토스트) 까지 노출시켜 사용자가 즉시 원인 파악.
+        reason = _last_import_error.get(module_name)
+        if reason:
+            raise ValueError(f"Module '{module_name}' not found ({reason})")
+        raise ValueError(f"Module '{module_name}' not found")
+    # Try to pass constructor kwargs (e.g. port, bps) if the class needs them
+    if constructor_kwargs:
+        sig = inspect.signature(cls.__init__)
+        ctor_args = {}
+        type_map = {"int": int, "float": float, "bool": bool, "str": str}
+        for pname, p in sig.parameters.items():
+            if pname == "self":
+                continue
+            if pname in constructor_kwargs:
+                val = constructor_kwargs[pname]
+                # 타입 힌트에 맞게 캐스팅
+                ann = p.annotation
+                if ann is not inspect.Parameter.empty:
+                    if isinstance(ann, str):
+                        ann = type_map.get(ann, ann)
+                    if ann in (int, float, str) and not isinstance(val, ann):
+                        try:
+                            val = ann(val)
+                        except (ValueError, TypeError):
+                            pass
+                ctor_args[pname] = val
+        if ctor_args:
+            instance = cls(**ctor_args)
+            if shared_serial_conn and hasattr(instance, "_conn"):
+                # device_manager가 이미 열어둔 시리얼 연결 주입
+                instance._conn = shared_serial_conn
+                _auto_connected.add(key)
+                logger.info("Injected shared serial conn into %s (_conn)", module_name)
+            else:
+                # Serial modules (e.g. IVIQEBenchIOClient): constructor sets port/bps
+                # but doesn't open the connection — call Connect() afterward
+                for method_name in ("Connect", "connect"):
+                    connect_fn = getattr(instance, method_name, None)
+                    if callable(connect_fn):
+                        try:
+                            sig = inspect.signature(connect_fn)
+                            # Only call if it takes no args (besides self)
+                            non_self = [p for p in sig.parameters if p != "self"]
+                            if len(non_self) == 0:
+                                result = connect_fn()
+                                logger.info("Auto-called %s.%s() → %s", module_name, method_name, result)
+                                if isinstance(result, str) and result.upper() in ("ERROR", "FAIL", "FAILED"):
+                                    logger.warning("Auto-connect %s.%s() returned %s", module_name, method_name, result)
+                                else:
+                                    _auto_connected.add(key)
+                        except Exception as e:
+                            logger.warning("Auto-connect %s.%s() failed: %s", module_name, method_name, e)
+                        break
+            _instances[key] = instance
+            # 연결 실패한 인스턴스는 다음 호출 시 재생성되도록 auto_connected에 등록
+            if key not in _auto_connected and _is_connected(instance):
+                _auto_connected.add(key)
+        else:
+            # Constructor doesn't accept the provided kwargs (e.g. BENCH, CANAT)
+            # Create instance normally, then try auto-connect/init
+            instance = cls()
+            connected = False
+            if "host" in constructor_kwargs:
+                # Socket-based modules: auto-call connect method
+                for method_name in ("socket_connect", "connect", "Connect"):
+                    connect_fn = getattr(instance, method_name, None)
+                    if callable(connect_fn):
+                        connect_fn(constructor_kwargs["host"])
+                        connected = True
+                        break
+            # init() 메서드가 있는 모듈 (e.g. CANAT): constructor_kwargs에서 매핑
+            if not connected:
+                init_fn = getattr(instance, "init", None)
+                if callable(init_fn):
+                    try:
+                        init_sig = inspect.signature(init_fn)
+                        init_args = {}
+                        # comport ← port 매핑
+                        kwarg_aliases = {"comport": "port", "port": "port"}
+                        for pname, p in init_sig.parameters.items():
+                            if pname == "self":
+                                continue
+                            if pname in constructor_kwargs:
+                                init_args[pname] = constructor_kwargs[pname]
+                            elif pname in kwarg_aliases and kwarg_aliases[pname] in constructor_kwargs:
+                                init_args[pname] = constructor_kwargs[kwarg_aliases[pname]]
+                            elif p.default is not inspect.Parameter.empty:
+                                pass  # 기본값 사용
+                            else:
+                                # 필수 인자 없으면 빈 문자열로 채움
+                                init_args[pname] = ""
+                        # log_path 기본값: {프로젝트루트}/results/CANAT_Log
+                        if "log_path" in init_args and not init_args["log_path"]:
+                            default_log = Path(__file__).resolve().parent.parent.parent / "results" / "CANAT_Log"
+                            default_log.mkdir(parents=True, exist_ok=True)
+                            init_args["log_path"] = str(default_log)
+                        result = init_fn(**init_args)
+                        logger.info("Auto-called %s.init(%s) → %s", module_name, init_args, result)
+                        _auto_connected.add(key)
+                    except Exception as e:
+                        logger.warning("Auto-init %s.init() failed: %s", module_name, e)
+            _instances[key] = instance
+    else:
+        _instances[key] = cls()
 
 
 def _cast_arg(val: Any, target_type: type) -> Any:
