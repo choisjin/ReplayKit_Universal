@@ -433,6 +433,7 @@ class TH:
         """
         start = time.monotonic()
         last = "(not checked)"
+        next_connect_try = 0.0
         while True:
             try:
                 res = subprocess.run(
@@ -444,6 +445,16 @@ class TH:
                 )
                 if line is None:
                     last = f"{self.th_adb} not in adb devices"
+                    # transport 미등록 — 해제 시 adb disconnect 로 정리했거나 adb 서버가 재시작된
+                    # 경우. CVD 가 살아있으면 adb connect 로 즉시 재등록되고, 부팅 중이면 실패를
+                    # 반복하다 부팅 완료 후 성공한다. 과한 호출 방지로 6초에 1번만 시도.
+                    now = time.monotonic()
+                    if now >= next_connect_try:
+                        next_connect_try = now + 6.0
+                        subprocess.run(
+                            ["adb", "connect", self.th_adb],
+                            capture_output=True, text=True, timeout=SETUP_ADB_TIMEOUT_S,
+                        )
                 else:
                     last = line.strip()
                     if "\tdevice" in line:
@@ -760,8 +771,29 @@ class TH:
             parts.append("cuttlefish: " + self.StopCvd())
         else:
             parts.append("cuttlefish: kept (stop_cvd_on_disconnect=False)")
+        # ── adb 네트워크 transport 정리 ──
+        # 해제 후에도 `adb devices` 에 RBVM(offline 잔류)/CVD 항목이 남아 디바이스 목록을
+        # 오염시킨다 → 둘 다 끊는다. CVD 프로세스는 위 정책대로 유지될 수 있는데, 그 경우
+        # 다음 연결의 _wait_cvd_adb 가 `adb connect` 로 transport 를 재등록한다.
+        for addr in (self.rbvm_ip, self.th_adb):
+            parts.append("adb: " + self._adb_disconnect(addr))
         self._setup_done = False
         return "ok: " + " | ".join(parts)
+
+    def _adb_disconnect(self, addr: str) -> str:
+        """`adb disconnect <addr>` — stale 네트워크 transport 제거. 실패해도 정보만 반환."""
+        if not addr:
+            return "skip (addr 비어있음)"
+        try:
+            res = subprocess.run(
+                ["adb", "disconnect", addr],
+                capture_output=True, text=True, timeout=SETUP_ADB_TIMEOUT_S,
+            )
+            out = ((res.stdout or "") + (res.stderr or "")).strip()
+            # adb 는 미등록 주소에 "error: no such device ..." 를 주는데 이미 깨끗한 상태라 ok.
+            return (out[-120:] or f"disconnected {addr}")
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            return f"disconnect {addr} 실패: {e}"
 
     def CvdStatus(self) -> str:
         """launch_cvd 가 떠 있는지 + 로그 마지막 몇 줄."""

@@ -586,6 +586,8 @@ class SCAR:
             parts.append("container: " + self.StopContainer().split("\n")[0])
         else:
             parts.append("container: kept (stop_container_on_disconnect=False)")
+        # 해제 후 인스턴스가 어떤 경로로든 재사용되더라도 connected 로 오인하지 않게 (TH 와 대칭).
+        self._setup_done = False
         return ("FAIL: " if any("FAIL" in p for p in parts) else "ok: ") + " | ".join(parts)
 
     def Reconnect(self) -> str:
