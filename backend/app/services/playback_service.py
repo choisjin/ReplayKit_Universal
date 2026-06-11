@@ -1432,11 +1432,15 @@ class PlaybackService:
         elif step.type == StepType.WIN_KEY:
             return f"win_key {p.get('key', '')}"
         elif step.type == StepType.WIN_KEY_COMBO:
-            keys = p.get("keys") if "keys" in p else p.get("combo", "")
-            if isinstance(keys, list):
-                keys_str = "+".join(str(k) for k in keys)
+            seq = p.get("combo_seq")
+            if isinstance(seq, list) and seq:
+                keys_str = " → ".join(str(c) for c in seq)
             else:
-                keys_str = str(keys)
+                keys = p.get("keys") if "keys" in p else p.get("combo", "")
+                if isinstance(keys, list):
+                    keys_str = "+".join(str(k) for k in keys)
+                else:
+                    keys_str = str(keys)
             cfx = p.get("click_first_x")
             cfy = p.get("click_first_y")
             at = f" @({cfx},{cfy})" if cfx is not None and cfy is not None else ""
@@ -2858,17 +2862,28 @@ class PlaybackService:
                 await loop.run_in_executor(None,
                     functools.partial(wc.send_key, str(params.get("key", ""))))
             elif step.type == StepType.WIN_KEY_COMBO:
-                raw = params.get("keys") if "keys" in params else params.get("combo", "")
-                if isinstance(raw, str):
-                    import re as _re
-                    keys_list = [s.strip() for s in _re.split(r"[+,]", raw) if s.strip()]
+                # combo_seq: 여러 조합을 한 컨텍스트 안에서 순서대로 실행 (라우터와 동일 파싱).
+                seq_raw = params.get("combo_seq")
+                combos: list[list[str]] = []
+                if isinstance(seq_raw, (list, tuple)) and seq_raw:
+                    for c in seq_raw:
+                        ks = [s.strip() for s in str(c).split("+") if s.strip()]
+                        if ks:
+                            combos.append(ks)
                 else:
-                    keys_list = [str(k).strip() for k in (raw or []) if str(k).strip()]
-                if keys_list:
+                    raw = params.get("keys") if "keys" in params else params.get("combo", "")
+                    if isinstance(raw, str):
+                        import re as _re
+                        keys_list = [s.strip() for s in _re.split(r"[+,]", raw) if s.strip()]
+                    else:
+                        keys_list = [str(k).strip() for k in (raw or []) if str(k).strip()]
+                    if keys_list:
+                        combos.append(keys_list)
+                if combos:
                     cfx = params.get("click_first_x")
                     cfy = params.get("click_first_y")
                     await loop.run_in_executor(None,
-                        functools.partial(wc.send_key_combo, keys_list,
+                        functools.partial(wc.send_key_combos, combos,
                                           int(cfx) if cfx is not None else None,
                                           int(cfy) if cfy is not None else None))
         else:

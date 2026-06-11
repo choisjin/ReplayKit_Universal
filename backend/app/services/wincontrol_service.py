@@ -1881,23 +1881,21 @@ class WinControlService:
         대상 컨트롤에 포커스를 부여 (send_text 와 동일 패턴). 분리된 win_tap →
         win_key_combo 두 호출은 사이의 fg 복원 때문에 포커스가 풀리므로 atomic 으로 합침.
         """
-        if not keys:
+        self.send_key_combos([keys] if keys else [], click_first_x, click_first_y)
+
+    def send_key_combos(self, combos: list[list[str]],
+                        click_first_x: Optional[int] = None,
+                        click_first_y: Optional[int] = None) -> None:
+        """여러 조합을 한 컨텍스트(포커스 유지) 안에서 순서대로 전송.
+
+        'Ctrl+A → BackSpace' 처럼 연속 조합을 요청 2개로 분리하면 사이의 fg 복원 후
+        재활성화 시 _focus 의 SetFocus(메인창)가 에디트 컨트롤 포커스를 빼앗아 두 번째
+        조합이 허공에 떨어진다. 클릭(포커스 부여) + 조합 전체를 atomic 으로 묶는다.
+        """
+        seq = [c for c in (combos or []) if c]
+        if not seq:
             return
         self._check()
-        # 수정자/일반 분리
-        modifiers: list[int] = []
-        regulars: list[int] = []
-        for k in keys:
-            key = str(k).strip()
-            if not key:
-                continue
-            mvk = self._MODIFIER_VK.get(key.lower())
-            if mvk is not None:
-                modifiers.append(mvk)
-            else:
-                regulars.append(_resolve_vk(key))
-        if not regulars and not modifiers:
-            return
         ctx = self._save_context()
         try:
             self._focus()
@@ -1911,6 +1909,35 @@ class WinControlService:
                 self._send_input_button("left", False)
                 # 클릭 → 포커스 안착 + 입력 큐 처리 시간.
                 time.sleep(0.20)
+            for i, keys in enumerate(seq):
+                if i > 0:
+                    # 조합 사이 간격 — 앞 조합(예: Ctrl+A 선택)이 처리될 시간.
+                    time.sleep(0.15)
+                self._press_combo(keys)
+            time.sleep(0.10)
+        finally:
+            self._restore_context(ctx)
+
+    def _press_combo(self, keys: list[str]) -> None:
+        """단일 조합(수정자+키) press. 컨텍스트/포커스 관리는 호출자 책임.
+
+        시퀀스: 수정자 down (순서대로) → 일반 키 down/up → 수정자 up (역순).
+        예외로 중간에 빠져나가도 finally 에서 수정자 강제 해제 (stuck key 방지).
+        """
+        modifiers: list[int] = []
+        regulars: list[int] = []
+        for k in keys or []:
+            key = str(k).strip()
+            if not key:
+                continue
+            mvk = self._MODIFIER_VK.get(key.lower())
+            if mvk is not None:
+                modifiers.append(mvk)
+            else:
+                regulars.append(_resolve_vk(key))
+        if not regulars and not modifiers:
+            return
+        try:
             # 1) 모든 수정자 down
             for vk in modifiers:
                 self._send_input_keybd(vk, 0, 0)
@@ -1921,16 +1948,11 @@ class WinControlService:
                 time.sleep(0.03)
                 self._send_input_keybd(vk, 0, KEYEVENTF_KEYUP)
                 time.sleep(0.02)
-            # 3) 수정자 up (역순)
-            for vk in reversed(modifiers):
-                self._send_input_keybd(vk, 0, KEYEVENTF_KEYUP)
-                time.sleep(0.02)
-            time.sleep(0.10)
         finally:
-            # 안전망 — 예외로 중간에 빠져나간 경우 수정자 강제 해제 (stuck key 방지).
+            # 3) 수정자 up (역순) — 정상/예외 경로 모두 해제.
             for vk in reversed(modifiers):
                 try:
                     self._send_input_keybd(vk, 0, KEYEVENTF_KEYUP)
                 except Exception:
                     pass
-            self._restore_context(ctx)
+                time.sleep(0.02)

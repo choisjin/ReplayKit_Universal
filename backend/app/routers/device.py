@@ -1212,20 +1212,32 @@ async def device_input(req: InputRequest):
                 elif req.action == "win_key":
                     wc.send_key(str(p.get("key", "")))
                 elif req.action == "win_key_combo":
-                    raw = p.get("keys") if "keys" in p else p.get("combo", "")
-                    if isinstance(raw, str):
-                        import re as _re
-                        keys_list = [s.strip() for s in _re.split(r"[+,]", raw) if s.strip()]
+                    # combo_seq: ["ctrl+a", "backspace"] — 여러 조합을 한 컨텍스트 안에서
+                    # 순서대로 실행 (분리 요청은 사이의 재활성화로 포커스가 풀림).
+                    seq_raw = p.get("combo_seq")
+                    combos: list[list[str]] = []
+                    if isinstance(seq_raw, (list, tuple)) and seq_raw:
+                        for c in seq_raw:
+                            ks = [s.strip() for s in str(c).split("+") if s.strip()]
+                            if ks:
+                                combos.append(ks)
                     else:
-                        keys_list = [str(k).strip() for k in (raw or []) if str(k).strip()]
-                    if not keys_list:
+                        raw = p.get("keys") if "keys" in p else p.get("combo", "")
+                        if isinstance(raw, str):
+                            import re as _re
+                            keys_list = [s.strip() for s in _re.split(r"[+,]", raw) if s.strip()]
+                        else:
+                            keys_list = [str(k).strip() for k in (raw or []) if str(k).strip()]
+                        if keys_list:
+                            combos.append(keys_list)
+                    if not combos:
                         raise ValueError("win_key_combo: empty keys")
                     # click_first_x/y: 단축키 전 해당 좌표 클릭으로 포커스 부여 (atomic).
                     cfx = p.get("click_first_x")
                     cfy = p.get("click_first_y")
-                    wc.send_key_combo(keys_list,
-                                      int(cfx) if cfx is not None else None,
-                                      int(cfy) if cfy is not None else None)
+                    wc.send_key_combos(combos,
+                                       int(cfx) if cfx is not None else None,
+                                       int(cfy) if cfy is not None else None)
 
             # Watchdog: 대상 앱 메시지 펌프가 막혀 native API 가 영영 안 끝나는 경우
             # 워커 스레드가 풀에 못 돌아와 백엔드 전체가 멈추는 문제 방어. 별도

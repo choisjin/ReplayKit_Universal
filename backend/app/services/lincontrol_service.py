@@ -1487,12 +1487,50 @@ class LinControlService:
                        click_first_y: Optional[int] = None) -> None:
         # click_first_x/y: 단축키 전송 전 해당 client 좌표 클릭으로 대상 컨트롤 포커스
         # 부여 (atomic — WinControlService.send_key_combo 와 인터페이스 동일).
-        if not keys:
+        self.send_key_combos([keys] if keys else [], click_first_x, click_first_y)
+
+    def send_key_combos(self, combos: list[list[str]],
+                        click_first_x: Optional[int] = None,
+                        click_first_y: Optional[int] = None) -> None:
+        """여러 조합을 한 컨텍스트(포커스 유지) 안에서 순서대로 전송.
+
+        'Ctrl+A → BackSpace' 처럼 연속 조합을 요청 2개로 분리하면 사이의 fg 복원/재활성화
+        로 대상 컨트롤 포커스가 풀려 두 번째 조합이 허공에 떨어진다.
+        WinControlService.send_key_combos 와 인터페이스 동일 (OS 공용 디스패치).
+        """
+        seq = [c for c in (combos or []) if c]
+        if not seq:
             return
         self._check()
+        ctx = self._save_context()
+        try:
+            self._focus()
+            # 0) 클릭으로 대상 컨트롤 포커스 — 같은 컨텍스트 안에서 해야 fg 안 풀림.
+            if click_first_x is not None and click_first_y is not None:
+                sx, sy = self._client_to_screen(int(click_first_x), int(click_first_y))
+                self._xtest_motion(sx, sy)
+                time.sleep(0.10)
+                self._xtest_button("left", True)
+                time.sleep(0.08)
+                self._xtest_button("left", False)
+                time.sleep(0.20)
+            for i, keys in enumerate(seq):
+                if i > 0:
+                    # 조합 사이 간격 — 앞 조합(예: Ctrl+A 선택)이 처리될 시간.
+                    time.sleep(0.15)
+                self._press_combo(keys)
+            time.sleep(0.10)
+        finally:
+            self._restore_context(ctx)
+
+    def _press_combo(self, keys: list[str]) -> None:
+        """단일 조합(수정자+키) press. 컨텍스트/포커스 관리는 호출자 책임.
+
+        예외로 중간에 빠져나가도 finally 에서 modifier 강제 해제 (stuck key 방지).
+        """
         modifiers: list[int] = []  # keycodes
         regulars: list[tuple[int, bool]] = []  # (keycode, need_shift)
-        for k in keys:
+        for k in keys or []:
             key = str(k).strip()
             if not key:
                 continue
@@ -1508,18 +1546,7 @@ class LinControlService:
                     regulars.append((int(kc), need_shift))
         if not regulars and not modifiers:
             return
-        ctx = self._save_context()
         try:
-            self._focus()
-            # 0) 클릭으로 대상 컨트롤 포커스 — 같은 컨텍스트 안에서 해야 fg 안 풀림.
-            if click_first_x is not None and click_first_y is not None:
-                sx, sy = self._client_to_screen(int(click_first_x), int(click_first_y))
-                self._xtest_motion(sx, sy)
-                time.sleep(0.10)
-                self._xtest_button("left", True)
-                time.sleep(0.08)
-                self._xtest_button("left", False)
-                time.sleep(0.20)
             for kc in modifiers:
                 self._xtest_key(kc, True)
                 time.sleep(0.02)
@@ -1535,15 +1562,11 @@ class LinControlService:
                 finally:
                     if shift_kc and shift_kc not in modifiers:
                         self._xtest_key(shift_kc, False)
-            for kc in reversed(modifiers):
-                self._xtest_key(kc, False)
-                time.sleep(0.02)
-            time.sleep(0.10)
         finally:
-            # 안전망 — 예외로 빠져나간 경우 modifier 강제 해제.
+            # modifier up (역순) — 정상/예외 경로 모두 해제.
             for kc in reversed(modifiers):
                 try:
                     self._xtest_key(kc, False)
                 except Exception:
                     pass
-            self._restore_context(ctx)
+                time.sleep(0.02)

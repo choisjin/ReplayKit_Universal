@@ -1539,20 +1539,18 @@ export default function RecordPage() {
   }, [wcAttached, wcSeqPoints, wcSeqInterval, t]);
 
   // 단축키 위치 대기 모드 실행 — 지정 좌표 클릭(포커스 부여) 후 단축키 전송.
-  // 첫 조합은 click_first_x/y 와 함께 atomic 으로, 나머지 조합(예: Ctrl+A → BackSpace 의
-  // BackSpace)은 이어서 전송 — 윈도우 재활성화 시 마지막 포커스 컨트롤이 복원되므로 OK.
+  // 다중 조합(예: Ctrl+A → BackSpace)도 combo_seq 로 한 요청/한 스텝에 묶어 atomic 실행 —
+  // 요청을 나누면 사이의 재활성화(SetFocus 메인창)로 에디트 포커스가 풀려 뒷 조합이 안 먹는다.
   const wcComboAtPoint = useCallback(async (x: number, y: number) => {
     const pc = wcPendingCombo;
     if (!pc) return;
     setWcPendingCombo(null);
-    const [first, ...rest] = pc.sequence;
-    if (!first) return;
-    await wcExecuteAction('win_key_combo',
-      { keys: first, click_first_x: x, click_first_y: y },
-      `win_key_combo ${first} @(${x},${y})`);
-    for (const combo of rest) {
-      await wcExecuteAction('win_key_combo', { keys: combo }, `win_key_combo ${combo}`);
-    }
+    if (pc.sequence.length === 0) return;
+    const desc = `win_key_combo ${pc.sequence.join(' → ')} @(${x},${y})`;
+    const params: Record<string, any> = pc.sequence.length === 1
+      ? { keys: pc.sequence[0], click_first_x: x, click_first_y: y }
+      : { combo_seq: pc.sequence, click_first_x: x, click_first_y: y };
+    await wcExecuteAction('win_key_combo', params, desc);
   }, [wcPendingCombo, wcExecuteAction]);
 
   const wcMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
