@@ -2,7 +2,7 @@
 
 SerialLogging과 동일한 사용 감각을 Android(adb) 디바이스에 제공한다.
   - StartLogging / StopLogging 으로 `adb logcat` 캡처 시작/종료(파일 저장)
-  - Monitor_pass_on_keyword / Monitor_fail_on_keyword 로 (이미 출력된 버퍼 + 미래
+  - Monitor_pass_on_keyword / Monitor_fail_on_keyword 로 (이미 출력된 로그 + 미래
     time초) 로그에서 키워드를 판독 — adb로 아무 명령도 push하지 않음.
 
 핵심 설계(시리얼에서 얻은 교훈 반영):
@@ -10,9 +10,14 @@ SerialLogging과 동일한 사용 감각을 Android(adb) 디바이스에 제공�
     버퍼/프로세스가 섞이지 않도록 serial을 키로 세션을 분리한다.
     (cf. SerialLogging 멀티포트 싱글톤 키 충돌 회귀)
   - **자가복구 리더**: 디바이스 reboot/usb 드롭으로 `adb logcat`이 종료(EOF)돼도
-    리더 스레드를 죽이지 않고 logcat을 재기동하여 **같은 버퍼에 이어서** 캡처한다.
-  - **과거 버퍼 포함 판독**: 키워드 검사는 include_past=True면 현재까지 캡처된
-    버퍼 전체를 먼저 스캔한 뒤 미래 time초를 폴링한다.
+    리더 스레드를 죽이지 않고 logcat을 재기동하여 **같은 세션에 이어서** 캡처한다.
+  - **스트리밍 저장 (legacy RDF start_logcat 동일 컨셉)**: 캡처 라인은 StartLogging
+    시점에 연 파일로 즉시 기록(주기 flush)한다 — 백엔드가 죽어도 그 시점까지 디스크에
+    남고, 장시간 캡처에도 메모리가 늘지 않는다. StopLogging(save_path)는 그 파일을
+    요청 경로로 이동만 한다. (이전: 메모리 누적 → Stop 일괄 저장 = 크래시 전체 유실)
+  - **과거 포함 판독**: include_past=True 키워드 검사는 스트리밍 **파일을 정본**으로
+    먼저 스캔(메모리 링버퍼는 최근 라인만 보관)한 뒤, 파일에서 읽은 라인 수를 절대
+    인덱스 삼아 링버퍼로 이어받아 미래 time초를 폴링한다 — flush 지연분 누락 없음.
 """
 
 from __future__ import annotations
@@ -20,10 +25,14 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
+from collections import deque
+from itertools import islice
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +41,14 @@ logger = logging.getLogger(__name__)
 # adb 바이너리 — adb_service와 동일 규약(ADB_PATH 환경변수 → 'adb').
 ADB_PATH = os.environ.get("ADB_PATH", "adb")
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+# 메모리 링버퍼 상한 — 뷰어 백필/키워드 '미래' 폴링용 최근 라인만 보관 (~15-20MB/디바이스).
+# 전체 이력은 스트리밍 파일이 정본이므로 메모리에 다 들고 있을 필요가 없다.
+LOGCAT_RING_MAX = 100_000
+# 스트리밍 파일 flush 정책 — N줄마다 또는 N초 경과 시. 미flush 백로그는 링버퍼 상한보다
+# 항상 훨씬 작아야 한다 (Monitor 의 파일→링버퍼 이어받기 무결성 전제).
+_FLUSH_EVERY_LINES = 100
+_FLUSH_INTERVAL_S = 0.5
 
 
 # ==========================================================================
@@ -161,10 +178,18 @@ class _LogcatSession:
         self._reader_thread: Optional[threading.Thread] = None
         self._capturing = False
         self._lock = threading.Lock()
-        self._logs: list[str] = []
-        self._log_capture_ts: list[float] = []
+        # 메모리는 최근 라인 링버퍼만 — 오래된 라인은 자동 폐기(전체 이력은 파일이 정본).
+        # 절대 라인 번호는 _line_counter 로 추적: 링버퍼 시작 = counter - len(logs).
+        self._logs: deque[str] = deque(maxlen=LOGCAT_RING_MAX)
+        self._log_capture_ts: deque[float] = deque(maxlen=LOGCAT_RING_MAX)
         self._line_counter = 0
         self._logcat_args = "-v time"
+        # 스트리밍 저장 파일 — start() 에서 열고 라인마다 기록(주기 flush).
+        # 쓰기/flush 는 리더 스레드 단일 작성자 전제(마커 포함) — 락 불필요.
+        self._file = None
+        self._file_path = ""
+        self._unflushed = 0
+        self._last_flush = 0.0
 
     # ------------------------------------------------------------------
     # logcat 프로세스 제어
@@ -200,15 +225,29 @@ class _LogcatSession:
             return f"ERROR: logcat clear 실패 — {e}"
 
     def start(self, clear: bool = True) -> str:
-        """캡처 시작. 이미 캡처 중이면 새로 시작하지 않고 그대로 둔다."""
+        """캡처 시작. 이미 캡처 중이면 새로 시작하지 않고 그대로 둔다.
+
+        legacy RDF `start_logcat` 처럼 저장 파일을 여기서 열어 즉시 스트리밍 기록한다.
+        파일을 못 열면 캡처를 시작하지 않는다 (메모리 전용 폴백 없음 — 유실 방지 목적).
+        """
         if self._capturing:
             return f"Logcat already capturing: {self._serial}"
         if clear:
             self.clear()
+        path = _auto_save_path(self._serial)
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            f = open(path, "w", encoding="utf-8")
+        except Exception as e:
+            return f"ERROR: 로그 파일 열기 실패 — {path}: {e}"
         with self._lock:
             self._logs.clear()
             self._log_capture_ts.clear()
-        self._line_counter = 0
+            self._line_counter = 0
+        self._file = f
+        self._file_path = path
+        self._unflushed = 0
+        self._last_flush = time.time()
         self._capturing = True
         self._reader_thread = threading.Thread(
             target=self._reader_loop, name=f"Logcat-{self._serial}", daemon=True
@@ -219,56 +258,66 @@ class _LogcatSession:
             "session_id": self._serial,
             "serial": self._serial,
             "started_at": time.time(),
+            "save_path": path,
             "scenario_playback": _is_scenario_playback(),
         })
-        return f"Logcat logging started: {self._serial}"
+        return f"Logcat logging started: {self._serial} → {path}"
 
     def stop(self, save_path: str = "") -> str:
-        """메모리 버퍼를 파일로 저장하고 캡처를 종료한다."""
-        with self._lock:
-            logs_snapshot = list(self._logs)
+        """캡처를 종료하고 스트리밍 파일을 닫는다. save_path 지정 시 그 경로로 이동.
 
-        saved_path = ""
+        라인은 캡처 중 이미 파일에 기록돼 있으므로(스트리밍) 여기서 버퍼를 쓰지 않는다.
+        """
+        if self._file is None and not self._capturing:
+            return f"ERROR: logcat 캡처 중이 아닙니다: {self._serial}"
+
+        self._stop_capture()  # 리더 스레드 join 후에 파일을 닫아야 마지막 라인 보존
+        total = self._line_counter
+        f = self._file
+        stream_path = self._file_path
+        self._file = None
+        self._file_path = ""
+
         save_error = ""
-        try:
-            if not save_path:
-                save_path = _auto_save_path(self._serial)
-            elif not os.path.dirname(save_path):
-                base_dir = Path(_auto_save_path(self._serial)).parent
-                save_path = str(base_dir / save_path)
+        if f is not None:
+            try:
+                f.flush()
+                f.close()
+            except Exception as e:
+                logger.error("[Logcat] stream file close failed: %s", e)
+                save_error = str(e)
+
+        # save_path 지정 시 스트리밍 파일 이동 (파일명만 오면 자동 저장 디렉터리 기준)
+        saved_path = stream_path
+        if save_path and stream_path:
+            if not os.path.dirname(save_path):
+                save_path = str(Path(stream_path).parent / save_path)
             try:
                 os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-                with open(save_path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(logs_snapshot))
-                    if logs_snapshot:
-                        f.write("\n")
+                shutil.move(stream_path, save_path)
                 saved_path = save_path
-                logger.info("[Logcat] Saved %d lines to %s", len(logs_snapshot), save_path)
             except Exception as e:
-                logger.error("[Logcat] Save failed: %s", e)
-                save_error = str(e)
-        except Exception as e:
-            logger.error("[Logcat] stop path resolution failed: %s", e)
-            save_error = save_error or str(e)
-        finally:
-            self._stop_capture()
-            with self._lock:
-                self._logs.clear()
-                self._log_capture_ts.clear()
+                logger.error("[Logcat] move to save_path failed: %s", e)
+                save_error = f"이동 실패({e}) — 스트리밍 경로에 보존: {stream_path}"
+
+        with self._lock:
+            self._logs.clear()
+            self._log_capture_ts.clear()
             self._line_counter = 0
-            try:
-                LOGCAT_HUB.emit_lifecycle({
-                    "type": "session_stopped",
-                    "session_id": self._serial,
-                    "save_path": saved_path,
-                    "stopped_at": time.time(),
-                })
-            except Exception:
-                pass
+        try:
+            LOGCAT_HUB.emit_lifecycle({
+                "type": "session_stopped",
+                "session_id": self._serial,
+                "save_path": saved_path,
+                "stopped_at": time.time(),
+            })
+        except Exception:
+            pass
 
         if save_error:
             return f"ERROR: 저장 실패 — {save_error}"
-        return f"Logcat saved ({len(logs_snapshot)} lines) to: {saved_path}"
+        logger.info("[Logcat] Saved %d lines to %s (streamed)", total, saved_path)
+        return f"Logcat saved ({total} lines) to: {saved_path}"
 
     def _stop_capture(self):
         self._capturing = False
@@ -305,11 +354,31 @@ class _LogcatSession:
     def _emit_marker(self, text: str) -> None:
         cap_ts = time.time()
         ts = time.strftime("%H:%M:%S", time.localtime(cap_ts))
-        stamped = f"[{ts}] --- {text} ---"
+        self._append_line(f"[{ts}] --- {text} ---", cap_ts)
+
+    def _append_line(self, stamped: str, cap_ts: float) -> None:
+        """캡처 라인 1줄 처리 — 링버퍼 적재 + 파일 즉시 기록(주기 flush) + 뷰어 발행.
+
+        파일 쓰기는 리더 스레드 단일 작성자 전제(마커 포함). 라인별로 링버퍼와 파일에
+        같은 순서로 들어가므로, Monitor 는 '파일에서 읽은 라인 수 = 절대 인덱스' 로
+        링버퍼에 이어붙일 수 있다.
+        """
         with self._lock:
-            self._logs.append(stamped)
+            self._logs.append(stamped)        # maxlen 도달 시 가장 오래된 라인 자동 폐기
             self._log_capture_ts.append(cap_ts)
             self._line_counter += 1
+        f = self._file
+        if f is not None:
+            try:
+                f.write(stamped + "\n")
+                self._unflushed += 1
+                if (self._unflushed >= _FLUSH_EVERY_LINES
+                        or cap_ts - self._last_flush >= _FLUSH_INTERVAL_S):
+                    f.flush()
+                    self._unflushed = 0
+                    self._last_flush = cap_ts
+            except Exception as e:
+                logger.warning("[Logcat] stream write failed (%s): %s", self._file_path, e)
         try:
             LOGCAT_HUB.emit_log(self._serial, stamped)
         except Exception:
@@ -356,17 +425,9 @@ class _LogcatSession:
                 continue
             cap_ts = time.time()
             ts = time.strftime("%H:%M:%S", time.localtime(cap_ts))
-            stamped = f"[{ts}] {line}"
-            with self._lock:
-                self._logs.append(stamped)
-                self._log_capture_ts.append(cap_ts)
-                self._line_counter += 1
-            try:
-                LOGCAT_HUB.emit_log(self._serial, stamped)
-            except Exception:
-                pass
+            self._append_line(f"[{ts}] {line}", cap_ts)
 
-        logger.info("[Logcat] reader loop ended for %s (logs=%d)", self._serial, len(self._logs))
+        logger.info("[Logcat] reader loop ended for %s (lines=%d)", self._serial, self._line_counter)
 
     def _kill_proc(self):
         proc = self._proc
@@ -380,6 +441,79 @@ class _LogcatSession:
     # ------------------------------------------------------------------
     # 키워드 판독 (명령 push 없음)
     # ------------------------------------------------------------------
+    # 과거(include_past)는 스트리밍 파일이 정본 — 링버퍼는 최근 LOGCAT_RING_MAX 줄만
+    # 보관하므로 장시간 세션의 앞부분은 메모리에 없다. 파일에서 읽은 라인 수를 절대
+    # 인덱스로 삼아 링버퍼로 이어받으면 flush 지연분(≤ 수백 줄 << 링 상한)도 누락 없다.
+
+    def _lines_since(self, abs_idx: int) -> tuple[list[str], list[float], int]:
+        """절대 라인 번호 abs_idx 이후의 링버퍼 스냅샷. 반환 (lines, ts, next_abs)."""
+        with self._lock:
+            buf_start = self._line_counter - len(self._logs)
+            start = max(0, abs_idx - buf_start)
+            lines = list(islice(self._logs, start, None))
+            ts = list(islice(self._log_capture_ts, start, None))
+            return lines, ts, self._line_counter
+
+    def _scan_file_first(self, keyword: str) -> tuple[int, Optional[str]]:
+        """스트리밍 파일에서 keyword 첫 매치 검색. 반환 (읽은 라인 수, 매치 라인|None).
+
+        매치 발견 시 즉시 중단(라인 수는 호출자가 안 씀). flush 된 데까지만 보이지만
+        이후 구간은 반환한 라인 수부터 링버퍼가 커버한다.
+        """
+        path = self._file_path
+        if not path:
+            return 0, None
+        n = 0
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for ln in f:
+                    n += 1
+                    if keyword in ln:
+                        return n, ln.rstrip("\n")
+        except FileNotFoundError:
+            return 0, None
+        except Exception as e:
+            logger.warning("[Logcat] past file scan failed (%s): %s", path, e)
+            return 0, None
+        return n, None
+
+    def _scan_file_all(self, keyword: str) -> tuple[int, list[tuple[float, str]]]:
+        """스트리밍 파일에서 keyword 전체 매치 수집. 반환 (읽은 라인 수, [(ts, line)])."""
+        path = self._file_path
+        if not path:
+            return 0, []
+        n = 0
+        hits: list[tuple[float, str]] = []
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for ln in f:
+                    n += 1
+                    if keyword in ln:
+                        ln = ln.rstrip("\n")
+                        hits.append((self._parse_line_ts(ln), ln))
+        except FileNotFoundError:
+            return 0, []
+        except Exception as e:
+            logger.warning("[Logcat] past file scan failed (%s): %s", path, e)
+            return 0, []
+        return n, hits
+
+    @staticmethod
+    def _parse_line_ts(line: str) -> float:
+        """라인 prefix '[HH:MM:SS]' → 오늘 기준 epoch (리포트 시간축 근사). 실패 시 now."""
+        now = time.time()
+        m = re.match(r"\[(\d{2}):(\d{2}):(\d{2})\]", line)
+        if not m:
+            return now
+        lt = time.localtime(now)
+        try:
+            ts = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday,
+                              int(m.group(1)), int(m.group(2)), int(m.group(3)), 0, 0, -1))
+        except (ValueError, OverflowError):
+            return now
+        if ts > now + 60:  # 자정 직후 어제 기록을 읽은 경우
+            ts -= 86400.0
+        return ts
 
     def monitor_pass(self, keyword: str, time_s: float = 5, include_past: bool = True) -> str:
         import time as _t
@@ -388,27 +522,25 @@ class _LogcatSession:
         if not self._capturing:
             return "ERROR: logcat 캡처가 시작되지 않았습니다. StartLogging() 먼저 호출하세요."
 
-        with self._lock:
-            check_idx = 0 if include_past else len(self._logs)
-            snapshot = self._logs[check_idx:]
-        for ln in snapshot:
-            if keyword in ln:
-                return f"PASS: keyword '{keyword}' detected — {ln.strip()[:120]}"
-        check_idx += len(snapshot)
+        # 과거분 — 파일(세션 시작부터 전부)을 스캔하고 그 라인 수에서 링버퍼로 이어받는다.
+        if include_past:
+            check_abs, hit = self._scan_file_first(keyword)
+            if hit is not None:
+                return f"PASS: keyword '{keyword}' detected — {hit.strip()[:120]}"
+        else:
+            with self._lock:
+                check_abs = self._line_counter
 
         deadline = _t.time() + max(0.0, float(time_s))
         while _t.time() < deadline:
-            with self._lock:
-                snapshot = self._logs[check_idx:]
-            check_idx += len(snapshot)
-            for ln in snapshot:
+            lines, _ts, check_abs = self._lines_since(check_abs)
+            for ln in lines:
                 if keyword in ln:
                     return f"PASS: keyword '{keyword}' detected — {ln.strip()[:120]}"
             _t.sleep(0.1)
 
-        with self._lock:
-            tail = self._logs[check_idx:]
-        for ln in tail:
+        lines, _ts, check_abs = self._lines_since(check_abs)
+        for ln in lines:
             if keyword in ln:
                 return f"PASS: keyword '{keyword}' detected — {ln.strip()[:120]}"
 
@@ -434,30 +566,23 @@ class _LogcatSession:
         parent_step_id, parent_repeat_index = _current_step_context()
         hits: list[tuple[float, str]] = []
 
-        with self._lock:
-            check_idx = 0 if include_past else len(self._logs)
-            snapshot = self._logs[check_idx:]
-            snapshot_ts = self._log_capture_ts[check_idx:check_idx + len(snapshot)]
-        for ln, ts in zip(snapshot, snapshot_ts):
-            if keyword in ln:
-                hits.append((ts, ln))
-        check_idx += len(snapshot)
+        # 과거분 — 파일 전체 매치 수집(타임스탬프는 라인 prefix에서 복원).
+        if include_past:
+            check_abs, hits = self._scan_file_all(keyword)
+        else:
+            with self._lock:
+                check_abs = self._line_counter
 
         deadline = _t.time() + max(0.0, float(time_s))
         while _t.time() < deadline:
-            with self._lock:
-                snapshot = self._logs[check_idx:]
-                snapshot_ts = self._log_capture_ts[check_idx:check_idx + len(snapshot)]
-            check_idx += len(snapshot)
-            for ln, ts in zip(snapshot, snapshot_ts):
+            lines, lines_ts, check_abs = self._lines_since(check_abs)
+            for ln, ts in zip(lines, lines_ts):
                 if keyword in ln:
                     hits.append((ts, ln))
             _t.sleep(0.1)
 
-        with self._lock:
-            tail = self._logs[check_idx:]
-            tail_ts = self._log_capture_ts[check_idx:check_idx + len(tail)]
-        for ln, ts in zip(tail, tail_ts):
+        lines, lines_ts, check_abs = self._lines_since(check_abs)
+        for ln, ts in zip(lines, lines_ts):
             if keyword in ln:
                 hits.append((ts, ln))
 
@@ -477,7 +602,9 @@ class _LogcatSession:
 
     def get_recent(self, limit: int = 1000) -> list[str]:
         with self._lock:
-            return list(self._logs[-int(limit):]) if self._logs else []
+            if not self._logs:
+                return []
+            return list(self._logs)[-int(limit):]
 
 
 class LogcatService:
