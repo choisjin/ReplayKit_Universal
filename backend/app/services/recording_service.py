@@ -72,6 +72,30 @@ def _migrate_legacy_step_types(data: dict) -> bool:
             params["module"] = "WoohyunBench"
             s["params"] = params
             changed = True
+
+    # 레거시 win_repeat_tap (같은 위치 count회 클릭, 중간 버전에서만 생성) →
+    # win_click_sequence (포커스 유지 다좌표 클릭). 같은 좌표를 count개 넣어 의미 보존.
+    # 프로세스 식별 정보(process_name/exe_path/window_* 등)는 그대로 유지.
+    for s in steps:
+        if s.get("type") != "win_repeat_tap":
+            continue
+        params = s.get("params", {}) or {}
+        x = int(params.get("x", 0) or 0)
+        y = int(params.get("y", 0) or 0)
+        count = max(1, int(params.get("count", 2) or 2))
+        new_params = {k: v for k, v in params.items() if k not in ("x", "y", "count")}
+        new_params["points"] = [{"x": x, "y": y} for _ in range(count)]
+        new_params.setdefault("interval_ms", 100)
+        new_params.setdefault("button", "left")
+        s["type"] = "win_click_sequence"
+        s["params"] = new_params
+        # 자동 생성 설명만 갱신 — 사용자가 직접 쓴 설명은 보존.
+        desc = s.get("description") or ""
+        if not desc or desc.startswith("win_repeat_tap"):
+            coords = " → ".join(f"({x},{y})" for _ in range(count))
+            s["description"] = f"win_click_sequence {coords} @{new_params['interval_ms']}ms"
+        changed = True
+        logger.info("Migrated legacy step win_repeat_tap → win_click_sequence (%d,%d ×%d)", x, y, count)
     return changed
 
 
