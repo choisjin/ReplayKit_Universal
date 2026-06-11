@@ -50,6 +50,14 @@ LOGCAT_RING_MAX = 100_000
 _FLUSH_EVERY_LINES = 100
 _FLUSH_INTERVAL_S = 0.5
 
+# 좀비 스트림 감시 — suspend→wake 에서 USB 재열거로 transport 가 바뀌면, suspend 중에
+# 재기동된 logcat 이 옛(얼어붙은) transport 에 붙은 채 EOF 없이 영원히 무음이 된다
+# (2026-06-11 실측: respawn 1회 후 2분간 무수신 → sleep 직전 로그가 파일에 안 들어옴).
+# 'offline 을 겪은 적 있고 + 지금 디바이스 online + N초 무수신' 이면 강제 재기동해
+# 새 transport 로 링버퍼 재덤프를 받는다. (안정 연결에서 조용한 디바이스는 offline 전적이
+# 없어 재기동하지 않음 — 재덤프 중복 루프 방지)
+_STALL_RESPAWN_S = 20.0
+
 
 # ==========================================================================
 # 뷰어용 Pub/Sub 허브 — SERIAL_HUB와 동일 패턴 (세션 키 = device serial).
@@ -190,6 +198,10 @@ class _LogcatSession:
         self._file_path = ""
         self._unflushed = 0
         self._last_flush = 0.0
+        # 좀비 스트림 감시 상태 (suspend→wake transport 재열거 대응)
+        self._watchdog_thread: Optional[threading.Thread] = None
+        self._last_data_ts = 0.0    # 마지막 '실제 디바이스 라인' 수신 시각
+        self._saw_offline = False   # 캡처 중 링크 단절/offline 을 겪었는지
 
     # ------------------------------------------------------------------
     # logcat 프로세스 제어
@@ -249,10 +261,16 @@ class _LogcatSession:
         self._unflushed = 0
         self._last_flush = time.time()
         self._capturing = True
+        self._last_data_ts = time.time()
+        self._saw_offline = False
         self._reader_thread = threading.Thread(
             target=self._reader_loop, name=f"Logcat-{self._serial}", daemon=True
         )
         self._reader_thread.start()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop, name=f"LogcatWD-{self._serial}", daemon=True
+        )
+        self._watchdog_thread.start()
         LOGCAT_HUB.emit_lifecycle({
             "type": "session_started",
             "session_id": self._serial,
@@ -338,6 +356,9 @@ class _LogcatSession:
         if self._reader_thread:
             self._reader_thread.join(timeout=3)
             self._reader_thread = None
+        if self._watchdog_thread:
+            self._watchdog_thread.join(timeout=3)
+            self._watchdog_thread = None
 
     def is_capturing(self) -> bool:
         return self._capturing
@@ -409,6 +430,7 @@ class _LogcatSession:
                 if self._capturing:
                     logger.warning("[Logcat] read failed (%s) — restarting for %s", e, self._serial)
                     self._emit_marker("logcat disconnected — reconnecting")
+                self._saw_offline = True
                 self._kill_proc()
                 continue
 
@@ -416,6 +438,7 @@ class _LogcatSession:
                 # EOF — logcat 종료(디바이스 reboot/끊김). 재기동 루프로.
                 if self._capturing:
                     self._emit_marker("logcat ended — reconnecting")
+                self._saw_offline = True
                 self._kill_proc()
                 self._interruptible_sleep(0.5)
                 continue
@@ -424,6 +447,7 @@ class _LogcatSession:
             if not line:
                 continue
             cap_ts = time.time()
+            self._last_data_ts = cap_ts
             ts = time.strftime("%H:%M:%S", time.localtime(cap_ts))
             self._append_line(f"[{ts}] {line}", cap_ts)
 
@@ -437,6 +461,52 @@ class _LogcatSession:
                 proc.kill()
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # 좀비 스트림 감시 (suspend→wake USB 재열거 대응)
+    # ------------------------------------------------------------------
+
+    def _adb_online(self) -> bool:
+        """`adb get-state` 가 'device' 면 online. offline/미등록/타임아웃은 False."""
+        try:
+            res = subprocess.run(
+                [ADB_PATH, "-s", self._serial, "get-state"],
+                capture_output=True, text=True, timeout=5,
+                creationflags=_NO_WINDOW,
+            )
+            return res.returncode == 0 and res.stdout.strip() == "device"
+        except Exception:
+            return False
+
+    def _watchdog_loop(self):
+        """suspend 중 재기동된 logcat 이 옛 transport 에 붙어 EOF 없이 무한 무음(좀비)이
+        되는 케이스 감시. readline 이 블로킹이라 리더 스스로는 탈출 못 함 → 여기서
+        proc.kill() 로 끊어주면 리더 루프가 새 transport 로 재기동한다(링버퍼 재덤프 →
+        suspend 직전 라인이 그제야 파일/버퍼에 들어옴).
+
+        오탐 방지: 'offline 을 겪은 적'(_saw_offline) 이 있을 때만 발동 — 안정 연결의
+        조용한 디바이스를 주기적으로 재기동해 링버퍼 중복 덤프를 쌓는 것을 막는다.
+        """
+        while self._capturing:
+            time.sleep(2.0)
+            if not self._capturing:
+                break
+            proc = self._proc
+            if proc is None or proc.poll() is not None:
+                continue  # 리더가 이미 재기동 사이클 중
+            quiet = time.time() - self._last_data_ts
+            if quiet < _STALL_RESPAWN_S or not self._saw_offline:
+                continue
+            if not self._adb_online():
+                continue  # 디바이스 자체가 아직 offline/suspend — 재기동해도 같음
+            logger.warning(
+                "[Logcat] stream stalled %.0fs with device online — force respawn (%s)",
+                quiet, self._serial,
+            )
+            self._emit_marker("logcat stalled — force respawn (transport renewed)")
+            self._saw_offline = False
+            self._last_data_ts = time.time()  # 재기동 후 다시 유예
+            self._kill_proc()  # readline EOF/EIO → 리더 루프가 즉시 재기동
 
     # ------------------------------------------------------------------
     # 키워드 판독 (명령 push 없음)
@@ -554,7 +624,8 @@ class _LogcatSession:
             )
         except Exception:
             pass
-        return f"FAIL: keyword '{keyword}' not detected within {float(time_s):g}s"
+        return (f"FAIL: keyword '{keyword}' not detected within {float(time_s):g}s"
+                + self._link_note())
 
     def monitor_fail(self, keyword: str, time_s: float = 5, include_past: bool = True) -> str:
         import time as _t
@@ -598,7 +669,21 @@ class _LogcatSession:
                 pass
             return (f"FAIL: keyword '{keyword}' detected {len(hits)} time(s) — "
                     f"{hits[0][1].strip()[:120]}")
-        return f"PASS: keyword '{keyword}' not detected within {float(time_s):g}s"
+        return (f"PASS: keyword '{keyword}' not detected within {float(time_s):g}s"
+                + self._link_note())
+
+    def _link_note(self) -> str:
+        """미검출 결과에 붙일 logcat 링크 상태 힌트.
+
+        디바이스 suspend/offline 중에는 logcat 링크가 죽어 라인이 호스트에 도착하지
+        않는다 — suspend 시점 로그(예: 'suspend entry')는 wake 후 adb 복구 시 링버퍼
+        재덤프로 일괄 도착하므로, 모니터를 wake 뒤에 배치해야 한다는 진단 단서.
+        """
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return (" (주의: logcat 링크 끊김 — 디바이스 offline/suspend 중에는 로그가 "
+                    "도착하지 않으며 wake 후 일괄 도착. 모니터를 wake 뒤로 배치 권장)")
+        return ""
 
     def get_recent(self, limit: int = 1000) -> list[str]:
         with self._lock:
