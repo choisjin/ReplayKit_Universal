@@ -631,13 +631,31 @@ class LogcatService:
     def clear(self, serial: str) -> str:
         return self._session(serial).clear()
 
+    def _capture_error(self, serial: str) -> str:
+        """모니터 호출 시 해당 serial 이 캡처 중이 아닐 때의 진단 메시지.
+
+        serial 자리에 엉뚱한 값(인자 밀림 등)이 들어온 경우를 바로 알 수 있게,
+        요청된 serial 과 현재 캡처 중인 세션 목록을 함께 보여준다.
+        """
+        with self._lock:
+            active = [s for s, ss in self._sessions.items() if ss.is_capturing()]
+        hint = f" (현재 캡처 중: {active})" if active else ""
+        return (f"ERROR: logcat 캡처가 시작되지 않았습니다 — serial='{serial}'. "
+                f"StartLogging() 먼저 호출하거나 serial 인자를 확인하세요.{hint}")
+
     def monitor_pass(self, serial: str, keyword: str, time_s: float = 5,
                      include_past: bool = True) -> str:
-        return self._session(serial).monitor_pass(keyword, time_s, include_past)
+        sess = self._session(serial)
+        if not sess.is_capturing():
+            return self._capture_error(serial)
+        return sess.monitor_pass(keyword, time_s, include_past)
 
     def monitor_fail(self, serial: str, keyword: str, time_s: float = 5,
                      include_past: bool = True) -> str:
-        return self._session(serial).monitor_fail(keyword, time_s, include_past)
+        sess = self._session(serial)
+        if not sess.is_capturing():
+            return self._capture_error(serial)
+        return sess.monitor_fail(keyword, time_s, include_past)
 
     def get_recent(self, serial: str, limit: int = 1000) -> list[str]:
         sess = self._sessions.get(serial)
