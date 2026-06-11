@@ -443,6 +443,10 @@ export default function RecordPage() {
   // 텍스트 입력 대기 모드 — '입력' 버튼 클릭 시 보낼 텍스트가 여기에 저장되고,
   // 다음 캔버스 클릭이 win_tap → win_input_text 시퀀스로 처리됨.
   const [wcPendingText, setWcPendingText] = useState<string | null>(null);
+  // 단축키 위치 대기 모드 — 단축키 버튼 클릭 시 조합이 여기 저장되고, 다음 캔버스
+  // 좌클릭 좌표를 먼저 클릭(대상 컨트롤 포커스)한 뒤 단축키를 전송 (백엔드 atomic).
+  // sequence: 'Ctrl+A → BackSpace' 처럼 여러 조합이면 첫 조합만 클릭과 묶고 나머지는 이어서 전송.
+  const [wcPendingCombo, setWcPendingCombo] = useState<{ label: string; sequence: string[] } | null>(null);
   // 연속클릭(시퀀스) — 여러 위치를 순서대로 클릭(드롭다운 열기→항목 선택).
   // 캔버스 클릭 순간 브라우저가 포커스를 가져가 타겟의 일시 팝업이 닫히므로,
   // 좌클릭마다 누적 좌표 전체를 백엔드에서 원자 재실행(win_click_sequence)해 상태를 재현.
@@ -1534,6 +1538,23 @@ export default function RecordPage() {
     setWcSeqPoints(pts);
   }, [wcAttached, wcSeqPoints, wcSeqInterval, t]);
 
+  // 단축키 위치 대기 모드 실행 — 지정 좌표 클릭(포커스 부여) 후 단축키 전송.
+  // 첫 조합은 click_first_x/y 와 함께 atomic 으로, 나머지 조합(예: Ctrl+A → BackSpace 의
+  // BackSpace)은 이어서 전송 — 윈도우 재활성화 시 마지막 포커스 컨트롤이 복원되므로 OK.
+  const wcComboAtPoint = useCallback(async (x: number, y: number) => {
+    const pc = wcPendingCombo;
+    if (!pc) return;
+    setWcPendingCombo(null);
+    const [first, ...rest] = pc.sequence;
+    if (!first) return;
+    await wcExecuteAction('win_key_combo',
+      { keys: first, click_first_x: x, click_first_y: y },
+      `win_key_combo ${first} @(${x},${y})`);
+    for (const combo of rest) {
+      await wcExecuteAction('win_key_combo', { keys: combo }, `win_key_combo ${combo}`);
+    }
+  }, [wcPendingCombo, wcExecuteAction]);
+
   const wcMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     // 좌(0)/우(2) 버튼만 처리 — 가운데 버튼은 무시.
     if (e.button !== 0 && e.button !== 2) return;
@@ -1567,6 +1588,15 @@ export default function RecordPage() {
         return;
       }
     }
+    // 단축키 위치 대기 모드 — 좌클릭(드래그 아님) 좌표를 먼저 클릭해 포커스를 준 뒤
+    // 단축키 전송 (텍스트 입력 대기와 동일한 1회성 UX).
+    if (wcPendingCombo !== null && wcGestureRef.current.button === 'left') {
+      const distC = Math.hypot(c.x - wcGestureRef.current.startX, c.y - wcGestureRef.current.startY);
+      if (distC <= 10) {
+        await wcComboAtPoint(c.x, c.y);
+        return;
+      }
+    }
     const { startX, startY, startTime, button } = wcGestureRef.current;
     const dist = Math.hypot(c.x - startX, c.y - startY);
     const elapsed = Date.now() - startTime;
@@ -1591,7 +1621,7 @@ export default function RecordPage() {
         { x: startX, y: startY, button },
         `win_tap${button === 'right' ? ' [right]' : ''} (${startX},${startY})`);
     }
-  }, [wcToWinCoords, wcExecuteAction, wcPendingText, wcSeqMode, wcSeqClick]);
+  }, [wcToWinCoords, wcExecuteAction, wcPendingText, wcPendingCombo, wcComboAtPoint, wcSeqMode, wcSeqClick]);
 
   const wcDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     // 연속클릭(시퀀스) 모드 — 두 번의 mouseup이 이미 개별 클릭으로 처리됐으므로 무시.
@@ -1617,14 +1647,29 @@ export default function RecordPage() {
     if (!txt) return;
     setWcPendingText(txt);
     setWcInputText('');
+    setWcPendingCombo(null);  // 단축키 위치 대기 모드와 상호 배타.
     message.info('입력 위치를 클릭하세요');
   }, [wcInputText, wcPendingText]);
+
+  // 단축키 버튼 → 위치 대기 모드 토글. 다음 캔버스 좌클릭 좌표를 먼저 클릭한 뒤
+  // 단축키가 전송된다 (포커스가 필요한 컨트롤에 정확히 적용). 같은 버튼 재클릭 = 취소.
+  const wcToggleComboPending = useCallback((label: string, sequence: string[]) => {
+    if (wcPendingCombo?.label === label) {
+      setWcPendingCombo(null);
+      message.info('단축키 취소됨');
+      return;
+    }
+    setWcPendingCombo({ label, sequence });
+    setWcPendingText(null);  // 텍스트 입력 대기 모드와 상호 배타.
+    message.info(`${label} — 적용할 위치를 클릭하세요`);
+  }, [wcPendingCombo]);
 
   // 연속클릭(시퀀스) 시작 — 캔버스 클릭마다 포커스 유지 클릭 + 좌표 누적 모드 진입.
   const wcSeqStart = useCallback(() => {
     setWcSeqMode(true);
     setWcSeqPoints([]);
-    setWcPendingText(null);  // 텍스트 입력 대기 모드와 상호 배타.
+    setWcPendingText(null);   // 텍스트 입력 대기 모드와 상호 배타.
+    setWcPendingCombo(null);  // 단축키 위치 대기 모드와 상호 배타.
     message.info('연속클릭: 드롭다운 등 위치를 순서대로 클릭한 뒤 완료를 누르세요');
   }, []);
 
@@ -1680,14 +1725,6 @@ export default function RecordPage() {
     setWcSeqMode(false);
     setWcSeqPoints([]);
   }, []);
-
-  // 키 조합 전송 — modifier(ctrl/alt/shift/win) + 일반 키. 예: "ctrl+a", "ctrl+shift+f5".
-  // 백엔드가 '+'/',' 분리 → 모든 modifier down → 일반 키 down/up → modifier up(역순).
-  const wcSendKeyCombo = useCallback((combo: string) => {
-    const c = (combo || '').trim();
-    if (!c) return Promise.resolve();
-    return wcExecuteAction('win_key_combo', { keys: c }, `win_key_combo ${c}`);
-  }, [wcExecuteAction]);
 
   // ----------------------------------------------------------------
   // Random stress helpers (HKMC/iSAP 전용)
@@ -5198,12 +5235,15 @@ export default function RecordPage() {
                         onContextMenu={(e) => e.preventDefault()}
                         style={{
                           maxWidth: '100%', maxHeight: '100%',
-                          // 텍스트 입력 대기 중이면 text 커서 + 노란 보더, 연속클릭 진행 중이면 파란 보더로 시각 안내.
+                          // 텍스트 입력 대기 = 노란 보더, 단축키 위치 대기 = 보라 보더,
+                          // 연속클릭 진행 중 = 파란 보더로 시각 안내.
                           border: wcPendingText !== null
                             ? '2px solid #faad14'
-                            : wcSeqMode
-                              ? '2px solid #1677ff'
-                              : (isDark ? '1px solid #333' : '1px solid #d9d9d9'),
+                            : wcPendingCombo !== null
+                              ? '2px solid #722ed1'
+                              : wcSeqMode
+                                ? '2px solid #1677ff'
+                                : (isDark ? '1px solid #333' : '1px solid #d9d9d9'),
                           borderRadius: 4,
                           cursor: wcPendingText !== null ? 'text' : 'crosshair',
                           userSelect: 'none',
@@ -5326,8 +5366,9 @@ export default function RecordPage() {
                       </Tag>
                     )}
                     {/* 단축키: 자주 쓰는 modifier 조합 버튼. 좌측 정렬.
-                        Ctrl+A 전체선택, Ctrl+C 복사, Ctrl+V 붙여넣기, Ctrl+X 잘라내기,
-                        Ctrl+Z 실행취소, Ctrl+Y 다시실행, Ctrl+S 저장, Alt+F4 닫기. */}
+                        클릭 시 위치 대기 모드 진입 — 다음 캔버스 좌클릭 좌표를 먼저 클릭해
+                        대상 컨트롤에 포커스를 준 뒤 단축키가 전송됨 (백엔드 atomic).
+                        같은 버튼 재클릭 = 취소. 연속클릭 모드 중에는 비활성. */}
                     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-start' }}>
                       <span style={{ fontSize: 12, color: mutedTextColor }}>단축키:</span>
                       {[
@@ -5345,16 +5386,20 @@ export default function RecordPage() {
                         <Button
                           key={label}
                           size="small"
-                          onClick={async () => {
-                            for (const combo of sequence) {
-                              await wcSendKeyCombo(combo);
-                            }
-                          }}
+                          type={wcPendingCombo?.label === label ? 'primary' : 'default'}
+                          danger={wcPendingCombo?.label === label}
+                          disabled={wcSeqMode}
+                          onClick={() => wcToggleComboPending(label, sequence)}
                         >
                           {label}
                         </Button>
                       ))}
                     </div>
+                    {wcPendingCombo !== null && (
+                      <Tag color="purple" style={{ alignSelf: 'flex-start' }}>
+                        {`${wcPendingCombo.label} — 적용할 위치를 클릭하세요 (해당 위치 클릭 후 단축키 전송)`}
+                      </Tag>
+                    )}
                   </>
                 ) : (
                   <div style={{ color: mutedTextColor, textAlign: 'center', padding: 19 }}>

@@ -1482,7 +1482,11 @@ class LinControlService:
         finally:
             self._restore_context(ctx)
 
-    def send_key_combo(self, keys: list[str]) -> None:
+    def send_key_combo(self, keys: list[str],
+                       click_first_x: Optional[int] = None,
+                       click_first_y: Optional[int] = None) -> None:
+        # click_first_x/y: 단축키 전송 전 해당 client 좌표 클릭으로 대상 컨트롤 포커스
+        # 부여 (atomic — WinControlService.send_key_combo 와 인터페이스 동일).
         if not keys:
             return
         self._check()
@@ -1507,6 +1511,15 @@ class LinControlService:
         ctx = self._save_context()
         try:
             self._focus()
+            # 0) 클릭으로 대상 컨트롤 포커스 — 같은 컨텍스트 안에서 해야 fg 안 풀림.
+            if click_first_x is not None and click_first_y is not None:
+                sx, sy = self._client_to_screen(int(click_first_x), int(click_first_y))
+                self._xtest_motion(sx, sy)
+                time.sleep(0.10)
+                self._xtest_button("left", True)
+                time.sleep(0.08)
+                self._xtest_button("left", False)
+                time.sleep(0.20)
             for kc in modifiers:
                 self._xtest_key(kc, True)
                 time.sleep(0.02)

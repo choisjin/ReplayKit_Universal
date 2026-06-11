@@ -1437,7 +1437,10 @@ class PlaybackService:
                 keys_str = "+".join(str(k) for k in keys)
             else:
                 keys_str = str(keys)
-            return f"win_key_combo {keys_str}"
+            cfx = p.get("click_first_x")
+            cfy = p.get("click_first_y")
+            at = f" @({cfx},{cfy})" if cfx is not None and cfy is not None else ""
+            return f"win_key_combo {keys_str}{at}"
         return step.type.value
 
     async def _force_reconnect_hkmc(self, device_id: str) -> bool:
@@ -2862,8 +2865,12 @@ class PlaybackService:
                 else:
                     keys_list = [str(k).strip() for k in (raw or []) if str(k).strip()]
                 if keys_list:
+                    cfx = params.get("click_first_x")
+                    cfy = params.get("click_first_y")
                     await loop.run_in_executor(None,
-                        functools.partial(wc.send_key_combo, keys_list))
+                        functools.partial(wc.send_key_combo, keys_list,
+                                          int(cfx) if cfx is not None else None,
+                                          int(cfy) if cfy is not None else None))
         else:
             # ADB actions — real_id를 ADB 시리얼(dev.address)로 변환
             adb_serial = real_id

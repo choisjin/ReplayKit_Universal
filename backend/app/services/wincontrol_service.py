@@ -1864,7 +1864,9 @@ class WinControlService:
         "rwin": 0x5C,                           # VK_RWIN
     }
 
-    def send_key_combo(self, keys: list[str]) -> None:
+    def send_key_combo(self, keys: list[str],
+                       click_first_x: Optional[int] = None,
+                       click_first_y: Optional[int] = None) -> None:
         """Modifier + key 조합 전송. 예: ['ctrl','a'], ['ctrl','shift','f5'], ['alt','f4'].
 
         시퀀스:
@@ -1874,6 +1876,10 @@ class WinControlService:
 
         문자열로도 받을 수 있게 라우터에서 '+' 또는 ',' 분리 후 호출.
         파싱은 호출자 책임 (라우터 레이어에서). 빈 리스트는 noop.
+
+        click_first_x/y 가 지정되면 단축키 전송 전 그 client 좌표를 먼저 클릭해
+        대상 컨트롤에 포커스를 부여 (send_text 와 동일 패턴). 분리된 win_tap →
+        win_key_combo 두 호출은 사이의 fg 복원 때문에 포커스가 풀리므로 atomic 으로 합침.
         """
         if not keys:
             return
@@ -1895,6 +1901,16 @@ class WinControlService:
         ctx = self._save_context()
         try:
             self._focus()
+            # 0) 클릭으로 대상 컨트롤 포커스 — 같은 컨텍스트 안에서 해야 fg 안 풀림.
+            if click_first_x is not None and click_first_y is not None:
+                sx, sy = self._client_to_screen(int(click_first_x), int(click_first_y))
+                self._send_input_mouse_move(sx, sy)
+                time.sleep(0.10)
+                self._send_input_button("left", True)
+                time.sleep(0.08)
+                self._send_input_button("left", False)
+                # 클릭 → 포커스 안착 + 입력 큐 처리 시간.
+                time.sleep(0.20)
             # 1) 모든 수정자 down
             for vk in modifiers:
                 self._send_input_keybd(vk, 0, 0)
