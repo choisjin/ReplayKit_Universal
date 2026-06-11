@@ -135,14 +135,10 @@ class LinControlService:
         self._screen = None
         self._dpy_lock = threading.RLock()
 
-        # deferred_restore 큐
-        self._defer_restore_active = False
-        self._deferred_restore_ctxs: list[dict] = []
-
-        # 포커스 홀드 — 연속클릭(드롭다운 등)용. 여러 send_* 호출(=여러 HTTP 요청)에
-        # 걸쳐 포어그라운드 복원을 지연. begin/end_focus_hold 로 명시 제어.
-        self._hold_active = False
-        self._hold_ctxs: list[dict] = []
+        # deferred_restore 상태 — 스레드 로컬 필수. 액션마다 watchdog 데몬 스레드가
+        # 따로 돌므로, 타임아웃으로 leak 된 스레드가 with 블록 안에 갇혀 있으면
+        # 인스턴스 공유 카운터로는 이후 모든 복원(포커스+커서)이 스킵된다.
+        self._defer_local = threading.local()
 
         # attach 시점에 1회 떠두는 초기 캡처 — 첫 capture_window 호출에 의해 1회 소비.
         # 임베드 직후 z-order 를 즉시 복구하지만 첫 프레임은 활성 상태에서 잡은 정상 비트맵.
@@ -571,11 +567,6 @@ class LinControlService:
 
     def detach(self) -> None:
         logger.info("LinControl detached: xid=%s", self._hwnd)
-        # 연속클릭 홀드가 남아있으면 해제 — 이전 활성 창 복원이 영영 안 되는 것 방지.
-        try:
-            self.end_focus_hold()
-        except Exception:
-            pass
         self._hwnd = None
         self._pid = None
         self._process_name = ""
@@ -1138,12 +1129,10 @@ class LinControlService:
     def _restore_context(self, ctx: dict) -> None:
         if not ctx:
             return
-        # 포커스 홀드 중이면 요청 경계를 넘어 복원 지연 (deferred_restore 보다 우선).
-        if getattr(self, "_hold_active", False):
-            self._hold_ctxs.append(ctx)
-            return
-        if self._defer_restore_active:
-            self._deferred_restore_ctxs.append(ctx)
+        # 현재 스레드가 deferred_restore 블록 안이면 큐에 적재 (스레드 로컬).
+        loc = getattr(self, "_defer_local", None)
+        if loc is not None and getattr(loc, "depth", 0) > 0:
+            loc.ctxs.append(ctx)
             return
         self._do_restore_context(ctx)
 
@@ -1167,35 +1156,22 @@ class LinControlService:
 
     @contextlib.contextmanager
     def deferred_restore(self):
-        self._defer_restore_active = True
-        self._deferred_restore_ctxs = []
+        # 재진입 안전 — send_click_sequence(내부 with) 가 라우터 캡처 사이클(외부 with)
+        # 안에서 실행될 때 최외곽 종료 시에만 1회 복원 (WinControlService 와 동일).
+        # 스레드 로컬 — leak 된 watchdog 스레드/동시 요청이 카운터를 오염시키는 것 방지.
+        loc = self._defer_local
+        loc.depth = getattr(loc, "depth", 0) + 1
+        if loc.depth == 1:
+            loc.ctxs = []
         try:
             yield
         finally:
-            self._defer_restore_active = False
-            ctxs = self._deferred_restore_ctxs
-            self._deferred_restore_ctxs = []
-            if ctxs:
-                self._do_restore_context(ctxs[0])
-
-    def begin_focus_hold(self) -> None:
-        """연속클릭 시작 — 이후 send_* 의 포어그라운드 복원을 end_focus_hold 까지 지연(멱등)."""
-        if not getattr(self, "_hold_active", False):
-            self._hold_active = True
-            self._hold_ctxs = []
-
-    def end_focus_hold(self) -> None:
-        """연속클릭 종료 — 지연된 복원을 1회 수행 (최초 ctx = 우리 앱)."""
-        if not getattr(self, "_hold_active", False):
-            return
-        self._hold_active = False
-        ctxs = self._hold_ctxs
-        self._hold_ctxs = []
-        if ctxs:
-            self._do_restore_context(ctxs[0])
-
-    def is_focus_held(self) -> bool:
-        return bool(getattr(self, "_hold_active", False))
+            loc.depth -= 1
+            if loc.depth == 0:
+                ctxs = loc.ctxs
+                loc.ctxs = []
+                if ctxs:
+                    self._do_restore_context(ctxs[0])
 
     # ── 좌표 변환 ──────────────────────────────────────────
     def _client_to_screen(self, x: int, y: int) -> tuple[int, int]:
@@ -1363,7 +1339,7 @@ class LinControlService:
 
     def send_click_sequence(self, points: list[dict], interval_ms: int = 150,
                             button: str = "left") -> None:
-        """여러 위치를 포커스 유지한 채 순서대로 클릭 (재생용, 원자 실행).
+        """여러 위치를 포커스 유지한 채 순서대로 클릭 (원자 실행 — 재생/라이브 공용).
 
         드롭다운 열기 → 항목 선택처럼 첫 클릭으로 뜬 일시 팝업이 다음 클릭 전에
         닫히면 안 되는 경우 사용. WinControlService.send_click_sequence 와 인터페이스

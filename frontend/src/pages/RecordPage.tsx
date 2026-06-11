@@ -443,9 +443,10 @@ export default function RecordPage() {
   // 텍스트 입력 대기 모드 — '입력' 버튼 클릭 시 보낼 텍스트가 여기에 저장되고,
   // 다음 캔버스 클릭이 win_tap → win_input_text 시퀀스로 처리됨.
   const [wcPendingText, setWcPendingText] = useState<string | null>(null);
-  // 연속클릭(시퀀스) — 포커스를 유지한 채 여러 위치를 순서대로 클릭(드롭다운 열기→항목 선택).
-  // '연속클릭' 시작 시 wcSeqMode=true, 캔버스 좌클릭마다 포커스 유지 클릭(win_tap+hold)을 실행하고
-  // 좌표를 wcSeqPoints에 누적. '완료'를 누르면 누적 좌표를 하나의 win_click_sequence 스텝으로 저장.
+  // 연속클릭(시퀀스) — 여러 위치를 순서대로 클릭(드롭다운 열기→항목 선택).
+  // 캔버스 클릭 순간 브라우저가 포커스를 가져가 타겟의 일시 팝업이 닫히므로,
+  // 좌클릭마다 누적 좌표 전체를 백엔드에서 원자 재실행(win_click_sequence)해 상태를 재현.
+  // '완료'를 누르면 누적 좌표를 하나의 win_click_sequence 스텝으로 저장.
   const [wcSeqMode, setWcSeqMode] = useState(false);
   const [wcSeqPoints, setWcSeqPoints] = useState<{ x: number; y: number }[]>([]);
   const [wcSeqInterval, setWcSeqInterval] = useState(150);
@@ -1495,16 +1496,19 @@ export default function RecordPage() {
     }
   }, [wcAttached, recording, delayMs, steps, t, wcRefreshImage]);
 
-  // 연속클릭(시퀀스) 중 캔버스 클릭 — 포커스 유지(hold=true) 클릭을 즉시 실행하고 좌표 누적.
-  // 백엔드가 포어그라운드 복원을 '완료'까지 미루므로 드롭다운 등 일시 팝업이 닫히지 않고,
-  // 응답 스크린샷(팝업 열린 상태)으로 캔버스를 갱신해 다음 클릭 위치를 고를 수 있다.
+  // 연속클릭(시퀀스) 중 캔버스 클릭 — 누적 좌표 + 새 좌표로 시퀀스 전체를 처음부터 재실행.
+  // 캔버스를 클릭하는 순간 브라우저가 포커스를 가져가 타겟이 비활성화되고 드롭다운 등
+  // 일시 팝업이 OS 동작으로 자동 닫힌다 — 요청 사이 포커스 유지로는 해결 불가.
+  // 따라서 클릭마다 [열기→...→새 클릭] 전체를 한 요청 안에서 원자 실행해 팝업이 열린
+  // 상태를 재현한 뒤 새 위치를 클릭하고, 응답 스크린샷으로 캔버스를 갱신한다.
   // 스텝은 여기서 저장하지 않음 — '완료' 시 하나의 win_click_sequence 로 저장.
   const wcSeqClick = useCallback(async (x: number, y: number) => {
     if (!wcAttached?.attached) return;
+    const pts = [...wcSeqPoints, { x, y }];
     let actionRes: any = null;
     try {
-      actionRes = await deviceApi.input('WinControl', 'win_tap', {
-        x, y, button: 'left', hold: true, capture_after_ms: 500,
+      actionRes = await deviceApi.input('WinControl', 'win_click_sequence', {
+        points: pts, interval_ms: wcSeqInterval, button: 'left', capture_after_ms: 500,
       });
     } catch (e: any) {
       message.error(e.response?.data?.detail || t('record.inputFailed'));
@@ -1527,8 +1531,8 @@ export default function RecordPage() {
       };
       img.src = `data:image/jpeg;base64,${b64}`;
     }
-    setWcSeqPoints(prev => [...prev, { x, y }]);
-  }, [wcAttached, t]);
+    setWcSeqPoints(pts);
+  }, [wcAttached, wcSeqPoints, wcSeqInterval, t]);
 
   const wcMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     // 좌(0)/우(2) 버튼만 처리 — 가운데 버튼은 무시.
@@ -1624,17 +1628,12 @@ export default function RecordPage() {
     message.info('연속클릭: 드롭다운 등 위치를 순서대로 클릭한 뒤 완료를 누르세요');
   }, []);
 
-  // 연속클릭 완료 — 백엔드 포커스 홀드 해제(이전 활성 창 복원) 후,
-  // 누적 좌표를 하나의 win_click_sequence 스텝으로 저장 (녹화 중일 때만).
+  // 연속클릭 완료 — 누적 좌표를 하나의 win_click_sequence 스텝으로 저장 (녹화 중일 때만).
+  // 각 클릭이 이미 원자 재실행으로 수행됐으므로 여기서 추가 실행은 없음 (skip_execute).
   const wcSeqFinish = useCallback(async () => {
     setWcSeqMode(false);
     const pts = wcSeqPoints;
     setWcSeqPoints([]);
-    try {
-      await deviceApi.input('WinControl', 'win_seq_end', {});
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || t('record.inputFailed'));
-    }
     if (pts.length === 0) return;
     const desc = `win_click_sequence ${pts.map(p => `(${p.x},${p.y})`).join(' → ')} @${wcSeqInterval}ms`;
     if (!recording) return;
@@ -1676,15 +1675,10 @@ export default function RecordPage() {
     }
   }, [wcSeqPoints, wcSeqInterval, recording, wcAttached, steps, delayMs, t]);
 
-  // 연속클릭 취소 — 홀드만 해제하고 스텝은 저장하지 않음 (이미 실행된 클릭은 되돌릴 수 없음).
-  const wcSeqCancel = useCallback(async () => {
+  // 연속클릭 취소 — 누적 좌표만 버리고 스텝은 저장하지 않음 (이미 실행된 클릭은 되돌릴 수 없음).
+  const wcSeqCancel = useCallback(() => {
     setWcSeqMode(false);
     setWcSeqPoints([]);
-    try {
-      await deviceApi.input('WinControl', 'win_seq_end', {});
-    } catch {
-      // 홀드 해제 실패는 무시 — detach/재연결 시에도 자연 복구됨.
-    }
   }, []);
 
   // 키 조합 전송 — modifier(ctrl/alt/shift/win) + 일반 키. 예: "ctrl+a", "ctrl+shift+f5".
@@ -5292,9 +5286,10 @@ export default function RecordPage() {
                         {`입력 위치를 클릭하세요 — "${wcPendingText.length > 30 ? wcPendingText.slice(0, 30) + '...' : wcPendingText}"`}
                       </Tag>
                     )}
-                    {/* 연속클릭(시퀀스): 포커스를 유지한 채 여러 위치를 순서대로 클릭.
-                        드롭다운처럼 클릭 후 포커스 복원으로 닫히는 일시 팝업 대응.
-                        시작 → 캔버스에서 순서대로 클릭(즉시 실행) → 완료 시 하나의 스텝으로 저장. */}
+                    {/* 연속클릭(시퀀스): 여러 위치를 순서대로 클릭. 드롭다운처럼 타겟 비활성화
+                        (캔버스 클릭 = 브라우저 활성화) 시 닫히는 일시 팝업 대응 — 클릭마다
+                        누적 시퀀스 전체를 원자 재실행해 팝업 상태를 재현한 뒤 새 위치를 클릭.
+                        시작 → 캔버스에서 순서대로 클릭 → 완료 시 하나의 스텝으로 저장. */}
                     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-start', width: '100%' }}>
                       <span style={{ fontSize: 12, color: mutedTextColor }}>연속클릭:</span>
                       <Tooltip title="재생 시 클릭 사이 간격(ms)">
@@ -5327,7 +5322,7 @@ export default function RecordPage() {
                     </div>
                     {wcSeqMode && (
                       <Tag color="blue" style={{ alignSelf: 'flex-start' }}>
-                        포커스 유지 중 — 드롭다운 등 위치를 순서대로 클릭한 뒤 완료를 누르세요
+                        연속클릭 진행 중 — 클릭할 때마다 시퀀스 전체가 처음부터 재실행됩니다. 순서대로 클릭 후 완료를 누르세요
                       </Tag>
                     )}
                     {/* 단축키: 자주 쓰는 modifier 조합 버튼. 좌측 정렬.

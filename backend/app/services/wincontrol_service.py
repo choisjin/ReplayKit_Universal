@@ -161,11 +161,11 @@ class WinControlService:
         # UWP AppUserModelID — 종료된 UWP 앱 재실행에 필요(.exe 직접 실행 불가).
         # 예: "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"
         self._aumid: str = ""
-        # 포커스 홀드 — 연속클릭(드롭다운 등) 용. 여러 send_* 호출(=여러 HTTP 요청)에
-        # 걸쳐 포어그라운드 복원을 지연시켜 타겟이 계속 활성 상태를 유지하게 한다.
-        # deferred_restore 는 단일 with 블록(요청) 범위인 반면 이건 begin/end 로 명시 제어.
-        self._hold_active: bool = False
-        self._hold_ctxs: list[dict] = []
+        # deferred_restore 상태 — 반드시 스레드 로컬이어야 함. 모든 액션은 watchdog
+        # (run_action_with_timeout)의 별도 스레드에서 실행되는데, 타임아웃으로 leak 된
+        # 스레드가 with 블록 안에 갇혀 있으면 인스턴스 공유 카운터로는 이후 모든 액션의
+        # 복원(포커스+커서)이 스킵돼 마우스가 타겟에 남는다.
+        self._defer_local = threading.local()
 
     @staticmethod
     def is_available() -> bool:
@@ -565,11 +565,6 @@ class WinControlService:
 
     def detach(self) -> None:
         logger.info("WinControl detached: hwnd=%s", self._hwnd)
-        # 연속클릭 홀드가 남아있으면 해제 — 이전 활성 창 복원이 영영 안 되는 것 방지.
-        try:
-            self.end_focus_hold()
-        except Exception:
-            pass
         self._hwnd = None
         self._pid = None
         self._process_name = ""
@@ -1411,7 +1406,18 @@ class WinControlService:
                 fg = windll.user32.GetForegroundWindow()
                 if fg and not win32gui.IsIconic(hwnd):
                     _, fg_pid = win32process.GetWindowThreadProcessId(fg)
-                    if fg_pid and self._pid and int(fg_pid) == int(self._pid):
+                    same_pids = {int(self._pid)} if self._pid else set()
+                    # UWP: 호스트(ApplicationFrameHost)와 콘텐츠 앱 프로세스가 다름 —
+                    # 콘텐츠 pid 도 "같은 앱" 으로 취급해야 플라이아웃/콤보 팝업이 열린
+                    # 상태에서 불필요한 재활성화(=팝업 닫힘)를 피한다.
+                    if self._content_hwnd:
+                        try:
+                            _, cpid = win32process.GetWindowThreadProcessId(self._content_hwnd)
+                            if cpid:
+                                same_pids.add(int(cpid))
+                        except Exception:
+                            pass
+                    if fg_pid and int(fg_pid) in same_pids:
                         # 같은 프로세스가 이미 활성 — 추가 포커스 조작 없이 짧은 안정화
                         # 대기만 (입력 큐 처리 시간).
                         time.sleep(0.05)
@@ -1488,14 +1494,11 @@ class WinControlService:
         """
         if not ctx:
             return
-        # 포커스 홀드 중이면 요청 경계를 넘어 복원을 지연 (begin/end_focus_hold 가 제어).
-        # deferred_restore(단일 요청) 보다 우선 — 홀드가 활성이면 이 요청의 deferred 종료
-        # 시점에도 복원하지 않고 end_focus_hold 까지 미룬다.
-        if getattr(self, "_hold_active", False):
-            self._hold_ctxs.append(ctx)
-            return
-        if getattr(self, "_defer_restore_active", False):
-            self._deferred_restore_ctxs.append(ctx)
+        # 현재 스레드가 deferred_restore 블록 안이면 큐에 적재 (스레드 로컬 —
+        # 다른 요청/leaked 스레드의 defer 상태와 격리).
+        loc = getattr(self, "_defer_local", None)
+        if loc is not None and getattr(loc, "depth", 0) > 0:
+            loc.ctxs.append(ctx)
             return
         self._do_restore_context(ctx)
 
@@ -1550,42 +1553,29 @@ class WinControlService:
               img = wc._capture_via_screen(wc._hwnd)  # 타겟 FG 상태 그대로 캡처
           # 블록 종료 — prev_fg(우리 앱) 로 복원 (1회만)
         """
-        self._defer_restore_active = True
-        self._deferred_restore_ctxs = []
+        # 재진입 안전 — send_click_sequence(내부 with) 가 라우터의 캡처 사이클(외부 with)
+        # 안에서 실행될 때, 내부 종료 시점에 복원해버리면 캡처 전에 포커스가 빠져
+        # 가려진 화면이 잡힌다. depth 를 세서 최외곽 종료 시에만 1회 복원.
+        #
+        # 스레드 로컬 필수 — 액션마다 watchdog 데몬 스레드가 따로 돌므로, 타임아웃으로
+        # leak 된 스레드(여전히 with 안)나 동시 요청이 인스턴스 공유 카운터를 오염시키면
+        # 이후 모든 복원이 스킵돼 마우스/포커스가 영영 안 돌아온다.
+        loc = self._defer_local
+        loc.depth = getattr(loc, "depth", 0) + 1
+        if loc.depth == 1:
+            loc.ctxs = []
         try:
             yield
         finally:
-            self._defer_restore_active = False
-            # 모든 지연된 ctx 복원 — LIFO 가 아니라 첫 번째(=최외곽) ctx 만 의미가 있음.
-            # 중첩된 액션이라면 결국 사용자 앱(맨 처음 fg)으로 돌아가야 하므로 첫 번째 사용.
-            ctxs = self._deferred_restore_ctxs
-            self._deferred_restore_ctxs = []
-            if ctxs:
-                # 가장 처음 저장된 ctx 가 진짜 prev_fg(우리 frontend), 나머지는 타겟 자신.
-                self._do_restore_context(ctxs[0])
-
-    def begin_focus_hold(self) -> None:
-        """연속클릭 시작 — 이후 send_* 의 포어그라운드 복원을 end_focus_hold 까지 지연.
-
-        여러 HTTP 요청에 걸쳐 타겟을 활성 상태로 유지 → 드롭다운 같은 일시 팝업이
-        클릭 사이에 닫히지 않는다. 이미 홀드 중이면 누적 컨텍스트를 보존(멱등).
-        """
-        if not getattr(self, "_hold_active", False):
-            self._hold_active = True
-            self._hold_ctxs = []
-
-    def end_focus_hold(self) -> None:
-        """연속클릭 종료 — 지연된 포어그라운드/커서 복원을 1회 수행 (최초 ctx = 우리 앱)."""
-        if not getattr(self, "_hold_active", False):
-            return
-        self._hold_active = False
-        ctxs = self._hold_ctxs
-        self._hold_ctxs = []
-        if ctxs:
-            self._do_restore_context(ctxs[0])
-
-    def is_focus_held(self) -> bool:
-        return bool(getattr(self, "_hold_active", False))
+            loc.depth -= 1
+            if loc.depth == 0:
+                # 모든 지연된 ctx 복원 — LIFO 가 아니라 첫 번째(=최외곽) ctx 만 의미가 있음.
+                # 중첩된 액션이라면 결국 사용자 앱(맨 처음 fg)으로 돌아가야 하므로 첫 번째 사용.
+                ctxs = loc.ctxs
+                loc.ctxs = []
+                if ctxs:
+                    # 가장 처음 저장된 ctx 가 진짜 prev_fg(우리 frontend), 나머지는 타겟 자신.
+                    self._do_restore_context(ctxs[0])
 
     def _client_to_screen(self, x: int, y: int) -> tuple[int, int]:
         """client 좌표 → screen 좌표.
@@ -1700,11 +1690,13 @@ class WinControlService:
 
     def send_click_sequence(self, points: list[dict], interval_ms: int = 150,
                             button: str = "left") -> None:
-        """여러 위치를 포커스 유지한 채 순서대로 클릭 (재생용, 원자 실행).
+        """여러 위치를 포커스 유지한 채 순서대로 클릭 (원자 실행 — 재생/라이브 공용).
 
         points: [{"x": .., "y": ..}, ...]. 드롭다운 열기 → 항목 선택처럼 첫 클릭으로
-        뜬 일시 팝업이 다음 클릭 전에 닫히면 안 되는 경우 사용. deferred_restore 로
-        시퀀스 전체 동안 포어그라운드 복원을 미루고, 블록 종료 시 1회만 우리 앱으로 복원.
+        뜬 일시 팝업이 다음 클릭 전에 닫히면 안 되는 경우 사용. 한 호출(=한 요청) 안에서
+        전체를 실행하므로 클릭 사이에 사용자 브라우저가 포커스를 가져갈 틈이 없다 —
+        타겟 비활성화 시 팝업이 자동으로 닫히는 OS 동작을 회피하는 유일한 방법.
+        deferred_restore 로 시퀀스 전체 동안 포어그라운드 복원을 미루고(중첩 안전),
         각 send_tap 의 _focus 가드(같은 프로세스가 이미 FG면 재포커스 안 함)가
         팝업의 포커스를 보존한다.
         """
