@@ -374,10 +374,28 @@ class SCAR:
             if self._api.is_alive():
                 self._health.force_docker_mode = False
                 log.append("  → 8081 alive: API 모드 활성 (force_docker_mode 해제)")
+            elif ok and self._docker.is_running():
+                # 컨테이너는 떴는데 8081 이 폴링 상한까지 안 옴 — scar.sh 가 '정지된 기존
+                # 컨테이너'를 재시작한 경우 UI 단계가 `docker exec -it`(TTY) 라 무TTY 환경에서
+                # 죽는 함정(launch.log 'cannot attach stdin to a TTY...'). 컨테이너가 없을 때의
+                # 신규 기동은 UI 까지 올라오지만([0] 정리 후 재기동은 이 함정을 밟는다),
+                # 그 경우 branch (a) 와 동일한 in-container start_ui.sh 직접 기동으로 폴백.
+                ok2, msg2 = self._docker.restart_ui_in_container(self.ui_dir, self.ui_home)
+                log.append(f"  → 8081 still down after {self._health.reconnect_wait_s:g}s "
+                           f"(컨테이너는 running) — in-container start_ui.sh 폴백:\n"
+                           f"{self._indent(msg2, '    ')}")
+                if ok2 and self._wait_api_up(60.0):
+                    self._health.force_docker_mode = False
+                    log.append("  → 8081 alive: API 모드 활성 (start_ui.sh 폴백 성공)")
+                else:
+                    log.append(
+                        f"  → 8081 여전히 down — 원인 확인: {SCAR_LAUNCH_LOG} / "
+                        f"docker exec {self.container} tail /rhw/logs/scar/ui_log_*.log"
+                    )
             elif ok:
                 log.append(
-                    f"  → 8081 still down after {self._health.reconnect_wait_s:g}s — UI 부팅 지연/실패\n"
-                    f"  → 원인 확인: {SCAR_LAUNCH_LOG} / docker exec {self.container} tail /rhw/logs/scar/ui_log_*.log"
+                    f"  → 8081 still down after {self._health.reconnect_wait_s:g}s — 컨테이너도 미기동\n"
+                    f"  → 원인 확인: {SCAR_LAUNCH_LOG}"
                 )
         else:
             log.append("[4] UI launch: skipped (container down, reconnect_script not set)")

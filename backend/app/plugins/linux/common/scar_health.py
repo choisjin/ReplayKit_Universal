@@ -21,7 +21,7 @@ import time
 from typing import Literal, Optional
 
 from .scar_api import SCARApi
-from .scar_docker import SCARDocker
+from .scar_docker import SCARDocker, SCAR_LAUNCH_LOG
 
 
 logger = logging.getLogger(__name__)
@@ -104,5 +104,27 @@ class SCARHealth:
                     self.force_docker_mode = False
                     logger.info("SCAR API came up during reconnect wait; force_docker_mode cleared")
                     break
+                # scar.sh 가 '정지된 기존 컨테이너'를 재시작한 경우 UI 단계가 `docker exec -it`
+                # (TTY) 라 무TTY 환경에서 죽는다 → 8081 은 폴링 상한까지 기다려도 영영 안 온다.
+                # 기동 로그에서 그 시그니처가 보이면 조기 중단 — 호출자(Setup [4](b))가
+                # in-container start_ui.sh 폴백으로 즉시 넘어간다.
+                if self._launch_hit_tty_trap():
+                    logger.warning(
+                        "SCAR launch hit no-TTY trap (scar.sh 'docker exec -it' UI step died); "
+                        "abort 8081 wait early")
+                    break
                 time.sleep(min(2.0, self.reconnect_wait_s))
         return ok
+
+    @staticmethod
+    def _launch_hit_tty_trap() -> bool:
+        """scar.sh 기동 로그에 TTY 함정 시그니처가 있는지.
+
+        start_via_script 가 기동마다 로그를 truncate(>) 하므로 이전 실행 잔재 오탐 없음.
+        """
+        try:
+            with open(SCAR_LAUNCH_LOG, "rb") as f:
+                tail = f.read()[-4096:]
+        except OSError:
+            return False
+        return b"cannot attach stdin" in tail
