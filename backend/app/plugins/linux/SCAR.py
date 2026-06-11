@@ -112,7 +112,7 @@ class SCAR:
         reconnect_script: Optional[str] = None,
         reconnect_args: Optional[str] = None,   # 공백 구분 문자열 (시나리오 호환)
         reconnect_cwd: Optional[str] = None,
-        reconnect_wait_s: float = 60.0,  # scar.sh --ui 가 8081/3000 올리는 데 20s 로는 부족 — 폴링 상한
+        reconnect_wait_s: float = 150.0,  # cold boot([0] 정리→재기동→UI)가 60s 를 넘는 벤치 실측 — 폴링 상한
         # ── netns VLAN 구성 (설치 가이드 2단계) ──────────────
         vlan_config_dir: str = "",               # sdv_vlan_config 디렉터리 (netns.sh 위치)
         ends: str = "FaceStep1_2025_R10",        # ENDS 버전
@@ -152,6 +152,15 @@ class SCAR:
         self._docker = SCARDocker(container=container)
         self.container = container
         args_list = reconnect_args.split() if reconnect_args else None
+        # 옛 폼 기본값(60)으로 저장된 기존 등록 자동 보정 — cold boot 가 60s 를 넘는 벤치에서
+        # [4] 폴링이 조기 포기 → 8081/3000 미기동 상태로 post-connect 전체 skip 사례(2026-06-11).
+        # 명시적으로 60 이 아닌 값을 준 등록은 그대로 존중한다.
+        try:
+            reconnect_wait_s = float(reconnect_wait_s)
+        except (TypeError, ValueError):
+            reconnect_wait_s = 150.0
+        if reconnect_wait_s == 60.0:
+            reconnect_wait_s = 150.0
         self._health = SCARHealth(
             api=self._api,
             docker=self._docker,
@@ -213,10 +222,17 @@ class SCAR:
             msg = self.Setup()
 
         # ── 연결 직후 UI 자동화 (버전 선택 + bench 토글) ──────
-        # setup 이 성공(_setup_done)했고 할 일이 있을 때만. 실패해도 등록 자체는 유지(경고만).
+        # setup 이 성공(_setup_done)했고 할 일이 있을 때만. 개별 항목 실패는 경고로 유지하되,
+        # 제어 백엔드(3000) 자체가 안 떠서 '전부' skip 된 경우는 connected 로 래치하지 않는다 —
+        # 래치되면 인스턴스가 캐시에 살아남아 이후 재연결이 아무것도 재시도하지 않는
+        # 영구 반설정(half-configured) 상태가 된다 (2026-06-11 cold-boot>폴링상한 사례).
         if self.post_connect and self._setup_done and (self.capabilities or self.ethernet_interfaces or self.ui_version or self.ends or self.start_services or self.bench_toggle):
             pc = self._post_connect()
             msg = f"{msg}\n{pc}"
+            if "제어 백엔드(3000) 미응답" in pc:
+                self._setup_done = False
+                msg = ("FAIL: post-connect 미완료 — UI 제어 백엔드(3000) 미응답 "
+                       "(연결을 다시 시도하면 Setup+UI 자동화를 재실행합니다)\n" + msg)
             self._setup_last_msg = msg
         return msg
 
@@ -224,7 +240,12 @@ class SCAR:
         """device_manager._is_connected 가 호출. Setup 성공 또는 SCAR 가용이면 True."""
         if self._setup_done:
             return True
-        # netns 미사용(vlan_config_dir 빈 칸) 등록도 컨테이너/API 살아있으면 connected.
+        if self.auto_setup and self.vlan_config_dir:
+            # full-setup 등록인데 Setup/post-connect 미완 — 컨테이너가 떠 있어도 connected 로
+            # 보지 않는다. 여기서 True 를 주면 module_service 가 인스턴스를 재사용해
+            # 재연결 클릭이 Setup/post-connect 를 영영 재시도하지 않는다.
+            return False
+        # netns 미사용(vlan_config_dir 빈 칸) 등록은 컨테이너/API 살아있으면 connected.
         return self._health.force_docker_mode or self._api.is_alive() or self._docker.is_running()
 
     # ── 시나리오 노출: Setup (수동 재실행 가능) ───────────
@@ -353,6 +374,11 @@ class SCAR:
             if self._api.is_alive():
                 self._health.force_docker_mode = False
                 log.append("  → 8081 alive: API 모드 활성 (force_docker_mode 해제)")
+            elif ok:
+                log.append(
+                    f"  → 8081 still down after {self._health.reconnect_wait_s:g}s — UI 부팅 지연/실패\n"
+                    f"  → 원인 확인: {SCAR_LAUNCH_LOG} / docker exec {self.container} tail /rhw/logs/scar/ui_log_*.log"
+                )
         else:
             log.append("[4] UI launch: skipped (container down, reconnect_script not set)")
 
@@ -575,10 +601,11 @@ class SCAR:
                 return False
             time.sleep(min(interval_s, max(0.1, timeout_s)))
 
-    def _control_ready(self, retries: int = 10, wait_s: float = 2.0) -> bool:
+    def _control_ready(self, retries: int = 15, wait_s: float = 2.0) -> bool:
         """제어 백엔드(3000) 가 응답할 때까지 대기. GET /list/ends 로 프로브.
 
         주의: 3000 의 GET / 는 응답을 안 보내(hang) 프로브로 못 쓴다 → /list/ends 사용.
+        8081 이 방금 떠도 3000(node backend_ui)이 몇 초 늦을 수 있어 30s 까지 본다.
         """
         url = self._control.base_url + "/list/ends"
         for _ in range(max(1, retries)):

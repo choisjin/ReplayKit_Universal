@@ -441,7 +441,8 @@ def list_available_modules() -> list[dict]:
               "default": "-t 2.2.0 --ui --arti tls"},
              {"name": "reconnect_cwd", "label": "scar.sh cwd (선택)", "type": "text", "default": "",
               "hidden": True},
-             {"name": "reconnect_wait_s", "label": "재기동 후 8081 폴링 상한 (초)", "type": "number", "default": "60",
+             # cold boot([0] 컨테이너 정리→재기동→start_ui.sh) 실측 60s 초과 벤치 존재 — 150s.
+             {"name": "reconnect_wait_s", "label": "재기동 후 8081 폴링 상한 (초)", "type": "number", "default": "150",
               "hidden": True},
              # ── 숨김: 가이드 디폴트 ──
              {"name": "standalone_ip", "label": "standalone 모드 IP", "type": "text",
