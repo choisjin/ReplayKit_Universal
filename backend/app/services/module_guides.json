@@ -825,13 +825,13 @@
     "_description": "DLT 로깅 — DLT 데몬에 TCP 직접 연결하여 로그를 캡처·저장하고 키워드 PASS/FAIL 판정하는 모듈 (GUI 불필요)",
     "functions": {
       "StartLogging": {
-        "description": "DLT 연결 + 캡처 시작 (메모리만, 파일 저장 없음). 뷰어 모달이 자동 오픈됩니다. 종료 시 StopLogging으로 일괄 저장.",
+        "description": "DLT 연결 + 캡처 시작. 모든 로그를 즉시 텍스트 파일(자동 경로)에 스트리밍 저장하고 메모리는 최근분만 유지합니다 (장시간 로깅에도 느려지지 않음). 뷰어 모달이 자동 오픈됩니다.",
         "params": {}
       },
       "StopLogging": {
-        "description": "DLT 캡처 종료 + 메모리 버퍼를 파일로 일괄 저장. 자동 경로 또는 지정 경로.",
+        "description": "DLT 캡처 종료. 로그는 이미 파일에 실시간 저장되어 있으며, save_path 지정 시 그 위치로 이동만 합니다.",
         "params": {
-          "save_path": "저장 파일 경로. 빈 값이면 자동 (재생 중: run_dir/logs/dlt_*.log, 스텝 테스트: backend/results/Temp_logs/dlt_*.log)"
+          "save_path": "저장 파일 경로. 빈 값이면 스트리밍 파일 그대로 유지 (재생 중: run_dir/logs/dlt_*.log, 스텝 테스트: backend/results/Temp_logs/dlt_*.log)"
         }
       },
       "count_keyword": {

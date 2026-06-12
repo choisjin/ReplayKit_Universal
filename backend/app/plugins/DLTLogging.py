@@ -6,6 +6,14 @@ DLT Viewer GUI 없이 시나리오 스텝 내에서:
   - 키워드 검색으로 PASS/FAIL 판정
   - 스텝 인덱스 구간 지정 검색
 
+저장 구조 (스트리밍 정본):
+  - StartSave/StartLogging 모두 캡처 시작과 동시에 모든 라인을 텍스트 파일에
+    즉시 기록한다 — 파일이 로그 정본.
+  - 메모리는 최근 _RING_MAX줄 링버퍼만 유지 (장시간 로깅 메모리 증가 방지).
+  - 전체/구간 검색(SearchAll/SearchRange 등)은 링버퍼에 없는 과거분을
+    스트림 파일에서 읽는다 (절대 인덱스 = 파일 라인 번호).
+  - StopLogging(save_path)은 일괄 덤프 대신 스트림 파일 이동만 수행.
+
 사용 예 (시나리오 스텝):
   DLTLogging.StartSave("C:/logs/test.log")      # 연결 + 캡처 + 파일 저장 시작
   DLTLogging.MarkStep(1)                        # 스텝 1 경계 표시
@@ -19,14 +27,20 @@ DLT Viewer GUI 없이 시나리오 스텝 내에서:
 import logging
 import os
 import queue
+import shutil
 import socket
 import struct
 import threading
 import time
+from collections import deque
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 logger = logging.getLogger(__name__)
+
+# 메모리 링버퍼 최대 라인 수 — 전체 로그의 정본은 스트림 파일이며, 메모리는
+# 최근 N줄만 유지한다 (장시간 로깅 시 무한 메모리 증가 → 전체 성능 저하 방지).
+_RING_MAX = 100_000
 
 
 # ==========================================================================
@@ -192,14 +206,21 @@ class DLTLogging:
         self._lock = threading.Lock()
         self._recv_buffer = bytearray()
 
-        # 로그 버퍼 (전체 캡처된 로그) + 라인별 capture timestamp (epoch float)
-        self._logs: list[str] = []
-        self._log_capture_ts: list[float] = []
+        # 로그 링버퍼 (최근 _RING_MAX줄) + 라인별 capture timestamp (epoch float).
+        # 전체 로그의 정본은 스트림 파일(_stream_path) — 캡처 시작과 동시에 모든
+        # 라인을 파일에 즉시 기록하고, 메모리는 최근분만 유지한다.
+        # 절대 인덱스 규약: 파일의 i번째 라인 = 절대 인덱스 i.
+        #   링버퍼의 시작 절대 인덱스 = _total_count - len(_logs)
+        self._logs: deque[str] = deque(maxlen=_RING_MAX)
+        self._log_capture_ts: deque[float] = deque(maxlen=_RING_MAX)
         self._msg_counter = 0
+        self._total_count = 0   # 캡처 시작 이후 누적 라인 수 (= 스트림 파일 라인 수)
+        self._clear_base = 0    # ClearLogs 이후 논리적 시작 절대 인덱스
 
-        # 파일 저장
+        # 파일 저장 (스트리밍 정본)
         self._save_file = None
         self._save_path: Optional[str] = None
+        self._stream_path: Optional[str] = None  # 정본 파일 경로 (close/move 후에도 유지)
 
         # 스텝 마킹: {step_index: log_buffer_index}
         self._step_marks: dict[int, int] = {}
@@ -236,6 +257,9 @@ class DLTLogging:
             self._logs.clear()
             self._log_capture_ts.clear()
             self._msg_counter = 0
+            self._total_count = 0
+            self._clear_base = 0
+            self._stream_path = None
             self._step_marks.clear()
             with self._counter_lock:
                 self._counters.clear()  # 새 세션마다 키워드 카운터 자동 리셋
@@ -268,6 +292,60 @@ class DLTLogging:
         return True
 
     # ------------------------------------------------------------------
+    # 스트림 파일 (로그 정본) 헬퍼
+    # ------------------------------------------------------------------
+
+    def _open_stream_file(self, save_path: str) -> str:
+        """스트림 파일을 연다. 성공 시 "", 실패 시 에러 메시지."""
+        try:
+            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+            self._save_file = open(save_path, "w", encoding="utf-8")
+            self._save_path = save_path
+            self._stream_path = save_path
+            return ""
+        except Exception as e:
+            return f"ERROR: 파일 열기 실패 — {e}"
+
+    def _iter_abs_range(self, start_abs: int, end_abs: int) -> Iterator[str]:
+        """절대 인덱스 [start_abs, end_abs) 라인을 순서대로 yield.
+
+        링버퍼에 남아 있는 구간은 메모리에서, 밀려난 과거 구간은 스트림 파일
+        (정본)에서 읽는다. 파일이 없으면 링버퍼 가용분만 반환한다.
+        검색류 함수가 전체 로그를 메모리에 복사하지 않고 스트리밍 소비하기 위한 통로.
+        """
+        with self._lock:
+            total = self._total_count
+            base = total - len(self._logs)
+            end_abs = min(int(end_abs), total)
+            start_abs = max(0, int(start_abs))
+            if start_abs >= end_abs:
+                return
+            if start_abs >= base:
+                ring_snap = list(self._logs)[start_abs - base:end_abs - base]
+                file_range = None
+            else:
+                ring_snap = list(self._logs)[:max(0, end_abs - base)]
+                file_range = (start_abs, min(end_abs, base))
+            path = self._stream_path
+        if file_range:
+            fstart, fend = file_range
+            if path and os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8", errors="replace") as f:
+                        for i, raw in enumerate(f):
+                            if i < fstart:
+                                continue
+                            if i >= fend:
+                                break
+                            yield raw.rstrip("\n")
+                except Exception as e:
+                    logger.warning("[DLTLogging] stream file read failed (%s): %s", path, e)
+            else:
+                logger.warning("[DLTLogging] stream file missing for range %d~%d", fstart, fend)
+        for line in ring_snap:
+            yield line
+
+    # ------------------------------------------------------------------
     # 로그 저장 시작/중단 (연결 포함)
     # ------------------------------------------------------------------
 
@@ -293,15 +371,11 @@ class DLTLogging:
         if not save_path:
             # 재생 중: run_dir/logs, 스텝 테스트: backend/results/Temp_logs
             save_path = _auto_save_path("dlt")
-        else:
-            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
 
-        try:
-            self._save_file = open(save_path, "w", encoding="utf-8")
-            self._save_path = save_path
-            logger.info("[DLTLogging] Save started: %s", save_path)
-        except Exception as e:
-            return f"ERROR: 파일 열기 실패 — {e}"
+        err = self._open_stream_file(save_path)
+        if err:
+            return err
+        logger.info("[DLTLogging] Save started: %s", save_path)
 
         # 뷰어 동기화: StartLogging과 동일한 lifecycle emit
         try:
@@ -356,10 +430,12 @@ class DLTLogging:
         return f"{self._host}:{self._port}"
 
     def StartLogging(self) -> str:
-        """뷰어 연동용: DLT 연결 + 로그 캡처 시작 (메모리만, 파일 저장 없음).
+        """뷰어 연동용: DLT 연결 + 로그 캡처 시작 (파일 즉시 스트리밍 저장).
 
-        실시간 저장 대신 메모리 버퍼에만 로그를 누적한다. 저장이 필요하면
-        StopLogging(save_path)로 종료 시점에 일괄 저장.
+        모든 라인을 수신 즉시 텍스트 파일(자동 경로)에 기록한다 — 파일이 로그
+        정본이며, 메모리는 최근 {_RING_MAX}줄 링버퍼만 유지해 장시간 로깅에도
+        느려지지 않는다. StopLogging(save_path)은 일괄 덤프 대신 스트림 파일을
+        지정 경로로 이동만 한다.
         DLT_HUB에 session_started 이벤트를 emit하여 뷰어가 자동 오픈된다.
 
         Returns:
@@ -368,26 +444,35 @@ class DLTLogging:
         err = self._connect()
         if err:
             return err
+        # 스트림 파일 즉시 오픈 (StartSave로 이미 저장 중이면 그 파일을 그대로 사용)
+        if not self._save_file:
+            err = self._open_stream_file(_auto_save_path("dlt"))
+            if err:
+                return err
+            logger.info("[DLTLogging] StartLogging streaming to: %s", self._save_path)
         DLT_HUB.emit_lifecycle({
             "type": "session_started",
             "session_id": self._session_id(),
             "host": self._host,
             "port": self._port,
-            "save_path": "",
+            "save_path": self._save_path or "",
             "started_at": time.time(),
             "scenario_playback": _is_scenario_playback(),
         })
-        return f"Logging started: {self._host}:{self._port}"
+        return f"Logging started: {self._host}:{self._port} (streaming to {self._save_path})"
 
     def StopLogging(self, save_path: str = "") -> str:
-        """뷰어 연동용: DLT 연결 종료 + 메모리 버퍼를 파일로 일괄 저장.
+        """뷰어 연동용: DLT 연결 종료. 로그는 이미 스트림 파일에 실시간 기록됨.
+
+        메모리 일괄 덤프 대신, 캡처 중 스트리밍 기록된 파일을 닫고 save_path가
+        지정되면 그 위치로 이동(move)만 한다 — 장시간 로깅에서도 종료가 즉시 끝난다.
 
         Args:
-            save_path: 저장할 파일 경로. 빈 값이면 컨텍스트별 자동 저장:
+            save_path: 저장할 파일 경로. 빈 값이면 스트림 파일(자동 경로) 그대로 유지:
                 - 시나리오 재생 중: {run_dir}/logs/dlt_{timestamp}.log
                 - 스텝 테스트:     backend/results/Temp_logs/dlt_{timestamp}.log
 
-        파일 저장 단계의 어떤 예외(경로 해석/mkdir/open)가 발생해도 finally에서
+        파일 처리 단계의 어떤 예외(경로 해석/mkdir/move)가 발생해도 finally에서
         _close_save_file + _disconnect를 무조건 실행하여 소켓 leak을 방지한다.
         cleanup_active_instances가 재생 중단 시 자동 호출하는 진입점이기도 하다.
 
@@ -395,35 +480,52 @@ class DLTLogging:
             결과 메시지 (저장 경로 포함)
         """
         sid = self._session_id()
-
-        # 메모리 버퍼 스냅샷
         with self._lock:
-            logs_snapshot = list(self._logs)
+            total_lines = self._total_count
 
         saved_path = ""
         save_error = ""
         try:
-            # save_path 해석: 빈 값 → 자동 경로+파일명, 파일명만 → 자동 디렉토리 하위
-            if not save_path:
-                save_path = _auto_save_path("dlt")
-            elif not os.path.dirname(save_path):
-                base_dir = Path(_auto_save_path("dlt")).parent
-                save_path = str(base_dir / save_path)
-            try:
+            # 캡처/파일을 먼저 정리해야 move 가능 (Windows: 열린 파일 이동 불가)
+            self._stop_capture()
+            self._close_save_file()
+            stream_path = self._stream_path
+
+            if not stream_path or not os.path.exists(stream_path):
+                # 스트림 파일이 없는 비정상 케이스 — 링버퍼 잔여분이라도 덤프
+                with self._lock:
+                    logs_snapshot = list(self._logs)
+                if not save_path:
+                    save_path = _auto_save_path("dlt")
+                elif not os.path.dirname(save_path):
+                    save_path = str(Path(_auto_save_path("dlt")).parent / save_path)
                 os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
                 with open(save_path, "w", encoding="utf-8") as f:
                     f.write("\n".join(logs_snapshot))
                     if logs_snapshot:
                         f.write("\n")
                 saved_path = save_path
-                logger.info("[DLTLogging] Saved %d lines to %s", len(logs_snapshot), save_path)
-            except Exception as e:
-                logger.error("[DLTLogging] Save failed: %s", e)
-                save_error = str(e)
+                total_lines = len(logs_snapshot)
+                logger.info("[DLTLogging] Saved %d lines (ring fallback) to %s",
+                            total_lines, save_path)
+            elif save_path:
+                # save_path 해석: 파일명만 → 자동 디렉토리 하위
+                if not os.path.dirname(save_path):
+                    save_path = str(Path(_auto_save_path("dlt")).parent / save_path)
+                os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+                if os.path.abspath(save_path) != os.path.abspath(stream_path):
+                    shutil.move(stream_path, save_path)
+                self._stream_path = save_path
+                saved_path = save_path
+                logger.info("[DLTLogging] Stream file moved: %s → %s (%d lines)",
+                            stream_path, save_path, total_lines)
+            else:
+                saved_path = stream_path
+                logger.info("[DLTLogging] Stream file kept: %s (%d lines)",
+                            stream_path, total_lines)
         except Exception as e:
-            # _auto_save_path 등 경로 해석 자체가 실패해도 finally의 _disconnect를 보장
-            logger.error("[DLTLogging] StopLogging path resolution failed: %s", e)
-            save_error = save_error or str(e)
+            logger.error("[DLTLogging] StopLogging save handling failed: %s", e)
+            save_error = str(e)
         finally:
             # StartSave로 시작했더라도 _save_file 누수 방지 + 캡처/소켓 무조건 정리
             self._close_save_file()
@@ -440,7 +542,7 @@ class DLTLogging:
 
         if save_error:
             return f"ERROR: 저장 실패 — {save_error}"
-        return f"Logging stopped. Saved {len(logs_snapshot)} lines to: {saved_path}"
+        return f"Logging stopped. Saved {total_lines} lines to: {saved_path}"
 
     def SearchSection(self, keyword: str, from_step: int, to_step: int, count: int = 5) -> str:
         """뷰어 연동용: MarkStep 구간 검색. SearchRange의 alias."""
@@ -480,61 +582,53 @@ class DLTLogging:
         interval = max(0.05, float(interval_ms) / 1000.0)
         start_time = time.time()
         check_count = 0
-        scan_pos = 0  # 다음 검사 시 시작할 인덱스 (이전 검사까지 본 위치)
+        scan_pos = self._clear_base  # 다음 검사 시 시작할 절대 인덱스
 
         while True:
             check_count += 1
 
-            # 새로 추가된 라인만 복사 — O(delta). 전체 버퍼 복사 비용 제거.
+            # 새로 추가된 라인만 검사 — O(delta). 폴링 주기 내 신규분은 링버퍼에 있음.
             with self._lock:
-                total_len = len(self._logs)
-                new_slice = self._logs[scan_pos:total_len] if total_len > scan_pos else []
+                total_len = self._total_count
 
             matched_idx = -1
-            base = scan_pos
-            for i, line in enumerate(new_slice):
+            for i, line in enumerate(self._iter_abs_range(scan_pos, total_len)):
                 if all(k in line for k in keywords):
-                    matched_idx = base + i
+                    matched_idx = scan_pos + i
                     break
 
             # 이 회차에서 본 범위 업데이트
             scan_pos = total_len
 
             if matched_idx >= 0:
-                # 매칭 — 전체 버퍼에서 해당 라인까지 한 번만 스냅샷
-                with self._lock:
-                    to_save = list(self._logs[:matched_idx + 1])
                 logger.info("[DLTLogging] WatchAndStop MATCH '%s' at idx=%d (check %d)",
                             keyword, matched_idx, check_count)
                 return self._watch_save_and_stop(
-                    to_save, save_path, keyword, check_count, matched=True,
+                    matched_idx + 1, save_path, keyword, check_count, matched=True,
                 )
 
             elapsed = time.time() - start_time
             if timeout_sec > 0 and elapsed >= timeout_sec:
-                with self._lock:
-                    to_save = list(self._logs)
                 logger.info("[DLTLogging] WatchAndStop TIMEOUT '%s' after %.1fs (check %d)",
                             keyword, elapsed, check_count)
                 return self._watch_save_and_stop(
-                    to_save, save_path, keyword, check_count,
+                    total_len, save_path, keyword, check_count,
                     matched=False, reason="timeout",
                 )
             if max_checks > 0 and check_count >= max_checks:
-                with self._lock:
-                    to_save = list(self._logs)
                 logger.info("[DLTLogging] WatchAndStop EXHAUSTED '%s' after %d checks",
                             keyword, check_count)
                 return self._watch_save_and_stop(
-                    to_save, save_path, keyword, check_count,
+                    total_len, save_path, keyword, check_count,
                     matched=False, reason="max_checks",
                 )
 
             time.sleep(interval)
 
-    def _watch_save_and_stop(self, logs_slice: list, save_path: str, keyword: str,
+    def _watch_save_and_stop(self, end_abs: int, save_path: str, keyword: str,
                              check_count: int, matched: bool, reason: str = "") -> str:
-        """WatchAndStop 종료 처리 — 저장 + 연결 해제 + lifecycle emit.
+        """WatchAndStop 종료 처리 — 정본(스트림 파일/링버퍼)에서 end_abs까지 저장
+        + 연결 해제 + lifecycle emit.
 
         save_path 해석:
           - 빈 값:           컨텍스트별 자동 경로 + 자동 파일명
@@ -550,16 +644,20 @@ class DLTLogging:
             base_dir = Path(_auto_save_path("dlt_watch")).parent
             save_path = str(base_dir / save_path)
         saved = ""
+        lines = 0
+        start_abs = self._clear_base
         try:
             os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
             with open(save_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(logs_slice))
-                if logs_slice:
-                    f.write("\n")
+                for line in self._iter_abs_range(start_abs, end_abs):
+                    f.write(line + "\n")
+                    lines += 1
             saved = save_path
         except Exception as e:
             logger.error("[DLTLogging] WatchAndStop save failed: %s", e)
+            lines = max(0, end_abs - start_abs)
 
+        self._close_save_file()
         self._disconnect()
         DLT_HUB.emit_lifecycle({
             "type": "session_stopped",
@@ -568,8 +666,7 @@ class DLTLogging:
             "stopped_at": time.time(),
         })
 
-        lines = len(logs_slice)
-        tail = f"saved {lines} lines to {saved}" if saved else f"{lines} lines in memory (not saved)"
+        tail = f"saved {lines} lines to {saved}" if saved else f"{lines} lines (save failed)"
         if matched:
             return f"PASS: '{keyword}' found after {check_count} checks — {tail}"
         if reason == "timeout":
@@ -577,25 +674,26 @@ class DLTLogging:
         return f"FAIL: '{keyword}' not found after {check_count} checks — {tail}"
 
     def GetRecentLogs(self, limit: int = 1000) -> list[str]:
-        """뷰어 backfill용 — 현재까지 캡처된 로그의 마지막 N줄."""
+        """뷰어 backfill용 — 현재까지 캡처된 로그의 마지막 N줄 (링버퍼 내)."""
         with self._lock:
-            if limit <= 0:
-                return list(self._logs)
-            return list(self._logs[-int(limit):])
+            logs = list(self._logs)
+        if limit <= 0:
+            return logs
+        return logs[-int(limit):]
 
     def GetStepMarks(self) -> dict[int, int]:
         """뷰어 UI용 — 현재 스텝 마킹 위치 dict."""
         return dict(self._step_marks)
 
     def SearchAllDetailed(self, keyword: str, max_results: int = 500) -> list[str]:
-        """뷰어 검색바용 — 매칭된 로그 라인 목록을 반환."""
+        """뷰어 검색바용 — 매칭된 로그 라인 목록을 반환 (정본=스트림 파일 기준)."""
         keywords = keyword.split() if keyword else []
         if not keywords:
             return []
         with self._lock:
-            logs = list(self._logs)
+            total = self._total_count
         out: list[str] = []
-        for line in logs:
+        for line in self._iter_abs_range(self._clear_base, total):
             if all(k in line for k in keywords):
                 out.append(line)
                 if len(out) >= int(max_results):
@@ -604,7 +702,7 @@ class DLTLogging:
 
     def SearchSectionDetailed(self, keyword: str, from_step: int,
                               to_step: int, max_results: int = 500) -> list[str]:
-        """뷰어 검색바용 — 스텝 구간 내 매칭 로그 라인 목록 반환."""
+        """뷰어 검색바용 — 스텝 구간 내 매칭 로그 라인 목록 반환 (정본 기준)."""
         keywords = keyword.split() if keyword else []
         if not keywords:
             return []
@@ -617,11 +715,9 @@ class DLTLogging:
             end_idx = self._step_marks[to_step]
         else:
             with self._lock:
-                end_idx = len(self._logs)
-        with self._lock:
-            logs = list(self._logs[start_idx:end_idx])
+                end_idx = self._total_count
         out: list[str] = []
-        for line in logs:
+        for line in self._iter_abs_range(start_idx, end_idx):
             if all(k in line for k in keywords):
                 out.append(line)
                 if len(out) >= int(max_results):
@@ -653,7 +749,7 @@ class DLTLogging:
             결과 메시지
         """
         with self._lock:
-            pos = len(self._logs)
+            pos = self._total_count  # 절대 인덱스 (= 스트림 파일 라인 위치)
         self._step_marks[int(step_index)] = pos
         logger.info("[DLTLogging] MarkStep %d at log index %d", step_index, pos)
         return f"Step {step_index} marked at log index {pos}"
@@ -898,10 +994,10 @@ class DLTLogging:
         """
         keywords = keyword.split()
         with self._lock:
-            logs = list(self._logs)
+            total = self._total_count
 
         matches = []
-        for line in logs:
+        for line in self._iter_abs_range(self._clear_base, total):
             if all(k in line for k in keywords):
                 matches.append(line.strip())
                 if len(matches) >= int(count):
@@ -937,18 +1033,15 @@ class DLTLogging:
         if to_step not in self._step_marks:
             # to_step이 마킹 안 되었으면 현재 끝까지
             with self._lock:
-                end_idx = len(self._logs)
+                end_idx = self._total_count
         else:
             end_idx = self._step_marks[to_step]
 
         start_idx = self._step_marks[from_step]
         keywords = keyword.split()
 
-        with self._lock:
-            logs_slice = self._logs[start_idx:end_idx]
-
         matches = []
-        for line in logs_slice:
+        for line in self._iter_abs_range(start_idx, end_idx):
             if all(k in line for k in keywords):
                 matches.append(line.strip())
                 if len(matches) >= int(count):
@@ -979,19 +1072,19 @@ class DLTLogging:
         keywords = keyword.split()
         timeout_sec = float(timeout)
         start = time.time()
-        check_idx = 0
+        check_abs = self._clear_base  # 절대 인덱스 — 새로 추가된 라인만 검사
 
         while time.time() - start < timeout_sec:
             with self._lock:
-                logs = list(self._logs)
+                total = self._total_count
 
-            for i in range(check_idx, len(logs)):
-                if all(k in logs[i] for k in keywords):
-                    line = logs[i].strip()
+            for line in self._iter_abs_range(check_abs, total):
+                if all(k in line for k in keywords):
+                    line = line.strip()
                     logger.info("[DLTLogging] WaitLog PASS: %s", line)
                     return f"PASS: {line}"
 
-            check_idx = len(logs)
+            check_abs = total
             time.sleep(0.3)
 
         logger.info("[DLTLogging] WaitLog FAIL: '%s' not found in %ds", keyword, timeout_sec)
@@ -1018,9 +1111,9 @@ class DLTLogging:
 
         for attempt in range(1, max_retries + 1):
             with self._lock:
-                logs = list(self._logs)
+                total = self._total_count
 
-            for line in logs:
+            for line in self._iter_abs_range(self._clear_base, total):
                 if all(k in line for k in keywords):
                     summary = line.strip()[:120]
                     logger.info("[DLTLogging] ExpectFound PASS: '%s' → attempt %d/%d — %s",
@@ -1058,9 +1151,9 @@ class DLTLogging:
 
         for attempt in range(1, max_retries + 1):
             with self._lock:
-                logs = list(self._logs)
+                total = self._total_count
 
-            for line in logs:
+            for line in self._iter_abs_range(self._clear_base, total):
                 if all(k in line for k in keywords):
                     summary = line.strip()[:120]
                     logger.info("[DLTLogging] ExpectNotFound FAIL: '%s' → found at attempt %d/%d — %s",
@@ -1088,8 +1181,8 @@ class DLTLogging:
         """
         connected = self._socket is not None
         with self._lock:
-            log_count = len(self._logs)
-        saving = self._save_path or "N/A"
+            log_count = self._total_count - self._clear_base
+        saving = self._save_path or self._stream_path or "N/A"
         marks = ", ".join(f"{k}:{v}" for k, v in sorted(self._step_marks.items()))
 
         parts = [
@@ -1110,6 +1203,9 @@ class DLTLogging:
         """
         with self._lock:
             self._logs.clear()
+            self._log_capture_ts.clear()
+            # 절대 인덱스는 유지 (스트림 파일 라인 위치와 1:1) — 논리적 시작점만 이동
+            self._clear_base = self._total_count
         self._msg_counter = 0
         self._step_marks.clear()
         return "Logs and step marks cleared"
@@ -1178,18 +1274,19 @@ class DLTLogging:
             line = self._parse_message(msg_data)
             if line:
                 cap_ts = time.time()
+                # 스트림 파일(정본)에 즉시 기록 — 절대 인덱스(_total_count)와
+                # 파일 라인 위치가 1:1이 되도록 append와 같은 lock 구간에서 처리.
                 with self._lock:
                     self._logs.append(line)
                     self._log_capture_ts.append(cap_ts)
                     self._msg_counter += 1
-
-                # 파일 저장 중이면 기록
-                if self._save_file:
-                    try:
-                        self._save_file.write(line + "\n")
-                        self._save_file.flush()
-                    except Exception:
-                        pass
+                    self._total_count += 1
+                    if self._save_file:
+                        try:
+                            self._save_file.write(line + "\n")
+                            self._save_file.flush()
+                        except Exception:
+                            pass
 
                 # 키워드 카운터/단언/검출 검사
                 if self._counters or self._asserts or self._fail_keywords:
