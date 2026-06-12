@@ -570,6 +570,10 @@ class ImageTapRequest(BaseModel):
     x_offset: int = 0
     delay_after_ms: int = 3000
     description: str = ""
+    # 이미지 롱터치: True면 매치 중심에 tap 대신 long press 실행/기록.
+    # duration_ms는 누르고 있는 시간 (재생 시 _run_image_tap도 동일 적용).
+    long_press: bool = False
+    duration_ms: int = 3000
 
 
 @router.post("/record/image-tap")
@@ -666,48 +670,57 @@ async def record_image_tap(req: ImageTapRequest):
     x_offset = int(req.x_offset or 0)
     tap_x = center_x + x_offset
 
+    long_press = bool(req.long_press)
+    duration_ms = max(1, int(req.duration_ms or 3000))
     try:
         if dev_type in ("hkmc_agent", "isap_agent"):
             await recording_svc._execute_step_action(
-                StepType.HKMC_TOUCH,
-                {"x": tap_x, "y": center_y, "screen_type": req.screen_type or "front_center"},
+                StepType.HKMC_LONG_PRESS if long_press else StepType.HKMC_TOUCH,
+                {"x": tap_x, "y": center_y, "duration_ms": duration_ms,
+                 "screen_type": req.screen_type or "front_center"},
                 req.device_id,
             )
         elif dev_type in ("icas_agent", "mib_agent"):
             await recording_svc._execute_step_action(
-                StepType.ICAS_TOUCH,
-                {"x": tap_x, "y": center_y, "screen_type": req.screen_type or "HU"},
+                StepType.ICAS_LONG_PRESS if long_press else StepType.ICAS_TOUCH,
+                {"x": tap_x, "y": center_y, "duration_ms": duration_ms,
+                 "screen_type": req.screen_type or "HU"},
                 req.device_id,
             )
         elif dev_type == "wincontrol":
             await recording_svc._execute_step_action(
-                StepType.WIN_TAP,
-                {"x": center_x, "y": center_y},
+                StepType.WIN_LONG_PRESS if long_press else StepType.WIN_TAP,
+                {"x": center_x, "y": center_y, "duration_ms": duration_ms},
                 req.device_id,
             )
         else:
-            # ADB / 그 외 → 일반 TAP
+            # ADB / 그 외 → 일반 TAP / LONG_PRESS
             await recording_svc._execute_step_action(
-                StepType.TAP,
-                {"x": center_x, "y": center_y},
+                StepType.LONG_PRESS if long_press else StepType.TAP,
+                {"x": center_x, "y": center_y, "duration_ms": duration_ms},
                 req.device_id,
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tap execution failed: {e}")
 
     # 5) IMAGE_TAP 스텝 기록 (skip_execute=True 로 이미 실행한 액션 중복 방지)
+    step_params = {
+        "template": tpl_filename,
+        "similarity": threshold,
+        "screen_type": req.screen_type,
+        "x_offset": x_offset,  # 재생 시 _run_image_tap이 매칭 좌표에 더해 터치 좌표계로 환산
+        "matched_x": center_x,
+        "matched_y": center_y,
+        "template_width": cw,
+        "template_height": ch,
+    }
+    if long_press:
+        # 이미지 롱터치 — 재생 시 _run_image_tap이 tap 대신 long press 로 분기
+        step_params["long_press"] = True
+        step_params["duration_ms"] = duration_ms
     step, _resp = await recording_svc.add_step(
         step_type=StepType.IMAGE_TAP,
-        params={
-            "template": tpl_filename,
-            "similarity": threshold,
-            "screen_type": req.screen_type,
-            "x_offset": x_offset,  # 재생 시 _run_image_tap이 매칭 좌표에 더해 터치 좌표계로 환산
-            "matched_x": center_x,
-            "matched_y": center_y,
-            "template_width": cw,
-            "template_height": ch,
-        },
+        params=step_params,
         device_id=req.device_id,
         description=req.description,
         delay_after_ms=req.delay_after_ms,

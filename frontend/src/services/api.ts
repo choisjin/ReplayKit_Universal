@@ -129,6 +129,8 @@ export const scenarioApi = {
     delayAfterMs?: number,
     description?: string,
     xOffset?: number,
+    longPress?: boolean,
+    durationMs?: number,
   ) => api.post('/scenario/record/image-tap', {
     scenario_name: scenarioName,
     device_id: deviceId,
@@ -139,6 +141,8 @@ export const scenarioApi = {
     delay_after_ms: delayAfterMs ?? 3000,
     description: description ?? '',
     x_offset: xOffset ?? 0,
+    long_press: longPress ?? false,
+    duration_ms: durationMs ?? 3000,
   }),
   updateImageTap: (
     scenarioName: string,

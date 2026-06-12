@@ -1336,6 +1336,8 @@ class PlaybackService:
         elif step.type == StepType.IMAGE_TAP:
             tpl = p.get("template", "")
             sim = float(p.get("similarity", 0.85))
+            if p.get("long_press"):
+                return f"image_long_press [{tpl}] @sim≥{sim:.2f} {p.get('duration_ms', 3000)}ms"
             return f"image_tap [{tpl}] @sim≥{sim:.2f}"
         elif step.type == StepType.REPEAT_TAP:
             return f"repeat_tap ({p.get('x', 0)}, {p.get('y', 0)}) ×{p.get('count', 5)} @{p.get('interval_ms', 100)}ms"
@@ -3054,31 +3056,45 @@ class PlaybackService:
         # 기본형/비-HKMC는 params에 x_offset이 없어 0 → 무영향.
         x_offset = int(params.get("x_offset", 0) or 0)
         tap_x = center_x + x_offset
+        # 이미지 롱터치: params.long_press 가 있으면 tap 대신 long press 실행
+        long_press = bool(params.get("long_press"))
+        duration_ms = max(1, int(params.get("duration_ms", 3000) or 3000))
         logger.info(
-            "image_tap match: tpl=%s confidence=%.3f center=(%d,%d) x_offset=%d tap=(%d,%d) device=%s",
-            tpl_name, confidence, center_x, center_y, x_offset, tap_x, center_y, real_id,
+            "image_tap match: tpl=%s confidence=%.3f center=(%d,%d) x_offset=%d tap=(%d,%d) long_press=%s device=%s",
+            tpl_name, confidence, center_x, center_y, x_offset, tap_x, center_y, long_press, real_id,
         )
 
-        # 3) 디바이스별 tap 실행
+        # 3) 디바이스별 tap / long press 실행
         if dev.type in ("hkmc_agent", "isap_agent"):
             svc = (self.dm.get_isap_service(real_id) if dev.type == "isap_agent"
                    else self.dm.get_hkmc_service(real_id))
             if not svc:
                 raise RuntimeError(f"image_tap: agent {real_id} not connected")
-            await svc.async_tap(tap_x, center_y, screen_type or "front_center")
+            if long_press:
+                await svc.async_long_press(tap_x, center_y, duration_ms, screen_type or "front_center")
+            else:
+                await svc.async_tap(tap_x, center_y, screen_type or "front_center")
         elif dev.type in ("icas_agent", "mib_agent"):
             svc = (self.dm.get_mib_service(real_id) if dev.type == "mib_agent"
                    else self.dm.get_icas_service(real_id))
             if not svc:
                 raise RuntimeError(f"image_tap: agent {real_id} not connected")
-            await svc.async_tap(tap_x, center_y, screen_type or "HU")
+            if long_press:
+                await svc.async_long_press(tap_x, center_y, duration_ms, screen_type or "HU")
+            else:
+                await svc.async_tap(tap_x, center_y, screen_type or "HU")
         elif dev.type == "wincontrol":
             wc = self.dm.get_wincontrol_service()
             import asyncio as _asyncio, functools as _ft
             loop = _asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None, _ft.partial(wc.send_tap, tap_x, center_y, "left"),
-            )
+            if long_press:
+                await loop.run_in_executor(
+                    None, _ft.partial(wc.send_long_press, tap_x, center_y, duration_ms, "left"),
+                )
+            else:
+                await loop.run_in_executor(
+                    None, _ft.partial(wc.send_tap, tap_x, center_y, "left"),
+                )
         else:
             # ADB
             adb_serial = dev.address or real_id
@@ -3090,7 +3106,11 @@ class PlaybackService:
                 except (ValueError, TypeError):
                     our_index = None
             adb_display_id = resolve_input_display_id(dev.info, our_index)
-            await self.adb.tap(tap_x, center_y, serial=adb_serial, display_id=adb_display_id)
+            if long_press:
+                await self.adb.long_press(tap_x, center_y, duration_ms,
+                                          serial=adb_serial, display_id=adb_display_id)
+            else:
+                await self.adb.tap(tap_x, center_y, serial=adb_serial, display_id=adb_display_id)
 
     def _rel_path(self, abs_path: str, scenario_name: str) -> str:
         """절대 경로 → 웹 서빙용 상대 경로.

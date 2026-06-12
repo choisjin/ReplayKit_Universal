@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Button, Card, Checkbox, Col, Image, Input, Modal, Radio, Row, Segmented, Select, Slider, Space, InputNumber, message, List, Tabs, Tag, Popover, Tooltip, Splitter } from 'antd';
-import { PlayCircleOutlined, PauseOutlined, PlusOutlined, SwapOutlined, FolderOpenOutlined, SaveOutlined, DeleteOutlined, BranchesOutlined, ScissorOutlined, CameraOutlined, ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined, EditOutlined, CopyOutlined, ZoomInOutlined, ZoomOutOutlined, HolderOutlined, SettingOutlined, StopOutlined, QuestionCircleOutlined, FundProjectionScreenOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlayCircleOutlined, PauseOutlined, PlusOutlined, SwapOutlined, FolderOpenOutlined, SaveOutlined, DeleteOutlined, BranchesOutlined, ScissorOutlined, CameraOutlined, ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined, EditOutlined, CopyOutlined, ZoomInOutlined, ZoomOutOutlined, HolderOutlined, SettingOutlined, StopOutlined, QuestionCircleOutlined, FundProjectionScreenOutlined, ReloadOutlined, FieldTimeOutlined } from '@ant-design/icons';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -581,6 +581,9 @@ export default function RecordPage() {
 
   // 이미지 터치 (image_tap) — 녹화 중 현재 화면에서 영역을 크롭해 템플릿 매칭으로 중심 클릭
   const [imageTapSimilarity, setImageTapSimilarity] = useState<number>(0.85);
+  // 이미지 롱터치 모드 — true면 매치 중심에 tap 대신 long press 실행/기록
+  const [imageTapLongPress, setImageTapLongPress] = useState(false);
+  const [imageTapLongPressMs, setImageTapLongPressMs] = useState<number>(3000);
   const [imageTapModalOpen, setImageTapModalOpen] = useState(false);
   const [imageTapBusy, setImageTapBusy] = useState(false);
   const imageTapCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -2162,7 +2165,8 @@ export default function RecordPage() {
 
   // 이미지 터치 모달 열기 — 현재 라이브 화면 스냅샷을 캔버스에 띄워 사용자가 크롭하게 함.
   // targetDeviceId 가 주어지면 그 디바이스 화면을 캡처/타깃으로 사용 (WinControl 패널 등).
-  const openImageTapModal = useCallback(async (targetDeviceId?: string) => {
+  // longPress=true 면 이미지 롱터치 모드 (매치 중심을 tap 대신 long press).
+  const openImageTapModal = useCallback(async (targetDeviceId?: string, longPress: boolean = false) => {
     if (!recording || !scenarioName) {
       message.warning(t('record.recordingRequired'));
       return;
@@ -2172,6 +2176,7 @@ export default function RecordPage() {
       message.warning(t('record.deviceRequired'));
       return;
     }
+    setImageTapLongPress(longPress);
     imageTapTargetRef.current = target;
     imageTapScreenshotRef.current = await snapshotScreenshot(target);
     if (!imageTapScreenshotRef.current) {
@@ -2299,8 +2304,12 @@ export default function RecordPage() {
           imageTapSimilarity,
           screenTypeArg,
           delayMs,
-          `image_tap (sim≥${imageTapSimilarity.toFixed(2)})`,
+          imageTapLongPress
+            ? `image_long_press (sim≥${imageTapSimilarity.toFixed(2)}, ${imageTapLongPressMs}ms)`
+            : `image_tap (sim≥${imageTapSimilarity.toFixed(2)})`,
           xOffsetArg,
+          imageTapLongPress,
+          imageTapLongPressMs,
         );
         const newStep = res.data.step;
         const match = res.data.match;
@@ -2320,7 +2329,7 @@ export default function RecordPage() {
     } finally {
       setImageTapBusy(false);
     }
-  }, [scenarioName, screenshotDeviceId, imageTapSimilarity, screenTypeArgForDevice, xOffsetForDevice, delayMs, refreshScreenshot, t, imageTapEditIndex]);
+  }, [scenarioName, screenshotDeviceId, imageTapSimilarity, screenTypeArgForDevice, xOffsetForDevice, delayMs, refreshScreenshot, t, imageTapEditIndex, imageTapLongPress, imageTapLongPressMs]);
 
   useEffect(() => {
     if (imageTapModalOpen) setTimeout(() => drawImageTapCanvas(), 50);
@@ -3934,6 +3943,8 @@ export default function RecordPage() {
       if (Number.isFinite(curSim) && curSim > 0 && curSim <= 1) {
         setImageTapSimilarity(curSim);
       }
+      // 롱터치 스텝 여부 반영 (타이틀 표시용 — params.long_press 는 서버가 보존)
+      setImageTapLongPress(!!s.params?.long_press);
       setImageTapEditIndex(index);
       setImageTapModalOpen(true);
       return;
@@ -4378,7 +4389,7 @@ export default function RecordPage() {
                           setAnnotatedPreviewSrc(`/screenshots/${scenarioName}/${s.params.template}?v=${s._imageVer || ''}`);
                           setAnnotatedPreviewVisible(true);
                         }}
-                      >IMG</Tag> sim≥{Number(s.params.similarity ?? 0.85).toFixed(2)} {s.params.template_width && s.params.template_height ? `(${s.params.template_width}×${s.params.template_height})` : ''} → ({s.params.matched_x ?? '?'},{s.params.matched_y ?? '?'})</>
+                      >IMG</Tag>{s.params.long_press ? <Tag color="orange" style={{ margin: 0, marginLeft: 2 }}>LONG {s.params.duration_ms ?? 3000}ms</Tag> : null} sim≥{Number(s.params.similarity ?? 0.85).toFixed(2)} {s.params.template_width && s.params.template_height ? `(${s.params.template_width}×${s.params.template_height})` : ''} → ({s.params.matched_x ?? '?'},{s.params.matched_y ?? '?'})</>
                     : JSON.stringify(s.params)}
                 </span>
               )}
@@ -4926,6 +4937,21 @@ export default function RecordPage() {
                         {t('record.imageTapButton')}
                       </Button>
                     </Tooltip>
+                    {/* 이미지 롱터치 — long press 를 지원하는 디바이스 타입에만 노출 */}
+                    {['adb', 'hkmc_agent', 'isap_agent', 'hkmc5th_wide_agent', 'icas_agent', 'mib_agent', 'wincontrol'].includes(screenDevice?.type || '') && (
+                      <Tooltip title={recording ? t('record.imageLongPressTooltip') : t('record.imageTapDisabled')}>
+                        <Button
+                          size="small"
+                          type="default"
+                          icon={<FieldTimeOutlined />}
+                          disabled={!recording || imageTapBusy}
+                          loading={imageTapBusy}
+                          onClick={() => openImageTapModal(screenshotDeviceId || undefined, true)}
+                        >
+                          {t('record.imageLongPressButton')}
+                        </Button>
+                      </Tooltip>
+                    )}
                     <Popover
                       trigger="click"
                       placement="bottom"
@@ -5282,6 +5308,18 @@ export default function RecordPage() {
                             onClick={() => openImageTapModal('WinControl')}
                           >
                             {t('record.imageTapButton')}
+                          </Button>
+                        </Tooltip>
+                        <Tooltip title={recording ? t('record.imageLongPressTooltip') : t('record.imageTapDisabled')}>
+                          <Button
+                            size="small"
+                            type="default"
+                            icon={<FieldTimeOutlined />}
+                            disabled={!recording || imageTapBusy}
+                            loading={imageTapBusy}
+                            onClick={() => openImageTapModal('WinControl', true)}
+                          >
+                            {t('record.imageLongPressButton')}
                           </Button>
                         </Tooltip>
                         <Popover
@@ -5825,6 +5863,8 @@ export default function RecordPage() {
         title={
           imageTapEditIndex != null
             ? t('record.imageTapEditTitle', { index: imageTapEditIndex + 1, sim: imageTapSimilarity.toFixed(2) })
+            : imageTapLongPress
+            ? t('record.imageLongPressModalTitle', { sim: imageTapSimilarity.toFixed(2), ms: String(imageTapLongPressMs) })
             : t('record.imageTapModalTitle', { sim: imageTapSimilarity.toFixed(2) })
         }
         open={imageTapModalOpen}
@@ -5849,6 +5889,24 @@ export default function RecordPage() {
               suffix="%"
               style={{ width: 80 }}
             />
+            {imageTapLongPress && imageTapEditIndex == null && (
+              <>
+                <span style={{ fontSize: 11, color: subTextColor }}>
+                  {t('record.imageLongPressMsLabel')}:
+                </span>
+                <InputNumber
+                  size="small"
+                  min={200}
+                  max={20000}
+                  step={100}
+                  value={imageTapLongPressMs}
+                  disabled={imageTapBusy}
+                  onChange={(v) => { if (typeof v === 'number') setImageTapLongPressMs(v); }}
+                  suffix="ms"
+                  style={{ width: 100 }}
+                />
+              </>
+            )}
             {imageTapEditIndex != null && (
               <Button
                 type="primary"
