@@ -1153,6 +1153,16 @@ export default function RecordPage() {
     const resolvedAction = resolveAction(action, targetDevice);
     const resolvedParams = resolveParams(resolvedAction, params, targetDevice);
 
+    // HKMC 6th: cluster는 터치 미지원 — monitor 바이트가 없어 에이전트가 front_center
+    // 터치로 해석하므로 전송·스텝기록 전에 차단 (iSAP은 cluster monitor 지원하므로 제외)
+    if (targetDev?.type === 'hkmc_agent'
+        && (resolvedAction === 'hkmc_touch' || resolvedAction === 'hkmc_swipe'
+            || resolvedAction === 'hkmc_long_press' || resolvedAction === 'repeat_tap')
+        && resolvedParams.screen_type === 'cluster') {
+      message.warning(t('record.hkmcClusterTouchBlocked'));
+      return;
+    }
+
     const alreadyExecuted = false;
 
     if (recording && !suppressStepAddRef.current) {

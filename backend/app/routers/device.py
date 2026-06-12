@@ -1116,34 +1116,38 @@ async def device_input(req: InputRequest):
                         _label, req.device_id, req.action, req.params, hkmc.is_connected)
             p = req.params
             screen_type = p.get("screen_type", "front_center")
-            if req.action == "repeat_tap":
-                await hkmc.async_repeat_tap(p["x"], p["y"], int(p.get("count", 5)),
-                                            int(p.get("interval_ms", 100)), screen_type)
-            elif req.action == "hkmc_touch":
-                await hkmc.async_tap(p["x"], p["y"], screen_type)
-                logger.info("[%s INPUT] tap sent: x=%s y=%s screen=%s", _label, p["x"], p["y"], screen_type)
-            elif req.action == "hkmc_long_press":
-                await hkmc.async_long_press(p["x"], p["y"],
-                                            int(p.get("duration_ms", 3000)), screen_type)
-                logger.info("[%s INPUT] long_press sent: x=%s y=%s ms=%s screen=%s",
-                            _label, p["x"], p["y"], p.get("duration_ms", 3000), screen_type)
-            elif req.action == "hkmc_swipe":
-                await hkmc.async_swipe(p["x1"], p["y1"], p["x2"], p["y2"], screen_type,
-                                       int(p.get("duration_ms", 0)))
-                logger.info("[%s INPUT] swipe sent: duration_ms=%s", _label, p.get("duration_ms", 0))
-            elif req.action == "hkmc_key":
-                key_name = p.get("key_name")
-                if key_name:
-                    await hkmc.async_send_key_by_name(
-                        key_name, p.get("sub_cmd", 0x43), p.get("monitor", 0x00),
-                        p.get("direction"), screen_type,
-                        key_source=p.get("key_source"),
-                    )
-                    logger.info("[%s INPUT] key sent: %s (source=%s)", _label, key_name, p.get("key_source"))
-                else:
-                    await hkmc.async_send_key(
-                        p["cmd"], p["sub_cmd"], p["key_data"], p.get("monitor", 0x00), p.get("direction")
-                    )
+            try:
+                if req.action == "repeat_tap":
+                    await hkmc.async_repeat_tap(p["x"], p["y"], int(p.get("count", 5)),
+                                                int(p.get("interval_ms", 100)), screen_type)
+                elif req.action == "hkmc_touch":
+                    await hkmc.async_tap(p["x"], p["y"], screen_type)
+                    logger.info("[%s INPUT] tap sent: x=%s y=%s screen=%s", _label, p["x"], p["y"], screen_type)
+                elif req.action == "hkmc_long_press":
+                    await hkmc.async_long_press(p["x"], p["y"],
+                                                int(p.get("duration_ms", 3000)), screen_type)
+                    logger.info("[%s INPUT] long_press sent: x=%s y=%s ms=%s screen=%s",
+                                _label, p["x"], p["y"], p.get("duration_ms", 3000), screen_type)
+                elif req.action == "hkmc_swipe":
+                    await hkmc.async_swipe(p["x1"], p["y1"], p["x2"], p["y2"], screen_type,
+                                           int(p.get("duration_ms", 0)))
+                    logger.info("[%s INPUT] swipe sent: duration_ms=%s", _label, p.get("duration_ms", 0))
+                elif req.action == "hkmc_key":
+                    key_name = p.get("key_name")
+                    if key_name:
+                        await hkmc.async_send_key_by_name(
+                            key_name, p.get("sub_cmd", 0x43), p.get("monitor", 0x00),
+                            p.get("direction"), screen_type,
+                            key_source=p.get("key_source"),
+                        )
+                        logger.info("[%s INPUT] key sent: %s (source=%s)", _label, key_name, p.get("key_source"))
+                    else:
+                        await hkmc.async_send_key(
+                            p["cmd"], p["sub_cmd"], p["key_data"], p.get("monitor", 0x00), p.get("direction")
+                        )
+            except ValueError as e:
+                # 터치 미지원 화면(cluster 등) — front_center 오라우팅 방지 차단
+                raise HTTPException(status_code=400, detail=str(e))
             return {"result": "ok"}
 
         if req.action in ("win_tap", "win_double_click", "win_click_sequence",

@@ -1340,6 +1340,10 @@ class HKMC6thService:
         """rear_left/rear_right일 때만 LCD 패킷에 monitor 바이트 포함.
         front_center는 None 반환 → 레거시 agent와의 호환성 유지.
 
+        cluster/hud 등 터치 미지원 화면은 ValueError — monitor 바이트가 없는
+        LCD 패킷은 에이전트가 front_center 터치로 해석하므로, 조용히
+        front_center 로 오라우팅하지 말고 차단한다.
+
         ccRC(legacy ccIC_Agent) 펌웨어는 monitor 바이트를 REAR_L=2 / REAR_R=1 로
         해석한다 — CMD_LCDTOUCH(0x69) 터치와 CMD_CCRC(0x93) 하드키가 **동일** 규약.
         따라서 ccRC 디바이스는 터치도 좌우를 swap해야 화면(SCREEN_CAPTURE_MAP)·
@@ -1350,8 +1354,13 @@ class HKMC6thService:
         반전이 재발 → swap을 복원한다. 터치/하드키 monitor 해석은 같은 펌웨어상
         동일하므로 ccRC면 둘 다 swap이 맞다 (일반 HKMC 6th 디바이스는 swap 없음).
         """
-        if screen_type not in ("rear_left", "rear_right"):
+        if screen_type in (None, "", "front_center"):
             return None
+        if screen_type not in ("rear_left", "rear_right"):
+            raise ValueError(
+                f"HKMC 6th touch input is not supported on '{screen_type}' screen "
+                "(front_center/rear_left/rear_right only)"
+            )
         if self._is_ccrc_legacy_monitor:
             # REAR_L↔REAR_R swap (legacy: byte 1=RIGHT, 2=LEFT)
             screen_type = "rear_right" if screen_type == "rear_left" else "rear_left"
