@@ -792,8 +792,7 @@ async def connect_device(req: ConnectRequest):
             raise HTTPException(status_code=400, detail="SSH requires address (host)")
         if not username:
             raise HTTPException(status_code=400, detail="SSH requires username")
-        if not password and not key_file_path:
-            raise HTTPException(status_code=400, detail="SSH requires password or key_file_path")
+        # 빈 비밀번호 허용: password/key_file_path 모두 비어 있어도 연결 시도 (빈 비번 인증)
         category = req.category or "auxiliary"
         try:
             dev = await dm.add_ssh_device(
