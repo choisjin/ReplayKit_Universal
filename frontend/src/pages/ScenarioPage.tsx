@@ -18,7 +18,6 @@ import { useWebcamContext } from '../context/WebcamContext';
 import { VideoCameraOutlined } from '@ant-design/icons';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
-import DLTViewer from '../components/DLTViewer';
 import { useDLTSessions } from '../hooks/useDLTSessions';
 import { useSerialSessions, useLogcatSessions } from '../hooks/useSerialSessions';
 
@@ -228,7 +227,7 @@ export default function ScenarioPage() {
   const logcatSessionHook = useLogcatSessions();
   const { webcam, ensureWebcamOpen } = useWebcamContext();
   const { pauseScreenStream, resumeScreenStream, primaryDevices, auxiliaryDevices } = useDevice();
-  // 시나리오 재생 중 Serial/Logcat 은 라이브 뷰어를 띄우지 않는다 — 로그가 폭주하면(예: logcat
+  // 시나리오 재생 중 DLT/Serial/Logcat 은 라이브 뷰어를 띄우지 않는다 — 로그가 폭주하면(예: logcat
   // 수십만 줄) 렌더링이 메인 스레드를 잡아먹어 PC 가 느려진다. 대신 "현재 logging 중"인 세션을
   // 작은 노티로 **계속 유지** 표시하고, StopLogging(세션 종료) 시 해당 노티를 **닫는다**.
   // → 사용자가 명시적으로 logging 상태를 파악 가능. 활성 세션 목록(sessions)에서 파생하므로
@@ -237,8 +236,8 @@ export default function ScenarioPage() {
   const _reconcileLogNotis = useCallback((
     prefix: string,
     label: string,
-    sessions: Array<{ session_id: string; port?: string; serial?: string }>,
-    addrOf: (s: { session_id: string; port?: string; serial?: string }) => string,
+    sessions: Array<{ session_id: string; port?: string | number; serial?: string; host?: string }>,
+    addrOf: (s: { session_id: string; port?: string | number; serial?: string; host?: string }) => string,
   ) => {
     const wanted = new Map<string, string>();
     sessions.forEach((s) => {
@@ -262,8 +261,12 @@ export default function ScenarioPage() {
 
   useEffect(() => {
     _reconcileLogNotis('log-serial', 'Serial', serialSessionHook.sessions,
-      (s) => s.port || String(s.session_id || '').split('@')[0]);
+      (s) => String(s.port || '') || String(s.session_id || '').split('@')[0]);
   }, [serialSessionHook.sessions, _reconcileLogNotis]);
+  useEffect(() => {
+    _reconcileLogNotis('log-dlt', 'DLT', dltSessionHook.sessions,
+      (s) => s.host || String(s.session_id || '').split(':')[0]);
+  }, [dltSessionHook.sessions, _reconcileLogNotis]);
   useEffect(() => {
     _reconcileLogNotis('log-logcat', 'Android logcat', logcatSessionHook.sessions,
       (s) => s.serial || s.session_id);
@@ -1630,15 +1633,9 @@ export default function ScenarioPage() {
       </div>
       <Splitter style={{ flex: 1, minHeight: 0 }}>
       <Splitter.Panel defaultSize="40%" min="20%" max="60%" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {playing && dltSessionHook.sessions.length > 0 ? (
-        // DLT 활성 시에만 시나리오 카드를 DLT 뷰어로 대체 — 패널 상단 50%만 차지(아래 50%는 웹캠 PiP 자리).
-        // Serial/Logcat 은 로그 폭주로 PC 가 느려져 라이브 뷰어를 띄우지 않고, StartLogging 시
-        // 작은 노티(어떤 device 의 어떤 로그가 logging 중)만 표시한다(위 useEffect 참고).
-        // width:100% — Splitter.Panel 좌측을 가로로 가득 채움.
-        <div style={{ width: '100%', height: '50%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <DLTViewer sessions={dltSessionHook.sessions} mode="card" theme={settings.theme} />
-        </div>
-      ) : (
+      {/* DLT/Serial/Logcat 모두 재생 중 라이브 뷰어를 띄우지 않는다 — 로그 폭주 시 렌더링이
+          메인 스레드를 잡아 PC 가 느려짐. StartLogging/StartSave 시 작은 노티만 표시 (위 useEffect).
+          과거에는 DLT 활성 시 이 카드를 DLTViewer(card)로 대체했으나 동일 이유로 제거. */}
       <Card
         style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
         styles={{ body: { flex: 1, overflow: 'auto', padding: '8px 12px' } }}
@@ -2209,7 +2206,6 @@ export default function ScenarioPage() {
         )}
 
       </Card>
-      )}
       </Splitter.Panel>
 
       <Splitter.Panel style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
