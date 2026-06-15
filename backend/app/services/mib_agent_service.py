@@ -25,11 +25,91 @@ import asyncio
 import io
 import logging
 import os
+import struct
 import threading
 import time
 from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
+
+# ── 라이브 미러 device-side 스트리머 ──
+# weston screen dump은 PNG 인코딩 때문에 0.63s/frame(1.6fps 천장)이라 라이브에 부적합.
+# 대신 surface를 무압축 BMP로 dump하면 ~20ms → AVN 합성은 HMI(0x10) 위에 맵(0x13)을
+# 정해진 사각형(geometry: layer 2240x1260 → screen 1560x878)에 붙여 재구성한다.
+# device엔 PIL/ffmpeg가 없어 순수 stdlib로 nearest 다운스케일 후, 프레임을
+#   b"MIBF" + struct('<HHI', w, h, len) + raw(BGR, top-down)
+# 형식으로 stdout에 흘린다. 백엔드 리더가 받아 BGR→JPEG로 변환.
+# %(TW)d / %(TH)d 는 start_live_stream에서 주입.
+_MIB_LIVE_STREAMER = r'''
+import sys, os, time, struct, subprocess
+os.environ["XDG_RUNTIME_DIR"] = "/run/platform/weston"
+LAYER_W, LAYER_H = 2240, 1260
+MAP_SRC = (0, 0, 1110, 836)
+MAP_DST = (27, 119, 1110, 836)
+TW, TH = %(TW)d, %(TH)d
+HMI_BMP, MAP_BMP = "/tmp/_mlh.bmp", "/tmp/_mlm.bmp"
+
+def dump(sid, path, timeout=2.0):
+    try: os.remove(path)
+    except OSError: pass
+    subprocess.run(["LayerManagerControl", "dump", "surface", sid, "to", path],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    declared = None; t0 = time.time()
+    while time.time() - t0 < timeout:
+        try: sz = os.path.getsize(path)
+        except OSError: sz = 0
+        if sz >= 6 and declared is None:
+            with open(path, "rb") as f:
+                f.seek(2); declared = struct.unpack("<I", f.read(4))[0]
+        if declared and sz >= declared:
+            with open(path, "rb") as f: return f.read()
+        time.sleep(0.003)
+    return None
+
+def parse(b):
+    off = struct.unpack("<I", b[10:14])[0]
+    w = struct.unpack("<i", b[18:22])[0]
+    h = struct.unpack("<i", b[22:26])[0]
+    px = struct.unpack("<H", b[28:30])[0] // 8
+    stride = ((w * px) + 3) & ~3
+    return b, w, abs(h), off, stride, px
+
+def region(bmp, sx, sy, sw, sh, dw, dh):
+    data, w, h, off, stride, px = bmp
+    cols = [(sx + dx * sw // dw) * px for dx in range(dw)]
+    rows = []
+    for dy in range(dh):
+        syy = sy + dy * sh // dh
+        rb = off + (h - 1 - syy) * stride
+        rows.append(b"".join(data[rb + c: rb + c + 3] for c in cols))
+    return rows
+
+def compose(hmi, mp):
+    base = region(hmi, 0, 0, LAYER_W, LAYER_H, TW, TH)
+    mx = MAP_DST[0] * TW // LAYER_W; my = MAP_DST[1] * TH // LAYER_H
+    mw = MAP_DST[2] * TW // LAYER_W; mh = MAP_DST[3] * TH // LAYER_H
+    part = region(mp, MAP_SRC[0], MAP_SRC[1], MAP_SRC[2], MAP_SRC[3], mw, mh)
+    for i, row in enumerate(part):
+        y = my + i
+        if 0 <= y < TH:
+            base[y] = base[y][:mx * 3] + row + base[y][(mx + mw) * 3:]
+    return b"".join(base)
+
+out = sys.stdout.buffer
+while True:
+    try:
+        hb = dump("0x10", HMI_BMP)
+        mb = dump("0x13", MAP_BMP)
+        if hb is None or mb is None:
+            time.sleep(0.05); continue
+        payload = compose(parse(hb), parse(mb))
+        out.write(b"MIBF" + struct.pack("<HHI", TW, TH, len(payload)) + payload)
+        out.flush()
+    except (BrokenPipeError, IOError):
+        break
+    except Exception:
+        time.sleep(0.05)
+'''
 
 # ── 하드키 서브 커맨드 (HKMC6thService API 호환용 — 내부적으로 press/release 구분) ──
 SHORT_KEY = 0x43
@@ -232,6 +312,30 @@ class MIBAgentService:
         self._ps_ssh = None
         self._ps_tunnel_chan = None
         self._ps_lock = threading.RLock()
+        # ── 라이브 미러 스트리밍 상태 ──
+        # 전용 SSH exec 채널에서 device 스트리머(python3)를 상주시키고, 리더 스레드가
+        # MIBF 프레임을 받아 BGR→JPEG로 변환해 최신 1장을 보관. main.py WS 루프는
+        # get_live_frame()으로 최신본을 꺼내 보낸다(프레임당 SCP/페이싱 제거).
+        # 라이브는 저해상도/저화질로 충분(조작용); 풀해상도 _screencap_hu는 이미지비교용으로 유지.
+        # 라이브는 전용 SSH 연결을 쓴다 — 풀해상도 screencap이 공유 SSH를 리셋해도
+        # 주 화면(라이브)이 끊기지 않도록 격리.
+        self._live_ssh = None
+        self._live_chan = None
+        self._live_thread = None
+        self._live_stop = threading.Event()
+        self._live_lock = threading.Lock()
+        self._latest_live_jpeg: Optional[bytes] = None
+        self._live_frame_id = 0
+
+        def _env_int_def(name: str, default: int) -> int:
+            try:
+                return int(os.environ.get(name) or default)
+            except Exception:
+                return default
+        # 타깃 해상도(다운스케일) — 작을수록 device python 합성이 빨라져 fps↑. 1560x878 비율 근사.
+        self._live_w = _env_int_def("MIB_LIVE_W", 520)
+        self._live_h = _env_int_def("MIB_LIVE_H", 293)
+        self._live_jpeg_q = _env_int_def("MIB_LIVE_JPEG_Q", 60)
         self._key_overrides: dict[str, dict] = dict(key_overrides or {})
         # 캡처에서 PNG 실제 크기와 _res_x/_res_y가 다를 때 자동 정정 + 영구 저장 콜백.
         # 시그니처: callback("WxH"). DeviceManager가 dev.info 갱신과 파일 저장을 담당.
@@ -932,6 +1036,11 @@ class MIBAgentService:
 
     def disconnect(self) -> None:
         self._connected = False
+        # 라이브 스트림(전용 채널 + 리더 스레드) 먼저 정리 — 공유 SSH를 닫기 전에.
+        try:
+            self.stop_live_stream()
+        except Exception:
+            pass
         with self._ssh_lock:
             if self._ssh_shell is not None:
                 try:
@@ -2001,6 +2110,138 @@ class MIBAgentService:
         return await loop.run_in_executor(
             None, self.screencap_bytes, screen_type, fmt, timeout
         )
+
+    # ------------------------------------------------------------------
+    # 라이브 미러 스트리밍 (surface 합성 → device python 다운스케일 → JPEG)
+    # ------------------------------------------------------------------
+    def is_live_running(self) -> bool:
+        t = self._live_thread
+        return bool(t and t.is_alive())
+
+    def start_live_stream(self) -> bool:
+        """device 스트리머를 전용 SSH 채널로 기동하고 리더 스레드를 띄운다.
+
+        이미 돌고 있으면 True. 실패 시 False(호출자가 레거시 screencap 경로로 폴백).
+        """
+        with self._live_lock:
+            if self._live_thread and self._live_thread.is_alive():
+                return True
+            self._live_stop.clear()
+        try:
+            ssh = self._new_ssh()  # 전용 연결 (공유 SSH 리셋과 격리)
+            try:
+                tr = ssh.get_transport()
+                if tr is not None:
+                    tr.set_keepalive(self._ssh_keepalive_interval)
+            except Exception:
+                pass
+            transport = ssh.get_transport()
+            if transport is None:
+                try: ssh.close()
+                except Exception: pass
+                return False
+            chan = transport.open_session()
+            chan.exec_command("python3 -u -")
+            script = _MIB_LIVE_STREAMER % {"TW": self._live_w, "TH": self._live_h}
+            chan.sendall(script.encode("utf-8"))
+            chan.shutdown_write()  # 스트리머는 stdin을 읽지 않음 → 즉시 EOF
+            t = threading.Thread(target=self._live_reader, args=(chan,), daemon=True)
+            with self._live_lock:
+                self._live_ssh = ssh
+                self._live_chan = chan
+                self._live_thread = t
+            t.start()
+            logger.info("MIB live stream started (%dx%d, q=%d)",
+                        self._live_w, self._live_h, self._live_jpeg_q)
+            return True
+        except Exception as e:
+            logger.warning("MIB live stream start failed: %r", e)
+            try:
+                ssh.close()
+            except Exception:
+                pass
+            with self._live_lock:
+                self._live_ssh = None
+                self._live_chan = None
+                self._live_thread = None
+            return False
+
+    def _live_reader(self, chan) -> None:
+        """채널에서 MIBF 프레임을 파싱해 BGR→JPEG 변환 후 최신본 보관."""
+        from PIL import Image
+        buf = b""
+        try:
+            chan.settimeout(5.0)
+        except Exception:
+            pass
+        while not self._live_stop.is_set():
+            try:
+                data = chan.recv(65536)
+            except Exception:
+                break
+            if not data:
+                break  # 채널 닫힘 → 스트리머 종료
+            buf += data
+            while True:
+                idx = buf.find(b"MIBF")
+                if idx < 0:
+                    # 매직이 아직 없음 — 버퍼 폭주 방지(꼬리만 보존)
+                    if len(buf) > (1 << 21):
+                        buf = buf[-8:]
+                    break
+                if len(buf) < idx + 12:
+                    break
+                w, h, ln = struct.unpack("<HHI", buf[idx + 4: idx + 12])
+                if len(buf) < idx + 12 + ln:
+                    break
+                payload = buf[idx + 12: idx + 12 + ln]
+                buf = buf[idx + 12 + ln:]
+                if ln != w * h * 3:
+                    continue  # 손상 프레임 스킵
+                try:
+                    img = Image.frombytes("RGB", (w, h), payload, "raw", "BGR")
+                    bio = io.BytesIO()
+                    img.save(bio, format="JPEG", quality=self._live_jpeg_q)
+                    jpg = bio.getvalue()
+                    with self._live_lock:
+                        self._latest_live_jpeg = jpg
+                        self._live_frame_id += 1
+                except Exception:
+                    continue
+        logger.info("MIB live reader exited")
+
+    def get_live_frame(self) -> tuple[Optional[bytes], int]:
+        """(최신 JPEG bytes, frame_id). 아직 없으면 (None, 0)."""
+        with self._live_lock:
+            return self._latest_live_jpeg, self._live_frame_id
+
+    def stop_live_stream(self) -> None:
+        self._live_stop.set()
+        with self._live_lock:
+            chan = self._live_chan
+            ssh = self._live_ssh
+            self._live_chan = None
+            self._live_ssh = None
+            t = self._live_thread
+            self._live_thread = None
+        if chan is not None:
+            try:
+                chan.close()
+            except Exception:
+                pass
+        if ssh is not None:
+            try:
+                ssh.close()
+            except Exception:
+                pass
+        if t and t.is_alive():
+            t.join(timeout=1.5)
+        with self._live_lock:
+            self._latest_live_jpeg = None
+
+    async def async_start_live_stream(self) -> bool:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.start_live_stream)
 
     # ------------------------------------------------------------------
     # Async wrappers (HKMC6th API 호환)

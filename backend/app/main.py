@@ -622,6 +622,8 @@ async def websocket_screen_mirror(websocket: WebSocket):
     # 최초엔 burst로 시작 — 연결 직후 초기 화면을 빠르게 채운 뒤 idle로 가라앉는다.
     _ssh_burst_remaining = SSH_REFRESH_BURST_N
     _ssh_seen_input_ts = -1.0
+    # MIB 라이브 스트리밍: 마지막으로 보낸 프레임 id (중복 송신 방지)
+    mib_last_frame_id = -1
 
     async def _adaptive_ssh_pace(svc) -> None:
         """방금 1프레임을 보낸 뒤 다음 캡처까지 입력 유무에 따라 대기.
@@ -706,20 +708,47 @@ async def websocket_screen_mirror(websocket: WebSocket):
                 elif is_mib:
                     mib = device_manager.get_mib_service(target_device_id)
                     if mib and mib.is_connected:
+                        # 라이브 스트리밍 경로: surface 합성 스트리머(device python)에서
+                        # 최신 프레임을 받아 보낸다. 프레임당 SCP/재인증·페이싱 없음.
+                        # 스트림이 죽었으면(첫 진입 포함) 재기동 시도, 실패 시 레거시 폴백.
+                        if not mib.is_live_running():
+                            started = await mib.async_start_live_stream()
+                            if started:
+                                mib_last_frame_id = -1
+                        if mib.is_live_running():
+                            try:
+                                jpeg_bytes, fid = mib.get_live_frame()
+                                if jpeg_bytes is not None and fid != mib_last_frame_id:
+                                    mib_last_frame_id = fid
+                                    await websocket.send_bytes(jpeg_bytes)
+                                    await asyncio.sleep(0.015)
+                                else:
+                                    # 새 프레임 대기 (device ~6-10fps)
+                                    await asyncio.sleep(0.03)
+                                continue
+                            except WebSocketDisconnect:
+                                break
+                            except Exception as ce:
+                                cls_name = type(ce).__name__
+                                if cls_name in ("ClientDisconnected", "ConnectionClosed",
+                                                "ConnectionClosedOK", "ConnectionClosedError"):
+                                    break
+                                logger.warning("MIB live send error: type=%s repr=%r",
+                                               cls_name, ce)
+                                await asyncio.sleep(0.3)
+                                continue
+                        # ── 레거시 폴백: LayerManagerControl dump + scp (스트림 불가 환경) ──
                         try:
-                            # MIB도 SSH+scp 기반 (LayerManagerControl dump). 타임아웃 여유 부여.
                             jpeg_bytes = await mib.async_screencap_bytes(
                                 screen_type=screen_type, fmt="jpeg"
                             )
                             await websocket.send_bytes(jpeg_bytes)
-                            # 적응형 리프레시: idle 10s, 입력 직후 2s×5회 burst
                             await _adaptive_ssh_pace(mib)
                             continue
                         except WebSocketDisconnect:
                             break
                         except Exception as ce:
                             cls_name = type(ce).__name__
-                            # 클라이언트 끊김 패밀리는 즉시 break (재시도 무의미)
                             if cls_name in ("ClientDisconnected", "ConnectionClosed",
                                             "ConnectionClosedOK", "ConnectionClosedError"):
                                 break
@@ -1022,6 +1051,17 @@ async def websocket_screen_mirror(websocket: WebSocket):
                 )
             except Exception as e:
                 logger.debug("scrcpy backend close on disconnect failed: %s", e)
+        # MIB 라이브 스트림(전용 SSH 채널 + 리더 스레드) 정리 — 미종료 시 device
+        # python 스트리머가 살아남아 surface dump를 계속 돈다.
+        if is_mib:
+            _mib = device_manager.get_mib_service(target_device_id)
+            if _mib is not None and _mib.is_live_running():
+                try:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, _mib.stop_live_stream
+                    )
+                except Exception as e:
+                    logger.debug("MIB live stream stop on disconnect failed: %s", e)
 
 
 # 현재 백그라운드 재생 태스크 (단일 재생만 허용)
