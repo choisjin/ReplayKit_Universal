@@ -433,7 +433,7 @@ class MIBAgentService:
                 return default
         # 타깃 가로 해상도(다운스케일). 세로(_live_h)는 0=화면비율 자동(인치별 자동 적응).
         # 작을수록 device python 다운스케일이 빨라져 fps↑(해상도↑=fps↓ 트레이드오프).
-        self._live_w = _env_int_def("MIB_LIVE_W", 640)
+        self._live_w = _env_int_def("MIB_LIVE_W", 832)  # 640*1.3 (가독성↑, fps 약간↓)
         self._live_h = _env_int_def("MIB_LIVE_H", 0)  # 0 → TH = TW*SH/SW 자동
         self._live_jpeg_q = _env_int_def("MIB_LIVE_JPEG_Q", 60)
         # 맵 합성 게이트 (live_stream_mixin과 동일) — 맵-영역이 "대부분 구멍(검정)"일 때만

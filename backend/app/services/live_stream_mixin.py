@@ -206,7 +206,7 @@ class LiveStreamMixin:
                         pass
             return d
         # 타깃 가로(다운스케일). 세로=0이면 화면비율 자동(인치별 적응). LIVE_*(공용)/MIB_LIVE_*(호환).
-        self._live_w = _ei(["LIVE_W", "MIB_LIVE_W"], 640)
+        self._live_w = _ei(["LIVE_W", "MIB_LIVE_W"], 832)  # 640*1.3 (가독성↑, fps 약간↓)
         self._live_h = _ei(["LIVE_H", "MIB_LIVE_H"], 0)
         self._live_jpeg_q = _ei(["LIVE_JPEG_Q", "MIB_LIVE_JPEG_Q"], 60)
         # 맵 합성 게이트: HMI 맵-영역이 "대부분 구멍(검정)"일 때만 맵을 합성한다.
