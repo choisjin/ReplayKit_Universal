@@ -32,76 +32,150 @@ from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
 
-# ── 라이브 미러 device-side 스트리머 ──
+# ── 라이브 미러 device-side 스트리머 (인치 무관 동적 합성) ──
 # weston screen dump은 PNG 인코딩 때문에 0.63s/frame(1.6fps 천장)이라 라이브에 부적합.
-# 대신 surface를 무압축 BMP로 dump하면 ~20ms → AVN 합성은 HMI(0x10) 위에 맵(0x13)을
-# 정해진 사각형(geometry: layer 2240x1260 → screen 1560x878)에 붙여 재구성한다.
-# device엔 PIL/ffmpeg가 없어 순수 stdlib로 nearest 다운스케일 후, 프레임을
-#   b"MIBF" + struct('<HHI', w, h, len) + raw(BGR, top-down)
-# 형식으로 stdout에 흘린다. 백엔드 리더가 받아 BGR→JPEG로 변환.
-# %(TW)d / %(TH)d 는 start_live_stream에서 주입.
+# 대신 surface를 무압축 BMP로 dump(~20ms)해서, 연결 시 LayerManagerControl get scene을
+# 파싱해 HMI(전체화면 서피스) + MAP(최대 면적의 비검정 서브 서피스)을 자동 식별한다
+# (하드코딩 좌표/ID 없음 → 10"/12.9"/15"/8" 등 모든 인치 자동 적응).
+# device엔 PIL/numpy 없어 순수 stdlib로 nearest 다운스케일만 하고, HMI/MAP을 따로 송출:
+#   b"MIBF" + struct('<HHhhHH', tw, th, mx, my, mw, mh) + HMI(tw*th*3 BGR) + MAP(mw*mh*3 BGR)
+# 백엔드가 numpy black-key 합성(HMI가 검정=투명인 곳에만 MAP) 후 JPEG.
+# __TW__ / __TH__(0=화면비율 자동)는 start_live_stream에서 .replace()로 주입.
 _MIB_LIVE_STREAMER = r'''
-import sys, os, time, struct, subprocess
+import sys, os, time, struct, subprocess, re
 os.environ["XDG_RUNTIME_DIR"] = "/run/platform/weston"
-LAYER_W, LAYER_H = 2240, 1260
-MAP_SRC = (0, 0, 1110, 836)
-MAP_DST = (27, 119, 1110, 836)
-TW, TH = %(TW)d, %(TH)d
-HMI_BMP, MAP_BMP = "/tmp/_mlh.bmp", "/tmp/_mlm.bmp"
+TW = __TW__
+TH_OVR = __TH__
+
+def lmc(a):
+    try:
+        return subprocess.run(["LayerManagerControl"] + a, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL).stdout.decode("utf-8", "replace")
+    except Exception:
+        return ""
+
+def f_xy(t, k):
+    m = re.search(k + r"\D*x=(-?\d+),\s*y=(-?\d+)", t)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+def f_reg(t, k):
+    m = re.search(k + r"\D*x=(-?\d+),\s*y=(-?\d+),\s*w=(\d+),\s*h=(\d+)", t)
+    return tuple(int(m.group(i)) for i in range(1, 5)) if m else None
+
+def f_ids(t, k):
+    m = re.search(k + r"\s*(.*)", t)
+    return re.findall(r"(\d+)\(0x[0-9a-fA-F]+\)", m.group(1)) if m else []
+
+def parse(b):
+    off = struct.unpack("<I", b[10:14])[0]
+    w = struct.unpack("<i", b[18:22])[0]; h = struct.unpack("<i", b[22:26])[0]
+    px = struct.unpack("<H", b[28:30])[0] // 8
+    return b, w, abs(h), off, ((w * px + 3) & ~3), px
 
 def dump(sid, path, timeout=2.0):
     try: os.remove(path)
     except OSError: pass
     subprocess.run(["LayerManagerControl", "dump", "surface", sid, "to", path],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    declared = None; t0 = time.time()
+    dec = None; t0 = time.time()
     while time.time() - t0 < timeout:
         try: sz = os.path.getsize(path)
         except OSError: sz = 0
-        if sz >= 6 and declared is None:
+        if sz >= 6 and dec is None:
             with open(path, "rb") as f:
-                f.seek(2); declared = struct.unpack("<I", f.read(4))[0]
-        if declared and sz >= declared:
+                f.seek(2); dec = struct.unpack("<I", f.read(4))[0]
+        if dec and sz >= dec:
             with open(path, "rb") as f: return f.read()
         time.sleep(0.003)
     return None
 
-def parse(b):
-    off = struct.unpack("<I", b[10:14])[0]
-    w = struct.unpack("<i", b[18:22])[0]
-    h = struct.unpack("<i", b[22:26])[0]
-    px = struct.unpack("<H", b[28:30])[0] // 8
-    stride = ((w * px) + 3) & ~3
-    return b, w, abs(h), off, stride, px
+def mostly_black(bm, samples=2048):
+    data, w, h, off, stride, px = bm
+    end = off + stride * h; step = max(px, ((end - off) // samples // px or 1) * px); i = off
+    while i + 3 <= end:
+        if data[i] > 16 or data[i + 1] > 16 or data[i + 2] > 16:
+            return False
+        i += step
+    return True
 
-def region(bmp, sx, sy, sw, sh, dw, dh):
-    data, w, h, off, stride, px = bmp
+def region(bm, sx, sy, sw, sh, dw, dh):
+    data, w, h, off, stride, px = bm
     cols = [(sx + dx * sw // dw) * px for dx in range(dw)]
     rows = []
     for dy in range(dh):
-        syy = sy + dy * sh // dh
-        rb = off + (h - 1 - syy) * stride
+        rb = off + (h - 1 - (sy + dy * sh // dh)) * stride
         rows.append(b"".join(data[rb + c: rb + c + 3] for c in cols))
     return rows
 
-def build(hmi, mp):
-    # HMI 전체(타깃)와 맵(맵-사각형 크기)을 따로 만들어 반환 — 합성/키잉은 백엔드(numpy)에서.
-    base = region(hmi, 0, 0, LAYER_W, LAYER_H, TW, TH)
-    mx = MAP_DST[0] * TW // LAYER_W; my = MAP_DST[1] * TH // LAYER_H
-    mw = MAP_DST[2] * TW // LAYER_W; mh = MAP_DST[3] * TH // LAYER_H
-    part = region(mp, MAP_SRC[0], MAP_SRC[1], MAP_SRC[2], MAP_SRC[3], mw, mh)
-    return b"".join(base), b"".join(part), mx, my, mw, mh
+# ── scene 파싱: HMI(전체화면) + MAP(최대 면적 비검정 서브 서피스) 자동 식별 ──
+scr = lmc(["get", "screen", "0"])
+SW, SH = f_xy(scr, "resolution:") or (1560, 878)
+TH = TH_OVR if TH_OVR > 0 else max(1, round(TW * SH / SW))
+LW = LH = 0; order = []
+for lid in f_ids(scr, "layer render order:"):
+    lt = lmc(["get", "layer", lid]); o = f_ids(lt, "surface render order:")
+    if o:
+        LW, LH = f_xy(lt, "original size:") or (SW, SH); order = o; break
+if not order:
+    LW, LH = SW, SH
+
+hmi = None; cands = []
+for sid in order:
+    st = lmc(["get", "surface", sid]); v = re.search(r"visibility:\s*(\d+)", st)
+    if v and v.group(1) == "0":
+        continue
+    src = f_reg(st, "source region:"); dst = f_reg(st, "destination region:")
+    osz = f_xy(st, "original size:")
+    if not src or not dst:
+        continue
+    if osz and osz[0] * osz[1] < 64 * 64:   # cursor/system surface 제외
+        continue
+    if dst[0] == 0 and dst[1] == 0 and dst[2] >= LW * 0.95 and dst[3] >= LH * 0.95:
+        hmi = (sid, src)                      # 전체화면 = HMI 크롬
+    else:
+        cands.append((sid, src, dst))
+# MAP = 최대 면적의 "비검정" 후보 (보조 서피스/빈 서피스 자동 배제)
+mapsel = None; best = -1
+for sid, src, dst in cands:
+    bm = dump(sid, "/tmp/_mlsel.bmp")
+    if bm is None or mostly_black(parse(bm)):
+        continue
+    area = dst[2] * dst[3]
+    if area > best:
+        best = area; mapsel = (sid, src, dst)
+
+if mapsel:
+    _, _, md = mapsel
+    mx = md[0] * TW // LW; my = md[1] * TH // LH
+    mw = max(1, md[2] * TW // LW); mh = max(1, md[3] * TH // LH)
+else:
+    mx = my = mw = mh = 0
+
+sys.stderr.write("MIBLIVE hmi=%s map=%s TW=%d TH=%d LW=%d LH=%d map_dst=%d,%d,%d,%d\n"
+                 % (hmi[0] if hmi else None, mapsel[0] if mapsel else None,
+                    TW, TH, LW, LH, mx, my, mw, mh))
+sys.stderr.flush()
 
 out = sys.stdout.buffer
+HMI_BMP, MAP_BMP = "/tmp/_mlhmi.bmp", "/tmp/_mlmap.bmp"
 while True:
     try:
-        hb = dump("0x10", HMI_BMP)
-        mb = dump("0x13", MAP_BMP)
-        if hb is None or mb is None:
+        if hmi is None:
+            time.sleep(0.2); continue
+        hb = dump(hmi[0], HMI_BMP)
+        if hb is None:
             time.sleep(0.05); continue
-        hbytes, mbytes, mx, my, mw, mh = build(parse(hb), parse(mb))
-        hdr = b"MIBF" + struct.pack("<HHhhHH", TW, TH, mx, my, mw, mh)
-        out.write(hdr + hbytes + mbytes)
+        hp = parse(hb); hs = hmi[1]
+        hbytes = b"".join(region(hp, hs[0], hs[1], hs[2], hs[3], TW, TH))
+        mbytes = b""
+        if mapsel and mw > 0 and mh > 0:
+            mb = dump(mapsel[0], MAP_BMP)
+            if mb is not None:
+                mp = parse(mb); ms = mapsel[1]
+                mbytes = b"".join(region(mp, ms[0], ms[1], ms[2], ms[3], mw, mh))
+        cmw, cmh = (mw, mh) if mbytes else (0, 0)
+        # SW,SH(실제 화면 해상도)도 보고 → 백엔드가 등록 해상도를 보정(터치 좌표 일치).
+        out.write(b"MIBF" + struct.pack("<HHhhHHHH", TW, TH, mx, my, cmw, cmh, SW, SH) + hbytes + mbytes)
         out.flush()
     except (BrokenPipeError, IOError):
         break
@@ -324,16 +398,17 @@ class MIBAgentService:
         self._live_lock = threading.Lock()
         self._latest_live_jpeg: Optional[bytes] = None
         self._live_frame_id = 0
+        self._live_res_synced = False  # 스트림당 1회 등록 해상도 보정 가드
 
         def _env_int_def(name: str, default: int) -> int:
             try:
                 return int(os.environ.get(name) or default)
             except Exception:
                 return default
-        # 타깃 해상도(다운스케일) — 작을수록 device python 합성이 빨라져 fps↑(해상도↑=fps↓ 트레이드오프).
-        # 1560x878(=1.777) 비율 유지. 640x360 기준 ~4-5fps.
+        # 타깃 가로 해상도(다운스케일). 세로(_live_h)는 0=화면비율 자동(인치별 자동 적응).
+        # 작을수록 device python 다운스케일이 빨라져 fps↑(해상도↑=fps↓ 트레이드오프).
         self._live_w = _env_int_def("MIB_LIVE_W", 640)
-        self._live_h = _env_int_def("MIB_LIVE_H", 360)
+        self._live_h = _env_int_def("MIB_LIVE_H", 0)  # 0 → TH = TW*SH/SW 자동
         self._live_jpeg_q = _env_int_def("MIB_LIVE_JPEG_Q", 60)
         self._key_overrides: dict[str, dict] = dict(key_overrides or {})
         # 캡처에서 PNG 실제 크기와 _res_x/_res_y가 다를 때 자동 정정 + 영구 저장 콜백.
@@ -2126,6 +2201,7 @@ class MIBAgentService:
             if self._live_thread and self._live_thread.is_alive():
                 return True
             self._live_stop.clear()
+            self._live_res_synced = False
         try:
             ssh = self._new_ssh()  # 전용 연결 (공유 SSH 리셋과 격리)
             try:
@@ -2141,7 +2217,9 @@ class MIBAgentService:
                 return False
             chan = transport.open_session()
             chan.exec_command("python3 -u -")
-            script = _MIB_LIVE_STREAMER % {"TW": self._live_w, "TH": self._live_h}
+            script = (_MIB_LIVE_STREAMER
+                      .replace("__TW__", str(self._live_w))
+                      .replace("__TH__", str(self._live_h)))
             chan.sendall(script.encode("utf-8"))
             chan.shutdown_write()  # 스트리머는 stdin을 읽지 않음 → 즉시 EOF
             t = threading.Thread(target=self._live_reader, args=(chan,), daemon=True)
@@ -2175,7 +2253,7 @@ class MIBAgentService:
         """
         from PIL import Image
         import numpy as np
-        HDR = 16  # b"MIBF"(4) + '<HHhhHH'(12)
+        HDR = 20  # b"MIBF"(4) + '<HHhhHHHH'(16): tw,th,mx,my,mw,mh,sw,sh
         buf = b""
         try:
             chan.settimeout(5.0)
@@ -2197,7 +2275,16 @@ class MIBAgentService:
                     break
                 if len(buf) < idx + HDR:
                     break
-                tw, th, mx, my, mw, mh = struct.unpack("<HHhhHH", buf[idx + 4: idx + HDR])
+                tw, th, mx, my, mw, mh, sw, sh = struct.unpack("<HHhhHHHH", buf[idx + 4: idx + HDR])
+                # 실제 화면 해상도로 등록 해상도 1회 보정 — 프론트 터치 좌표 매핑(deviceRes)이
+                # 라이브 이미지가 나타내는 좌표 공간과 일치하도록(인치별 자동).
+                if not self._live_res_synced and sw > 0 and sh > 0:
+                    self._live_res_synced = True
+                    try:
+                        if self._maybe_autoupdate_resolution(sw, sh):
+                            logger.info("MIB live: 등록 해상도 보정 → %dx%d", sw, sh)
+                    except Exception as e:
+                        logger.debug("MIB live resolution sync failed: %s", e)
                 hmi_len = tw * th * 3
                 map_len = mw * mh * 3
                 total = idx + HDR + hmi_len + map_len
