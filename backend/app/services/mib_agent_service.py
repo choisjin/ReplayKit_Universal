@@ -84,16 +84,13 @@ def region(bmp, sx, sy, sw, sh, dw, dh):
         rows.append(b"".join(data[rb + c: rb + c + 3] for c in cols))
     return rows
 
-def compose(hmi, mp):
+def build(hmi, mp):
+    # HMI 전체(타깃)와 맵(맵-사각형 크기)을 따로 만들어 반환 — 합성/키잉은 백엔드(numpy)에서.
     base = region(hmi, 0, 0, LAYER_W, LAYER_H, TW, TH)
     mx = MAP_DST[0] * TW // LAYER_W; my = MAP_DST[1] * TH // LAYER_H
     mw = MAP_DST[2] * TW // LAYER_W; mh = MAP_DST[3] * TH // LAYER_H
     part = region(mp, MAP_SRC[0], MAP_SRC[1], MAP_SRC[2], MAP_SRC[3], mw, mh)
-    for i, row in enumerate(part):
-        y = my + i
-        if 0 <= y < TH:
-            base[y] = base[y][:mx * 3] + row + base[y][(mx + mw) * 3:]
-    return b"".join(base)
+    return b"".join(base), b"".join(part), mx, my, mw, mh
 
 out = sys.stdout.buffer
 while True:
@@ -102,8 +99,9 @@ while True:
         mb = dump("0x13", MAP_BMP)
         if hb is None or mb is None:
             time.sleep(0.05); continue
-        payload = compose(parse(hb), parse(mb))
-        out.write(b"MIBF" + struct.pack("<HHI", TW, TH, len(payload)) + payload)
+        hbytes, mbytes, mx, my, mw, mh = build(parse(hb), parse(mb))
+        hdr = b"MIBF" + struct.pack("<HHhhHH", TW, TH, mx, my, mw, mh)
+        out.write(hdr + hbytes + mbytes)
         out.flush()
     except (BrokenPipeError, IOError):
         break
@@ -2167,8 +2165,16 @@ class MIBAgentService:
             return False
 
     def _live_reader(self, chan) -> None:
-        """채널에서 MIBF 프레임을 파싱해 BGR→JPEG 변환 후 최신본 보관."""
+        """채널에서 MIBF 프레임(HMI + 맵 따로)을 파싱 → numpy black-key 합성 → JPEG.
+
+        프레임 형식: b"MIBF" + struct('<HHhhHH', tw, th, mx, my, mw, mh)
+                     + HMI(tw*th*3 BGR) + MAP(mw*mh*3 BGR)
+        합성: HMI를 베이스로, 맵-사각형 안에서 HMI가 (거의) 검정인 곳(=투명 구멍)에만 맵을 표시.
+              팝업/메뉴가 맵 위로 뜨면 그 영역은 HMI(불투명)라 맵이 가리지 않는다.
+        """
         from PIL import Image
+        import numpy as np
+        HDR = 16  # b"MIBF"(4) + '<HHhhHH'(12)
         buf = b""
         try:
             chan.settimeout(5.0)
@@ -2176,7 +2182,7 @@ class MIBAgentService:
             pass
         while not self._live_stop.is_set():
             try:
-                data = chan.recv(65536)
+                data = chan.recv(262144)
             except Exception:
                 break
             if not data:
@@ -2185,21 +2191,33 @@ class MIBAgentService:
             while True:
                 idx = buf.find(b"MIBF")
                 if idx < 0:
-                    # 매직이 아직 없음 — 버퍼 폭주 방지(꼬리만 보존)
-                    if len(buf) > (1 << 21):
+                    if len(buf) > (1 << 23):
                         buf = buf[-8:]
                     break
-                if len(buf) < idx + 12:
+                if len(buf) < idx + HDR:
                     break
-                w, h, ln = struct.unpack("<HHI", buf[idx + 4: idx + 12])
-                if len(buf) < idx + 12 + ln:
+                tw, th, mx, my, mw, mh = struct.unpack("<HHhhHH", buf[idx + 4: idx + HDR])
+                hmi_len = tw * th * 3
+                map_len = mw * mh * 3
+                total = idx + HDR + hmi_len + map_len
+                if len(buf) < total:
                     break
-                payload = buf[idx + 12: idx + 12 + ln]
-                buf = buf[idx + 12 + ln:]
-                if ln != w * h * 3:
-                    continue  # 손상 프레임 스킵
+                hmi_bytes = buf[idx + HDR: idx + HDR + hmi_len]
+                map_bytes = buf[idx + HDR + hmi_len: total]
+                buf = buf[total:]
+                if len(hmi_bytes) != hmi_len:
+                    continue
                 try:
-                    img = Image.frombytes("RGB", (w, h), payload, "raw", "BGR")
+                    comp = np.frombuffer(hmi_bytes, np.uint8).reshape(th, tw, 3).copy()
+                    if mw > 0 and mh > 0 and len(map_bytes) == map_len:
+                        x0 = max(0, mx); y0 = max(0, my)
+                        reg = comp[y0:y0 + mh, x0:x0 + mw]
+                        rh, rw = reg.shape[0], reg.shape[1]
+                        if rh > 0 and rw > 0:
+                            mp = np.frombuffer(map_bytes, np.uint8).reshape(mh, mw, 3)[:rh, :rw]
+                            hole = reg.max(axis=2) <= 16  # HMI가 (거의) 검정 = 투명 구멍
+                            reg[hole] = mp[hole]
+                    img = Image.fromarray(comp[:, :, ::-1], "RGB")  # BGR→RGB
                     bio = io.BytesIO()
                     img.save(bio, format="JPEG", quality=self._live_jpeg_q)
                     jpg = bio.getvalue()
