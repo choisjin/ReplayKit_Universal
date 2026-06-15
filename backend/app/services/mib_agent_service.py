@@ -330,9 +330,10 @@ class MIBAgentService:
                 return int(os.environ.get(name) or default)
             except Exception:
                 return default
-        # 타깃 해상도(다운스케일) — 작을수록 device python 합성이 빨라져 fps↑. 1560x878 비율 근사.
-        self._live_w = _env_int_def("MIB_LIVE_W", 520)
-        self._live_h = _env_int_def("MIB_LIVE_H", 293)
+        # 타깃 해상도(다운스케일) — 작을수록 device python 합성이 빨라져 fps↑(해상도↑=fps↓ 트레이드오프).
+        # 1560x878(=1.777) 비율 유지. 640x360 기준 ~4-5fps.
+        self._live_w = _env_int_def("MIB_LIVE_W", 640)
+        self._live_h = _env_int_def("MIB_LIVE_H", 360)
         self._live_jpeg_q = _env_int_def("MIB_LIVE_JPEG_Q", 60)
         self._key_overrides: dict[str, dict] = dict(key_overrides or {})
         # 캡처에서 PNG 실제 크기와 _res_x/_res_y가 다를 때 자동 정정 + 영구 저장 콜백.
