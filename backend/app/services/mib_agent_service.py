@@ -367,17 +367,24 @@ class MIBAgentService:
                 return 0
         self._touch_x_offset = _env_int("MIB_TOUCH_X_OFFSET")
         self._touch_y_offset = _env_int("MIB_TOUCH_Y_OFFSET")
-        # 터치 디지타이저 좌표 스케일 — MIB 터치 패널의 Y 분해능이 디스플레이의 ~절반이라
-        # (X는 디스플레이 전폭과 동일) 화면좌표(0..res)를 디지타이저 좌표로 변환할 때 Y를 스케일.
-        # 등록 해상도(res_y)는 풀해상도 screencap crop·프론트 매핑용으로 화면 그대로 두고,
-        # 인코딩 단계에서만 스케일해 터치 좌표를 일치시킨다. 단위/인치별로 다르면 env로 보정.
-        def _env_float(name: str, default: float) -> float:
+        # 터치 디지타이저 좌표 스케일.
+        # MIB 터치 디지타이저는 "화면 픽셀"이 아니라 화면의 ~절반 해상도(양축)를 좌표공간으로 쓴다
+        # (검증: X는 인코딩이 x_mult=2로 ÷2해 780 전송→정상; Y도 ÷2해야 일치).
+        # 참조 인코딩 mult=int(res/1023)+1은 res>1023인 축만 ÷2하므로(폭1560 O, 높이878 X) Y가 어긋났다.
+        # → 올바른 sent = 화면좌표/2 (양축). 인코딩이 ÷mult를 하므로 scale=mult/2로 두면
+        #   (화면×mult/2)/mult = 화면/2 가 되어 인치 무관(8/10/12.9" 등) 항상 정확.
+        # 등록 해상도(res)는 풀해상도 screencap crop·프론트 매핑용으로 화면 그대로 유지.
+        # 기본은 None(=mult/2 자동); 패널이 다르면 env로 절대 스케일 override.
+        def _env_float_opt(name: str):
+            v = os.environ.get(name)
+            if not v:
+                return None
             try:
-                return float(os.environ.get(name) or default)
+                return float(v)
             except Exception:
-                return default
-        self._touch_x_scale = _env_float("MIB_TOUCH_X_SCALE", 1.0)
-        self._touch_y_scale = _env_float("MIB_TOUCH_Y_SCALE", 0.5)
+                return None
+        self._touch_x_scale = _env_float_opt("MIB_TOUCH_X_SCALE")  # None → x_mult/2
+        self._touch_y_scale = _env_float_opt("MIB_TOUCH_Y_SCALE")  # None → y_mult/2
         # 캡처 전용 SSH 세션 — LayerManagerControl dump + SCP pull 용. 캡처 한 사이클은
         # 1초 가까이 걸리므로, 같은 락에 묶이면 그 사이 입력(ksend)이 블록됨.
         # 따라서 터치/하드키는 별도 _input_ssh_*에서 보내 캡처와 병렬화.
@@ -1343,9 +1350,11 @@ class MIBAgentService:
     # Touch (press/drag/release) — ref RemoteController.excutecmdTouch*
     # ------------------------------------------------------------------
     def _touch_frame(self, x: int, y: int, end_byte: int) -> str:
-        # 화면좌표(0..res) → 디지타이저 좌표 스케일 (Y 분해능이 디스플레이의 ~절반).
-        sx = int(round(int(x) * self._touch_x_scale))
-        sy = int(round(int(y) * self._touch_y_scale))
+        # 화면좌표 → 디지타이저 좌표 스케일. 기본 scale=mult/2 → 인코딩의 ÷mult와 합쳐 항상 화면÷2.
+        xs = self._touch_x_scale if self._touch_x_scale is not None else (self._x_mult / 2.0)
+        ys = self._touch_y_scale if self._touch_y_scale is not None else (self._y_mult / 2.0)
+        sx = int(round(int(x) * xs))
+        sy = int(round(int(y) * ys))
         # 디바이스별 터치 원점 보정 — 음수/해상도 초과를 클램프. 터치가 클릭보다 아래에
         # 찍히면(상단 상태바 등) y_offset을 음수로 두어 위로 끌어올린다.
         ax = min(max(0, sx + self._touch_x_offset), max(1, self._res_x))
