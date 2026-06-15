@@ -466,9 +466,9 @@ class MIBAgentService:
         # 맵 합성. 홈은 진짜 구멍이라 ≤8 비율 ~98%, Dial/차량뷰는 ~5%↓라 게이트로 분리.
         self._map_key_t = _env_int_def("MAP_KEY_T", 2)
         try:
-            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.9)
+            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.8)
         except Exception:
-            self._map_hole_gate = 0.9
+            self._map_hole_gate = 0.8
         self._key_overrides: dict[str, dict] = dict(key_overrides or {})
         # 캡처에서 PNG 실제 크기와 _res_x/_res_y가 다를 때 자동 정정 + 영구 저장 콜백.
         # 시그니처: callback("WxH"). DeviceManager가 dev.info 갱신과 파일 저장을 담당.

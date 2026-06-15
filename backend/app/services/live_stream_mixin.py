@@ -242,9 +242,9 @@ class LiveStreamMixin:
         # 홈은 진짜 구멍이라 ≤8 비율 ~98%, Dial/차량뷰는 ~5% 이하라 게이트로 분리됨.
         self._map_key_t = _ei(["MAP_KEY_T"], 2)          # 검정 판정 임계(정확한 검정=진짜 구멍)
         try:
-            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.9)
+            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.8)
         except Exception:
-            self._map_hole_gate = 0.9                      # 맵-영역 검정비율 컷오프(홈 98% vs 콘텐츠 <50%)
+            self._map_hole_gate = 0.8                      # 맵-영역 검정비율 컷오프(홈 98% vs 콘텐츠 <50%)
 
     def is_live_running(self) -> bool:
         t = getattr(self, "_live_thread", None)
