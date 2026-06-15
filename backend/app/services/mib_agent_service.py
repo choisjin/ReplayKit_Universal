@@ -1363,11 +1363,14 @@ class MIBAgentService:
     # Touch (press/drag/release) — ref RemoteController.excutecmdTouch*
     # ------------------------------------------------------------------
     def _touch_frame(self, x: int, y: int, end_byte: int) -> str:
-        # MIB 터치 디지타이저 = 화면÷2(양축). 화면좌표를 디지타이저 좌표로 직접 변환 후 mult=1로 인코딩.
-        # (참조 인코딩의 ÷mult 우회: 폭 2240(15") 등 mult=3 축에서 'scale=1.5 → sx>res → res로
-        #  사전클램프'가 좌표를 뭉개 오른쪽이 안 닿던 버그 → 직접 ÷2로 해결. mult 의존 제거.)
-        xs = self._touch_x_scale if self._touch_x_scale is not None else 0.5
-        ys = self._touch_y_scale if self._touch_y_scale is not None else 0.5
+        # MIB 터치 디지타이저 = 화면 / max(2, mult),  mult = int(res/1023)+1.
+        # 실측: 폭<2046(mult≤2)은 ÷2, 폭 2240(15", mult=3)은 ÷3 (frontend 1420→screen 2160 데이터).
+        #       높이<1023(mult=1)도 floor 2로 ÷2 (10.4" 878 검증). mult=1을 그대로 ÷1하면 2배 어긋남.
+        # 화면좌표를 디지타이저 좌표로 변환 후 mult=1로 인코딩(참조의 ÷mult 사전클램프 버그 회피).
+        dvx = max(2, self._x_mult)
+        dvy = max(2, self._y_mult)
+        xs = self._touch_x_scale if self._touch_x_scale is not None else (1.0 / dvx)
+        ys = self._touch_y_scale if self._touch_y_scale is not None else (1.0 / dvy)
         dx = int(round(int(x) * xs)) + self._touch_x_offset
         dy = int(round(int(y) * ys)) + self._touch_y_offset
         # 디지타이저 좌표 범위로 클램프(= 화면×scale). 음수/초과 방지.
