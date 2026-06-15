@@ -49,7 +49,7 @@ async def start_recording(req: StartRecordingRequest):
     try:
         scenario = await recording_svc.start_recording(req.name, req.description)
         return {"status": "recording", "scenario": scenario.model_dump()}
-    except RuntimeError as e:
+    except (RuntimeError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -1238,39 +1238,50 @@ async def rename_group(req: RenameGroupRequest):
     return {"groups": groups}
 
 
-@router.delete("/groups/{group_name}")
-async def delete_group(group_name: str):
-    groups = recording_svc.delete_group(group_name)
+# 주의: 그룹 이름에는 '/'(예: "테마/화면구성")가 포함될 수 있어 URL 경로 파라미터로
+# 쓰면 라우팅이 깨진다(%2F 인코딩도 ASGI 디코드로 무력화됨). 따라서 그룹을 변경하는
+# 모든 엔드포인트는 group_name을 요청 본문(body)으로 받는다.
+
+class DeleteGroupRequest(BaseModel):
+    group_name: str
+
+
+@router.post("/groups/delete")
+async def delete_group(req: DeleteGroupRequest):
+    groups = recording_svc.delete_group(req.group_name)
     return {"groups": groups}
 
 
 class GroupScenarioRequest(BaseModel):
+    group_name: str
     scenario_name: str
 
 
 class GroupIndexRequest(BaseModel):
+    group_name: str
     index: int
 
 
-@router.post("/groups/{group_name}/add")
-async def add_to_group(group_name: str, req: GroupScenarioRequest):
-    groups = recording_svc.add_to_group(group_name, req.scenario_name)
+@router.post("/groups/add")
+async def add_to_group(req: GroupScenarioRequest):
+    groups = recording_svc.add_to_group(req.group_name, req.scenario_name)
     return {"groups": groups}
 
 
-@router.post("/groups/{group_name}/remove")
-async def remove_from_group(group_name: str, req: GroupIndexRequest):
-    groups = recording_svc.remove_from_group_by_index(group_name, req.index)
+@router.post("/groups/remove")
+async def remove_from_group(req: GroupIndexRequest):
+    groups = recording_svc.remove_from_group_by_index(req.group_name, req.index)
     return {"groups": groups}
 
 
 class ReorderGroupRequest(BaseModel):
+    group_name: str
     ordered_indices: list[int]
 
 
-@router.post("/groups/{group_name}/reorder")
-async def reorder_group(group_name: str, req: ReorderGroupRequest):
-    groups = recording_svc.reorder_group(group_name, req.ordered_indices)
+@router.post("/groups/reorder")
+async def reorder_group(req: ReorderGroupRequest):
+    groups = recording_svc.reorder_group(req.group_name, req.ordered_indices)
     return {"groups": groups}
 
 
@@ -1280,45 +1291,48 @@ class JumpTarget(BaseModel):
 
 
 class UpdateGroupJumpsRequest(BaseModel):
+    group_name: str
     index: int
     on_pass_goto: Optional[JumpTarget] = None
     on_fail_goto: Optional[JumpTarget] = None
 
 
-@router.post("/groups/{group_name}/jumps")
-async def update_group_jumps(group_name: str, req: UpdateGroupJumpsRequest):
+@router.post("/groups/jumps")
+async def update_group_jumps(req: UpdateGroupJumpsRequest):
     pass_goto = req.on_pass_goto.model_dump() if req.on_pass_goto else None
     fail_goto = req.on_fail_goto.model_dump() if req.on_fail_goto else None
-    groups = recording_svc.update_group_jumps(group_name, req.index, pass_goto, fail_goto)
+    groups = recording_svc.update_group_jumps(req.group_name, req.index, pass_goto, fail_goto)
     return {"groups": groups}
 
 
 class UpdateGroupStepJumpsRequest(BaseModel):
+    group_name: str
     index: int        # scenario index in group
     step_id: int      # step id within scenario
     on_pass_goto: Optional[JumpTarget] = None
     on_fail_goto: Optional[JumpTarget] = None
 
 
-@router.post("/groups/{group_name}/step-jumps")
-async def update_group_step_jumps(group_name: str, req: UpdateGroupStepJumpsRequest):
+@router.post("/groups/step-jumps")
+async def update_group_step_jumps(req: UpdateGroupStepJumpsRequest):
     pass_goto = req.on_pass_goto.model_dump() if req.on_pass_goto else None
     fail_goto = req.on_fail_goto.model_dump() if req.on_fail_goto else None
     groups = recording_svc.update_group_step_jumps(
-        group_name, req.index, req.step_id, pass_goto, fail_goto
+        req.group_name, req.index, req.step_id, pass_goto, fail_goto
     )
     return {"groups": groups}
 
 
 class UpdateGroupPlayCountRequest(BaseModel):
+    group_name: str
     index: int
     play_count: int = Field(ge=1, le=999)
 
 
-@router.post("/groups/{group_name}/play-count")
-async def update_group_play_count(group_name: str, req: UpdateGroupPlayCountRequest):
+@router.post("/groups/play-count")
+async def update_group_play_count(req: UpdateGroupPlayCountRequest):
     """Update per-member play count for a scenario in a group."""
-    groups = recording_svc.update_group_play_count(group_name, req.index, req.play_count)
+    groups = recording_svc.update_group_play_count(req.group_name, req.index, req.play_count)
     return {"groups": groups}
 
 
@@ -1336,6 +1350,8 @@ async def copy_scenario(name: str, req: CopyScenarioRequest):
     try:
         scenario = await recording_svc.copy_scenario(name, req.target_name)
         return {"status": "ok", "scenario": scenario.model_dump()}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Scenario '{name}' not found")
 

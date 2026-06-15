@@ -666,7 +666,7 @@ export default function ScenarioPage() {
       message.success(t('scenario.copySuccess'));
       setCopyModalVisible(false);
       fetchScenarios();
-    } catch { message.error(t('scenario.copyFailed')); }
+    } catch (e: any) { message.error(e?.response?.data?.detail || t('scenario.copyFailed')); }
   };
 
   // --- Export / Import ---
@@ -769,7 +769,7 @@ export default function ScenarioPage() {
       setGroups(res.data.groups);
       setNewGroupName('');
       message.success(t('scenario.groupCreateSuccess'));
-    } catch { message.error(t('scenario.groupCreateFailed')); }
+    } catch (e: any) { message.error(e?.response?.data?.detail || t('scenario.groupCreateFailed')); }
   };
 
   const deleteGroup = (gName: string) => {
@@ -2103,7 +2103,9 @@ export default function ScenarioPage() {
                 { key: 'rename', label: t('common.rename'), onClick: () => {
                   const newName = prompt(t('scenario.folderName'), contextMenu.name);
                   if (newName && newName !== contextMenu.name) {
-                    scenarioApi.renameFolder(contextMenu.name, newName).then(res => setFolders(res.data.folders));
+                    scenarioApi.renameFolder(contextMenu.name, newName)
+                      .then(res => setFolders(res.data.folders))
+                      .catch((e: any) => message.error(e?.response?.data?.detail || t('scenario.renameFailed')));
                   }
                   setContextMenu(null);
                 }},
@@ -2115,7 +2117,9 @@ export default function ScenarioPage() {
                 { key: 'copy', label: t('common.copy'), onClick: () => {
                   const newName = prompt(t('common.rename'), `${contextMenu.name}_copy`);
                   if (newName) {
-                    scenarioApi.copy(contextMenu.name, newName).then(() => { fetchScenarios(); fetchFolders(); });
+                    scenarioApi.copy(contextMenu.name, newName)
+                      .then(() => { fetchScenarios(); fetchFolders(); })
+                      .catch((e: any) => message.error(e?.response?.data?.detail || t('scenario.copyFailed')));
                   }
                   setContextMenu(null);
                 }},
@@ -2123,7 +2127,9 @@ export default function ScenarioPage() {
                   const newName = prompt(t('common.rename'), contextMenu.name);
                   if (newName && newName !== contextMenu.name) {
                     const oldName = contextMenu.name;
-                    scenarioApi.rename(oldName, newName).then(() => { fetchScenarios(); fetchFolders(); });
+                    scenarioApi.rename(oldName, newName)
+                      .then(() => { fetchScenarios(); fetchFolders(); })
+                      .catch((e: any) => message.error(e?.response?.data?.detail || t('scenario.renameFailed')));
                     if (selectedName === oldName) setSelectedName(newName);
                     setMultiSelectedNames(prev => prev.map(n => n === oldName ? newName : n));
                   }
@@ -2170,7 +2176,9 @@ export default function ScenarioPage() {
                   </Select>
                   <Button size="small" icon={<FolderAddOutlined />} onClick={() => {
                     const name = prompt(t('scenario.folderName'));
-                    if (name) scenarioApi.createFolder(name).then(res => setFolders(res.data.folders));
+                    if (name) scenarioApi.createFolder(name)
+                      .then(res => setFolders(res.data.folders))
+                      .catch((e: any) => message.error(e?.response?.data?.detail || 'Failed'));
                   }}>{t('scenario.newFolder')}</Button>
                 </div>
                 <Dropdown

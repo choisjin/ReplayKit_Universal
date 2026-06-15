@@ -22,6 +22,28 @@ logger = logging.getLogger(__name__)
 SCENARIOS_DIR = Path(__file__).resolve().parent.parent.parent / "scenarios"
 SCREENSHOTS_DIR = Path(__file__).resolve().parent.parent.parent / "screenshots"
 
+# 시나리오/그룹/폴더 이름에 쓸 수 없는 문자.
+# - '/' '\\' 는 파일·디렉터리 경로와 URL 라우팅을 깨뜨림(예: 그룹명 "테마/화면구성")
+# - ': * ? " < > |' 는 Windows 파일명 금지 문자
+INVALID_NAME_CHARS = set('/\\:*?"<>|')
+INVALID_NAME_CHARS_DISPLAY = '/ \\ : * ? " < > |'
+
+
+def validate_entity_name(name: str, kind: str = "이름") -> str:
+    """시나리오/그룹/폴더 이름 검증. 문제가 되는 특수문자가 있으면 ValueError.
+
+    반환값은 앞뒤 공백을 제거한 정규화된 이름.
+    """
+    cleaned = (name or "").strip()
+    if not cleaned:
+        raise ValueError(f"{kind}을(를) 입력하세요")
+    bad = sorted({c for c in cleaned if c in INVALID_NAME_CHARS or ord(c) < 32})
+    if bad:
+        raise ValueError(
+            f"{kind}에 다음 문자는 사용할 수 없습니다: {INVALID_NAME_CHARS_DISPLAY}"
+        )
+    return cleaned
+
 
 def _migrate_legacy_step_types(data: dict) -> bool:
     """레거시 cmd_send / cmd_check 스텝을 module_command (CMD 모듈)으로 변환.
@@ -137,6 +159,7 @@ class RecordingService:
         """Start a new recording session."""
         if self._recording:
             raise RuntimeError("Already recording")
+        scenario_name = validate_entity_name(scenario_name, "시나리오 이름")
 
         self._current_scenario = Scenario(
             name=scenario_name,
@@ -350,6 +373,7 @@ class RecordingService:
 
     async def rename_scenario(self, old_name: str, new_name: str) -> bool:
         """Rename a scenario file and update group references."""
+        new_name = validate_entity_name(new_name, "시나리오 이름")
         old_path = SCENARIOS_DIR / f"{old_name}.json"
         new_path = SCENARIOS_DIR / f"{new_name}.json"
         if not old_path.exists():
@@ -451,6 +475,7 @@ class RecordingService:
         return folders
 
     def create_folder(self, name: str) -> dict[str, list[str]]:
+        name = validate_entity_name(name, "폴더 이름")
         folders = self._load_folders()
         if name in folders:
             raise ValueError(f"폴더 '{name}'이(가) 이미 존재합니다")
@@ -459,6 +484,7 @@ class RecordingService:
         return folders
 
     def rename_folder(self, old_name: str, new_name: str) -> dict[str, list[str]]:
+        new_name = validate_entity_name(new_name, "폴더 이름")
         folders = self._load_folders()
         if new_name in folders:
             raise ValueError(f"폴더 '{new_name}'이(가) 이미 존재합니다")
@@ -517,6 +543,7 @@ class RecordingService:
         return folders
 
     def create_group_folder(self, name: str) -> dict[str, list[str]]:
+        name = validate_entity_name(name, "그룹 폴더 이름")
         folders = self._load_group_folders()
         if name in folders:
             raise ValueError(f"그룹 폴더 '{name}'이(가) 이미 존재합니다")
@@ -525,6 +552,7 @@ class RecordingService:
         return folders
 
     def rename_group_folder(self, old_name: str, new_name: str) -> dict[str, list[str]]:
+        new_name = validate_entity_name(new_name, "그룹 폴더 이름")
         folders = self._load_group_folders()
         if new_name in folders:
             raise ValueError(f"그룹 폴더 '{new_name}'이(가) 이미 존재합니다")
@@ -608,6 +636,7 @@ class RecordingService:
         return self._load_groups()
 
     def create_group(self, group_name: str) -> dict[str, list[dict]]:
+        group_name = validate_entity_name(group_name, "그룹 이름")
         groups = self._load_groups()
         if group_name in groups:
             raise ValueError(f"그룹 '{group_name}'이(가) 이미 존재합니다")
@@ -622,6 +651,7 @@ class RecordingService:
         return groups
 
     def rename_group(self, old_name: str, new_name: str) -> dict[str, list[dict]]:
+        new_name = validate_entity_name(new_name, "그룹 이름")
         groups = self._load_groups()
         if new_name in groups:
             raise ValueError(f"그룹 '{new_name}'이(가) 이미 존재합니다")
@@ -767,6 +797,7 @@ class RecordingService:
 
     async def copy_scenario(self, source_name: str, target_name: str) -> Scenario:
         """Copy a scenario with a new name, including screenshots."""
+        target_name = validate_entity_name(target_name, "시나리오 이름")
         source = await self.load_scenario(source_name)
         source.name = target_name
         source.created_at = datetime.now(timezone.utc).isoformat()

@@ -179,19 +179,20 @@ export const scenarioApi = {
   getGroups: () => api.get('/scenario/groups'),
   createGroup: (name: string) => api.post('/scenario/groups', { name }),
   renameGroup: (oldName: string, newName: string) => api.put('/scenario/groups', { old_name: oldName, new_name: newName }),
-  deleteGroup: (groupName: string) => api.delete(`/scenario/groups/${groupName}`),
+  // 그룹 이름에 '/'가 포함될 수 있어 경로 파라미터 대신 본문(group_name)으로 전달
+  deleteGroup: (groupName: string) => api.post('/scenario/groups/delete', { group_name: groupName }),
   addToGroup: (groupName: string, scenarioName: string) =>
-    api.post(`/scenario/groups/${groupName}/add`, { scenario_name: scenarioName }),
+    api.post('/scenario/groups/add', { group_name: groupName, scenario_name: scenarioName }),
   removeFromGroup: (groupName: string, index: number) =>
-    api.post(`/scenario/groups/${groupName}/remove`, { index }),
+    api.post('/scenario/groups/remove', { group_name: groupName, index }),
   reorderGroup: (groupName: string, orderedIndices: number[]) =>
-    api.post(`/scenario/groups/${groupName}/reorder`, { ordered_indices: orderedIndices }),
+    api.post('/scenario/groups/reorder', { group_name: groupName, ordered_indices: orderedIndices }),
   updateGroupJumps: (groupName: string, index: number, on_pass_goto: { scenario: number; step: number } | null, on_fail_goto: { scenario: number; step: number } | null) =>
-    api.post(`/scenario/groups/${groupName}/jumps`, { index, on_pass_goto, on_fail_goto }),
+    api.post('/scenario/groups/jumps', { group_name: groupName, index, on_pass_goto, on_fail_goto }),
   updateGroupStepJumps: (groupName: string, index: number, stepId: number, on_pass_goto: { scenario: number; step: number } | null, on_fail_goto: { scenario: number; step: number } | null) =>
-    api.post(`/scenario/groups/${groupName}/step-jumps`, { index, step_id: stepId, on_pass_goto, on_fail_goto }),
+    api.post('/scenario/groups/step-jumps', { group_name: groupName, index, step_id: stepId, on_pass_goto, on_fail_goto }),
   updateGroupPlayCount: (groupName: string, index: number, playCount: number) =>
-    api.post(`/scenario/groups/${groupName}/play-count`, { index, play_count: playCount }),
+    api.post('/scenario/groups/play-count', { group_name: groupName, index, play_count: playCount }),
   // Copy
   copy: (name: string, targetName: string) =>
     api.post(`/scenario/copy/${name}`, { target_name: targetName }),
