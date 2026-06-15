@@ -377,12 +377,10 @@ class MIBAgentService:
         self._touch_y_offset = _env_int("MIB_TOUCH_Y_OFFSET")
         # 터치 디지타이저 좌표 스케일.
         # MIB 터치 디지타이저는 "화면 픽셀"이 아니라 화면의 ~절반 해상도(양축)를 좌표공간으로 쓴다
-        # (검증: X는 인코딩이 x_mult=2로 ÷2해 780 전송→정상; Y도 ÷2해야 일치).
-        # 참조 인코딩 mult=int(res/1023)+1은 res>1023인 축만 ÷2하므로(폭1560 O, 높이878 X) Y가 어긋났다.
-        # → 올바른 sent = 화면좌표/2 (양축). 인코딩이 ÷mult를 하므로 scale=mult/2로 두면
-        #   (화면×mult/2)/mult = 화면/2 가 되어 인치 무관(8/10/12.9" 등) 항상 정확.
+        # (검증: 10.4" Y 720→350 ≈ ÷2). → sent = 화면좌표 × 0.5, mult=1로 직접 인코딩.
+        # (구버전은 scale=mult/2 후 ÷mult였는데, 폭2240(15") mult=3에서 사전클램프 버그 → 직접 ÷2로 변경.)
         # 등록 해상도(res)는 풀해상도 screencap crop·프론트 매핑용으로 화면 그대로 유지.
-        # 기본은 None(=mult/2 자동); 패널이 다르면 env로 절대 스케일 override.
+        # 기본은 None(=0.5); 패널이 다르면 env로 절대 스케일 override.
         def _env_float_opt(name: str):
             v = os.environ.get(name)
             if not v:
@@ -1365,16 +1363,17 @@ class MIBAgentService:
     # Touch (press/drag/release) — ref RemoteController.excutecmdTouch*
     # ------------------------------------------------------------------
     def _touch_frame(self, x: int, y: int, end_byte: int) -> str:
-        # 화면좌표 → 디지타이저 좌표 스케일. 기본 scale=mult/2 → 인코딩의 ÷mult와 합쳐 항상 화면÷2.
-        xs = self._touch_x_scale if self._touch_x_scale is not None else (self._x_mult / 2.0)
-        ys = self._touch_y_scale if self._touch_y_scale is not None else (self._y_mult / 2.0)
-        sx = int(round(int(x) * xs))
-        sy = int(round(int(y) * ys))
-        # 디바이스별 터치 원점 보정 — 음수/해상도 초과를 클램프. 터치가 클릭보다 아래에
-        # 찍히면(상단 상태바 등) y_offset을 음수로 두어 위로 끌어올린다.
-        ax = min(max(0, sx + self._touch_x_offset), max(1, self._res_x))
-        ay = min(max(0, sy + self._touch_y_offset), max(1, self._res_y))
-        p1, p2, p3 = _encode_touch_xy(ax, ay, self._x_mult, self._y_mult)
+        # MIB 터치 디지타이저 = 화면÷2(양축). 화면좌표를 디지타이저 좌표로 직접 변환 후 mult=1로 인코딩.
+        # (참조 인코딩의 ÷mult 우회: 폭 2240(15") 등 mult=3 축에서 'scale=1.5 → sx>res → res로
+        #  사전클램프'가 좌표를 뭉개 오른쪽이 안 닿던 버그 → 직접 ÷2로 해결. mult 의존 제거.)
+        xs = self._touch_x_scale if self._touch_x_scale is not None else 0.5
+        ys = self._touch_y_scale if self._touch_y_scale is not None else 0.5
+        dx = int(round(int(x) * xs)) + self._touch_x_offset
+        dy = int(round(int(y) * ys)) + self._touch_y_offset
+        # 디지타이저 좌표 범위로 클램프(= 화면×scale). 음수/초과 방지.
+        ax = min(max(0, dx), max(1, int(self._res_x * xs)))
+        ay = min(max(0, dy), max(1, int(self._res_y * ys)))
+        p1, p2, p3 = _encode_touch_xy(ax, ay, 1, 1)
         return (
             f"0x83 0x50 0x20 0x0b 0x00 0x00 0x00 0x00 0x00 0xa0 0x01 0x11 "
             f"0x{p1:02x} 0x{p2:02x} 0x{p3:02x} 0x{end_byte:02x}"
