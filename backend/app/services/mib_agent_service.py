@@ -138,43 +138,71 @@ for sid in order:
     else:
         cands.append((sid, src, dst))
 # MAP = 최대 면적의 "비검정" 후보 (보조 서피스/빈 서피스 자동 배제)
-mapsel = None; best = -1
-mapsel_in = None; best_in = -1
-for sid, src, dst in cands:
-    bm = dump(sid, "/tmp/_mlsel.bmp")
-    if bm is None or mostly_black(parse(bm)):
-        continue
-    area = dst[2] * dst[3]
-    if dst[0] > 0 and dst[1] > 0 and area > best_in:  # inset(여백) = 맵 위젯 우선
-        best_in = area; mapsel_in = (sid, src, dst)
-    if area > best:
-        best = area; mapsel = (sid, src, dst)
-# inset 후보가 있으면 그것(전체화면 앱 surface를 맵으로 오선택하는 것 방지 → 화면 무관 안정)
-mapsel = mapsel_in or mapsel
+def hole_frac(hp, dst, T=2):
+    # 0x10(HMI)의 dst(layer좌표) 영역에서 검정(=투명 구멍) 픽셀 비율. 맵은 이 비율이 높은 자리.
+    data, w, h, off, stride, px = hp
+    x0, y0, rw, rh = dst
+    gx = max(1, rw // 120); gy = max(1, rh // 120)
+    cnt = tot = 0; yy = y0
+    while yy < y0 + rh:
+        if 0 <= yy < h:
+            rb = off + (h - 1 - yy) * stride; xx = x0
+            while xx < x0 + rw:
+                if 0 <= xx < w:
+                    o = rb + xx * px
+                    if o + 3 <= len(data):
+                        tot += 1
+                        if max(data[o], data[o + 1], data[o + 2]) <= T:
+                            cnt += 1
+                xx += gx
+        yy += gy
+    return (cnt / tot) if tot else 0.0
 
-if mapsel:
-    _, _, md = mapsel
-    mx = md[0] * TW // LW; my = md[1] * TH // LH
-    mw = max(1, md[2] * TW // LW); mh = max(1, md[3] * TH // LH)
-else:
-    mx = my = mw = mh = 0
+def select_map():
+    # 맵 = 0x10의 '구멍(검정)'이 가장 많이 겹치는 후보(투명 뒤 backdrop). 면적 휴리스틱 폐기.
+    # 구멍 비율이 낮으면(맵 없는 화면) None → 맵 합성 안 함(비침 방지). 화면 전환마다 재선택.
+    if hmi is None:
+        return None
+    hb = dump(hmi[0], "/tmp/_mlhsel.bmp")
+    if hb is None:
+        return None
+    hp = parse(hb); best = None; bestf = 0.55
+    for sid, src, dst in cands:
+        bm = dump(sid, "/tmp/_mlsel.bmp")
+        if bm is None or mostly_black(parse(bm)):
+            continue
+        f = hole_frac(hp, dst)
+        if f > bestf:
+            bestf = f; best = (sid, src, dst)
+    return best
 
-sys.stderr.write("MIBLIVE hmi=%s map=%s TW=%d TH=%d LW=%d LH=%d map_dst=%d,%d,%d,%d\n"
-                 % (hmi[0] if hmi else None, mapsel[0] if mapsel else None,
-                    TW, TH, LW, LH, mx, my, mw, mh))
+def map_rect(ms):
+    if not ms:
+        return 0, 0, 0, 0
+    md = ms[2]
+    return (md[0] * TW // LW, md[1] * TH // LH,
+            max(1, md[2] * TW // LW), max(1, md[3] * TH // LH))
+
+sys.stderr.write("MIBLIVE hmi=%s cands=%d TW=%d TH=%d LW=%d LH=%d\n"
+                 % (hmi[0] if hmi else None, len(cands), TW, TH, LW, LH))
 sys.stderr.flush()
 
 out = sys.stdout.buffer
 HMI_BMP, MAP_BMP = "/tmp/_mlhmi.bmp", "/tmp/_mlmap.bmp"
+mapsel = None; sel_t = -999.0
 while True:
     try:
         if hmi is None:
             time.sleep(0.2); continue
+        now = time.time()
+        if now - sel_t > 2.0:   # 2초마다 맵 재선택(화면 전환 적응; 맵 없는 화면이면 None)
+            mapsel = select_map(); sel_t = now
         hb = dump(hmi[0], HMI_BMP)
         if hb is None:
             time.sleep(0.05); continue
         hp = parse(hb); hs = hmi[1]
         hbytes = b"".join(region(hp, hs[0], hs[1], hs[2], hs[3], TW, TH))
+        mx, my, mw, mh = map_rect(mapsel)
         mbytes = b""
         if mapsel and mw > 0 and mh > 0:
             mb = dump(mapsel[0], MAP_BMP)
@@ -438,9 +466,9 @@ class MIBAgentService:
         # 맵 합성. 홈은 진짜 구멍이라 ≤8 비율 ~98%, Dial/차량뷰는 ~5%↓라 게이트로 분리.
         self._map_key_t = _env_int_def("MAP_KEY_T", 2)
         try:
-            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.8)
+            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.9)
         except Exception:
-            self._map_hole_gate = 0.8
+            self._map_hole_gate = 0.9
         self._key_overrides: dict[str, dict] = dict(key_overrides or {})
         # 캡처에서 PNG 실제 크기와 _res_x/_res_y가 다를 때 자동 정정 + 영구 저장 콜백.
         # 시그니처: callback("WxH"). DeviceManager가 dev.info 갱신과 파일 저장을 담당.
