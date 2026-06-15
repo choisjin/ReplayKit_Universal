@@ -623,7 +623,7 @@ async def websocket_screen_mirror(websocket: WebSocket):
     _ssh_burst_remaining = SSH_REFRESH_BURST_N
     _ssh_seen_input_ts = -1.0
     # MIB 라이브 스트리밍: 마지막으로 보낸 프레임 id (중복 송신 방지)
-    mib_last_frame_id = -1
+    live_last_frame_id = -1
 
     async def _adaptive_ssh_pace(svc) -> None:
         """방금 1프레임을 보낸 뒤 다음 캡처까지 입력 유무에 따라 대기.
@@ -686,18 +686,42 @@ async def websocket_screen_mirror(websocket: WebSocket):
                 elif is_icas:
                     icas = device_manager.get_icas_service(target_device_id)
                     if icas and icas.is_connected:
+                        # 라이브 스트리밍(surface 합성) — MIB과 동일. 프레임당 SCP/페이싱 제거.
+                        # 스트리머는 HU(screen 0)만 합성 → IID/HUD는 기존 screencap 경로로.
+                        _live_hu = screen_type in (None, "", "HU")
+                        if _live_hu and not icas.is_live_running():
+                            started = await icas.async_start_live_stream()
+                            if started:
+                                live_last_frame_id = -1
+                        if _live_hu and icas.is_live_running():
+                            try:
+                                jpeg_bytes, fid = icas.get_live_frame()
+                                if jpeg_bytes is not None and fid != live_last_frame_id:
+                                    live_last_frame_id = fid
+                                    await websocket.send_bytes(jpeg_bytes)
+                                    await asyncio.sleep(0.015)
+                                else:
+                                    await asyncio.sleep(0.03)
+                                continue
+                            except WebSocketDisconnect:
+                                break
+                            except Exception as ce:
+                                cls_name = type(ce).__name__
+                                if cls_name in ("ClientDisconnected", "ConnectionClosed",
+                                                "ConnectionClosedOK", "ConnectionClosedError"):
+                                    break
+                                logger.warning("ICAS live send error: type=%s repr=%r", cls_name, ce)
+                                await asyncio.sleep(0.3)
+                                continue
+                        # ── 레거시 폴백: LayerManagerControl dump + scp (스트림 불가 환경) ──
                         try:
-                            # ICAS는 SSH+scp 기반이라 캡처가 오래 걸림 → 타임아웃 여유 부여
                             jpeg_bytes = await icas.async_screencap_bytes(
                                 screen_type=screen_type, fmt="jpeg"
                             )
                             await websocket.send_bytes(jpeg_bytes)
-                            # 적응형 리프레시: idle 10s, 입력 직후 2s×5회 burst
                             await _adaptive_ssh_pace(icas)
                             continue
                         except Exception as ce:
-                            # 캡처 실패 원인을 진단하기 위해 warning 레벨로 기록.
-                            # 일부 예외(paramiko ChannelException 등)는 str()이 비어있어 type을 함께 출력.
                             msg = str(ce) or type(ce).__name__
                             logger.warning("ICAS capture error (%s): %s (%s)", screen_type, msg, type(ce).__name__)
                             await asyncio.sleep(0.5)
@@ -711,15 +735,17 @@ async def websocket_screen_mirror(websocket: WebSocket):
                         # 라이브 스트리밍 경로: surface 합성 스트리머(device python)에서
                         # 최신 프레임을 받아 보낸다. 프레임당 SCP/재인증·페이싱 없음.
                         # 스트림이 죽었으면(첫 진입 포함) 재기동 시도, 실패 시 레거시 폴백.
-                        if not mib.is_live_running():
+                        # 스트리머는 HU(screen 0)만 합성 → IID/HUD는 기존 screencap 경로로.
+                        _live_hu = screen_type in (None, "", "HU")
+                        if _live_hu and not mib.is_live_running():
                             started = await mib.async_start_live_stream()
                             if started:
-                                mib_last_frame_id = -1
-                        if mib.is_live_running():
+                                live_last_frame_id = -1
+                        if _live_hu and mib.is_live_running():
                             try:
                                 jpeg_bytes, fid = mib.get_live_frame()
-                                if jpeg_bytes is not None and fid != mib_last_frame_id:
-                                    mib_last_frame_id = fid
+                                if jpeg_bytes is not None and fid != live_last_frame_id:
+                                    live_last_frame_id = fid
                                     await websocket.send_bytes(jpeg_bytes)
                                     await asyncio.sleep(0.015)
                                 else:
@@ -1062,6 +1088,15 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     )
                 except Exception as e:
                     logger.debug("MIB live stream stop on disconnect failed: %s", e)
+        if is_icas:
+            _icas = device_manager.get_icas_service(target_device_id)
+            if _icas is not None and _icas.is_live_running():
+                try:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, _icas.stop_live_stream
+                    )
+                except Exception as e:
+                    logger.debug("ICAS live stream stop on disconnect failed: %s", e)
 
 
 # 현재 백그라운드 재생 태스크 (단일 재생만 허용)

@@ -33,6 +33,9 @@ from typing import Optional, Callable
 logger = logging.getLogger(__name__)
 
 # ── 라이브 미러 device-side 스트리머 (인치 무관 동적 합성) ──
+# NOTE: 이 스트리머/스트리밍 메서드는 live_stream_mixin.LiveStreamMixin 과 동일 구현이다.
+#   ICAS는 mixin을 상속해 쓴다(중복 제거). MIB은 검증·동작 중이라 인라인 유지 중 —
+#   추후 MIB도 mixin 상속으로 이관 예정(그때 아래 상수/메서드 삭제). 수정 시 양쪽 동기화 필요.
 # weston screen dump은 PNG 인코딩 때문에 0.63s/frame(1.6fps 천장)이라 라이브에 부적합.
 # 대신 surface를 무압축 BMP로 dump(~20ms)해서, 연결 시 LayerManagerControl get scene을
 # 파싱해 HMI(전체화면 서피스) + MAP(최대 면적의 비검정 서브 서피스)을 자동 식별한다

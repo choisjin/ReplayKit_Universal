@@ -28,6 +28,8 @@ import threading
 import time
 from typing import Optional
 
+from .live_stream_mixin import LiveStreamMixin
+
 logger = logging.getLogger(__name__)
 
 # ── 하드키 서브 커맨드 (HKMC6thService API 호환용 — 내부적으로 press/release 구분) ──
@@ -143,7 +145,7 @@ def _png_partially_decodable(path: str) -> bool:
         return False
 
 
-class ICASAgentService:
+class ICASAgentService(LiveStreamMixin):
     """SSH 기반 ICAS HU 제어 서비스.
 
     HKMC6thService와 동일한 async API를 제공하여 playback_service가
@@ -210,6 +212,13 @@ class ICASAgentService:
         # _consecutive_failures가 임계치 넘으면 _get_shared_ssh에서 짧은 sleep 후 재연결 시도.
         self._consecutive_capture_failures = 0
         self._consecutive_capture_failures_threshold = 3
+        # ── 라이브 미러 스트리밍 (surface 합성 → JPEG, LiveStreamMixin) ──
+        # ICAS는 자체 터치 캘리브레이션(mult 테이블)이 있어 등록 해상도 자동보정은 끔
+        # (_live_sync_res=False). 라이브 합성은 기존 screencap과 같은 화면 좌표공간을
+        # 나타내므로 프론트 매핑/터치 동작은 그대로 유지된다.
+        self._live_label = "ICAS"
+        self._live_sync_res = False
+        self._init_live_stream()
 
     # ------------------------------------------------------------------
     # Basic accessors
@@ -441,6 +450,11 @@ class ICASAgentService:
 
     def disconnect(self) -> None:
         self._connected = False
+        # 라이브 스트림(전용 채널 + 리더 스레드) 먼저 정리 — 공유 SSH 닫기 전에.
+        try:
+            self.stop_live_stream()
+        except Exception:
+            pass
         with self._ssh_lock:
             if self._ssh_shell is not None:
                 try:
