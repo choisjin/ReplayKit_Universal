@@ -367,6 +367,17 @@ class MIBAgentService:
                 return 0
         self._touch_x_offset = _env_int("MIB_TOUCH_X_OFFSET")
         self._touch_y_offset = _env_int("MIB_TOUCH_Y_OFFSET")
+        # 터치 디지타이저 좌표 스케일 — MIB 터치 패널의 Y 분해능이 디스플레이의 ~절반이라
+        # (X는 디스플레이 전폭과 동일) 화면좌표(0..res)를 디지타이저 좌표로 변환할 때 Y를 스케일.
+        # 등록 해상도(res_y)는 풀해상도 screencap crop·프론트 매핑용으로 화면 그대로 두고,
+        # 인코딩 단계에서만 스케일해 터치 좌표를 일치시킨다. 단위/인치별로 다르면 env로 보정.
+        def _env_float(name: str, default: float) -> float:
+            try:
+                return float(os.environ.get(name) or default)
+            except Exception:
+                return default
+        self._touch_x_scale = _env_float("MIB_TOUCH_X_SCALE", 1.0)
+        self._touch_y_scale = _env_float("MIB_TOUCH_Y_SCALE", 0.5)
         # 캡처 전용 SSH 세션 — LayerManagerControl dump + SCP pull 용. 캡처 한 사이클은
         # 1초 가까이 걸리므로, 같은 락에 묶이면 그 사이 입력(ksend)이 블록됨.
         # 따라서 터치/하드키는 별도 _input_ssh_*에서 보내 캡처와 병렬화.
@@ -1332,10 +1343,13 @@ class MIBAgentService:
     # Touch (press/drag/release) — ref RemoteController.excutecmdTouch*
     # ------------------------------------------------------------------
     def _touch_frame(self, x: int, y: int, end_byte: int) -> str:
+        # 화면좌표(0..res) → 디지타이저 좌표 스케일 (Y 분해능이 디스플레이의 ~절반).
+        sx = int(round(int(x) * self._touch_x_scale))
+        sy = int(round(int(y) * self._touch_y_scale))
         # 디바이스별 터치 원점 보정 — 음수/해상도 초과를 클램프. 터치가 클릭보다 아래에
         # 찍히면(상단 상태바 등) y_offset을 음수로 두어 위로 끌어올린다.
-        ax = min(max(0, int(x) + self._touch_x_offset), max(1, self._res_x))
-        ay = min(max(0, int(y) + self._touch_y_offset), max(1, self._res_y))
+        ax = min(max(0, sx + self._touch_x_offset), max(1, self._res_x))
+        ay = min(max(0, sy + self._touch_y_offset), max(1, self._res_y))
         p1, p2, p3 = _encode_touch_xy(ax, ay, self._x_mult, self._y_mult)
         return (
             f"0x83 0x50 0x20 0x0b 0x00 0x00 0x00 0x00 0x00 0xa0 0x01 0x11 "
