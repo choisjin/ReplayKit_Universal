@@ -139,13 +139,18 @@ for sid in order:
         cands.append((sid, src, dst))
 # MAP = 최대 면적의 "비검정" 후보 (보조 서피스/빈 서피스 자동 배제)
 mapsel = None; best = -1
+mapsel_in = None; best_in = -1
 for sid, src, dst in cands:
     bm = dump(sid, "/tmp/_mlsel.bmp")
     if bm is None or mostly_black(parse(bm)):
         continue
     area = dst[2] * dst[3]
+    if dst[0] > 0 and dst[1] > 0 and area > best_in:  # inset(여백) = 맵 위젯 우선
+        best_in = area; mapsel_in = (sid, src, dst)
     if area > best:
         best = area; mapsel = (sid, src, dst)
+# inset 후보가 있으면 그것(전체화면 앱 surface를 맵으로 오선택하는 것 방지 → 화면 무관 안정)
+mapsel = mapsel_in or mapsel
 
 if mapsel:
     _, _, md = mapsel
@@ -433,11 +438,11 @@ class MIBAgentService:
         self._live_jpeg_q = _env_int_def("MIB_LIVE_JPEG_Q", 60)
         # 맵 합성 게이트 (live_stream_mixin과 동일) — 맵-영역이 "대부분 구멍(검정)"일 때만
         # 맵 합성. 홈은 진짜 구멍이라 ≤8 비율 ~98%, Dial/차량뷰는 ~5%↓라 게이트로 분리.
-        self._map_key_t = _env_int_def("MAP_KEY_T", 8)
+        self._map_key_t = _env_int_def("MAP_KEY_T", 2)
         try:
-            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.5)
+            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.8)
         except Exception:
-            self._map_hole_gate = 0.5
+            self._map_hole_gate = 0.8
         self._key_overrides: dict[str, dict] = dict(key_overrides or {})
         # 캡처에서 PNG 실제 크기와 _res_x/_res_y가 다를 때 자동 정정 + 영구 저장 콜백.
         # 시그니처: callback("WxH"). DeviceManager가 dev.info 갱신과 파일 저장을 담당.

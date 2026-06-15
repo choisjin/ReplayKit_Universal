@@ -123,13 +123,18 @@ for sid in order:
     else:
         cands.append((sid, src, dst))
 mapsel = None; best = -1
+mapsel_in = None; best_in = -1
 for sid, src, dst in cands:
     bm = dump(sid, "/tmp/_mlsel.bmp")
     if bm is None or mostly_black(parse(bm)):
         continue
     area = dst[2] * dst[3]
+    if dst[0] > 0 and dst[1] > 0 and area > best_in:  # inset(여백) = 맵 위젯 우선
+        best_in = area; mapsel_in = (sid, src, dst)
     if area > best:
         best = area; mapsel = (sid, src, dst)
+# inset 후보가 있으면 그것(전체화면 앱 surface를 맵으로 오선택하는 것 방지 → 화면 무관 안정)
+mapsel = mapsel_in or mapsel
 
 if mapsel:
     _, _, md = mapsel
@@ -207,11 +212,11 @@ class LiveStreamMixin:
         # 맵 합성 게이트: HMI 맵-영역이 "대부분 구멍(검정)"일 때만 맵을 합성한다.
         # 알파가 없어 '투명 구멍'과 '불투명 어두운 콘텐츠'를 픽셀값으로 근사 —
         # 홈은 진짜 구멍이라 ≤8 비율 ~98%, Dial/차량뷰는 ~5% 이하라 게이트로 분리됨.
-        self._map_key_t = _ei(["MAP_KEY_T"], 8)          # 검정 판정 임계
+        self._map_key_t = _ei(["MAP_KEY_T"], 2)          # 검정 판정 임계(정확한 검정=진짜 구멍)
         try:
-            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.5)
+            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.8)
         except Exception:
-            self._map_hole_gate = 0.5                      # 맵-영역 검정비율 컷오프
+            self._map_hole_gate = 0.8                      # 맵-영역 검정비율 컷오프(홈 98% vs 콘텐츠 <50%)
 
     def is_live_running(self) -> bool:
         t = getattr(self, "_live_thread", None)
