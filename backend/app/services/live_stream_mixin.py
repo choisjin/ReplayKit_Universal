@@ -204,6 +204,14 @@ class LiveStreamMixin:
         self._live_w = _ei(["LIVE_W", "MIB_LIVE_W"], 640)
         self._live_h = _ei(["LIVE_H", "MIB_LIVE_H"], 0)
         self._live_jpeg_q = _ei(["LIVE_JPEG_Q", "MIB_LIVE_JPEG_Q"], 60)
+        # 맵 합성 게이트: HMI 맵-영역이 "대부분 구멍(검정)"일 때만 맵을 합성한다.
+        # 알파가 없어 '투명 구멍'과 '불투명 어두운 콘텐츠'를 픽셀값으로 근사 —
+        # 홈은 진짜 구멍이라 ≤8 비율 ~98%, Dial/차량뷰는 ~5% 이하라 게이트로 분리됨.
+        self._map_key_t = _ei(["MAP_KEY_T"], 8)          # 검정 판정 임계
+        try:
+            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.5)
+        except Exception:
+            self._map_hole_gate = 0.5                      # 맵-영역 검정비율 컷오프
 
     def is_live_running(self) -> bool:
         t = getattr(self, "_live_thread", None)
@@ -324,8 +332,11 @@ class LiveStreamMixin:
                         rh, rw = reg.shape[0], reg.shape[1]
                         if rh > 0 and rw > 0:
                             mp = np.frombuffer(map_bytes, np.uint8).reshape(mh, mw, 3)[:rh, :rw]
-                            hole = reg.max(axis=2) <= 16  # HMI가 (거의) 검정 = 투명 구멍
-                            reg[hole] = mp[hole]
+                            hole = reg.max(axis=2) <= self._map_key_t  # HMI가 (거의) 검정 = 투명 구멍
+                            # 맵-영역이 대부분 구멍일 때만 맵 합성(홈). Dial/차량뷰처럼 불투명
+                            # 콘텐츠가 채운 화면은 검정비율이 낮아 맵을 안 깐다(비침 방지).
+                            if hole.mean() > self._map_hole_gate:
+                                reg[hole] = mp[hole]
                     img = Image.fromarray(comp[:, :, ::-1], "RGB")  # BGR→RGB
                     bio = io.BytesIO()
                     img.save(bio, format="JPEG", quality=self._live_jpeg_q)

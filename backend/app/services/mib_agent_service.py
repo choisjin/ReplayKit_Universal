@@ -431,6 +431,13 @@ class MIBAgentService:
         self._live_w = _env_int_def("MIB_LIVE_W", 640)
         self._live_h = _env_int_def("MIB_LIVE_H", 0)  # 0 → TH = TW*SH/SW 자동
         self._live_jpeg_q = _env_int_def("MIB_LIVE_JPEG_Q", 60)
+        # 맵 합성 게이트 (live_stream_mixin과 동일) — 맵-영역이 "대부분 구멍(검정)"일 때만
+        # 맵 합성. 홈은 진짜 구멍이라 ≤8 비율 ~98%, Dial/차량뷰는 ~5%↓라 게이트로 분리.
+        self._map_key_t = _env_int_def("MAP_KEY_T", 8)
+        try:
+            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.5)
+        except Exception:
+            self._map_hole_gate = 0.5
         self._key_overrides: dict[str, dict] = dict(key_overrides or {})
         # 캡처에서 PNG 실제 크기와 _res_x/_res_y가 다를 때 자동 정정 + 영구 저장 콜백.
         # 시그니처: callback("WxH"). DeviceManager가 dev.info 갱신과 파일 저장을 담당.
@@ -2329,8 +2336,11 @@ class MIBAgentService:
                         rh, rw = reg.shape[0], reg.shape[1]
                         if rh > 0 and rw > 0:
                             mp = np.frombuffer(map_bytes, np.uint8).reshape(mh, mw, 3)[:rh, :rw]
-                            hole = reg.max(axis=2) <= 16  # HMI가 (거의) 검정 = 투명 구멍
-                            reg[hole] = mp[hole]
+                            hole = reg.max(axis=2) <= self._map_key_t  # HMI가 (거의) 검정 = 투명 구멍
+                            # 맵-영역이 대부분 구멍일 때만 맵 합성(홈). Dial/차량뷰처럼 불투명
+                            # 콘텐츠가 채운 화면은 검정비율이 낮아 맵을 안 깐다(비침 방지).
+                            if hole.mean() > self._map_hole_gate:
+                                reg[hole] = mp[hole]
                     img = Image.fromarray(comp[:, :, ::-1], "RGB")  # BGR→RGB
                     bio = io.BytesIO()
                     img.save(bio, format="JPEG", quality=self._live_jpeg_q)
