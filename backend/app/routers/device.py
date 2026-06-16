@@ -1510,6 +1510,20 @@ async def update_device(req: UpdateDeviceRequest):
                     )
                 except Exception as e:
                     logger.warning("Failed to update live MIB touch offsets: %s", e)
+        # MIB 터치 디지타이저 스케일 라이브 반영 (touch_x_scale/touch_y_scale). reconnect 없이 캘리브레이션.
+        # 패널 고유값(해상도 공식 미도출). 예: 13.1" 1920x1080 → touch_y_scale=0.25 (Y 2배 늘어남 보정).
+        if dev.type == "mib_agent" and (
+            "touch_x_scale" in req.extra_fields or "touch_y_scale" in req.extra_fields
+        ):
+            svc = dm.get_mib_service(dev.id)
+            if svc is not None:
+                try:
+                    svc.set_touch_scale(
+                        dev.info.get("touch_x_scale"),
+                        dev.info.get("touch_y_scale"),
+                    )
+                except Exception as e:
+                    logger.warning("Failed to update live MIB touch scale: %s", e)
         # Reset cached module instance when connection params change
         module_name = dev.info.get("module")
         if module_name:

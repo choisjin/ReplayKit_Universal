@@ -1426,6 +1426,31 @@ class MIBAgentService:
     def get_touch_offsets(self) -> tuple[int, int]:
         return (self._touch_x_offset, self._touch_y_offset)
 
+    def set_touch_scale(self, x_scale=None, y_scale=None) -> None:
+        """터치 디지타이저 절대 스케일 override (디바이스별 라이브 캘리브레이션용).
+
+        None/빈값/0이하 = 기본(축별 1/max(2,mult), 보통 0.5) 사용.
+        일부 패널은 디지타이저 좌표공간이 화면의 1/2이 아니다. 예: 13.1" 1920x1080은
+        Y 디지타이저가 화면의 ~1/4이라 기본 ÷2(화면×0.5)로 보내면 터치가 Y로 2배 늘어남
+        → y_scale=0.25 로 보정. 해상도 공식으로는 도출 불가한 패널 펌웨어 고유값이라
+        디바이스 info(touch_x_scale/touch_y_scale)에 저장해 디바이스별로만 적용한다.
+        """
+        def _f(v):
+            if v is None or v == "":
+                return None
+            try:
+                fv = float(v)
+            except Exception:
+                return None
+            return fv if fv > 0 else None
+        self._touch_x_scale = _f(x_scale)
+        self._touch_y_scale = _f(y_scale)
+        logger.info("MIB touch scale set: x=%s y=%s",
+                    self._touch_x_scale, self._touch_y_scale)
+
+    def get_touch_scale(self) -> tuple:
+        return (self._touch_x_scale, self._touch_y_scale)
+
     def _touch_press(self, x: int, y: int) -> None:
         self._ksend(self._touch_frame(x, y, 0xFD))
 

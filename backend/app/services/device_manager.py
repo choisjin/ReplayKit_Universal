@@ -2885,6 +2885,14 @@ class DeviceManager:
                         svc.set_touch_offsets(int(_tox or 0), int(_toy or 0))
                     except Exception as e:
                         logger.warning("MIB touch offset apply failed: %s", e)
+                # 저장된 터치 디지타이저 스케일 override (패널 고유값, 예: 13.1" y=0.25)
+                _txs = dev.info.get("touch_x_scale")
+                _tys = dev.info.get("touch_y_scale")
+                if _txs is not None or _tys is not None:
+                    try:
+                        svc.set_touch_scale(_txs, _tys)
+                    except Exception as e:
+                        logger.warning("MIB touch scale apply failed: %s", e)
                 ok = await svc.async_connect()
                 if ok:
                     self._mib_conns[dev.id] = svc
