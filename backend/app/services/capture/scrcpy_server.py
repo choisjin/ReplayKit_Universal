@@ -85,6 +85,14 @@ _FIRST_FRAME_TIMEOUT = 12.0
 # socket → relay chunk 크기. 너무 크면 첫 프레임 latency 증가, 너무 작으면 syscall 폭주.
 _READ_CHUNK = 64 * 1024
 
+# 스트림 stall 감지 timeout (초). codec_options.i-frame-interval=1 로 화면이 정적이어도
+# 매 ~1초 IDR 키프레임이 흐르므로, 이 시간 동안 단 한 chunk 도 안 오면 디바이스측
+# 인코더/소켓이 멈춘 것이다 (CW 같은 와이드 자동차 디스플레이 3840x1440 에서 첫 프레임
+# 직후 인코더가 출력을 멈추는 케이스 관측됨). first-frame 검증은 통과해 "started" 로그가
+# 찍힌 뒤 화면만 얼어붙고 예외가 없어 main.py 재시작도 안 타던 결함의 핵심.
+# 예외를 던져 main.py 가 백엔드를 닫고 재시작하게 한다 (그동안 screencap 폴백이 채움).
+_STALL_TIMEOUT = 6.0
+
 # relay 큐 최대 chunk 수 (~64KB/chunk). 소비자(WS)가 느릴 때 여기까지만 backlog 를
 # 허용하고, 초과 시 backlog 를 버린 뒤 다음 키프레임부터 재동기한다. 4MB(=64) 정도면
 # 일시적 네트워크 지터를 흡수하면서도 PC 메모리 증가를 제한한다.
@@ -727,7 +735,21 @@ class ScrcpyServerBackend:
         """
         try:
             while not self._closed:
-                item = await self._frame_queue.get()
+                # stall watchdog — i-frame-interval=1 이라 정상이면 ~1fps 로 데이터가
+                # 흐른다. _STALL_TIMEOUT 동안 한 chunk 도 없으면 디바이스 인코더/소켓이
+                # 멈춘 것 → 예외를 던져 main.py 가 백엔드를 재시작하도록 한다.
+                try:
+                    item = await asyncio.wait_for(
+                        self._frame_queue.get(), timeout=_STALL_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    raise RuntimeError(
+                        f"scrcpy stream stalled: no NAL for {_STALL_TIMEOUT:.0f}s "
+                        f"(i-frame-interval=1 should emit ~1fps) — "
+                        f"device encoder/socket frozen "
+                        f"(serial={self.serial} display={self.logical_id} "
+                        f"bytes_in={self._total_bytes_in})"
+                    )
                 if item is _EOF_SENTINEL:
                     break
                 yield item
