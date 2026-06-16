@@ -1937,11 +1937,11 @@ class PlaybackService:
         elif dev_type == "icas_agent":
             svc = self.dm.get_icas_service(dev_id)
             if svc:
-                await svc.async_touch(x, y, screen_type or "HU")
+                await svc.async_tap(x, y, screen_type or "HU")
         elif dev_type == "mib_agent":
             svc = self.dm.get_mib_service(dev_id)
             if svc:
-                await svc.async_touch(x, y, screen_type or "HU")
+                await svc.async_tap(x, y, screen_type or "HU")
         else:
             logger.warning("OCR ClickText: 탭 미지원 디바이스 타입 %s", dev_type)
 
