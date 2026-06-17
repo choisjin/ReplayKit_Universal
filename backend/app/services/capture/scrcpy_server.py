@@ -2,7 +2,7 @@
 
 scrcpy-server.jar를 디바이스에 push 후 app_process로 실행해 MediaCodec API를
 직접 호출한다. screenrecord와 달리:
-  * idle 시에도 frame 출력이 자연스러움 (인코더 직접 제어 + i-frame-interval=1 로 ~1fps)
+  * idle 시에도 frame 출력 유지 (repeat-previous-frame-after 로 정적 화면도 직전 프레임 재송출)
   * 무한 streaming (segment 175초 제한 없음)
   * raw_video_stream=true 모드로 prefix bytes 없이 순수 H.264 NAL stream 수신
 
@@ -85,13 +85,17 @@ _FIRST_FRAME_TIMEOUT = 12.0
 # socket → relay chunk 크기. 너무 크면 첫 프레임 latency 증가, 너무 작으면 syscall 폭주.
 _READ_CHUNK = 64 * 1024
 
-# 스트림 stall 감지 timeout (초). codec_options.i-frame-interval=1 로 화면이 정적이어도
-# 매 ~1초 IDR 키프레임이 흐르므로, 이 시간 동안 단 한 chunk 도 안 오면 디바이스측
-# 인코더/소켓이 멈춘 것이다 (CW 같은 와이드 자동차 디스플레이 3840x1440 에서 첫 프레임
-# 직후 인코더가 출력을 멈추는 케이스 관측됨). first-frame 검증은 통과해 "started" 로그가
-# 찍힌 뒤 화면만 얼어붙고 예외가 없어 main.py 재시작도 안 타던 결함의 핵심.
-# 예외를 던져 main.py 가 백엔드를 닫고 재시작하게 한다 (그동안 screencap 폴백이 채움).
-_STALL_TIMEOUT = 6.0
+# 스트림 stall 감지 timeout (초). 정적 화면에서 MediaCodec surface 인코더는 새 입력
+# 프레임이 없으면 출력을 멈춘다 (i-frame-interval 은 없는 프레임을 만들지 못함). 그래서
+# codec_options 에 repeat-previous-frame-after 를 추가해 정적 화면에서도 직전 프레임을
+# 재송출하게 했고, 정상 스트림은 화면이 멈춰도 데이터가 계속 흐른다. 따라서 이 timeout 은
+# 그 옵션이 통하지 않는(벤더 MediaCodec) 디바이스에서 "소켓은 살아있는데 인코더가 진짜로
+# hang" 한 경우만 회수하는 안전망이다. 실제 disconnect 는 socket EOF 로 자연 종료되므로
+# 이 timeout 과 무관하다.
+# ※ 과거 6s 는 CW 3840x1440 정적 화면(프레임 없음)을 freeze 로 오인 → 매번 첫 IDR 1장
+#   (화면별 고정 바이트, 예: 정지 홈화면 ~125KB)만 받고 6s 뒤 죽임 → 26s 쿨다운 후 재시작
+#   = 무한 thrash + 화면 깜빡임/프레임드랍. 정적 화면 오탐을 피하도록 넉넉히 잡는다.
+_STALL_TIMEOUT = 30.0
 
 # relay 큐 최대 chunk 수 (~64KB/chunk). 소비자(WS)가 느릴 때 여기까지만 backlog 를
 # 허용하고, 초과 시 backlog 를 버린 뒤 다음 키프레임부터 재동기한다. 4MB(=64) 정도면
@@ -488,8 +492,12 @@ class ScrcpyServerBackend:
           * raw_video_stream=true: prefix bytes(dummy 1 + device_meta 64) +
             frame_meta(12/frame) 모두 비활성화. PyAV가 raw H.264 NAL stream을 바로
             디코딩 가능.
-          * codec_options=i-frame-interval=1: 1초마다 IDR 키프레임 강제. 정적 화면
-            디바이스에서 첫 IDR 대기로 인한 first-frame timeout 방지.
+          * codec_options:
+              - i-frame-interval=1: 1초마다 IDR 키프레임 강제 (재동기/first-frame 대기 단축).
+              - repeat-previous-frame-after=100000(µs): 정적 화면에서 새 입력 프레임이 없을
+                때 직전 프레임을 100ms 마다 재송출. MediaCodec surface 인코더는 입력이 없으면
+                출력을 멈추므로, 이 옵션이 없으면 정지 화면에서 NAL 이 끊겨 stall watchdog 이
+                오탐한다 (CW 3840x1440 무한 재시작 thrash 의 근본 원인). long 타입(:long) 필수.
         """
         opts = [
             "log_level=info",
@@ -504,7 +512,14 @@ class ScrcpyServerBackend:
             "stay_awake=false",
             "power_off_on_close=false",
             "raw_video_stream=true",
-            "codec_options=i-frame-interval=1",
+            # i-frame-interval=1: 1초마다 IDR 강제.
+            # repeat-previous-frame-after: 정적 화면에서 새 입력 프레임이 없을 때 직전
+            #   프레임을 재송출(100ms)해 NAL stream 이 끊기지 않게 한다. MediaCodec
+            #   surface 인코더는 입력이 없으면 출력을 멈추고 i-frame-interval 은 "생성된
+            #   프레임들 사이" 간격일 뿐 없는 프레임을 만들지 못한다 → 이 옵션이 정적
+            #   화면 stall 의 근본 해결책. 재송출 프레임은 변화 없는 skip P-frame 이라
+            #   거의 0바이트. KEY_REPEAT_PREVIOUS_FRAME_AFTER 는 long → :long 필수.
+            "codec_options=i-frame-interval=1,repeat-previous-frame-after:long=100000",
         ]
         # `echo SCRCPYPID:$$` 후 `exec`로 app_process를 띄우면 셸 PID($$)가 그대로
         # app_process PID가 된다 → close 시 이 PID를 정확히 kill -9 가능.
