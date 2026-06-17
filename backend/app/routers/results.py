@@ -9,6 +9,7 @@ import subprocess
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import FileResponse, StreamingResponse
@@ -38,6 +39,20 @@ def _find_ffmpeg() -> str | None:
     if local_bin.is_file():
         return str(local_bin)
     return None
+
+
+def _content_disposition(filename: str) -> str:
+    """RFC 5987 형식의 Content-Disposition 헤더 값 생성.
+
+    HTTP 헤더 값은 latin-1로만 인코딩되므로 한글·괄호 등 비-ASCII 파일명을
+    그대로 넣으면 UnicodeEncodeError로 응답이 깨진다. ASCII fallback(filename=)과
+    UTF-8 인코딩(filename*=)을 함께 제공해 한글 파일명도 안전하게 내려보낸다.
+    """
+    ascii_fallback = filename.encode("ascii", "ignore").decode().strip() or "result"
+    return (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{quote(filename)}"
+    )
 
 
 @router.get("/list")
@@ -676,11 +691,11 @@ async def export_result_excel(filename: str):
     wb.save(buf)
     buf.seek(0)
 
-    export_name = filename.replace(".json", ".xlsx")
+    export_name = Path(filename.replace(".json", ".xlsx")).name
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{export_name}"'},
+        headers={"Content-Disposition": _content_disposition(export_name)},
     )
 
 
@@ -787,7 +802,7 @@ async def export_result_bundle(filename: str, export_path: str = ""):
             return StreamingResponse(
                 buf,
                 media_type="application/zip",
-                headers={"Content-Disposition": f'attachment; filename="{folder_name}.zip"'},
+                headers={"Content-Disposition": _content_disposition(f"{folder_name}.zip")},
             )
     finally:
         # ZIP용 임시 assets 정리 + HTML 경로 복원 (런 폴더가 원본이면 패치 원복)
