@@ -2995,7 +2995,7 @@ export default function ScenarioPage() {
                       blockNode
                       showIcon
                       defaultExpandAll
-                      draggable={{ icon: false, nodeDraggable: (node: any) => String(node.key).startsWith('scenario:') }}
+                      draggable={{ icon: false, nodeDraggable: (node: any) => String(node.key).startsWith('scenario:') || String(node.key).startsWith('folder:') }}
                       selectedKeys={modalTreeSelected.map(n => `scenario:${n}`)}
                       onSelect={(_keys, info) => {
                         const ne = (info as any).nativeEvent as MouseEvent | undefined;
@@ -3029,12 +3029,21 @@ export default function ScenarioPage() {
                       }}
                       onDragStart={(info: any) => {
                         const key = String(info.node.key);
-                        if (!key.startsWith('scenario:')) return;
-                        const draggedName = key.replace('scenario:', '');
-                        // 드래그한 항목이 다중 선택에 포함되어 있으면 전체, 아니면 단일
-                        const names = (modalTreeSelected.includes(draggedName) && modalTreeSelected.length > 1)
-                          ? modalTreeSelected
-                          : [draggedName];
+                        let names: string[];
+                        if (key.startsWith('folder:')) {
+                          // 폴더 드래그 — 하위 시나리오 전체를 일괄 추가
+                          const fname = key.replace('folder:', '');
+                          names = (folders[fname] || []).filter(n => scenarios.includes(n));
+                          if (names.length === 0) return;
+                        } else if (key.startsWith('scenario:')) {
+                          const draggedName = key.replace('scenario:', '');
+                          // 드래그한 항목이 다중 선택에 포함되어 있으면 전체, 아니면 단일
+                          names = (modalTreeSelected.includes(draggedName) && modalTreeSelected.length > 1)
+                            ? modalTreeSelected
+                            : [draggedName];
+                        } else {
+                          return;
+                        }
                         try {
                           info.event.dataTransfer.setData('application/x-scenario-names', JSON.stringify(names));
                           info.event.dataTransfer.setData('text/plain', names.join('\n'));
