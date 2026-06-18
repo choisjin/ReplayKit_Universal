@@ -646,7 +646,10 @@ export default function ScenarioPage() {
       setRenameModalVisible(false);
       setSelectedName(newName);
       setMultiSelectedNames(prev => prev.map(n => n === oldName ? newName : n));
+      // 백엔드가 그룹/폴더 내 시나리오 참조도 새 이름으로 갱신하므로 함께 리페치
       fetchScenarios();
+      fetchFolders();
+      fetchGroups();
     } catch (e: any) {
       message.error(e.response?.data?.detail || t('scenario.renameFailed'));
     }
@@ -2128,7 +2131,7 @@ export default function ScenarioPage() {
                   if (newName && newName !== contextMenu.name) {
                     const oldName = contextMenu.name;
                     scenarioApi.rename(oldName, newName)
-                      .then(() => { fetchScenarios(); fetchFolders(); })
+                      .then(() => { fetchScenarios(); fetchFolders(); fetchGroups(); })
                       .catch((e: any) => message.error(e?.response?.data?.detail || t('scenario.renameFailed')));
                     if (selectedName === oldName) setSelectedName(newName);
                     setMultiSelectedNames(prev => prev.map(n => n === oldName ? newName : n));
