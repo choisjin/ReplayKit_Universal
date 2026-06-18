@@ -4622,7 +4622,7 @@ export default function RecordPage() {
                   {screenDevice && (
                     <Tag color={screenAlive ? 'green' : 'red'} style={{ marginLeft: 0 }}>
                       {screenAlive
-                        ? `JPEG ${streamFps}fps`
+                        ? `${h264Mode ? 'H.264' : 'JPEG'} ${streamFps}fps`
                         : t('record.deviceDisconnected')}
                     </Tag>
                   )}

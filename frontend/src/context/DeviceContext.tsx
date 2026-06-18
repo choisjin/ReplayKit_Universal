@@ -99,10 +99,13 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     setStreamFps(0);
   }, []);
 
-  // Frame arrived → mark alive, reset 3s timeout, count fps
-  const markFrameAlive = useCallback(() => {
+  // Frame arrived → mark alive, reset 3s timeout, (optionally) count fps.
+  // countFps=false: WebCodecs H.264 경로는 WS 청크 ≠ 프레임이므로 alive 만 갱신하고
+  //   fps 는 디코더 output 콜백(onFrame)에서 실프레임 단위로 센다. JPEG 경로는 메시지
+  //   1개 = 프레임 1장이라 countFps=true 로 메시지 단위 카운트가 정확하다.
+  const markFrameAlive = useCallback((countFps = true) => {
     setScreenAlive(true);
-    fpsCountRef.current += 1;
+    if (countFps) fpsCountRef.current += 1;
     if (screenAliveTimerRef.current) clearTimeout(screenAliveTimerRef.current);
     screenAliveTimerRef.current = setTimeout(() => setScreenAlive(false), 3000);
   }, []);
@@ -338,13 +341,19 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
             if (n === 1 || n % 300 === 0) {
               console.info(`[mirror] feed#${n} bytes=${bytes.length} hasFrame=${h264RendererRef.current.hasFrame} (WebCodecs)`);
             }
+            // fps 는 디코더 output 콜백(onFrame)에서 실프레임 단위로 카운트 → 여기선 alive 만.
+            markFrameAlive(false);
           } else if (jmuxerRef.current) {
+            // JMuxer 폴백은 프레임 단위 콜백이 없어 메시지(청크) 기준 근사 카운트.
             jmuxerRef.current.feed({ video: bytes });
-          } else if (h264FeedCountRef.current === 0) {
-            // 디코더 미초기화 시 데이터 드롭 (useEffect에서 곧 초기화됨) — 첫 케이스만 알림.
-            console.warn('[mirror] H.264 binary arrived but decoder not ready yet (dropping until init)');
+            markFrameAlive(true);
+          } else {
+            if (h264FeedCountRef.current === 0) {
+              // 디코더 미초기화 시 데이터 드롭 (useEffect에서 곧 초기화됨) — 첫 케이스만 알림.
+              console.warn('[mirror] H.264 binary arrived but decoder not ready yet (dropping until init)');
+            }
+            markFrameAlive(false);
           }
-          markFrameAlive();
         } else {
           // JPEG 바이너리 → Blob URL → <img>/<canvas>
           const blob = new Blob([event.data], { type: 'image/jpeg' });
@@ -420,7 +429,11 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     if (webCodecsSupported()) {
       if (!h264RendererRef.current) {
         console.info('[mirror] init H.264 via WebCodecs VideoDecoder');
-        h264RendererRef.current = new H264Renderer((msg) => console.info('[mirror]', msg));
+        h264RendererRef.current = new H264Renderer(
+          (msg) => console.info('[mirror]', msg),
+          // 디코더가 실제 프레임을 출력할 때마다 fps +1 (WS 청크 수가 아닌 실프레임 기준)
+          () => { fpsCountRef.current += 1; },
+        );
       }
       return;
     }

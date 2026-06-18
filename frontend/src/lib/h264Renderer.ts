@@ -36,9 +36,11 @@ export class H264Renderer {
   private closed = false;
   private decodeErrored = false;
   private onLog?: (msg: string) => void;
+  private onFrame?: () => void; // 실제 디코딩된 프레임마다 호출 (정확한 fps 측정용)
 
-  constructor(onLog?: (msg: string) => void) {
+  constructor(onLog?: (msg: string) => void, onFrame?: () => void) {
     this.onLog = onLog;
+    this.onFrame = onFrame;
   }
 
   get hasFrame(): boolean {
@@ -128,6 +130,8 @@ export class H264Renderer {
             try { this.latest.close(); } catch { /* ignore */ }
           }
           this.latest = frame;
+          // 디코더가 실제로 프레임을 출력한 시점 = 1 프레임 (WS 청크 수가 아닌 실프레임 fps)
+          try { this.onFrame?.(); } catch { /* ignore */ }
         },
         error: (e: any) => {
           this.decodeErrored = true;
