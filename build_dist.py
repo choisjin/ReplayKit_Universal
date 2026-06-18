@@ -1351,6 +1351,13 @@ tools/*
 !tools/scrcpy-server.jar
 !tools/ffmpeg.exe
 !tools/ffmpeg
+# 동봉 adb (platform-tools) — 전 PC 동일 버전 보장. 미포함 시 배포 PC가 PATH adb 로
+# 폴백해 PC별 캡처 깨짐("Cannot decode screenshot")이 재발. Windows는 DLL 2개 필수.
+!tools/platform-tools
+!tools/platform-tools/adb
+!tools/platform-tools/adb.exe
+!tools/platform-tools/AdbWinApi.dll
+!tools/platform-tools/AdbWinUsbApi.dll
 
 # 사용자 데이터
 backend/screenshots/
