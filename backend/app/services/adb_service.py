@@ -18,10 +18,13 @@ from typing import Optional
 from .capture.scrcpy_server import (
     ScrcpyServerBackend, detect_scrcpy_server,
 )
+from .adb_path import resolve_adb_path
 
 logger = logging.getLogger(__name__)
 
-ADB_PATH = os.environ.get("ADB_PATH", "adb")
+# 전 PC 동일 adb 보장 — 번들 tools/platform-tools/adb 우선, 미배치 시 PATH 'adb' 폴백.
+# (import 시 전용 ANDROID_ADB_SERVER_PORT 도 함께 세팅됨)
+ADB_PATH = resolve_adb_path()
 
 
 def resolve_sf_display_id(dev_info: dict | None, logical_id: int | None) -> str | None:
@@ -868,6 +871,14 @@ class ADBService:
                 stdout, _, _ = await loop.run_in_executor(None, functools.partial(_run_sync_bytes, cmd_cat))
             else:
                 raise RuntimeError(f"screencap failed: {stderr2}")
+            # 파일 폴백의 cat 결과도 raw 바이너리라 동일 채널 손상 가능 — PNG 매직바이트
+            # 재검증해 깨진 바이트를 그대로 흘려보내지 않는다(= 호출부의 "Cannot decode
+            # screenshot" 대신 명확한 실패 → device.py는 빈 이미지 반환/재시도).
+            if not stdout or stdout[:4] != b'\x89PNG':
+                raise RuntimeError(
+                    "screencap returned corrupted/non-PNG data (adb binary channel "
+                    "corruption — check bundled adb / ANDROID_ADB_SERVER_PORT)"
+                )
 
         if fmt == "jpeg" and stdout:
             import cv2

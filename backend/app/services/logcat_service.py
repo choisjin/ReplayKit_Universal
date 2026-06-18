@@ -38,8 +38,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# adb 바이너리 — adb_service와 동일 규약(ADB_PATH 환경변수 → 'adb').
-ADB_PATH = os.environ.get("ADB_PATH", "adb")
+# adb 바이너리 — adb_service와 동일 규약(번들 adb 우선, PATH 'adb' 폴백).
+from .adb_path import resolve_adb_path
+ADB_PATH = resolve_adb_path()
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 # 메모리 링버퍼 상한 — 뷰어 백필/키워드 '미래' 폴링용 최근 라인만 보관 (~15-20MB/디바이스).

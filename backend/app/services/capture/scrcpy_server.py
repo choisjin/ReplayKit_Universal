@@ -67,7 +67,9 @@ logger = logging.getLogger(__name__)
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
-ADB_PATH = os.environ.get("ADB_PATH", "adb")
+# 전 PC 동일 adb 보장 — 번들 tools/platform-tools/adb 우선 (../adb_path 공용 resolver).
+from ..adb_path import resolve_adb_path
+ADB_PATH = resolve_adb_path()
 
 # scrcpy 버전 — 옵션 형식과 동작이 버전마다 다르므로 server.jar와 정확히 일치해야 한다.
 # scrcpy 1.x server는 client_version과 BuildConfig.VERSION_NAME을 strict 비교하므로

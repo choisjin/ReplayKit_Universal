@@ -52,6 +52,14 @@ tools/*
 # capture/ffmpeg_runtime.py + webcam_service.py 둘 다 이 경로 탐색.
 # 97MB 라 LFS 후보지만 GitHub 100MB 한도 미만 → 직접 트래킹.
 !tools/ffmpeg.exe
+# 동봉 adb (platform-tools) — 전 PC 동일 버전/서버로 통일해 PC별 adb 편차로 인한
+# 캡처 깨짐("Cannot decode screenshot")·scrcpy 실패를 차단. Windows는 DLL 2개 필수.
+# tools/* 는 한 단계만 ignore 하므로 하위 디렉토리를 un-ignore 하면 내부 파일은 추적됨.
+!tools/platform-tools
+!tools/platform-tools/adb
+!tools/platform-tools/adb.exe
+!tools/platform-tools/AdbWinApi.dll
+!tools/platform-tools/AdbWinUsbApi.dll
 installer_output/
 DltViewerSDK_21.1.3_ver/
 

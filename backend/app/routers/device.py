@@ -2205,7 +2205,10 @@ async def get_screenshot(device_id: str, fmt: str = "jpeg", screen_type: str = "
             adb_serial = dev.address if dev else device_id
             display_id = _parse_adb_display_id(screen_type)
             sf_did = resolve_sf_display_id(dev.info if dev else None, display_id)
-            img_bytes = await adb.screencap_bytes(serial=adb_serial, fmt=fmt, sf_display_id=sf_did)
+            # 단발 캡처도 미러링과 동일한 base64 스트리머 경로 사용 — 특정 PC/adb에서
+            # exec-out raw 바이너리가 깨져 "Cannot decode screenshot" 나는 것을 방지.
+            # 스트리머 실패 시 내부에서 screencap_bytes(spawn) 로 자동 폴백한다.
+            img_bytes = await adb.streaming_screencap_bytes(serial=adb_serial, fmt=fmt, sf_display_id=sf_did)
             b64 = base64.b64encode(img_bytes).decode("ascii")
             return {"image": b64, "format": fmt}
     except HTTPException:

@@ -426,7 +426,9 @@ async def capture_expected_image(req: CaptureExpectedImageRequest):
             except (ValueError, TypeError):
                 pass
             sf_did = resolve_sf_display_id(dev.info if dev else None, adb_did)
-            png_bytes = await adb_svc.screencap_bytes(serial=adb_serial, sf_display_id=sf_did)
+            # 미러링과 동일한 base64 스트리머 경로 — exec-out raw 바이너리 손상 방지
+            # (특정 PC/adb 버전에서 "Cannot decode screenshot" 회귀 차단). 실패 시 내부 폴백.
+            png_bytes = await adb_svc.streaming_screencap_bytes(serial=adb_serial, fmt="png", sf_display_id=sf_did)
     except HTTPException:
         raise
     except Exception as e:
