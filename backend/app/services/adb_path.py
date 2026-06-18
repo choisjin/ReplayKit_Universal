@@ -1,13 +1,16 @@
-"""동봉 adb 바이너리 경로 해석 + adb 서버 포트 격리.
+"""동봉 adb 바이너리 경로 해석.
 
-전 PC에서 **동일한 adb 클라이언트/서버**를 쓰도록 보장한다. 시스템 PATH에 잡힌
-제각각의 adb(버전 상이) 대신 번들된 ``tools/platform-tools/adb`` 를 우선 사용하고,
-전용 ``ANDROID_ADB_SERVER_PORT`` 를 강제해 그 PC의 시스템 adb 서버(기본 5037)나
-에뮬레이터(5554-5585)와 완전히 분리한다.
+전 PC에서 **동일한 adb 바이너리(버전)** 를 쓰도록 보장한다. 시스템 PATH에 잡힌
+제각각 버전의 adb 대신 번들된 ``tools/platform-tools/adb`` 를 우선 사용한다.
 
 배경: 특정 PC에서만 `exec-out screencap` raw 바이너리가 깨져(구버전/충돌 adb)
 "Cannot decode screenshot" 가 났다. 미러링(base64 스트리머)은 멀쩡한데 단발 캡처만
-실패하는 비대칭의 근본 원인이 PC별 adb 편차였다.
+실패하는 비대칭의 근본 원인이 PC별 adb 편차였다. → 번들 adb로 버전 통일해서 해결.
+
+※ adb **서버 포트는 기본 5037을 그대로 공유**한다. 전용 포트(예: 15037)로 격리하면
+별도 adb 서버가 떠서 USB 디바이스를 시스템 5037 서버와 경합 → 앱이 디바이스를
+하나도 못 보는 회귀가 발생했다(USB는 한 서버만 인터페이스를 claim). 번들 adb가
+시스템 adb와 같은 버전이면 5037 공유가 안정적이라 격리가 불필요하다.
 
 경로 탐색은 ``capture.scrcpy_server.detect_scrcpy_server`` 와 동일한 우선순위를 따른다.
 adb_service / scrcpy_server / logcat_service 3개 모듈이 공통으로 import 한다.
@@ -20,13 +23,6 @@ import functools
 import os
 import sys
 from pathlib import Path
-
-# 전용 adb 서버 포트 — adb 기본(5037)·에뮬레이터 예약대역(5554-5585)을 모두 피한다.
-# 이미 외부에서 ANDROID_ADB_SERVER_PORT 를 지정했다면 그 값을 존중(setdefault).
-# 이 모듈은 adb를 쓰는 backend 서비스들이 import 하므로, 실제 adb 명령이 실행되기
-# 전에 환경변수가 세팅되어 모든 adb 자식 프로세스가 이 포트의 서버를 사용하게 된다.
-ADB_SERVER_PORT = "15037"
-os.environ.setdefault("ANDROID_ADB_SERVER_PORT", ADB_SERVER_PORT)
 
 
 def _project_root() -> Path:

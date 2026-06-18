@@ -31,6 +31,7 @@ https://dl.google.com/android/repository/platform-tools-latest-windows.zip
 ## 동작 메모
 
 - 미배치(파일 없음) 시 resolver는 시스템 PATH의 `adb` 로 graceful fallback 한다.
-- adb 서버는 `ANDROID_ADB_SERVER_PORT=15037`(전용 포트)로 격리되어 그 PC의
-  시스템 adb 서버(5037)·에뮬레이터와 섞이지 않는다. (`adb_path.py`)
+- adb 서버 포트는 **기본 5037을 그대로 공유**한다(시스템 `adb devices` 와 동일 서버·동일
+  디바이스 목록). 전용 포트로 격리하면 별도 서버가 USB 디바이스를 5037 서버와 경합해
+  앱이 디바이스를 못 보는 문제가 생기므로 격리하지 않는다.
 - `ADB_PATH` 환경변수를 지정하면 그 경로가 최우선으로 사용된다(디버그/예외 PC용).

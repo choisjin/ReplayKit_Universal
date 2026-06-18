@@ -23,7 +23,7 @@ from .adb_path import resolve_adb_path
 logger = logging.getLogger(__name__)
 
 # 전 PC 동일 adb 보장 — 번들 tools/platform-tools/adb 우선, 미배치 시 PATH 'adb' 폴백.
-# (import 시 전용 ANDROID_ADB_SERVER_PORT 도 함께 세팅됨)
+# (adb 서버 포트는 기본 5037 공유 — 격리 시 USB 디바이스 경합으로 스캔 실패)
 ADB_PATH = resolve_adb_path()
 
 
@@ -877,7 +877,7 @@ class ADBService:
             if not stdout or stdout[:4] != b'\x89PNG':
                 raise RuntimeError(
                     "screencap returned corrupted/non-PNG data (adb binary channel "
-                    "corruption — check bundled adb / ANDROID_ADB_SERVER_PORT)"
+                    "corruption — check bundled adb version / USB cable)"
                 )
 
         if fmt == "jpeg" and stdout:
