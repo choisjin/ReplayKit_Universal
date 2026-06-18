@@ -1058,6 +1058,7 @@ class ADBService:
         logical_id: Optional[int],
         *,
         bitrate: int = 4_000_000,
+        max_fps: Optional[int] = None,
     ) -> Optional[ScrcpyServerBackend]:
         """디바이스의 scrcpy 백엔드를 보장.
 
@@ -1101,6 +1102,7 @@ class ADBService:
             for attempt in range(2):
                 backend = ScrcpyServerBackend(
                     serial, logical_id, bitrate=bitrate,
+                    **({"max_fps": max_fps} if max_fps is not None else {}),
                 )
                 ok = await backend.try_start()
                 if ok:

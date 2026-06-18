@@ -82,6 +82,11 @@ DEVICE_JAR_PATH = "/data/local/tmp/scrcpy-server.jar"
 # 별로 적용 시점에 차이가 있어 timeout 여유와 함께 사용.
 _FIRST_FRAME_TIMEOUT = 12.0
 
+# 미러링 기본 프레임레이트 상한 (scrcpy max_fps 인코더 옵션). 0 = 무제한.
+# 디바이스 인코더 부하·PC 디코딩 부하·WS 대역폭을 낮추기 위해 15fps 로 캡한다.
+# (자동화 미러는 부드러운 60fps 가 필요 없고, 낮을수록 OOM/thrash 여유가 커진다.)
+_DEFAULT_MAX_FPS = 15
+
 # socket → relay chunk 크기. 너무 크면 첫 프레임 latency 증가, 너무 작으면 syscall 폭주.
 _READ_CHUNK = 64 * 1024
 
@@ -220,7 +225,7 @@ class ScrcpyServerBackend:
         logical_id: Optional[int] = None,
         *,
         bitrate: int = 4_000_000,
-        max_fps: int = 0,
+        max_fps: int = _DEFAULT_MAX_FPS,
     ):
         self.serial = serial
         self.logical_id = logical_id or 0
@@ -320,9 +325,9 @@ class ScrcpyServerBackend:
 
         logger.info(
             "scrcpy backend started: serial=%s display=%s port=%d bitrate=%d "
-            "size=%sx%s (v%s, H.264 relay)",
+            "max_fps=%d size=%sx%s (v%s, H.264 relay)",
             self.serial, self.logical_id, self.local_port, self.bitrate,
-            self.video_width, self.video_height, SCRCPY_VERSION,
+            self.max_fps, self.video_width, self.video_height, SCRCPY_VERSION,
         )
         return True
 
