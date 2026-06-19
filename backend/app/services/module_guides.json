@@ -789,7 +789,8 @@
       "send_command": {
         "description": "SSH로 명령어를 실행하고 완료 후 전체 출력을 반환합니다 (블로킹). 한국어 Windows 출력은 cp949/euc-kr 인코딩으로 자동 처리.",
         "params": {
-          "command": "실행할 명령어. 예: 'ls -al', 'cat /etc/version'"
+          "command": "실행할 명령어. 예: 'ls -al', 'cat /etc/version'",
+          "stdin_file": "지정 시 해당 로컬(PC) 파일 내용을 명령의 stdin 으로 주입 (업로드 불필요). 로컬 스크립트를 원격에서 즉시 실행: command='sudo bash -s', stdin_file='C:\\ReplayKit\\scripts\\Check_Battery.sh'. 기본값: 비움(주입 안 함)"
         }
       },
       "send_command_stream": {
@@ -804,7 +805,8 @@
           "command": "실행할 명령어",
           "expected": "출력에 포함되거나 완전히 일치해야 할 기대 문자열. 비워두면 '출력이 없을 때만 pass'(no-output 검증)로 동작",
           "match_mode": "비교 방식: 'contains'(부분 일치) 또는 'exact'(완전 일치). 기본값: contains",
-          "timeout": "최대 대기 시간 (초). 기본값: 60초"
+          "timeout": "최대 대기 시간 (초). 기본값: 60초",
+          "stdin_file": "지정 시 해당 로컬(PC) 파일 내용을 명령의 stdin 으로 주입 (업로드 불필요). 예: command='sudo bash -s', stdin_file='C:\\ReplayKit\\scripts\\Check_Battery.sh'. 기본값: 비움"
         }
       },
       "Check_Logic": {
@@ -813,7 +815,8 @@
           "command": "실행할 명령어",
           "keywords": "키워드 목록. 쉼표로 구분. 예: 'OK,ready,done'",
           "logic": "판정 로직: 'and'(모든 키워드 포함 시 pass) 또는 'or'(하나 이상 포함 시 pass). 기본값: and",
-          "timeout": "최대 대기 시간 (초). 기본값: 60초"
+          "timeout": "최대 대기 시간 (초). 기본값: 60초",
+          "stdin_file": "지정 시 해당 로컬(PC) 파일 내용을 명령의 stdin 으로 주입 (업로드 불필요). 예: command='sudo bash -s', stdin_file='C:\\ReplayKit\\scripts\\Check_Battery.sh'. 기본값: 비움"
         }
       },
       "send_file": {

@@ -789,7 +789,8 @@
       "send_command": {
         "description": "Executes a command via SSH and returns the full output on completion (blocking). Korean Windows output is automatically handled via cp949/euc-kr encoding.",
         "params": {
-          "command": "Command to execute. e.g. 'ls -al', 'cat /etc/version'"
+          "command": "Command to execute. e.g. 'ls -al', 'cat /etc/version'",
+          "stdin_file": "If set, the content of this local (PC) file is fed to the command's stdin (no upload needed). Run a local script remotely: command='sudo bash -s', stdin_file='C:\\ReplayKit\\scripts\\Check_Battery.sh'. Default: empty (no injection)"
         }
       },
       "send_command_stream": {
@@ -804,7 +805,8 @@
           "command": "Command to execute",
           "expected": "Expected string that must be contained in or exactly match the output. Leave empty for 'pass only when there is no output' (no-output check)",
           "match_mode": "Comparison mode: 'contains' (substring) or 'exact' (full match). Default: contains",
-          "timeout": "Maximum wait time (seconds). Default: 60s"
+          "timeout": "Maximum wait time (seconds). Default: 60s",
+          "stdin_file": "If set, the content of this local (PC) file is fed to the command's stdin (no upload needed). e.g. command='sudo bash -s', stdin_file='C:\\ReplayKit\\scripts\\Check_Battery.sh'. Default: empty"
         }
       },
       "Check_Logic": {
@@ -813,7 +815,8 @@
           "command": "Command to execute",
           "keywords": "Comma-separated keyword list. e.g. 'OK,ready,done'",
           "logic": "Logic: 'and' (pass when all keywords present) or 'or' (pass when at least one present). Default: and",
-          "timeout": "Maximum wait time (seconds). Default: 60s"
+          "timeout": "Maximum wait time (seconds). Default: 60s",
+          "stdin_file": "If set, the content of this local (PC) file is fed to the command's stdin (no upload needed). e.g. command='sudo bash -s', stdin_file='C:\\ReplayKit\\scripts\\Check_Battery.sh'. Default: empty"
         }
       },
       "send_file": {

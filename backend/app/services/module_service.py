@@ -947,6 +947,7 @@ def get_module_functions(module_name: str) -> list[dict]:
                 {"name": "expected", "required": False, "default": "''"},
                 {"name": "match_mode", "required": False, "default": "'contains'"},
                 {"name": "timeout", "required": False, "default": "60"},
+                {"name": "stdin_file", "required": False, "default": "''"},
             ],
         })
         functions.append({
@@ -956,8 +957,16 @@ def get_module_functions(module_name: str) -> list[dict]:
                 {"name": "keywords", "required": True},
                 {"name": "logic", "required": False, "default": "'and'"},
                 {"name": "timeout", "required": False, "default": "60"},
+                {"name": "stdin_file", "required": False, "default": "''"},
             ],
         })
+        # send_command 은 실제 메서드라 introspect 되지만, _execute_sync 가 추가로
+        # stdin_file(로컬 파일 stdin 주입) 을 지원하므로 UI 파라미터에도 노출한다.
+        for fn in functions:
+            if fn["name"] == "send_command":
+                if not any(p["name"] == "stdin_file" for p in fn["params"]):
+                    fn["params"].append(
+                        {"name": "stdin_file", "required": False, "default": "''"})
 
     # 가이드 데이터 병합
     guides = _load_guides()
@@ -1231,6 +1240,45 @@ def _cast_arg(val: Any, target_type: type) -> Any:
     return target_type(s)
 
 
+def _ssh_exec_decoded(client, command: str, timeout: int = 60,
+                      stdin_file: str = "") -> str:
+    """SSH로 명령을 실행하고 stdout+stderr 를 디코딩한 문자열을 반환 (strip 됨, 비어있을 수 있음).
+
+    stdin_file 이 지정되면 해당 로컬(PC) 파일 내용을 원격 명령의 stdin 으로 주입한다 —
+    업로드 없이 `bash -s < 로컬파일` 패턴으로 로컬 스크립트를 원격에서 즉시 실행하는 용도.
+    인코딩 fallback: utf-8 → cp949 → euc-kr → cp437.
+    """
+    feed = b""
+    if stdin_file:
+        p = Path(stdin_file)
+        if not p.is_file():
+            raise FileNotFoundError(f"stdin_file not found: {stdin_file}")
+        feed = p.read_bytes()
+    try:
+        stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        if stdin_file:
+            try:
+                stdin.write(feed)
+                stdin.flush()
+            finally:
+                # EOF 신호 — 원격 `bash -s`(stdin 스크립트) 가 입력 종료를 인식하도록
+                try:
+                    stdin.channel.shutdown_write()
+                except Exception:
+                    pass
+        out_bytes = stdout.read()
+        err_bytes = stderr.read()
+    except Exception as e:
+        raise RuntimeError(f"SSH exec failed: {e}") from e
+    combined = out_bytes + (b"\n" + err_bytes if err_bytes else b"")
+    for enc in ("utf-8", "cp949", "euc-kr", "cp437"):
+        try:
+            return combined.decode(enc).strip()
+        except UnicodeDecodeError:
+            continue
+    return combined.decode(errors="replace").strip()
+
+
 def _execute_sync(module_name: str, function_name: str, args: dict,
                   constructor_kwargs: Optional[dict] = None,
                   shared_serial_conn=None, ssh_credentials: Optional[dict] = None,
@@ -1367,20 +1415,9 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
         if client is None:
             raise RuntimeError("SSH client not connected")
         command = args.get("command", "")
-        try:
-            stdin, stdout, stderr = client.exec_command(command, timeout=60)
-            out_bytes = stdout.read()
-            err_bytes = stderr.read()
-        except Exception as e:
-            raise RuntimeError(f"SSH exec failed: {e}") from e
-        combined = out_bytes + (b"\n" + err_bytes if err_bytes else b"")
-        # 인코딩 fallback: utf-8 → cp949 → euc-kr → cp437 (Windows 기본)
-        for enc in ("utf-8", "cp949", "euc-kr", "cp437"):
-            try:
-                return combined.decode(enc).strip() or "(no output)"
-            except UnicodeDecodeError:
-                continue
-        return combined.decode(errors="replace").strip() or "(no output)"
+        stdin_file = str(args.get("stdin_file", "") or "")
+        output = _ssh_exec_decoded(client, command, 60, stdin_file)
+        return output or "(no output)"
 
     # SSHManager.Check / Check_Logic 가상 함수: send_command 와 동일하게 명령을 실행한 뒤
     # 출력을 기대값/키워드로 합부 판정 (CMD.Check / CMD.Check_Logic 와 동일 규약).
@@ -1391,25 +1428,9 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
             raise RuntimeError("SSH client not connected")
         command = args.get("command", "")
         timeout = _cast_arg(args.get("timeout", 60), int)
-        try:
-            stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
-            out_bytes = stdout.read()
-            err_bytes = stderr.read()
-        except Exception as e:
-            raise RuntimeError(f"SSH exec failed: {e}") from e
-        combined = out_bytes + (b"\n" + err_bytes if err_bytes else b"")
-        # 인코딩 fallback: utf-8 → cp949 → euc-kr → cp437 (send_command 와 동일)
-        decoded = None
-        for enc in ("utf-8", "cp949", "euc-kr", "cp437"):
-            try:
-                decoded = combined.decode(enc).strip()
-                break
-            except UnicodeDecodeError:
-                continue
-        if decoded is None:
-            decoded = combined.decode(errors="replace").strip()
-        actual = decoded
-        output = decoded or "(no output)"
+        stdin_file = str(args.get("stdin_file", "") or "")
+        actual = _ssh_exec_decoded(client, command, timeout, stdin_file)
+        output = actual or "(no output)"
 
         if function_name == "Check":
             expected = str(args.get("expected", "") or "").strip()
