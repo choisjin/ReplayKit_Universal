@@ -938,6 +938,26 @@ def get_module_functions(module_name: str) -> list[dict]:
                 {"name": "command", "required": True},
             ],
         })
+        # CMD.Check / Check_Logic 와 동일한 합부 판정 가상 함수 (실제 클래스에는 없음).
+        # send_command 와 같은 방식으로 명령을 실행한 뒤 출력을 기대값/키워드로 판정한다.
+        functions.append({
+            "name": "Check",
+            "params": [
+                {"name": "command", "required": True},
+                {"name": "expected", "required": False, "default": "''"},
+                {"name": "match_mode", "required": False, "default": "'contains'"},
+                {"name": "timeout", "required": False, "default": "60"},
+            ],
+        })
+        functions.append({
+            "name": "Check_Logic",
+            "params": [
+                {"name": "command", "required": True},
+                {"name": "keywords", "required": True},
+                {"name": "logic", "required": False, "default": "'and'"},
+                {"name": "timeout", "required": False, "default": "60"},
+            ],
+        })
 
     # 가이드 데이터 병합
     guides = _load_guides()
@@ -1361,6 +1381,67 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
             except UnicodeDecodeError:
                 continue
         return combined.decode(errors="replace").strip() or "(no output)"
+
+    # SSHManager.Check / Check_Logic 가상 함수: send_command 와 동일하게 명령을 실행한 뒤
+    # 출력을 기대값/키워드로 합부 판정 (CMD.Check / CMD.Check_Logic 와 동일 규약).
+    # 실패 시 "FAIL:" 접두사를 반환 → playback_service 가 스텝을 fail 로 판정.
+    if module_name == "SSHManager" and function_name in ("Check", "Check_Logic"):
+        client = getattr(instance, "ssh_client", None)
+        if client is None:
+            raise RuntimeError("SSH client not connected")
+        command = args.get("command", "")
+        timeout = _cast_arg(args.get("timeout", 60), int)
+        try:
+            stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+            out_bytes = stdout.read()
+            err_bytes = stderr.read()
+        except Exception as e:
+            raise RuntimeError(f"SSH exec failed: {e}") from e
+        combined = out_bytes + (b"\n" + err_bytes if err_bytes else b"")
+        # 인코딩 fallback: utf-8 → cp949 → euc-kr → cp437 (send_command 와 동일)
+        decoded = None
+        for enc in ("utf-8", "cp949", "euc-kr", "cp437"):
+            try:
+                decoded = combined.decode(enc).strip()
+                break
+            except UnicodeDecodeError:
+                continue
+        if decoded is None:
+            decoded = combined.decode(errors="replace").strip()
+        actual = decoded
+        output = decoded or "(no output)"
+
+        if function_name == "Check":
+            expected = str(args.get("expected", "") or "").strip()
+            match_mode = str(args.get("match_mode", "contains") or "contains")
+            if not expected:
+                # expected 가 비어있으면 "출력 없음"일 때만 pass (no-output 검증)
+                if actual == "":
+                    return "(no output)"
+                return f"FAIL: expected({match_mode}): (no output)\n---\n{output}"
+            if match_mode == "exact":
+                passed = actual == expected
+            else:
+                passed = expected in actual
+            if passed:
+                return output
+            return f"FAIL: expected({match_mode}): {expected}\n---\n{output}"
+
+        # Check_Logic
+        keywords = str(args.get("keywords", "") or "")
+        logic = str(args.get("logic", "and") or "and").strip().lower()
+        kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
+        if not kw_list:
+            return f"FAIL: logic({logic}): no keywords provided\n---\n{output}"
+        if logic not in ("and", "or"):
+            return f"FAIL: logic: unknown mode '{logic}' (use 'and' or 'or')\n---\n{output}"
+        if logic == "and":
+            passed = all(k in actual for k in kw_list)
+        else:
+            passed = any(k in actual for k in kw_list)
+        if passed:
+            return output
+        return f"FAIL: logic({logic}): {keywords}\n---\n{output}"
 
     # SSHManager.send_command_stream 가상 함수: 실시간 스트리밍 (bg_task_store 사용)
     if module_name == "SSHManager" and function_name == "send_command_stream":

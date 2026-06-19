@@ -798,6 +798,24 @@
           "command": "Command to execute. e.g. 'netstat -a', 'tail -f /var/log/syslog'"
         }
       },
+      "Check": {
+        "description": "Executes a command via SSH and compares the output against an expected value (blocking). Returns a 'FAIL:' prefix on failure so the step is judged as failed. Korean output is automatically handled via cp949/euc-kr encoding.",
+        "params": {
+          "command": "Command to execute",
+          "expected": "Expected string that must be contained in or exactly match the output. Leave empty for 'pass only when there is no output' (no-output check)",
+          "match_mode": "Comparison mode: 'contains' (substring) or 'exact' (full match). Default: contains",
+          "timeout": "Maximum wait time (seconds). Default: 60s"
+        }
+      },
+      "Check_Logic": {
+        "description": "Executes a command via SSH and judges pass/fail against multiple keywords using and/or logic (blocking). Returns a 'FAIL:' prefix on failure so the step is judged as failed.",
+        "params": {
+          "command": "Command to execute",
+          "keywords": "Comma-separated keyword list. e.g. 'OK,ready,done'",
+          "logic": "Logic: 'and' (pass when all keywords present) or 'or' (pass when at least one present). Default: and",
+          "timeout": "Maximum wait time (seconds). Default: 60s"
+        }
+      },
       "send_file": {
         "description": "Transfers a local file to the remote device.",
         "params": {

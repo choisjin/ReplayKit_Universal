@@ -798,6 +798,24 @@
           "command": "실행할 명령어. 예: 'netstat -a', 'tail -f /var/log/syslog'"
         }
       },
+      "Check": {
+        "description": "SSH로 명령어를 실행하고 출력 결과를 기대값과 비교합니다(블로킹). 실패 시 'FAIL:' 접두사를 반환하여 스텝이 fail로 판정됩니다. 한국어 출력은 cp949/euc-kr 인코딩으로 자동 처리.",
+        "params": {
+          "command": "실행할 명령어",
+          "expected": "출력에 포함되거나 완전히 일치해야 할 기대 문자열. 비워두면 '출력이 없을 때만 pass'(no-output 검증)로 동작",
+          "match_mode": "비교 방식: 'contains'(부분 일치) 또는 'exact'(완전 일치). 기본값: contains",
+          "timeout": "최대 대기 시간 (초). 기본값: 60초"
+        }
+      },
+      "Check_Logic": {
+        "description": "SSH로 명령어를 실행하고 출력에 대해 여러 키워드를 and/or 로직으로 합부 판정합니다(블로킹). 실패 시 'FAIL:' 접두사를 반환하여 스텝이 fail로 판정됩니다.",
+        "params": {
+          "command": "실행할 명령어",
+          "keywords": "키워드 목록. 쉼표로 구분. 예: 'OK,ready,done'",
+          "logic": "판정 로직: 'and'(모든 키워드 포함 시 pass) 또는 'or'(하나 이상 포함 시 pass). 기본값: and",
+          "timeout": "최대 대기 시간 (초). 기본값: 60초"
+        }
+      },
       "send_file": {
         "description": "로컬 파일을 원격 장비로 전송합니다.",
         "params": {
