@@ -427,7 +427,8 @@ export default function RecordPage() {
   const waitDurationRef = useRef(1000);
 
   // Per-step controls (for manual step input)
-  const [delayMs] = useState(3000);
+  // 설정의 기본 wait 시간(default_wait_ms)을 각 스텝의 delay_after_ms 기본값으로 사용.
+  const delayMs = settings.default_wait_ms ?? 3000;
   const [compareModePopoverIndex, setCompareModePopoverIndex] = useState<number | null>(null);
 
   // ── WinControl (Windows 프로세스 임베드 컨트롤) ────────────────

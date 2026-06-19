@@ -13,6 +13,7 @@ export interface AppSettings {
   language: Language;
   monitor_server_url: string;
   admin_server_url: string;
+  default_wait_ms: number;
   threshold_full: number;
   threshold_single_crop: number;
   threshold_full_exclude: number;
@@ -39,6 +40,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   language: 'ko',
   monitor_server_url: '',
   admin_server_url: '',
+  default_wait_ms: 3000,
   threshold_full: 0.95,
   threshold_single_crop: 0.90,
   threshold_full_exclude: 0.93,

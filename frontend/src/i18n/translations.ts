@@ -258,6 +258,8 @@ const translations = {
     'settings.thresholdCrop': '단일크롭',
     'settings.thresholdExclude': '영역제외',
     'settings.thresholdMulti': '멀티크롭',
+    'settings.defaultWaitTitle': '기본 wait 시간',
+    'settings.defaultWaitDesc': '새 스텝을 추가할 때 적용되는 기본 대기 시간(delay)입니다. 스텝별로 개별 수정도 가능합니다.',
     'settings.language': '언어 / Language',
     'settings.languageDesc': '시스템 언어를 변경합니다. / Change system language.',
 
@@ -1131,6 +1133,8 @@ const translations = {
     'settings.thresholdCrop': 'Single Crop',
     'settings.thresholdExclude': 'Exclude Area',
     'settings.thresholdMulti': 'Multi Crop',
+    'settings.defaultWaitTitle': 'Default Wait Time',
+    'settings.defaultWaitDesc': 'Default delay applied when adding a new step. Can be overridden per step.',
     'settings.language': 'Language / 언어',
     'settings.languageDesc': 'Change system language. / 시스템 언어를 변경합니다.',
 

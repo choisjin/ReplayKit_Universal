@@ -28,6 +28,7 @@ _DEFAULTS = {
     "language": "ko",
     "monitor_server_url": "",
     "admin_server_url": "",
+    "default_wait_ms": 3000,
     "threshold_full": 0.95,
     "threshold_single_crop": 0.90,
     "threshold_full_exclude": 0.93,
@@ -63,6 +64,7 @@ class UpdateSettingsRequest(BaseModel):
     language: Optional[str] = None
     monitor_server_url: Optional[str] = None
     admin_server_url: Optional[str] = None
+    default_wait_ms: Optional[int] = None
     threshold_full: Optional[float] = None
     threshold_single_crop: Optional[float] = None
     threshold_full_exclude: Optional[float] = None
@@ -87,6 +89,8 @@ async def update_settings(req: UpdateSettingsRequest):
         current["monitor_server_url"] = req.monitor_server_url
     if req.admin_server_url is not None:
         current["admin_server_url"] = req.admin_server_url
+    if req.default_wait_ms is not None:
+        current["default_wait_ms"] = req.default_wait_ms
     if req.threshold_full is not None:
         current["threshold_full"] = req.threshold_full
     if req.threshold_single_crop is not None:
