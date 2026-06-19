@@ -292,6 +292,38 @@ HKMC_KEYS = {
 }
 
 
+def _enable_tcp_keepalive(sock: socket.socket,
+                          idle: int = 5, interval: int = 2, count: int = 3) -> None:
+    """소켓에 TCP keepalive 를 켜서 half-open 연결(피어 전원 OFF 등)을 OS 가 감지하게 한다.
+
+    HKMC 에이전트 디바이스를 전원 OFF 하면 FIN/RST 없이 연결이 half-open 으로 남는다.
+    recv 스레드는 1s 타임아웃을 무시(continue)하므로 죽은 소켓을 영원히 감지 못 하고
+    `_connected` 가 거짓 True 로 유지 → 자동 재연결이 발동하지 않는다.
+    keepalive 를 켜면 idle + interval*count(기본 ~11s) 후 recv() 가 OSError 를 던져
+    recv 스레드가 `_connected=False` 로 내리고, 다음 스텝에서 재연결이 정상 동작한다.
+
+    Windows 는 per-socket idle/interval 을 SIO_KEEPALIVE_VALS(ioctl)로만 설정 가능하고,
+    Linux 는 TCP_KEEPIDLE/INTVL/CNT 소켓옵션을 쓴다. 어느 쪽도 실패해도 무해하게 무시.
+    """
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except Exception:
+        return
+    try:
+        if hasattr(socket, "SIO_KEEPALIVE_VALS"):  # Windows
+            # (onoff, keepalivetime_ms, keepaliveinterval_ms)
+            sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, idle * 1000, interval * 1000))
+        else:  # Linux / 기타 POSIX
+            if hasattr(socket, "TCP_KEEPIDLE"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, idle)
+            if hasattr(socket, "TCP_KEEPINTVL"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval)
+            if hasattr(socket, "TCP_KEEPCNT"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, count)
+    except Exception:
+        pass
+
+
 def _calc_crc16(data: list[int]) -> int:
     """CRC16 with 0xC659 polynomial (from IVIHKMC6thClient)."""
     crc = 0xFFFF
@@ -590,6 +622,8 @@ class HKMC6thService:
         try:
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            # half-open 감지: 디바이스 전원 OFF 시 OS 가 ~11s 내 죽은 소켓을 감지하게 한다.
+            _enable_tcp_keepalive(self._socket)
             self._socket.settimeout(timeout)
             self._socket.connect((self.host, self.port))
         except Exception as e:

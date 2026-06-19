@@ -692,7 +692,13 @@ class PlaybackService:
                         )
                         skip_ensure = True
             if action_device_id and not skip_ensure:
-                await self._ensure_device_connected(action_device_id)
+                # HKMC/iSAP 계열: 스텝 시작 시 이미 끊겨 있으면 1회만 재연결 시도하고
+                # 스텝을 실행한다. (재생 중 끊김의 2분(20s×6) 장기 재연결은 액션 실행
+                # 중 ConnectionError 경로가 담당 — 매 스텝마다 2분씩 기다리지 않게 분리.)
+                if self._is_hkmc_device(action_device_id):
+                    await self._ensure_device_connected(action_device_id, max_retries=1)
+                else:
+                    await self._ensure_device_connected(action_device_id)
             t1 = time.time()
 
             # Execute the action
@@ -732,7 +738,10 @@ class PlaybackService:
                 )
                 return step_result
             if ss_device:
-                await self._ensure_device_connected(ss_device["id"])
+                if self._is_hkmc_device(ss_device["id"]):
+                    await self._ensure_device_connected(ss_device["id"], max_retries=1)
+                else:
+                    await self._ensure_device_connected(ss_device["id"])
             t4 = time.time()
             actual_path = None
             if ss_device:
@@ -2378,6 +2387,10 @@ class PlaybackService:
             # false fail 로 끝나지 않고 force-reconnect 후 동일 함수를 재실행한다.
             if module_name == "HKMC6th" and dev and dev.type == "hkmc_agent":
                 last_exc: Optional[BaseException] = None
+                # 액션 시작 시점 연결 상태: 정상 연결 중 끊기면 2분(20s×6) 재연결,
+                # 이미 끊겨 있던 경우엔 1회만(스텝 시작 게이트와 동일 정책 — 매 모듈
+                # 스텝마다 2분씩 기다리는 것을 방지).
+                _was_connected = bool(hkmc_svc and hkmc_svc.is_connected)
                 for _hkmc_mod_attempt in range(2):
                     try:
                         result = await execute_module_function(
@@ -2394,8 +2407,11 @@ class PlaybackService:
                                 "HKMC6th module action failed (connection lost), reconnecting: %s",
                                 ce,
                             )
-                            await self._force_reconnect_hkmc(real_id)
-                            # force-reconnect 후 새 서비스 인스턴스를 받아 다음 시도에 주입
+                            if _was_connected:
+                                await self._ensure_device_connected(real_id, max_retries=6, retry_interval=20.0)
+                            else:
+                                await self._ensure_device_connected(real_id, max_retries=1)
+                            # 재연결 후 새 서비스 인스턴스를 받아 다음 시도에 주입
                             hkmc_svc = self.dm.get_hkmc_service(real_id)
                             if hkmc_svc is None:
                                 raise
@@ -2405,6 +2421,8 @@ class PlaybackService:
                     raise last_exc
             elif module_name == "HKMC5thWide" and dev and dev.type == "hkmc5th_wide_agent":
                 last_exc = None
+                # HKMC6th 와 동일 정책: 정상 연결 중 끊김=2분(20s×6), 이미 끊김=1회.
+                _was_connected = bool(hkmc_svc and hkmc_svc.is_connected)
                 for _hkmc_mod_attempt in range(2):
                     try:
                         result = await execute_module_function(
@@ -2420,7 +2438,10 @@ class PlaybackService:
                             logger.warning(
                                 "HKMC5thWide module action failed (connection lost), reconnecting: %s", ce,
                             )
-                            await self._ensure_device_connected(real_id, max_retries=1)
+                            if _was_connected:
+                                await self._ensure_device_connected(real_id, max_retries=6, retry_interval=20.0)
+                            else:
+                                await self._ensure_device_connected(real_id, max_retries=1)
                             hkmc_svc = self.dm.get_hkmc5th_wide_service(real_id)
                             if hkmc_svc is None:
                                 raise
@@ -2533,7 +2554,11 @@ class PlaybackService:
                 except (ConnectionError, OSError) as ce:
                     if _hkmc_attempt == 0:
                         logger.warning("HKMC/iSAP action failed (connection lost), reconnecting: %s", ce)
-                        await self._ensure_device_connected(real_id, max_retries=2, retry_interval=2.0)
+                        # 재생 중 끊김(정상 연결 중 드롭): 20초에 한 번씩 2분간(6회) 재연결.
+                        # 디바이스 전원 사이클(off→on) 직후 에이전트 부팅(수십 초)을 흡수.
+                        # 2분 내 복구 실패 시 attempt 1 이 미연결을 확인하고 raise → 스텝 실패,
+                        # 디바이스는 disconnected 로 남고 이후 스텝은 시작 시 1회만 재시도.
+                        await self._ensure_device_connected(real_id, max_retries=6, retry_interval=20.0)
                     else:
                         raise
         elif step.type in (StepType.ICAS_TOUCH, StepType.ICAS_SWIPE, StepType.ICAS_KEY, StepType.ICAS_LONG_PRESS) or (step.type == StepType.REPEAT_TAP and self._is_icas_device(real_id)):

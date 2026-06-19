@@ -215,6 +215,24 @@ async def _probe_tcp_port(
     return None
 
 
+async def _tcp_reachable(ip: str, port: int, timeout: float = 0.5) -> bool:
+    """IP:Port 에 TCP 연결이 되는지만 빠르게 확인 (세마포어 불필요한 단발 프로브)."""
+    if not ip or not port:
+        return False
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(ip, port), timeout=timeout
+        )
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
 async def scan_tcp_port(
     port: int,
     connect_timeout: float = 0.3,
@@ -1656,9 +1674,16 @@ class DeviceManager:
                 port = dev.info.get("port", 0)
                 if not port:
                     continue
-                # error 상태면 재시도 안 함 (사용자가 수동으로 재연결해야)
+                # error 상태(연속 실패로 포기)라도, 디바이스가 전원 ON 으로 복귀해
+                # 포트가 다시 열렸으면 자동 복구한다. 장치 off→on 후 영구 미재연결되던
+                # 회귀의 핵심 수정 — 예전엔 error 면 무조건 continue 로 영영 포기했음.
                 if dev.status == "error":
-                    continue
+                    if await _tcp_reachable(dev.address, port):
+                        logger.info("HKMC device %s reachable again — resetting error state", dev.id)
+                        self._hkmc_reconnect_attempts.pop(dev.id, None)
+                        dev.status = "reconnecting"
+                    else:
+                        continue
                 attempts = self._hkmc_reconnect_attempts.get(dev.id, 0)
                 if attempts >= self.HKMC_MAX_RECONNECT_ATTEMPTS:
                     dev.status = "error"
