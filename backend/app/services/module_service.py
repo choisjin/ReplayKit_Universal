@@ -12,6 +12,7 @@ import inspect
 import functools
 import json
 import logging
+import re
 import sys
 import threading
 from pathlib import Path
@@ -947,7 +948,6 @@ def get_module_functions(module_name: str) -> list[dict]:
                 {"name": "expected", "required": False, "default": "''"},
                 {"name": "match_mode", "required": False, "default": "'contains'"},
                 {"name": "timeout", "required": False, "default": "60"},
-                {"name": "stdin_file", "required": False, "default": "''"},
             ],
         })
         functions.append({
@@ -957,16 +957,8 @@ def get_module_functions(module_name: str) -> list[dict]:
                 {"name": "keywords", "required": True},
                 {"name": "logic", "required": False, "default": "'and'"},
                 {"name": "timeout", "required": False, "default": "60"},
-                {"name": "stdin_file", "required": False, "default": "''"},
             ],
         })
-        # send_command 은 실제 메서드라 introspect 되지만, _execute_sync 가 추가로
-        # stdin_file(로컬 파일 stdin 주입) 을 지원하므로 UI 파라미터에도 노출한다.
-        for fn in functions:
-            if fn["name"] == "send_command":
-                if not any(p["name"] == "stdin_file" for p in fn["params"]):
-                    fn["params"].append(
-                        {"name": "stdin_file", "required": False, "default": "''"})
 
     # 가이드 데이터 병합
     guides = _load_guides()
@@ -1240,28 +1232,54 @@ def _cast_arg(val: Any, target_type: type) -> Any:
     return target_type(s)
 
 
-def _ssh_exec_decoded(client, command: str, timeout: int = 60,
-                      stdin_file: str = "") -> str:
+# `bash -s` 류의 stdin 스크립트 실행에서 `< 로컬경로` 리디렉션을 탐지하는 패턴.
+# 따옴표("..." / '...') 또는 공백 없는 경로 토큰을 캡처.
+_SSH_STDIN_REDIRECT_RE = re.compile(r'<\s*("[^"]*"|\'[^\']*\'|\S+)')
+
+
+def _extract_local_stdin(command: str) -> tuple[str, bytes | None]:
+    """command 안의 `bash -s < 로컬파일` 패턴을 탐지해 (정리된 command, 파일내용) 반환.
+
+    paramiko exec_command 는 로컬(PC) stdin 리디렉션을 처리하지 못한다. 그래서 명령에
+    `bash -s ... < <경로>` 가 있고 그 경로가 PC 에 실제 존재하는 파일이면, 별도 파라미터
+    없이 그 내용을 stdin 으로 주입하고 명령에서 `< <경로>` 부분을 제거한다 (업로드 불필요).
+    경로가 로컬 파일이 아니면 원격 리디렉션으로 보고 명령을 그대로 둔다.
+    """
+    # `bash` + `-s` 플래그가 함께 있을 때만 동작 (일반 원격 리디렉션 오작동 방지)
+    if "<" not in command or "bash" not in command:
+        return command, None
+    if not re.search(r'(^|\s)-s(\s|$|<|\'|")', command):
+        return command, None
+    m = _SSH_STDIN_REDIRECT_RE.search(command)
+    if not m:
+        return command, None
+    raw = m.group(1).strip().strip('"').strip("'").strip()
+    if not raw:
+        return command, None
+    p = Path(raw)
+    if not p.is_file():
+        return command, None  # 로컬 파일 아님 → 원격 리디렉션으로 그대로 실행
+    data = p.read_bytes()
+    # `< <경로>` 부분만 제거 (나머지 인자/플래그는 보존)
+    cleaned = (command[:m.start()] + command[m.end():]).strip()
+    return cleaned, data
+
+
+def _ssh_exec_decoded(client, command: str, timeout: int = 60) -> str:
     """SSH로 명령을 실행하고 stdout+stderr 를 디코딩한 문자열을 반환 (strip 됨, 비어있을 수 있음).
 
-    stdin_file 이 지정되면 해당 로컬(PC) 파일 내용을 원격 명령의 stdin 으로 주입한다 —
-    업로드 없이 `bash -s < 로컬파일` 패턴으로 로컬 스크립트를 원격에서 즉시 실행하는 용도.
-    인코딩 fallback: utf-8 → cp949 → euc-kr → cp437.
+    command 에 `bash -s < 로컬파일` 패턴이 있으면 그 로컬 파일을 stdin 으로 자동 주입한다
+    (업로드 없이 로컬 스크립트를 원격에서 실행). 인코딩 fallback: utf-8 → cp949 → euc-kr → cp437.
     """
-    feed = b""
-    if stdin_file:
-        p = Path(stdin_file)
-        if not p.is_file():
-            raise FileNotFoundError(f"stdin_file not found: {stdin_file}")
-        feed = p.read_bytes()
+    command, feed = _extract_local_stdin(command)
     try:
         stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
-        if stdin_file:
+        if feed is not None:
             try:
                 stdin.write(feed)
                 stdin.flush()
             finally:
-                # EOF 신호 — 원격 `bash -s`(stdin 스크립트) 가 입력 종료를 인식하도록
+                # EOF 신호 — 원격 `bash -s` 가 입력 종료를 인식하도록
                 try:
                     stdin.channel.shutdown_write()
                 except Exception:
@@ -1415,8 +1433,7 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
         if client is None:
             raise RuntimeError("SSH client not connected")
         command = args.get("command", "")
-        stdin_file = str(args.get("stdin_file", "") or "")
-        output = _ssh_exec_decoded(client, command, 60, stdin_file)
+        output = _ssh_exec_decoded(client, command, 60)
         return output or "(no output)"
 
     # SSHManager.Check / Check_Logic 가상 함수: send_command 와 동일하게 명령을 실행한 뒤
@@ -1428,8 +1445,7 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
             raise RuntimeError("SSH client not connected")
         command = args.get("command", "")
         timeout = _cast_arg(args.get("timeout", 60), int)
-        stdin_file = str(args.get("stdin_file", "") or "")
-        actual = _ssh_exec_decoded(client, command, timeout, stdin_file)
+        actual = _ssh_exec_decoded(client, command, timeout)
         output = actual or "(no output)"
 
         if function_name == "Check":
