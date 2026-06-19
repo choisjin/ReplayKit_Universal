@@ -2054,6 +2054,30 @@ class DeviceManager:
         """등록된 SSH 디바이스의 SSHConnection 반환. 없으면 None."""
         return self._ssh_conns.get(device_id)
 
+    def ensure_ssh_conn(self, device_id: str) -> Optional[SSHConnection]:
+        """SSH 디바이스의 SSHConnection 반환. 없으면 dev.info 자격증명으로 새로 생성.
+
+        연결 객체가 유실된 뒤에도 dev.info 만 있으면 SSHConnection 을 복원해
+        재생 중 재연결을 시도할 수 있게 한다. 실제 connect() 는 호출 측이 수행.
+        SSH 디바이스가 아니거나 정보가 없으면 None.
+        """
+        conn = self._ssh_conns.get(device_id)
+        if conn is not None:
+            return conn
+        dev = self._devices.get(device_id)
+        if not dev or dev.type != "ssh":
+            return None
+        info = dev.info or {}
+        conn = SSHConnection(
+            host=info.get("host", dev.address),
+            port=int(info.get("port", 22) or 22),
+            username=info.get("username", ""),
+            password=info.get("password", ""),
+            key_file_path=info.get("key_file_path") or None,
+        )
+        self._ssh_conns[device_id] = conn
+        return conn
+
     def _close_ssh_conn(self, device_id: str) -> None:
         """SSH 연결 종료 + 캐시에서 제거."""
         conn = self._ssh_conns.pop(device_id, None)

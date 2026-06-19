@@ -1818,6 +1818,47 @@ class PlaybackService:
                         return
             dev.status = "offline"
 
+        elif dev.type == "ssh":
+            # SSHManager 스텝 실행 전 연결 상태 확인 → 끊겼으면 재연결.
+            # device_manager 의 SSHConnection 으로 장비 도달성을 검증/복구한다
+            # (모듈 스텝은 자체 create_ssh_client 로 접속하지만, 여기서 먼저 장비
+            #  복귀를 기다려 부팅 중 즉시 실패하는 것을 막는다).
+            conn = self.dm.get_ssh_conn(device_id)
+            if conn and conn.is_alive():
+                dev.status = "connected"
+                return
+            lock = self.dm.get_reconnect_lock(device_id)
+            async with lock:
+                conn = self.dm.ensure_ssh_conn(device_id)
+                if conn is None:
+                    return
+                if conn.is_alive():
+                    dev.status = "connected"
+                    return
+                loop = asyncio.get_event_loop()
+                # 스테일(half-open) 클라이언트 정리 후 새로 연결
+                try:
+                    await loop.run_in_executor(None, conn.disconnect)
+                except Exception:
+                    pass
+                for attempt in range(1, max_retries + 1):
+                    if self._should_stop:
+                        return
+                    logger.info("Playback: SSH reconnect %s attempt %d/%d", device_id, attempt, max_retries)
+                    try:
+                        # connect() 는 blocking (paramiko) — executor 에서 실행해 event loop 보호
+                        await loop.run_in_executor(None, conn.connect)
+                        if conn.is_alive():
+                            dev.status = "connected"
+                            logger.info("Playback: SSH reconnected %s", device_id)
+                            return
+                    except Exception as e:
+                        logger.debug("Playback: SSH reconnect %s failed: %s", device_id, e)
+                    if attempt < max_retries:
+                        if await self._interruptible_sleep(retry_interval):
+                            return
+                dev.status = "disconnected"
+
     def _resolve_real_device_id(self, step: Step) -> Optional[str]:
         """Resolve step's device_id alias to real device ID."""
         if not step.device_id:
@@ -2382,6 +2423,11 @@ class PlaybackService:
                         module_name, func_name, real_id, ctor_kwargs,
                         shared_conn is not None, ssh_credentials is not None, adb_serial,
                         hkmc_svc is not None)
+            # SSH 디바이스: 스텝 실행 전 연결 상태 확인 + 끊겼으면 재연결 후 진행.
+            # 연결되어 있으면 is_alive() 한 번으로 즉시 통과(오버헤드 없음),
+            # 끊겨 있으면 최대 30초(6×5s) 재연결을 기다린 뒤 스텝을 실행한다.
+            if dev and dev.type == "ssh":
+                await self._ensure_device_connected(real_id, max_retries=6, retry_interval=5.0)
             # HKMC6th 모듈은 직접 HKMC_TOUCH/SWIPE 스텝과 동일하게 stale socket
             # 또는 idle drop 으로 인한 ConnectionError 를 1회 retry — 같은 스텝이
             # false fail 로 끝나지 않고 force-reconnect 후 동일 함수를 재실행한다.
