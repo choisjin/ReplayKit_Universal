@@ -1,12 +1,74 @@
-import { Card, InputNumber, Select, Space, Switch, message, Typography } from 'antd';
+import { useEffect, useState } from 'react';
+import { Button, Card, InputNumber, Select, Space, Switch, message, Typography } from 'antd';
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
 
 const { Text } = Typography;
 
+const THRESHOLD_KEYS = [
+  'threshold_full',
+  'threshold_single_crop',
+  'threshold_full_exclude',
+  'threshold_multi_crop',
+] as const;
+type ThresholdKey = typeof THRESHOLD_KEYS[number];
+
 export default function SettingsPage() {
   const { settings, updateSettings } = useSettings();
   const { t } = useTranslation();
+
+  // 기본 wait 시간 — Apply 버튼으로만 반영. 비워도(null) 자동 초기화하지 않음.
+  const [waitMs, setWaitMs] = useState<number | null>(settings.default_wait_ms);
+  // 이미지 비교 임계값 — Apply 버튼으로만 반영.
+  const [thresholds, setThresholds] = useState<Record<ThresholdKey, number | null>>({
+    threshold_full: settings.threshold_full,
+    threshold_single_crop: settings.threshold_single_crop,
+    threshold_full_exclude: settings.threshold_full_exclude,
+    threshold_multi_crop: settings.threshold_multi_crop,
+  });
+
+  // 설정 로드/외부 변경 시 로컬 입력값 동기화
+  useEffect(() => {
+    setWaitMs(settings.default_wait_ms);
+  }, [settings.default_wait_ms]);
+  useEffect(() => {
+    setThresholds({
+      threshold_full: settings.threshold_full,
+      threshold_single_crop: settings.threshold_single_crop,
+      threshold_full_exclude: settings.threshold_full_exclude,
+      threshold_multi_crop: settings.threshold_multi_crop,
+    });
+  }, [settings.threshold_full, settings.threshold_single_crop, settings.threshold_full_exclude, settings.threshold_multi_crop]);
+
+  const handleWaitApply = async () => {
+    if (waitMs == null) {
+      message.warning(t('common.valueRequired'));
+      return;
+    }
+    try {
+      await updateSettings({ default_wait_ms: waitMs });
+      message.success(t('common.saved'));
+    } catch {
+      message.error(t('common.saveFailed'));
+    }
+  };
+
+  const handleThresholdApply = async () => {
+    const partial: Partial<Record<ThresholdKey, number>> = {};
+    for (const k of THRESHOLD_KEYS) {
+      if (thresholds[k] == null) {
+        message.warning(t('common.valueRequired'));
+        return;
+      }
+      partial[k] = thresholds[k] as number;
+    }
+    try {
+      await updateSettings(partial);
+      message.success(t('common.saved'));
+    } catch {
+      message.error(t('common.saveFailed'));
+    }
+  };
 
   const handleThemeToggle = async (checked: boolean) => {
     try {
@@ -63,11 +125,13 @@ export default function SettingsPage() {
               size="small"
               min={0}
               step={100}
-              value={settings.default_wait_ms}
-              onChange={(v) => updateSettings({ default_wait_ms: v ?? 3000 })}
+              value={waitMs}
+              onChange={(v) => setWaitMs(v)}
+              onPressEnter={handleWaitApply}
               suffix="ms"
               style={{ width: 120 }}
             />
+            <Button type="primary" size="small" onClick={handleWaitApply}>{t('common.apply')}</Button>
           </Space>
           <Text type="secondary" style={{ fontSize: 11, marginTop: 3, display: 'block' }}>
             {t('settings.defaultWaitDesc')}
@@ -90,13 +154,19 @@ export default function SettingsPage() {
                 <InputNumber
                   size="small"
                   min={0} max={1} step={0.01}
-                  value={settings[key]}
-                  onChange={(v) => updateSettings({ [key]: v ?? 0.95 })}
+                  value={thresholds[key]}
+                  onChange={(v) => setThresholds((prev) => ({ ...prev, [key]: v }))}
+                  onPressEnter={handleThresholdApply}
                   style={{ width: 80 }}
                 />
-                <span style={{ color: '#888', fontSize: 11 }}>{Math.round((settings[key] ?? 0.95) * 100)}%</span>
+                <span style={{ color: '#888', fontSize: 11 }}>
+                  {thresholds[key] != null ? `${Math.round(thresholds[key]! * 100)}%` : '—'}
+                </span>
               </Space>
             ))}
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <Button type="primary" size="small" onClick={handleThresholdApply}>{t('common.apply')}</Button>
           </div>
         </Card>
       </Space>
