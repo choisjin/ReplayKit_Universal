@@ -104,6 +104,10 @@ const statusText = (s: string, t: (k: TranslationKey) => string) =>
 const effStatus = (r: { status: string; excluded_from_result?: boolean }) =>
   r.excluded_from_result ? 'branch' : r.status;
 
+// 상세 보기용 — 분기 스텝은 어느 조건(Pass/Fail)으로 분기됐는지까지 표기
+const statusDetail = (r: { status: string; excluded_from_result?: boolean }, t: (k: TranslationKey) => string) =>
+  r.excluded_from_result ? `${t('results.statusBranch')} (${r.status === 'pass' ? 'PASS' : 'FAIL'})` : statusText(r.status, t);
+
 const imageUrl = (path: string | null) => {
   if (!path) return null;
   let rel = path.replace(/\\/g, '/');
@@ -1590,7 +1594,7 @@ export default function ResultsPage() {
           return (
           <>
             <Space style={{ marginBottom: 13 }} wrap>
-              <Tag color={statusColor(effStatus(compareStep))}>{statusText(effStatus(compareStep), t)}</Tag>
+              <Tag color={statusColor(effStatus(compareStep))}>{statusDetail(compareStep, t)}</Tag>
               {compareStep.compare_mode && compareStep.compare_mode !== 'full' && (
                 <Tag color="purple">
                   {compareStep.compare_mode === 'single_crop' ? t('results.singleCrop')

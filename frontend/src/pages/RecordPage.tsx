@@ -76,6 +76,12 @@ const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExcl
         ))}
         <Option value={-1}>{t('record.end')}</Option>
       </Select>
+      <Tooltip title={t('scenario.excludeResultTooltip')}>
+        <Checkbox
+          checked={!!step.exclude_pass_from_result}
+          onChange={(e) => onToggleExclude(index, 'exclude_pass_from_result', e.target.checked)}
+        ><span style={{ fontSize: 11 }}>{t('scenario.branchMode')}</span></Checkbox>
+      </Tooltip>
     </Space>
     <Space size={4}>
       <Tag color="red" style={{ margin: 0 }}>Fail →</Tag>
@@ -94,20 +100,12 @@ const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExcl
         ))}
         <Option value={-1}>{t('record.end')}</Option>
       </Select>
-    </Space>
-    {/* 결과 미반영 — 체크 시 해당 방향 결과를 최종 집계에서 제외하고 Status를 '분기'로 표시 */}
-    <Tooltip title={t('scenario.excludeResultTooltip')}>
-      <span style={{ fontSize: 10, color: '#888', cursor: 'help' }}>{t('scenario.excludeResultLabel')}</span>
-    </Tooltip>
-    <Space size={10}>
-      <Checkbox
-        checked={!!step.exclude_pass_from_result}
-        onChange={(e) => onToggleExclude(index, 'exclude_pass_from_result', e.target.checked)}
-      ><span style={{ fontSize: 11, color: '#52c41a' }}>{t('scenario.excludePassResult')}</span></Checkbox>
-      <Checkbox
-        checked={!!step.exclude_fail_from_result}
-        onChange={(e) => onToggleExclude(index, 'exclude_fail_from_result', e.target.checked)}
-      ><span style={{ fontSize: 11, color: '#ff4d4f' }}>{t('scenario.excludeFailResult')}</span></Checkbox>
+      <Tooltip title={t('scenario.excludeResultTooltip')}>
+        <Checkbox
+          checked={!!step.exclude_fail_from_result}
+          onChange={(e) => onToggleExclude(index, 'exclude_fail_from_result', e.target.checked)}
+        ><span style={{ fontSize: 11 }}>{t('scenario.branchMode')}</span></Checkbox>
+      </Tooltip>
     </Space>
   </Space>
 ));

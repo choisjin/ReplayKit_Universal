@@ -177,6 +177,10 @@ const statusLabel = (s: string, t: (k: TranslationKey) => string) =>
 const effStatus = (r: { status: string; excluded_from_result?: boolean }) =>
   r.excluded_from_result ? 'branch' : r.status;
 
+// 상세 보기용 — 분기 스텝은 어느 조건(Pass/Fail)으로 분기됐는지까지 표기
+const statusDetail = (r: { status: string; excluded_from_result?: boolean }, t: (k: TranslationKey) => string) =>
+  r.excluded_from_result ? `${t('results.statusBranch')} (${r.status === 'pass' ? 'PASS' : 'FAIL'})` : statusLabel(r.status, t);
+
 const imageUrl = (path: string | null) => {
   if (!path) return null;
   let rel = path.replace(/\\/g, '/');
@@ -2345,11 +2349,12 @@ export default function ScenarioPage() {
                         passGoto: JumpTarget | null, failGoto: JumpTarget | null,
                         onUpdate: (pg: JumpTarget | null, fg: JumpTarget | null) => void,
                         field: 'pass' | 'fail',
+                        excludeChecked: boolean, onToggleExclude: (checked: boolean) => void,
                       ) => {
                         const jump = field === 'pass' ? passGoto : failGoto;
                         const targetSteps = jump && jump.scenario >= 0 ? (scenarioStepsCache[members[jump.scenario]?.name] || []) : [];
                         return (
-                          <span key={field} style={{ display: 'inline-flex', flex: '1 1 240px', minWidth: 200, gap: 3, alignItems: 'center', fontSize: 11 }}>
+                          <span key={field} style={{ display: 'inline-flex', flex: '1 1 280px', minWidth: 220, gap: 3, alignItems: 'center', fontSize: 11 }}>
                             <span style={{ color: jumpColor, fontWeight: 700, flexShrink: 0 }}>{jumpLabel}</span>
                             <Select
                               size="small"
@@ -2384,6 +2389,13 @@ export default function ScenarioPage() {
                                 ))}
                               </Select>
                             )}
+                            <Tooltip title={t('scenario.excludeResultTooltip')}>
+                              <Checkbox
+                                checked={excludeChecked}
+                                onChange={(e) => onToggleExclude(e.target.checked)}
+                                style={{ flexShrink: 0, fontSize: 11 }}
+                              ><span style={{ fontSize: 11 }}>{t('scenario.branchMode')}</span></Checkbox>
+                            </Tooltip>
                           </span>
                         );
                       };
@@ -2483,32 +2495,20 @@ export default function ScenarioPage() {
                                       <span style={{ flex: 1, color: hasSJ ? '#d89614' : undefined }}>{step.description || `(${step.type || 'step'})`}</span>
                                       {hasSJ && <BranchesOutlined style={{ color: '#d89614', fontSize: 10 }} />}
                                     </div>
-                                    {/* 2행: P/F/Reset */}
+                                    {/* 2행: P/F(+Branch Mode)/Reset */}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 26, marginTop: 3, flexWrap: 'wrap' }}>
                                       {renderJumpRow('P→', '#52c41a', sj.on_pass_goto, sj.on_fail_goto,
-                                        (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg, !!sj.exclude_pass_from_result, !!sj.exclude_fail_from_result), 'pass')}
+                                        (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg, !!sj.exclude_pass_from_result, !!sj.exclude_fail_from_result), 'pass',
+                                        !!sj.exclude_pass_from_result, (checked) => updateGroupStepJumps(gName, idx, sid, sj.on_pass_goto, sj.on_fail_goto, checked, !!sj.exclude_fail_from_result))}
                                       {renderJumpRow('F→', '#ff4d4f', sj.on_pass_goto, sj.on_fail_goto,
-                                        (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg, !!sj.exclude_pass_from_result, !!sj.exclude_fail_from_result), 'fail')}
+                                        (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg, !!sj.exclude_pass_from_result, !!sj.exclude_fail_from_result), 'fail',
+                                        !!sj.exclude_fail_from_result, (checked) => updateGroupStepJumps(gName, idx, sid, sj.on_pass_goto, sj.on_fail_goto, !!sj.exclude_pass_from_result, checked))}
                                       {(hasSJ || sj.exclude_pass_from_result || sj.exclude_fail_from_result) && (
                                         <Button size="small" type="link" danger style={{ fontSize: 10, padding: 0 }}
                                           icon={<ClearOutlined />}
                                           onClick={() => updateGroupStepJumps(gName, idx, sid, null, null, false, false)}
                                         >{t('scenario.reset')}</Button>
                                       )}
-                                    </div>
-                                    {/* 3행: 결과 미반영 체크박스 — 체크 시 해당 방향 결과를 '분기'로 표시하고 집계 제외 */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingLeft: 26, marginTop: 2, flexWrap: 'wrap' }}>
-                                      <Tooltip title={t('scenario.excludeResultTooltip')}>
-                                        <span style={{ fontSize: 10, color: '#888', cursor: 'help' }}>{t('scenario.excludeResultLabel')}:</span>
-                                      </Tooltip>
-                                      <Checkbox
-                                        checked={!!sj.exclude_pass_from_result}
-                                        onChange={(e) => updateGroupStepJumps(gName, idx, sid, sj.on_pass_goto, sj.on_fail_goto, e.target.checked, !!sj.exclude_fail_from_result)}
-                                      ><span style={{ fontSize: 11, color: '#52c41a' }}>{t('scenario.excludePassResult')}</span></Checkbox>
-                                      <Checkbox
-                                        checked={!!sj.exclude_fail_from_result}
-                                        onChange={(e) => updateGroupStepJumps(gName, idx, sid, sj.on_pass_goto, sj.on_fail_goto, !!sj.exclude_pass_from_result, e.target.checked)}
-                                      ><span style={{ fontSize: 11, color: '#ff4d4f' }}>{t('scenario.excludeFailResult')}</span></Checkbox>
                                     </div>
                                   </div>
                                 );
@@ -3174,6 +3174,7 @@ export default function ScenarioPage() {
                       passGoto: JumpTarget | null, failGoto: JumpTarget | null,
                       onUpdate: (pg: JumpTarget | null, fg: JumpTarget | null) => void,
                       field: 'pass' | 'fail',
+                      excludeChecked: boolean, onToggleExclude: (checked: boolean) => void,
                     ) => {
                       const jump = field === 'pass' ? passGoto : failGoto;
                       const targetSteps = jump && jump.scenario >= 0 ? (scenarioStepsCache[members[jump.scenario]?.name] || []) : [];
@@ -3213,6 +3214,13 @@ export default function ScenarioPage() {
                               ))}
                             </Select>
                           )}
+                          <Tooltip title={t('scenario.excludeResultTooltip')}>
+                            <Checkbox
+                              checked={excludeChecked}
+                              onChange={(e) => onToggleExclude(e.target.checked)}
+                              style={{ flexShrink: 0, fontSize: 11 }}
+                            ><span style={{ fontSize: 11 }}>{t('scenario.branchMode')}</span></Checkbox>
+                          </Tooltip>
                         </span>
                       );
                     };
@@ -3306,32 +3314,20 @@ export default function ScenarioPage() {
                                     <span style={{ flex: 1, color: hasSJ ? '#d89614' : undefined }}>{step.description || `(${step.type || 'step'})`}</span>
                                     {hasSJ && <BranchesOutlined style={{ color: '#d89614', fontSize: 10 }} />}
                                   </div>
-                                  {/* 2행: P / F / Reset */}
+                                  {/* 2행: P / F(+Branch Mode) / Reset */}
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 26, marginTop: 3, flexWrap: 'wrap' }}>
                                     {renderJumpRow('P→', '#52c41a', sj.on_pass_goto, sj.on_fail_goto,
-                                      (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg, !!sj.exclude_pass_from_result, !!sj.exclude_fail_from_result), 'pass')}
+                                      (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg, !!sj.exclude_pass_from_result, !!sj.exclude_fail_from_result), 'pass',
+                                      !!sj.exclude_pass_from_result, (checked) => updateGroupStepJumps(gName, idx, sid, sj.on_pass_goto, sj.on_fail_goto, checked, !!sj.exclude_fail_from_result))}
                                     {renderJumpRow('F→', '#ff4d4f', sj.on_pass_goto, sj.on_fail_goto,
-                                      (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg, !!sj.exclude_pass_from_result, !!sj.exclude_fail_from_result), 'fail')}
+                                      (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg, !!sj.exclude_pass_from_result, !!sj.exclude_fail_from_result), 'fail',
+                                      !!sj.exclude_fail_from_result, (checked) => updateGroupStepJumps(gName, idx, sid, sj.on_pass_goto, sj.on_fail_goto, !!sj.exclude_pass_from_result, checked))}
                                     {(hasSJ || sj.exclude_pass_from_result || sj.exclude_fail_from_result) && (
                                       <Button size="small" type="link" danger style={{ fontSize: 10, padding: 0 }}
                                         icon={<ClearOutlined />}
                                         onClick={() => updateGroupStepJumps(gName, idx, sid, null, null, false, false)}
                                       >{t('scenario.reset')}</Button>
                                     )}
-                                  </div>
-                                  {/* 3행: 결과 미반영 체크박스 — 체크 시 해당 방향 결과를 '분기'로 표시하고 집계 제외 */}
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingLeft: 26, marginTop: 2, flexWrap: 'wrap' }}>
-                                    <Tooltip title={t('scenario.excludeResultTooltip')}>
-                                      <span style={{ fontSize: 10, color: '#888', cursor: 'help' }}>{t('scenario.excludeResultLabel')}:</span>
-                                    </Tooltip>
-                                    <Checkbox
-                                      checked={!!sj.exclude_pass_from_result}
-                                      onChange={(e) => updateGroupStepJumps(gName, idx, sid, sj.on_pass_goto, sj.on_fail_goto, e.target.checked, !!sj.exclude_fail_from_result)}
-                                    ><span style={{ fontSize: 11, color: '#52c41a' }}>{t('scenario.excludePassResult')}</span></Checkbox>
-                                    <Checkbox
-                                      checked={!!sj.exclude_fail_from_result}
-                                      onChange={(e) => updateGroupStepJumps(gName, idx, sid, sj.on_pass_goto, sj.on_fail_goto, !!sj.exclude_pass_from_result, e.target.checked)}
-                                    ><span style={{ fontSize: 11, color: '#ff4d4f' }}>{t('scenario.excludeFailResult')}</span></Checkbox>
                                   </div>
                                 </div>
                               );
@@ -3412,7 +3408,7 @@ export default function ScenarioPage() {
             return (
               <>
                 <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Tag color={statusColor(effStatus(compareStep))} style={{ fontSize: 12 }}>{statusLabel(effStatus(compareStep), t)}</Tag>
+                  <Tag color={statusColor(effStatus(compareStep))} style={{ fontSize: 12 }}>{statusDetail(compareStep, t)}</Tag>
                   <span style={{ color: '#888', marginLeft: 'auto' }}>Duration: {formatDuration(compareStep.execution_time_ms)}</span>
                 </div>
                 {compareStep.command && (
@@ -3429,7 +3425,7 @@ export default function ScenarioPage() {
           return (
             <>
               <Space style={{ marginBottom: 6 }} wrap>
-                <Tag color={statusColor(effStatus(compareStep))}>{statusLabel(effStatus(compareStep), t)}</Tag>
+                <Tag color={statusColor(effStatus(compareStep))}>{statusDetail(compareStep, t)}</Tag>
                 {compareStep.compare_mode && compareStep.compare_mode !== 'full' && (
                   <Tag color="purple">
                     {compareStep.compare_mode === 'single_crop' ? t('scenario.singleCrop') : compareStep.compare_mode === 'full_exclude' ? t('scenario.excludeArea') : compareStep.compare_mode === 'multi_crop' ? t('scenario.multiCrop') : compareStep.compare_mode}
