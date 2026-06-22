@@ -130,6 +130,7 @@ interface StepResultData {
   command: string;
   description: string;
   status: string;
+  excluded_from_result?: boolean;  // 조건부이동 결과 미반영 → Status를 '분기'로 표시
   similarity_score: number | null;
   expected_image: string | null;
   expected_annotated_image: string | null;
@@ -171,6 +172,10 @@ const statusColor = (s: string) =>
 // 'branch'(조건부이동 결과 미반영)는 '분기'로, 그 외는 대문자 그대로 표기
 const statusLabel = (s: string, t: (k: TranslationKey) => string) =>
   s === 'branch' ? t('results.statusBranch') : s.toUpperCase();
+
+// 결과 미반영 스텝은 status(실제 pass/fail)와 무관하게 '분기'로 표시
+const effStatus = (r: { status: string; excluded_from_result?: boolean }) =>
+  r.excluded_from_result ? 'branch' : r.status;
 
 const imageUrl = (path: string | null) => {
   if (!path) return null;
@@ -1576,9 +1581,9 @@ export default function ScenarioPage() {
   ];
 
   const playbackSteps = playbackScenario?.steps || [];
-  const passCount = stepResults.filter((r) => r.status === 'pass').length;
-  const failCount = stepResults.filter((r) => r.status === 'fail').length;
-  const errorCount = stepResults.filter((r) => r.status === 'error').length;
+  const passCount = stepResults.filter((r) => r.status === 'pass' && !r.excluded_from_result).length;
+  const failCount = stepResults.filter((r) => r.status === 'fail' && !r.excluded_from_result).length;
+  const errorCount = stepResults.filter((r) => r.status === 'error' && !r.excluded_from_result).length;
 
   const _colTitle = (en: string, ko: string) => <div style={{ textAlign: 'center' }}>{en}<br /><span style={{ fontSize: 10, color: '#888' }}>{ko}</span></div>;
   const makeStepResultColumns = (totalRepeat: number) => [
@@ -1588,7 +1593,7 @@ export default function ScenarioPage() {
     { title: _colTitle('Device', t('scenario.colDevice')), dataIndex: 'device_id', key: 'device_id', align: 'center' as const, render: (v: string) => v ? <Tag color={v.startsWith('Android') ? 'green' : v.startsWith('Serial') ? 'purple' : 'geekblue'} style={{ margin: 0 }}>{v}</Tag> : '-' },
     { title: _colTitle('Command', 'action'), dataIndex: 'command', key: 'command', width: colWidths['command'] || 200, ellipsis: true, align: 'center' as const, onHeaderCell: () => ({ width: colWidths['command'] || 200, onResize: (_e: any, { size }: any) => setColWidths(prev => ({ ...prev, command: size.width })) }), render: (v: string, r: StepResultData) => <span style={{ textAlign: 'left', display: 'block' }}>{v || r.message || '-'}</span> },
     { title: _colTitle('Remark', t('common.description')), dataIndex: 'description', key: 'description', width: colWidths['description'] || 200, ellipsis: true, align: 'center' as const, onHeaderCell: () => ({ width: colWidths['description'] || 200, onResize: (_e: any, { size }: any) => setColWidths(prev => ({ ...prev, description: size.width })) }), render: (v: string) => <span style={{ textAlign: 'left', display: 'block' }}>{v || '-'}</span> },
-    { title: _colTitle('Status', t('common.result')), dataIndex: 'status', key: 'status', align: 'center' as const, render: (s: string) => s === 'running' ? <Tag color="processing">RUNNING</Tag> : <Tag color={statusColor(s)}>{statusLabel(s, t)}</Tag> },
+    { title: _colTitle('Status', t('common.result')), dataIndex: 'status', key: 'status', align: 'center' as const, render: (s: string, r: StepResultData) => s === 'running' ? <Tag color="processing">RUNNING</Tag> : <Tag color={statusColor(effStatus(r))}>{statusLabel(effStatus(r), t)}</Tag> },
     { title: _colTitle('Delay', t('scenario.colSetting')), dataIndex: 'delay_ms', key: 'delay', align: 'center' as const, render: (ms: number) => ms ? formatDuration(ms) : '-' },
     { title: _colTitle('Duration', t('scenario.colActual')), dataIndex: 'execution_time_ms', key: 'duration', align: 'center' as const, render: (ms: number, r: StepResultData) => r.status === 'running' ? <span style={{ color: '#1677ff' }}>{formatDuration(liveDuration)}</span> : formatDuration(ms) },
     { title: _colTitle('', t('scenario.compare')), key: 'compare', align: 'center' as const, render: (_: any, r: StepResultData) => {
@@ -2314,7 +2319,7 @@ export default function ScenarioPage() {
               rowKey={(_r, idx) => `${idx}`}
               size="small"
               pagination={false}
-              rowClassName={(r: StepResultData) => r.status === 'running' ? 'row-running' : r.status === 'fail' ? 'row-fail' : r.status === 'error' ? 'row-error' : r.status === 'pass' ? 'row-pass' : ''}
+              rowClassName={(r: StepResultData) => r.status === 'running' ? 'row-running' : r.excluded_from_result ? '' : r.status === 'fail' ? 'row-fail' : r.status === 'error' ? 'row-error' : r.status === 'pass' ? 'row-pass' : ''}
             />
             </div>
           ) : groupShownInDetail && groups[groupShownInDetail] ? (
@@ -3407,7 +3412,7 @@ export default function ScenarioPage() {
             return (
               <>
                 <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Tag color={statusColor(compareStep.status)} style={{ fontSize: 12 }}>{statusLabel(compareStep.status, t)}</Tag>
+                  <Tag color={statusColor(effStatus(compareStep))} style={{ fontSize: 12 }}>{statusLabel(effStatus(compareStep), t)}</Tag>
                   <span style={{ color: '#888', marginLeft: 'auto' }}>Duration: {formatDuration(compareStep.execution_time_ms)}</span>
                 </div>
                 {compareStep.command && (
@@ -3424,7 +3429,7 @@ export default function ScenarioPage() {
           return (
             <>
               <Space style={{ marginBottom: 6 }} wrap>
-                <Tag color={statusColor(compareStep.status)}>{statusLabel(compareStep.status, t)}</Tag>
+                <Tag color={statusColor(effStatus(compareStep))}>{statusLabel(effStatus(compareStep), t)}</Tag>
                 {compareStep.compare_mode && compareStep.compare_mode !== 'full' && (
                   <Tag color="purple">
                     {compareStep.compare_mode === 'single_crop' ? t('scenario.singleCrop') : compareStep.compare_mode === 'full_exclude' ? t('scenario.excludeArea') : compareStep.compare_mode === 'multi_crop' ? t('scenario.multiCrop') : compareStep.compare_mode}

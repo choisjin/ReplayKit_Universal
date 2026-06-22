@@ -41,19 +41,20 @@ const SortableStepItem = ({ id, index, isDark, children }: { id: string; index: 
 };
 
 // Extracted outside to prevent re-creation on every render
-const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, t }: {
+const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExclude, t }: {
   step: Step;
   index: number;
   steps: Step[];
   onUpdate: (index: number, field: 'on_pass_goto' | 'on_fail_goto', value: number | null) => void;
+  onToggleExclude: (index: number, field: 'exclude_pass_from_result' | 'exclude_fail_from_result', value: boolean) => void;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
 }) => (
   <Space direction="vertical" size={4} style={{ padding: 3 }}>
     <div style={{ fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
       {t('record.conditionalJumpTitle', { index: String(index + 1) })}
-      {(step.on_pass_goto != null || step.on_fail_goto != null) && (
+      {(step.on_pass_goto != null || step.on_fail_goto != null || step.exclude_pass_from_result || step.exclude_fail_from_result) && (
         <Button size="small" type="link" danger style={{ padding: 0, fontSize: 10, height: 'auto' }}
-          onClick={() => { onUpdate(index, 'on_pass_goto', null); onUpdate(index, 'on_fail_goto', null); }}>
+          onClick={() => { onUpdate(index, 'on_pass_goto', null); onUpdate(index, 'on_fail_goto', null); onToggleExclude(index, 'exclude_pass_from_result', false); onToggleExclude(index, 'exclude_fail_from_result', false); }}>
           {t('common.reset')}
         </Button>
       )}
@@ -94,6 +95,20 @@ const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, t }: {
         <Option value={-1}>{t('record.end')}</Option>
       </Select>
     </Space>
+    {/* 결과 미반영 — 체크 시 해당 방향 결과를 최종 집계에서 제외하고 Status를 '분기'로 표시 */}
+    <Tooltip title={t('scenario.excludeResultTooltip')}>
+      <span style={{ fontSize: 10, color: '#888', cursor: 'help' }}>{t('scenario.excludeResultLabel')}</span>
+    </Tooltip>
+    <Space size={10}>
+      <Checkbox
+        checked={!!step.exclude_pass_from_result}
+        onChange={(e) => onToggleExclude(index, 'exclude_pass_from_result', e.target.checked)}
+      ><span style={{ fontSize: 11, color: '#52c41a' }}>{t('scenario.excludePassResult')}</span></Checkbox>
+      <Checkbox
+        checked={!!step.exclude_fail_from_result}
+        onChange={(e) => onToggleExclude(index, 'exclude_fail_from_result', e.target.checked)}
+      ><span style={{ fontSize: 11, color: '#ff4d4f' }}>{t('scenario.excludeFailResult')}</span></Checkbox>
+    </Space>
   </Space>
 ));
 
@@ -111,6 +126,8 @@ interface Step {
   expected_image: string | null;
   on_pass_goto?: number | null;
   on_fail_goto?: number | null;
+  exclude_pass_from_result?: boolean;  // 조건부이동 결과 미반영(Pass) → Status '분기'
+  exclude_fail_from_result?: boolean;  // 조건부이동 결과 미반영(Fail) → Status '분기'
   roi?: ROI | null;
   similarity_threshold?: number;
   compare_mode?: 'full' | 'single_crop' | 'full_exclude' | 'multi_crop' | 'match_crop';
@@ -3907,6 +3924,11 @@ export default function RecordPage() {
     setSteps((prev) => prev.map((s, i) => i === index ? { ...s, [field]: value } : s));
   }, []);
 
+  // 조건부이동 '결과 미반영' 체크박스 토글
+  const updateStepExclude = useCallback((index: number, field: 'exclude_pass_from_result' | 'exclude_fail_from_result', value: boolean) => {
+    setSteps((prev) => prev.map((s, i) => i === index ? { ...s, [field]: value } : s));
+  }, []);
+
   const updateStepDescription = useCallback((index: number, value: string) => {
     setSteps((prev) => prev.map((s, i) => i === index ? { ...s, description: value } : s));
   }, []);
@@ -4491,11 +4513,11 @@ export default function RecordPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 2, justifyContent: 'flex-end' }}>
               <Button size="small" type="text" icon={<EditOutlined />} title={t('record.editCommand')} onClick={() => openEditStepModal(index)} style={{ color: '#1890ff', width: 28 }} />
               <Popover
-                content={<JumpEditorInner step={s} index={index} steps={steps} onUpdate={updateStepJump} t={t} />}
+                content={<JumpEditorInner step={s} index={index} steps={steps} onUpdate={updateStepJump} onToggleExclude={updateStepExclude} t={t} />}
                 trigger="click"
                 placement="left"
               >
-                <Button size="small" type="text" icon={<BranchesOutlined />} title={t('record.conditionalJump')} style={{ width: 28, ...(s.on_pass_goto != null || s.on_fail_goto != null ? { color: '#722ed1' } : {}) }} />
+                <Button size="small" type="text" icon={<BranchesOutlined />} title={t('record.conditionalJump')} style={{ width: 28, ...(s.on_pass_goto != null || s.on_fail_goto != null || s.exclude_pass_from_result || s.exclude_fail_from_result ? { color: '#722ed1' } : {}) }} />
               </Popover>
               <Popover
                 open={waitPopoverIndex === index}
@@ -4542,7 +4564,7 @@ export default function RecordPage() {
     </div>
     </SortableContext>
     </DndContext>
-  ), [steps, recording, updateStepJump, updateStepDescription, openEditStepModal, openRoiModal, screenshotDeviceId, scenarioName, saveExpectedFull, openCaptureModal, testStep, testingStepIndex, updateCompareMode, openExcludeRoiModal, openMultiCropModal, showAnnotatedPreview, selectCompareMode, compareModePopoverIndex, waitPopoverIndex, wMode, wDuration, wStart, wInterval, wMin, wMax, allDevices, t, dndSensors, handleDragEnd, openImportStepModal]);
+  ), [steps, recording, updateStepJump, updateStepExclude, updateStepDescription, openEditStepModal, openRoiModal, screenshotDeviceId, scenarioName, saveExpectedFull, openCaptureModal, testStep, testingStepIndex, updateCompareMode, openExcludeRoiModal, openMultiCropModal, showAnnotatedPreview, selectCompareMode, compareModePopoverIndex, waitPopoverIndex, wMode, wDuration, wStart, wInterval, wMin, wMax, allDevices, t, dndSensors, handleDragEnd, openImportStepModal]);
 
   return (
     <div className="record-page" style={{ height: 'calc(100vh - 80px)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>

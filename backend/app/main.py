@@ -228,7 +228,9 @@ async def _remote_play(scenario_name: str, repeat: int, verify: bool):
                 else:
                     step_result = item
                     result.step_results.append(step_result)
-                    if step_result.status == "pass":
+                    if step_result.excluded_from_result:
+                        pass  # 조건부이동 결과 미반영('분기') — 집계/시나리오 판정에서 제외
+                    elif step_result.status == "pass":
                         result.passed_steps += 1
                         playback_service._monitor_state["passed"] += 1
                     elif step_result.status == "fail":
@@ -1569,7 +1571,9 @@ async def _run_play_job(data: dict):
                             step_result.step_id = _pending_seq
                             step_result.description = f"[Cycle {iteration}] {step_result.description}" if step_result.description else f"[Cycle {iteration}]"
                     result.step_results.append(step_result)
-                    if step_result.status == "pass":
+                    if step_result.excluded_from_result:
+                        pass  # 조건부이동 결과 미반영('분기') — 집계/시나리오 판정에서 제외
+                    elif step_result.status == "pass":
                         result.passed_steps += 1
                         playback_service._monitor_state["passed"] += 1
                     elif step_result.status == "fail":
@@ -1842,19 +1846,21 @@ async def _run_play_group_job(data: dict):
                             step_result.step_id = _pending_seq
                         step_result.description = f"{sc_prefix} {step_result.description}" if step_result.description else sc_prefix
 
-                        # 조건부이동 '결과 미반영' 처리 — 점프 분기 판단에는 실제 pass/fail을
-                        # 그대로 쓰되(real_status), 체크된 방향은 집계·표시에서 중립 'branch'로 덮어쓴다.
+                        # 조건부이동 '결과 미반영' 처리 — status(실제 pass/fail)는 그대로 두어
+                        # 라우팅이 정상 동작하게 하고, 그룹 step_jumps의 exclude가 걸린 방향이면
+                        # excluded_from_result만 True로 마킹한다. (Step 모델 자체 exclude는
+                        # playback_service가 yield 시점에 이미 마킹함 — 여기선 그룹 설정만 추가 반영)
                         real_status = step_result.status
                         _sj = None if is_runtime_fail else step_jumps.get(str(original_step_id))
                         if _sj:
                             if real_status == "pass" and _sj.get("exclude_pass_from_result"):
-                                step_result.status = "branch"
+                                step_result.excluded_from_result = True
                             elif real_status in ("fail", "error") and _sj.get("exclude_fail_from_result"):
-                                step_result.status = "branch"
+                                step_result.excluded_from_result = True
 
                         unified_result.step_results.append(step_result)
-                        if step_result.status == "branch":
-                            pass  # 결과 미반영 — 집계/시나리오 판정에서 제외
+                        if step_result.excluded_from_result:
+                            pass  # 결과 미반영('분기') — 집계/시나리오 판정에서 제외
                         elif step_result.status == "pass":
                             unified_result.passed_steps += 1
                         elif step_result.status == "fail":
@@ -1873,7 +1879,7 @@ async def _run_play_group_job(data: dict):
                         # step_jump는 일반 스텝에만 적용 (인라인 fail에는 무의미)
                         if is_runtime_fail:
                             continue
-                        # 멤버/스텝 점프는 실제 결과(real_status) 기준 — '분기' 중립화는 표시·집계 전용
+                        # 멤버/스텝 점프는 실제 결과(real_status) 기준 — 미반영은 집계·표시 전용
                         last_step_status = real_status
                         sj = step_jumps.get(str(original_step_id))
                         if sj:

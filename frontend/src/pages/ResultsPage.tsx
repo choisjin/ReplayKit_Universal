@@ -68,6 +68,7 @@ interface StepResultDetail {
   sub_results: SubResultDetail[];
   parent_step_id?: number | null;  // sync 모드 fail_on_keyword가 trigger한 인라인 fail의 parent
   fail_index?: number | null;       // 같은 parent 내 1-based 순번 (Fail_Count_N)
+  excluded_from_result?: boolean;   // 조건부이동 결과 미반영 → Status를 '분기'로 표시
 }
 
 interface ResultDetail {
@@ -98,6 +99,10 @@ const statusColor = (s: string) =>
 // 'branch'(조건부이동 결과 미반영)는 '분기'로, 그 외는 대문자 그대로 표기
 const statusText = (s: string, t: (k: TranslationKey) => string) =>
   s === 'branch' ? t('results.statusBranch') : s.toUpperCase();
+
+// 결과 미반영 스텝은 status(실제 pass/fail)와 무관하게 '분기'로 표시
+const effStatus = (r: { status: string; excluded_from_result?: boolean }) =>
+  r.excluded_from_result ? 'branch' : r.status;
 
 const imageUrl = (path: string | null) => {
   if (!path) return null;
@@ -998,7 +1003,7 @@ export default function ResultsPage() {
   const _colTitle = (en: string, ko: string) => <div style={{ textAlign: 'center' }}>{en}<br /><span style={{ fontSize: 10, color: '#888' }}>{ko}</span></div>;
   // 필터용: 현재 표시 데이터에서 고유값 추출
   const _allSteps: StepResultDetail[] = detail?.step_results || (groupDetail ? groupDetail.flatMap(d => d.step_results || []) : []);
-  const _uniqueStatuses = [...new Set(_allSteps.map(s => s.status).filter(Boolean))].sort();
+  const _uniqueStatuses = [...new Set(_allSteps.map(s => effStatus(s)).filter(Boolean))].sort();
   const _uniqueDevices = [...new Set(_allSteps.map(s => s.device_id).filter(Boolean))].sort();
   const _uniqueRepeats = [...new Set(_allSteps.map(s => s.repeat_index ?? 1))].sort((a, b) => a - b);
 
@@ -1082,9 +1087,9 @@ export default function ResultsPage() {
       key: 'status',
       align: 'center' as const,
       filters: _uniqueStatuses.map(s => ({ text: statusText(s, t), value: s })),
-      onFilter: (value: any, record: any) => record.status === value,
+      onFilter: (value: any, record: any) => effStatus(record) === value,
       defaultFilteredValue: null,
-      render: (s: string) => <Tag color={statusColor(s)} style={{ margin: 0 }}>{statusText(s, t)}</Tag>,
+      render: (_s: string, record: StepResultDetail) => <Tag color={statusColor(effStatus(record))} style={{ margin: 0 }}>{statusText(effStatus(record), t)}</Tag>,
       _hide: false,
     },
     {
@@ -1266,12 +1271,12 @@ export default function ResultsPage() {
               cycleSteps.push({ ...s, _seq: seq, _scenarioName: d.scenario_name });
             }
           }
-          const cyclePass = cycleSteps.filter(s => s.status === 'pass').length;
-          const cycleFail = cycleSteps.filter(s => s.status === 'fail').length;
-          const cycleWarn = cycleSteps.filter(s => s.status === 'warning').length;
-          const cycleBranch = cycleSteps.filter(s => s.status === 'branch').length;
-          // 'branch'(조건부이동 결과 미반영)는 error로 집계하지 않음
-          const cycleErr = cycleSteps.filter(s => s.status !== 'pass' && s.status !== 'fail' && s.status !== 'warning' && s.status !== 'branch').length;
+          const cycleBranch = cycleSteps.filter(s => s.excluded_from_result).length;
+          // 결과 미반영('분기') 스텝은 pass/fail/error 어디에도 집계하지 않음
+          const cyclePass = cycleSteps.filter(s => !s.excluded_from_result && s.status === 'pass').length;
+          const cycleFail = cycleSteps.filter(s => !s.excluded_from_result && s.status === 'fail').length;
+          const cycleWarn = cycleSteps.filter(s => !s.excluded_from_result && s.status === 'warning').length;
+          const cycleErr = cycleSteps.filter(s => !s.excluded_from_result && s.status !== 'pass' && s.status !== 'fail' && s.status !== 'warning').length;
           return (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
@@ -1336,7 +1341,7 @@ export default function ResultsPage() {
                 pagination={false}
                 scroll={{ y: 500 }}
                 rowClassName={(r: any, idx: number) => {
-                  const statusCls = r.status === 'pass' ? 'row-pass' : r.status === 'fail' ? 'row-fail' : r.status === 'error' ? 'row-error' : '';
+                  const statusCls = r.excluded_from_result ? '' : r.status === 'pass' ? 'row-pass' : r.status === 'fail' ? 'row-fail' : r.status === 'error' ? 'row-error' : '';
                   // 시나리오 경계 (이전 스텝과 시나리오명 다르면)
                   const prevScenario = idx > 0 ? (cycleSteps[idx - 1] as any)?._scenarioName : null;
                   const boundary = prevScenario && prevScenario !== r._scenarioName ? 'scenario-boundary' : '';
@@ -1502,7 +1507,8 @@ export default function ResultsPage() {
                   size="small"
                   pagination={false}
                   rowClassName={(r: StepResultDetail) => {
-                    const statusCls = r.status === 'fail' ? 'result-row-fail' :
+                    const statusCls = r.excluded_from_result ? '' :
+                      r.status === 'fail' ? 'result-row-fail' :
                       r.status === 'error' ? 'result-row-error' :
                       r.status === 'warning' ? 'result-row-warning' : '';
                     const playingCls = currentPlayingStepId === r.step_id && (r.repeat_index || 1) === activeRecRepeat ? 'result-row-playing' : '';
@@ -1584,7 +1590,7 @@ export default function ResultsPage() {
           return (
           <>
             <Space style={{ marginBottom: 13 }} wrap>
-              <Tag color={statusColor(compareStep.status)}>{statusText(compareStep.status, t)}</Tag>
+              <Tag color={statusColor(effStatus(compareStep))}>{statusText(effStatus(compareStep), t)}</Tag>
               {compareStep.compare_mode && compareStep.compare_mode !== 'full' && (
                 <Tag color="purple">
                   {compareStep.compare_mode === 'single_crop' ? t('results.singleCrop')

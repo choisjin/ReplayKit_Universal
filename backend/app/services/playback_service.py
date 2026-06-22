@@ -433,9 +433,12 @@ class PlaybackService:
 
                 step = scenario.steps[idx]
                 step_result = await self._execute_step(step, scenario.name, verify)
+                self._apply_result_exclusion(step, step_result)
                 result.step_results.append(step_result)
 
-                if step_result.status == "pass":
+                if step_result.excluded_from_result:
+                    pass  # 조건부이동 결과 미반영('분기') — 집계/시나리오 판정에서 제외
+                elif step_result.status == "pass":
                     result.passed_steps += 1
                 elif step_result.status == "fail":
                     result.failed_steps += 1
@@ -547,6 +550,7 @@ class PlaybackService:
                 }
 
                 step_result = await self._execute_step(step, scenario.name, verify, repeat_index=repeat_index)
+                self._apply_result_exclusion(step, step_result)
                 yield step_result
 
                 # 이 스텝이 trigger한 sync 모드 fail_on_keyword 결과를 인라인으로 yield
@@ -613,6 +617,22 @@ class PlaybackService:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _apply_result_exclusion(step: Step, step_result: StepResult) -> None:
+        """조건부이동 '결과 미반영' 처리.
+
+        체크된 방향(pass/fail)의 실제 결과면 excluded_from_result=True로 마킹한다.
+        status(실제 pass/fail)는 그대로 두어 조건부 점프 라우팅이 정상 동작하게 하고,
+        집계·시나리오 판정에서만 제외하며 프론트가 Status를 '분기'로 표시한다.
+        """
+        if step_result.parent_step_id is not None:
+            return  # 인라인 fail row에는 적용하지 않음
+        s = step_result.status
+        if s == "pass" and getattr(step, "exclude_pass_from_result", False):
+            step_result.excluded_from_result = True
+        elif s in ("fail", "error") and getattr(step, "exclude_fail_from_result", False):
+            step_result.excluded_from_result = True
 
     async def _execute_step(
         self,

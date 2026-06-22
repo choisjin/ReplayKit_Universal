@@ -115,6 +115,10 @@ class Step(BaseModel):
     similarity_threshold: float = 0.95
     on_pass_goto: Optional[int] = None  # step ID to jump to on pass (None = next)
     on_fail_goto: Optional[int] = None  # step ID to jump to on fail (None = next)
+    # 조건부이동 '결과 미반영' — 체크 시 해당 방향(pass/fail) 결과를 최종 집계·시나리오
+    # 통과/실패 판정에서 제외하고 Status를 '분기'로 표시 (점프 분기 판단엔 실제 결과 사용)
+    exclude_pass_from_result: bool = False
+    exclude_fail_from_result: bool = False
     compare_mode: CompareMode = CompareMode.FULL
     exclude_rois: list[ROI] = Field(default_factory=list)  # regions to exclude (full_exclude mode)
     expected_images: list[CropItem] = Field(default_factory=list)  # multi_crop mode
@@ -148,7 +152,10 @@ class StepResult(BaseModel):
     device_id: str = ""  # which device executed this step
     command: str = ""  # human-readable action description
     description: str = ""  # user remark for the step
-    status: str  # "pass", "fail", "error"
+    status: str  # "pass", "fail", "error" (조건부이동 '분기'는 excluded_from_result로 표시)
+    # 조건부이동 결과 미반영 스텝 — status는 실제 pass/fail을 유지(라우팅용)하되,
+    # True면 집계/시나리오 판정에서 제외하고 프론트가 Status를 '분기'로 표시한다.
+    excluded_from_result: bool = False
     # 부모 스텝 id — fail_on_keyword(time>0)이 모니터링 중 검출한 fail row가 부모 스텝 직하에 인라인 표시될 때 사용.
     # None이면 일반 스텝, 값이 있으면 해당 스텝이 trigger한 runtime fail.
     parent_step_id: Optional[int] = None
