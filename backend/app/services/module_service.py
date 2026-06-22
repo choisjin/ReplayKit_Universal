@@ -1259,7 +1259,10 @@ def _extract_local_stdin(command: str) -> tuple[str, bytes | None]:
     p = Path(raw)
     if not p.is_file():
         return command, None  # 로컬 파일 아님 → 원격 리디렉션으로 그대로 실행
-    data = p.read_bytes()
+    # CRLF/CR 정규화: Windows에서 저장한 .sh 가 `\r\n` 이면 원격 bash 가
+    # `then\r` 을 then 으로 인식 못해 `unexpected "fi"` / `bash: \r: not found` 발생.
+    # bash -s 로 들어가는 건 항상 셸 스크립트 텍스트라 LF 통일이 안전하다.
+    data = p.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     # `< <경로>` 부분만 제거 (나머지 인자/플래그는 보존)
     cleaned = (command[:m.start()] + command[m.end():]).strip()
     return cleaned, data
