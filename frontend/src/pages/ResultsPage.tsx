@@ -185,6 +185,16 @@ export default function ResultsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [compareStep, setCompareStep] = useState<StepResultDetail | null>(null);
 
+  // 가상 스크롤 테이블 높이 (모달은 top:20 으로 윈도우에 고정 → innerHeight 기반 계산).
+  // 수천 스텝도 보이는 행만 렌더하도록 virtual Table 에 numeric scroll.y 필요.
+  const [detailTableY, setDetailTableY] = useState(() =>
+    typeof window !== 'undefined' ? Math.max(240, window.innerHeight - 320) : 480);
+  useEffect(() => {
+    const onResize = () => setDetailTableY(Math.max(240, window.innerHeight - 320));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   // 그룹 상세 뷰 (사이클별 통합)
   const [groupDetail, setGroupDetail] = useState<ResultDetail[] | null>(null);
   const [groupDetailCycle, setGroupDetailCycle] = useState(1);
@@ -1016,6 +1026,7 @@ export default function ResultsPage() {
       title: _colTitle('Time Stamp', t('results.timestamp')),
       dataIndex: 'timestamp',
       key: 'timestamp',
+      width: 95,
       align: 'center' as const,
       render: (v: string | null) => <span style={{ fontSize: 11, lineHeight: 1.4 }}>{v ? formatTime(v) : '-'}</span>,
       _hide: false,
@@ -1023,6 +1034,7 @@ export default function ResultsPage() {
     {
       title: _colTitle('Repeat', t('results.repeat')),
       key: 'repeat',
+      width: 80,
       align: 'center' as const,
       filters: _uniqueRepeats.map(r => ({ text: `#${r}`, value: r })),
       onFilter: (value: any, record: any) => (record.repeat_index ?? 1) === value,
@@ -1036,6 +1048,7 @@ export default function ResultsPage() {
       title: _colTitle('Step', t('results.step')),
       dataIndex: 'step_id',
       key: 'step_id',
+      width: 90,
       align: 'center' as const,
       render: (_: any, r: any) => {
         // 인라인 runtime fail (sync 모드 fail_on_keyword 결과)은 Fail_Count_N으로 표시.
@@ -1050,6 +1063,7 @@ export default function ResultsPage() {
       title: _colTitle('Device', t('results.deviceCol')),
       dataIndex: 'device_id',
       key: 'device_id',
+      width: 120,
       align: 'center' as const,
       filters: _uniqueDevices.map(d => ({ text: d, value: d })),
       onFilter: (value: any, record: any) => (record.device_id || '') === value,
@@ -1089,6 +1103,7 @@ export default function ResultsPage() {
       title: _colTitle('Status', t('results.resultCol')),
       dataIndex: 'status',
       key: 'status',
+      width: 100,
       align: 'center' as const,
       filters: _uniqueStatuses.map(s => ({ text: statusText(s, t), value: s })),
       onFilter: (value: any, record: any) => effStatus(record) === value,
@@ -1100,6 +1115,7 @@ export default function ResultsPage() {
       title: _colTitle('Delay', t('results.delaySet')),
       dataIndex: 'delay_ms',
       key: 'delay',
+      width: 90,
       align: 'center' as const,
       render: (v: number) => v ? formatDuration(v) : '-',
       _hide: webcamExpanded,
@@ -1108,6 +1124,7 @@ export default function ResultsPage() {
       title: _colTitle('Duration', t('results.duration')),
       dataIndex: 'execution_time_ms',
       key: 'duration',
+      width: 100,
       align: 'center' as const,
       render: (v: number) => formatDuration(v),
       _hide: webcamExpanded,
@@ -1115,6 +1132,7 @@ export default function ResultsPage() {
     {
       title: _colTitle('', t('scenario.compare')),
       key: 'compare',
+      width: 130,
       align: 'center' as const,
       render: (_: any, r: StepResultDetail) => {
         // 모듈 명령(cmd, adb_send 등)의 출력값을 LOG 버튼으로 노출
@@ -1342,8 +1360,9 @@ export default function ResultsPage() {
                 dataSource={cycleSteps}
                 rowKey={(r: any) => `${r._seq || r.step_id}_${r.repeat_index}_${r.device_id}`}
                 size="small"
+                virtual
                 pagination={false}
-                scroll={{ y: 500 }}
+                scroll={{ x: 1205, y: detailTableY }}
                 rowClassName={(r: any, idx: number) => {
                   const statusCls = r.excluded_from_result ? '' : r.status === 'pass' ? 'row-pass' : r.status === 'fail' ? 'row-fail' : r.status === 'error' ? 'row-error' : '';
                   // 시나리오 경계 (이전 스텝과 시나리오명 다르면)
@@ -1509,6 +1528,8 @@ export default function ResultsPage() {
                   dataSource={detail.step_results}
                   rowKey={(r: StepResultDetail) => `${r.step_id}_${r.repeat_index}`}
                   size="small"
+                  virtual
+                  scroll={{ x: 1205, y: detailTableY }}
                   pagination={false}
                   rowClassName={(r: StepResultDetail) => {
                     const statusCls = r.excluded_from_result ? '' :

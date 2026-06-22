@@ -429,6 +429,23 @@ export default function ScenarioPage() {
     }
   }, [stepResults, playing]);
 
+  // 라이브 결과 테이블 dataSource — 매 렌더마다 [...].reverse() 새 배열을 만들면
+  // AntD Table 이 전체 행을 재생성하므로, stepResults/playing 변화시에만 재계산.
+  const liveStepRows = useMemo(
+    () => (playing ? [...stepResults].reverse() : stepResults),
+    [stepResults, playing],
+  );
+
+  // 가상 스크롤 테이블 높이. Splitter 는 가로 분할이라 높이는 윈도우 기준으로 충분.
+  // 수천 스텝 누적 시에도 보이는 행만 렌더 → 장시간 재생 후 느려짐/메모리 누적 방지.
+  const [liveTableY, setLiveTableY] = useState(() =>
+    typeof window !== 'undefined' ? Math.max(200, window.innerHeight - 230) : 480);
+  useEffect(() => {
+    const onResize = () => setLiveTableY(Math.max(200, window.innerHeight - 230));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   // 시나리오 스텝 미리보기
   const [previewSteps, setPreviewSteps] = useState<any[]>([]);
   const [skipStepIds, setSkipStepIds] = useState<Set<number>>(new Set());
@@ -1595,16 +1612,16 @@ export default function ScenarioPage() {
 
   const _colTitle = (en: string, ko: string) => <div style={{ textAlign: 'center' }}>{en}<br /><span style={{ fontSize: 10, color: '#888' }}>{ko}</span></div>;
   const makeStepResultColumns = (totalRepeat: number) => [
-    { title: _colTitle('Time Stamp', t('scenario.colTimestamp')), dataIndex: 'timestamp', key: 'timestamp', align: 'center' as const, render: (v: string | null) => <span style={{ fontSize: 11, lineHeight: 1.4 }}>{v ? formatTime(v, lang) : '-'}</span> },
-    { title: _colTitle('Repeat', t('scenario.colCurrentTotal')), dataIndex: 'repeat_index', key: 'repeat', align: 'center' as const, render: (v: number) => totalRepeat === 0 ? `${v}/∞` : `${v}/${totalRepeat}` },
-    { title: _colTitle('Step', t('scenario.colOrder')), dataIndex: 'step_id', key: 'step_id', align: 'center' as const },
-    { title: _colTitle('Device', t('scenario.colDevice')), dataIndex: 'device_id', key: 'device_id', align: 'center' as const, render: (v: string) => v ? <Tag color={v.startsWith('Android') ? 'green' : v.startsWith('Serial') ? 'purple' : 'geekblue'} style={{ margin: 0 }}>{v}</Tag> : '-' },
+    { title: _colTitle('Time Stamp', t('scenario.colTimestamp')), dataIndex: 'timestamp', key: 'timestamp', width: 95, align: 'center' as const, render: (v: string | null) => <span style={{ fontSize: 11, lineHeight: 1.4 }}>{v ? formatTime(v, lang) : '-'}</span> },
+    { title: _colTitle('Repeat', t('scenario.colCurrentTotal')), dataIndex: 'repeat_index', key: 'repeat', width: 80, align: 'center' as const, render: (v: number) => totalRepeat === 0 ? `${v}/∞` : `${v}/${totalRepeat}` },
+    { title: _colTitle('Step', t('scenario.colOrder')), dataIndex: 'step_id', key: 'step_id', width: 70, align: 'center' as const },
+    { title: _colTitle('Device', t('scenario.colDevice')), dataIndex: 'device_id', key: 'device_id', width: 130, align: 'center' as const, render: (v: string) => v ? <Tag color={v.startsWith('Android') ? 'green' : v.startsWith('Serial') ? 'purple' : 'geekblue'} style={{ margin: 0 }}>{v}</Tag> : '-' },
     { title: _colTitle('Command', 'action'), dataIndex: 'command', key: 'command', width: colWidths['command'] || 200, ellipsis: true, align: 'center' as const, onHeaderCell: () => ({ width: colWidths['command'] || 200, onResize: (_e: any, { size }: any) => setColWidths(prev => ({ ...prev, command: size.width })) }), render: (v: string, r: StepResultData) => <span style={{ textAlign: 'left', display: 'block' }}>{v || r.message || '-'}</span> },
     { title: _colTitle('Remark', t('common.description')), dataIndex: 'description', key: 'description', width: colWidths['description'] || 200, ellipsis: true, align: 'center' as const, onHeaderCell: () => ({ width: colWidths['description'] || 200, onResize: (_e: any, { size }: any) => setColWidths(prev => ({ ...prev, description: size.width })) }), render: (v: string) => <span style={{ textAlign: 'left', display: 'block' }}>{v || '-'}</span> },
-    { title: _colTitle('Status', t('common.result')), dataIndex: 'status', key: 'status', align: 'center' as const, render: (s: string, r: StepResultData) => s === 'running' ? <Tag color="processing">RUNNING</Tag> : <Tag color={statusColor(effStatus(r))}>{statusLabel(effStatus(r), t)}</Tag> },
-    { title: _colTitle('Delay', t('scenario.colSetting')), dataIndex: 'delay_ms', key: 'delay', align: 'center' as const, render: (ms: number) => ms ? formatDuration(ms) : '-' },
-    { title: _colTitle('Duration', t('scenario.colActual')), dataIndex: 'execution_time_ms', key: 'duration', align: 'center' as const, render: (ms: number, r: StepResultData) => r.status === 'running' ? <span style={{ color: '#1677ff' }}>{formatDuration(liveDuration)}</span> : formatDuration(ms) },
-    { title: _colTitle('', t('scenario.compare')), key: 'compare', align: 'center' as const, render: (_: any, r: StepResultData) => {
+    { title: _colTitle('Status', t('common.result')), dataIndex: 'status', key: 'status', width: 100, align: 'center' as const, render: (s: string, r: StepResultData) => s === 'running' ? <Tag color="processing">RUNNING</Tag> : <Tag color={statusColor(effStatus(r))}>{statusLabel(effStatus(r), t)}</Tag> },
+    { title: _colTitle('Delay', t('scenario.colSetting')), dataIndex: 'delay_ms', key: 'delay', width: 90, align: 'center' as const, render: (ms: number) => ms ? formatDuration(ms) : '-' },
+    { title: _colTitle('Duration', t('scenario.colActual')), dataIndex: 'execution_time_ms', key: 'duration', width: 100, align: 'center' as const, render: (ms: number, r: StepResultData) => r.status === 'running' ? <span style={{ color: '#1677ff' }}>{formatDuration(liveDuration)}</span> : formatDuration(ms) },
+    { title: _colTitle('', t('scenario.compare')), key: 'compare', width: 110, align: 'center' as const, render: (_: any, r: StepResultData) => {
       if (r.status === 'running') return '-';
       // 모듈 실행 결과(CMD 등)는 이미지 없이 메시지만 있을 수 있음
       const isModuleMsg = r.command?.startsWith('CMD::') || r.command?.includes('::');
@@ -2323,9 +2340,11 @@ export default function ScenarioPage() {
             <Table
               columns={makeStepResultColumns(totalIterations)}
               components={{ header: { cell: ResizableTitle } }}
-              dataSource={playing ? [...stepResults].reverse() : stepResults}
+              dataSource={liveStepRows}
               rowKey={(_r, idx) => `${idx}`}
               size="small"
+              virtual
+              scroll={{ x: 1175, y: liveTableY }}
               pagination={false}
               rowClassName={(r: StepResultData) => r.status === 'running' ? 'row-running' : r.excluded_from_result ? '' : r.status === 'fail' ? 'row-fail' : r.status === 'error' ? 'row-error' : r.status === 'pass' ? 'row-pass' : ''}
             />
