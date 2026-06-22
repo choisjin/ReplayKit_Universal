@@ -14,6 +14,7 @@ import { scenarioApi, deviceApi, resultsApi, serverApi } from '../services/api';
 import { useDevice } from '../context/DeviceContext';
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
+import type { TranslationKey } from '../i18n';
 import { useWebcamContext } from '../context/WebcamContext';
 import { VideoCameraOutlined } from '@ant-design/icons';
 import { Resizable } from 'react-resizable';
@@ -152,6 +153,8 @@ interface JumpTarget {
 interface StepJump {
   on_pass_goto: JumpTarget | null;
   on_fail_goto: JumpTarget | null;
+  exclude_pass_from_result?: boolean;  // 체크 시 pass 결과를 최종 집계에서 제외('분기' 표시)
+  exclude_fail_from_result?: boolean;  // 체크 시 fail 결과를 최종 집계에서 제외('분기' 표시)
 }
 
 interface GroupEntry {
@@ -163,7 +166,11 @@ interface GroupEntry {
 }
 
 const statusColor = (s: string) =>
-  s === 'pass' ? 'green' : s === 'warning' ? 'orange' : s === 'error' ? 'volcano' : 'red';
+  s === 'pass' ? 'green' : s === 'warning' ? 'orange' : s === 'error' ? 'volcano' : s === 'branch' ? 'purple' : 'red';
+
+// 'branch'(조건부이동 결과 미반영)는 '분기'로, 그 외는 대문자 그대로 표기
+const statusLabel = (s: string, t: (k: TranslationKey) => string) =>
+  s === 'branch' ? t('results.statusBranch') : s.toUpperCase();
 
 const imageUrl = (path: string | null) => {
   if (!path) return null;
@@ -825,9 +832,9 @@ export default function ScenarioPage() {
     reorderGroup(gName, perm);
   };
 
-  const updateGroupStepJumps = async (gName: string, entryIdx: number, stepId: number, on_pass_goto: JumpTarget | null, on_fail_goto: JumpTarget | null) => {
+  const updateGroupStepJumps = async (gName: string, entryIdx: number, stepId: number, on_pass_goto: JumpTarget | null, on_fail_goto: JumpTarget | null, exclude_pass_from_result = false, exclude_fail_from_result = false) => {
     try {
-      const res = await scenarioApi.updateGroupStepJumps(gName, entryIdx, stepId, on_pass_goto, on_fail_goto);
+      const res = await scenarioApi.updateGroupStepJumps(gName, entryIdx, stepId, on_pass_goto, on_fail_goto, exclude_pass_from_result, exclude_fail_from_result);
       setGroups(res.data.groups);
     } catch { message.error(t('scenario.stepJumpFailed')); }
   };
@@ -1581,7 +1588,7 @@ export default function ScenarioPage() {
     { title: _colTitle('Device', t('scenario.colDevice')), dataIndex: 'device_id', key: 'device_id', align: 'center' as const, render: (v: string) => v ? <Tag color={v.startsWith('Android') ? 'green' : v.startsWith('Serial') ? 'purple' : 'geekblue'} style={{ margin: 0 }}>{v}</Tag> : '-' },
     { title: _colTitle('Command', 'action'), dataIndex: 'command', key: 'command', width: colWidths['command'] || 200, ellipsis: true, align: 'center' as const, onHeaderCell: () => ({ width: colWidths['command'] || 200, onResize: (_e: any, { size }: any) => setColWidths(prev => ({ ...prev, command: size.width })) }), render: (v: string, r: StepResultData) => <span style={{ textAlign: 'left', display: 'block' }}>{v || r.message || '-'}</span> },
     { title: _colTitle('Remark', t('common.description')), dataIndex: 'description', key: 'description', width: colWidths['description'] || 200, ellipsis: true, align: 'center' as const, onHeaderCell: () => ({ width: colWidths['description'] || 200, onResize: (_e: any, { size }: any) => setColWidths(prev => ({ ...prev, description: size.width })) }), render: (v: string) => <span style={{ textAlign: 'left', display: 'block' }}>{v || '-'}</span> },
-    { title: _colTitle('Status', t('common.result')), dataIndex: 'status', key: 'status', align: 'center' as const, render: (s: string) => s === 'running' ? <Tag color="processing">RUNNING</Tag> : <Tag color={statusColor(s)}>{s.toUpperCase()}</Tag> },
+    { title: _colTitle('Status', t('common.result')), dataIndex: 'status', key: 'status', align: 'center' as const, render: (s: string) => s === 'running' ? <Tag color="processing">RUNNING</Tag> : <Tag color={statusColor(s)}>{statusLabel(s, t)}</Tag> },
     { title: _colTitle('Delay', t('scenario.colSetting')), dataIndex: 'delay_ms', key: 'delay', align: 'center' as const, render: (ms: number) => ms ? formatDuration(ms) : '-' },
     { title: _colTitle('Duration', t('scenario.colActual')), dataIndex: 'execution_time_ms', key: 'duration', align: 'center' as const, render: (ms: number, r: StepResultData) => r.status === 'running' ? <span style={{ color: '#1677ff' }}>{formatDuration(liveDuration)}</span> : formatDuration(ms) },
     { title: _colTitle('', t('scenario.compare')), key: 'compare', align: 'center' as const, render: (_: any, r: StepResultData) => {
@@ -2474,15 +2481,29 @@ export default function ScenarioPage() {
                                     {/* 2행: P/F/Reset */}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 26, marginTop: 3, flexWrap: 'wrap' }}>
                                       {renderJumpRow('P→', '#52c41a', sj.on_pass_goto, sj.on_fail_goto,
-                                        (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg), 'pass')}
+                                        (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg, !!sj.exclude_pass_from_result, !!sj.exclude_fail_from_result), 'pass')}
                                       {renderJumpRow('F→', '#ff4d4f', sj.on_pass_goto, sj.on_fail_goto,
-                                        (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg), 'fail')}
-                                      {hasSJ && (
+                                        (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg, !!sj.exclude_pass_from_result, !!sj.exclude_fail_from_result), 'fail')}
+                                      {(hasSJ || sj.exclude_pass_from_result || sj.exclude_fail_from_result) && (
                                         <Button size="small" type="link" danger style={{ fontSize: 10, padding: 0 }}
                                           icon={<ClearOutlined />}
-                                          onClick={() => updateGroupStepJumps(gName, idx, sid, null, null)}
+                                          onClick={() => updateGroupStepJumps(gName, idx, sid, null, null, false, false)}
                                         >{t('scenario.reset')}</Button>
                                       )}
+                                    </div>
+                                    {/* 3행: 결과 미반영 체크박스 — 체크 시 해당 방향 결과를 '분기'로 표시하고 집계 제외 */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingLeft: 26, marginTop: 2, flexWrap: 'wrap' }}>
+                                      <Tooltip title={t('scenario.excludeResultTooltip')}>
+                                        <span style={{ fontSize: 10, color: '#888', cursor: 'help' }}>{t('scenario.excludeResultLabel')}:</span>
+                                      </Tooltip>
+                                      <Checkbox
+                                        checked={!!sj.exclude_pass_from_result}
+                                        onChange={(e) => updateGroupStepJumps(gName, idx, sid, sj.on_pass_goto, sj.on_fail_goto, e.target.checked, !!sj.exclude_fail_from_result)}
+                                      ><span style={{ fontSize: 11, color: '#52c41a' }}>{t('scenario.excludePassResult')}</span></Checkbox>
+                                      <Checkbox
+                                        checked={!!sj.exclude_fail_from_result}
+                                        onChange={(e) => updateGroupStepJumps(gName, idx, sid, sj.on_pass_goto, sj.on_fail_goto, !!sj.exclude_pass_from_result, e.target.checked)}
+                                      ><span style={{ fontSize: 11, color: '#ff4d4f' }}>{t('scenario.excludeFailResult')}</span></Checkbox>
                                     </div>
                                   </div>
                                 );
@@ -3283,15 +3304,29 @@ export default function ScenarioPage() {
                                   {/* 2행: P / F / Reset */}
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 26, marginTop: 3, flexWrap: 'wrap' }}>
                                     {renderJumpRow('P→', '#52c41a', sj.on_pass_goto, sj.on_fail_goto,
-                                      (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg), 'pass')}
+                                      (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg, !!sj.exclude_pass_from_result, !!sj.exclude_fail_from_result), 'pass')}
                                     {renderJumpRow('F→', '#ff4d4f', sj.on_pass_goto, sj.on_fail_goto,
-                                      (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg), 'fail')}
-                                    {hasSJ && (
+                                      (pg, fg) => updateGroupStepJumps(gName, idx, sid, pg, fg, !!sj.exclude_pass_from_result, !!sj.exclude_fail_from_result), 'fail')}
+                                    {(hasSJ || sj.exclude_pass_from_result || sj.exclude_fail_from_result) && (
                                       <Button size="small" type="link" danger style={{ fontSize: 10, padding: 0 }}
                                         icon={<ClearOutlined />}
-                                        onClick={() => updateGroupStepJumps(gName, idx, sid, null, null)}
+                                        onClick={() => updateGroupStepJumps(gName, idx, sid, null, null, false, false)}
                                       >{t('scenario.reset')}</Button>
                                     )}
+                                  </div>
+                                  {/* 3행: 결과 미반영 체크박스 — 체크 시 해당 방향 결과를 '분기'로 표시하고 집계 제외 */}
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingLeft: 26, marginTop: 2, flexWrap: 'wrap' }}>
+                                    <Tooltip title={t('scenario.excludeResultTooltip')}>
+                                      <span style={{ fontSize: 10, color: '#888', cursor: 'help' }}>{t('scenario.excludeResultLabel')}:</span>
+                                    </Tooltip>
+                                    <Checkbox
+                                      checked={!!sj.exclude_pass_from_result}
+                                      onChange={(e) => updateGroupStepJumps(gName, idx, sid, sj.on_pass_goto, sj.on_fail_goto, e.target.checked, !!sj.exclude_fail_from_result)}
+                                    ><span style={{ fontSize: 11, color: '#52c41a' }}>{t('scenario.excludePassResult')}</span></Checkbox>
+                                    <Checkbox
+                                      checked={!!sj.exclude_fail_from_result}
+                                      onChange={(e) => updateGroupStepJumps(gName, idx, sid, sj.on_pass_goto, sj.on_fail_goto, !!sj.exclude_pass_from_result, e.target.checked)}
+                                    ><span style={{ fontSize: 11, color: '#ff4d4f' }}>{t('scenario.excludeFailResult')}</span></Checkbox>
                                   </div>
                                 </div>
                               );
@@ -3372,7 +3407,7 @@ export default function ScenarioPage() {
             return (
               <>
                 <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Tag color={statusColor(compareStep.status)} style={{ fontSize: 12 }}>{compareStep.status.toUpperCase()}</Tag>
+                  <Tag color={statusColor(compareStep.status)} style={{ fontSize: 12 }}>{statusLabel(compareStep.status, t)}</Tag>
                   <span style={{ color: '#888', marginLeft: 'auto' }}>Duration: {formatDuration(compareStep.execution_time_ms)}</span>
                 </div>
                 {compareStep.command && (
@@ -3389,7 +3424,7 @@ export default function ScenarioPage() {
           return (
             <>
               <Space style={{ marginBottom: 6 }} wrap>
-                <Tag color={statusColor(compareStep.status)}>{compareStep.status.toUpperCase()}</Tag>
+                <Tag color={statusColor(compareStep.status)}>{statusLabel(compareStep.status, t)}</Tag>
                 {compareStep.compare_mode && compareStep.compare_mode !== 'full' && (
                   <Tag color="purple">
                     {compareStep.compare_mode === 'single_crop' ? t('scenario.singleCrop') : compareStep.compare_mode === 'full_exclude' ? t('scenario.excludeArea') : compareStep.compare_mode === 'multi_crop' ? t('scenario.multiCrop') : compareStep.compare_mode}
@@ -3441,7 +3476,7 @@ export default function ScenarioPage() {
                       columns={[
                         { title: t('scenario.label'), dataIndex: 'label', key: 'label', render: (v: string) => v || '-' },
                         { title: t('scenario.score'), dataIndex: 'score', key: 'score', width: 100, render: (v: number) => `${(v * 100).toFixed(2)}%` },
-                        { title: t('common.status'), dataIndex: 'status', key: 'status', width: 80, render: (s: string) => <Tag color={statusColor(s)}>{s.toUpperCase()}</Tag> },
+                        { title: t('common.status'), dataIndex: 'status', key: 'status', width: 80, render: (s: string) => <Tag color={statusColor(s)}>{statusLabel(s, t)}</Tag> },
                         { title: t('scenario.matchLocation'), key: 'loc', width: 200, render: (_: any, r: SubResultData) => r.match_location ? `(${r.match_location.x},${r.match_location.y}) ${r.match_location.width}x${r.match_location.height}` : '-' },
                       ]}
                     />

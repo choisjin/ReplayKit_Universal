@@ -4,6 +4,7 @@ import { DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FolderOp
 import { resultsApi, scenarioApi } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
+import type { TranslationKey } from '../i18n';
 
 interface ResultSummary {
   filename: string;
@@ -91,7 +92,12 @@ const statusColor = (s: string) =>
     : s === 'warning' ? 'orange'
     : s === 'error' ? 'volcano'
     : s === 'stopped' ? 'default'
+    : s === 'branch' ? 'purple'
     : 'red';
+
+// 'branch'(조건부이동 결과 미반영)는 '분기'로, 그 외는 대문자 그대로 표기
+const statusText = (s: string, t: (k: TranslationKey) => string) =>
+  s === 'branch' ? t('results.statusBranch') : s.toUpperCase();
 
 const imageUrl = (path: string | null) => {
   if (!path) return null;
@@ -1075,10 +1081,10 @@ export default function ResultsPage() {
       dataIndex: 'status',
       key: 'status',
       align: 'center' as const,
-      filters: _uniqueStatuses.map(s => ({ text: s.toUpperCase(), value: s })),
+      filters: _uniqueStatuses.map(s => ({ text: statusText(s, t), value: s })),
       onFilter: (value: any, record: any) => record.status === value,
       defaultFilteredValue: null,
-      render: (s: string) => <Tag color={statusColor(s)} style={{ margin: 0 }}>{s.toUpperCase()}</Tag>,
+      render: (s: string) => <Tag color={statusColor(s)} style={{ margin: 0 }}>{statusText(s, t)}</Tag>,
       _hide: false,
     },
     {
@@ -1263,7 +1269,9 @@ export default function ResultsPage() {
           const cyclePass = cycleSteps.filter(s => s.status === 'pass').length;
           const cycleFail = cycleSteps.filter(s => s.status === 'fail').length;
           const cycleWarn = cycleSteps.filter(s => s.status === 'warning').length;
-          const cycleErr = cycleSteps.filter(s => s.status !== 'pass' && s.status !== 'fail' && s.status !== 'warning').length;
+          const cycleBranch = cycleSteps.filter(s => s.status === 'branch').length;
+          // 'branch'(조건부이동 결과 미반영)는 error로 집계하지 않음
+          const cycleErr = cycleSteps.filter(s => s.status !== 'pass' && s.status !== 'fail' && s.status !== 'warning' && s.status !== 'branch').length;
           return (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
@@ -1286,6 +1294,7 @@ export default function ResultsPage() {
                 <Tag color="red">{cycleFail} Fail</Tag>
                 {cycleWarn > 0 && <Tag color="orange">{cycleWarn} Warning</Tag>}
                 {cycleErr > 0 && <Tag color="volcano">{cycleErr} Error</Tag>}
+                {cycleBranch > 0 && <Tag color="purple">{cycleBranch} {t('results.statusBranch')}</Tag>}
                 <span style={{ color: '#888' }}>/ {cycleSteps.length} steps</span>
               </Space>
               {/* 웹캠 패널 */}
@@ -1575,7 +1584,7 @@ export default function ResultsPage() {
           return (
           <>
             <Space style={{ marginBottom: 13 }} wrap>
-              <Tag color={statusColor(compareStep.status)}>{compareStep.status.toUpperCase()}</Tag>
+              <Tag color={statusColor(compareStep.status)}>{statusText(compareStep.status, t)}</Tag>
               {compareStep.compare_mode && compareStep.compare_mode !== 'full' && (
                 <Tag color="purple">
                   {compareStep.compare_mode === 'single_crop' ? t('results.singleCrop')

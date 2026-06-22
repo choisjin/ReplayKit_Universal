@@ -1842,8 +1842,20 @@ async def _run_play_group_job(data: dict):
                             step_result.step_id = _pending_seq
                         step_result.description = f"{sc_prefix} {step_result.description}" if step_result.description else sc_prefix
 
+                        # 조건부이동 '결과 미반영' 처리 — 점프 분기 판단에는 실제 pass/fail을
+                        # 그대로 쓰되(real_status), 체크된 방향은 집계·표시에서 중립 'branch'로 덮어쓴다.
+                        real_status = step_result.status
+                        _sj = None if is_runtime_fail else step_jumps.get(str(original_step_id))
+                        if _sj:
+                            if real_status == "pass" and _sj.get("exclude_pass_from_result"):
+                                step_result.status = "branch"
+                            elif real_status in ("fail", "error") and _sj.get("exclude_fail_from_result"):
+                                step_result.status = "branch"
+
                         unified_result.step_results.append(step_result)
-                        if step_result.status == "pass":
+                        if step_result.status == "branch":
+                            pass  # 결과 미반영 — 집계/시나리오 판정에서 제외
+                        elif step_result.status == "pass":
                             unified_result.passed_steps += 1
                         elif step_result.status == "fail":
                             unified_result.failed_steps += 1
@@ -1861,10 +1873,11 @@ async def _run_play_group_job(data: dict):
                         # step_jump는 일반 스텝에만 적용 (인라인 fail에는 무의미)
                         if is_runtime_fail:
                             continue
-                        last_step_status = step_result.status
+                        # 멤버/스텝 점프는 실제 결과(real_status) 기준 — '분기' 중립화는 표시·집계 전용
+                        last_step_status = real_status
                         sj = step_jumps.get(str(original_step_id))
                         if sj:
-                            if step_result.status == "pass":
+                            if real_status == "pass":
                                 sj_jump = sj.get("on_pass_goto")
                             else:
                                 sj_jump = sj.get("on_fail_goto")

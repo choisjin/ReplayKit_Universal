@@ -1313,6 +1313,9 @@ class UpdateGroupStepJumpsRequest(BaseModel):
     step_id: int      # step id within scenario
     on_pass_goto: Optional[JumpTarget] = None
     on_fail_goto: Optional[JumpTarget] = None
+    # 체크 시 해당 방향 결과를 최종 집계에서 제외('분기'로 중립 표시)
+    exclude_pass_from_result: bool = False
+    exclude_fail_from_result: bool = False
 
 
 @router.post("/groups/step-jumps")
@@ -1320,7 +1323,8 @@ async def update_group_step_jumps(req: UpdateGroupStepJumpsRequest):
     pass_goto = req.on_pass_goto.model_dump() if req.on_pass_goto else None
     fail_goto = req.on_fail_goto.model_dump() if req.on_fail_goto else None
     groups = recording_svc.update_group_step_jumps(
-        req.group_name, req.index, req.step_id, pass_goto, fail_goto
+        req.group_name, req.index, req.step_id, pass_goto, fail_goto,
+        req.exclude_pass_from_result, req.exclude_fail_from_result,
     )
     return {"groups": groups}
 

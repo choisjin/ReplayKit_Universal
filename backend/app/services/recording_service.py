@@ -773,18 +773,39 @@ class RecordingService:
         self._save_groups(groups)
         return groups
 
-    def update_group_step_jumps(self, group_name: str, index: int, step_id: int, on_pass_goto, on_fail_goto) -> dict[str, list[dict]]:
-        """Update conditional jump settings for a specific step within a scenario in a group."""
+    def update_group_step_jumps(
+        self,
+        group_name: str,
+        index: int,
+        step_id: int,
+        on_pass_goto,
+        on_fail_goto,
+        exclude_pass_from_result: bool = False,
+        exclude_fail_from_result: bool = False,
+    ) -> dict[str, list[dict]]:
+        """Update conditional jump settings for a specific step within a scenario in a group.
+
+        exclude_pass_from_result / exclude_fail_from_result: 체크 시 해당 방향(pass/fail)
+        결과를 최종 집계·시나리오 판정에서 제외하고 Status를 '분기(branch)'로 중립 표시한다.
+        (점프 분기 판단에는 실제 pass/fail을 그대로 사용 — 표시·집계에서만 제외)
+        """
         groups = self._load_groups()
         if group_name in groups and 0 <= index < len(groups[group_name]):
             entry = groups[group_name][index]
             if "step_jumps" not in entry:
                 entry["step_jumps"] = {}
             key = str(step_id)
-            if on_pass_goto is None and on_fail_goto is None:
+            has_jump = on_pass_goto is not None or on_fail_goto is not None
+            has_exclude = bool(exclude_pass_from_result) or bool(exclude_fail_from_result)
+            if not has_jump and not has_exclude:
                 entry["step_jumps"].pop(key, None)
             else:
-                entry["step_jumps"][key] = {"on_pass_goto": on_pass_goto, "on_fail_goto": on_fail_goto}
+                entry["step_jumps"][key] = {
+                    "on_pass_goto": on_pass_goto,
+                    "on_fail_goto": on_fail_goto,
+                    "exclude_pass_from_result": bool(exclude_pass_from_result),
+                    "exclude_fail_from_result": bool(exclude_fail_from_result),
+                }
             # Clean up empty step_jumps
             if not entry["step_jumps"]:
                 del entry["step_jumps"]
