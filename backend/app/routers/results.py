@@ -7,6 +7,10 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
+import threading
+import time
+import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +18,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 logger = logging.getLogger(__name__)
 
@@ -540,8 +545,12 @@ def _build_html_report(data: dict, output_path: Path) -> str:
     return "".join(parts)
 
 
-def _build_excel_workbook(data: dict, filepath: Path = None):
-    """Build an openpyxl Workbook from result data. Reusable by settings router."""
+def _build_excel_workbook(data: dict, filepath: Path = None, progress=None):
+    """Build an openpyxl Workbook from result data. Reusable by settings router.
+
+    progress(done:int, total:int): 스텝 단위 진행 콜백(선택). 이미지 임베드가
+    무거우므로 내보내기 진행률 표시에 사용한다.
+    """
     import openpyxl
     from openpyxl.drawing.image import Image as XlImage
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -599,7 +608,14 @@ def _build_excel_workbook(data: dict, filepath: Path = None):
     total_repeat = data.get("total_repeat", 1)
     img_row_height = 120
 
-    for ri, sr in enumerate(data.get("step_results", []), start=3):
+    _steps = data.get("step_results", [])
+    _total_steps = len(_steps)
+    for ri, sr in enumerate(_steps, start=3):
+        if progress is not None:
+            try:
+                progress(ri - 2, _total_steps)
+            except Exception:
+                pass
         status = sr.get("status", "")
         timestamp = sr.get("timestamp", data.get("started_at", ""))
         command = sr.get("command", "")
@@ -708,19 +724,34 @@ async def export_result_excel(filename: str):
     )
 
 
-@router.post("/export-bundle/{filename:path}")
-async def export_result_bundle(filename: str, export_path: str = ""):
-    """결과 내보내기: 런 폴더를 ZIP으로 압축하여 다운로드 또는 지정 경로에 저장.
+def _export_bundle_sync(filename: str, export_path: str, progress=None) -> dict:
+    """결과 내보내기의 동기(블로킹) 본문 — 스레드에서 실행해 이벤트 루프를 막지 않는다.
 
-    - 런 폴더: 폴더 전체를 ZIP 압축
-    - 레거시 파일: Excel + 녹화를 임시 폴더에 모아 ZIP 압축
+    리포트 재생성(이미지 임베드 엑셀 포함)·ZIP 압축이 무거우므로 분리.
+    progress(percent:int, phase:str): 전체 진행률 콜백(선택).
 
-    Args:
-        export_path: 저장 경로. 빈 값이면 브라우저 다운로드.
+    반환:
+      - export_path 지정: {"mode": "saved", "path", "folder", "size"}
+      - 다운로드:        {"mode": "download", "zip_path", "folder", "size"}
     """
+    def _p(pct: int, phase: str) -> None:
+        if progress is not None:
+            try:
+                progress(pct, phase)
+            except Exception:
+                pass
+
+    # 엑셀(이미지 임베드)은 5~78%, ZIP 압축은 82~99% 구간에 매핑한다.
+    def _excel_prog(done, total):
+        if total:
+            _p(5 + int(73 * done / total), "Excel 생성 중")
+
+    def _zip_prog(done, total):
+        if total:
+            _p(82 + int(17 * done / total), "압축 중")
+
+    _p(1, "준비 중")
     filepath = RESULTS_DIR / filename
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail="Result not found")
 
     # 런 폴더인지 레거시인지 판별
     if filepath.name == "result.json" and filepath.parent != RESULTS_DIR:
@@ -736,13 +767,15 @@ async def export_result_bundle(filename: str, export_path: str = ""):
             try:
                 html_path = run_dir / "result.html"
                 html_path.write_text(_build_html_report(data, html_path), encoding="utf-8")
+                _p(3, "HTML 생성 완료")
             except Exception as e:
                 logger.warning("HTML report regeneration failed: %s", e)
             try:
-                wb = _build_excel_workbook(data, filepath)
+                wb = _build_excel_workbook(data, filepath, progress=_excel_prog)
                 wb.save(str(run_dir / "result.xlsx"))
             except Exception as e:
                 logger.warning("Excel report regeneration failed: %s", e)
+        _p(80, "압축 준비 중")
     else:
         # 레거시: 임시 폴더에 결과물 수집
         data = json.loads(filepath.read_text(encoding="utf-8"))
@@ -763,7 +796,7 @@ async def export_result_bundle(filename: str, export_path: str = ""):
 
         # Excel 생성
         try:
-            wb = _build_excel_workbook(data, filepath)
+            wb = _build_excel_workbook(data, filepath, progress=_excel_prog)
             wb.save(str(run_dir / filepath.name.replace(".json", ".xlsx")))
         except Exception as e:
             logger.warning("Excel report generation failed: %s", e)
@@ -776,6 +809,7 @@ async def export_result_bundle(filename: str, export_path: str = ""):
             logger.warning("HTML report generation failed: %s", e)
 
         # 웹캠 녹화 복사 (webm + mp4)
+        _p(80, "녹화 수집 중")
         base = filename.replace(".json", "")
         if RECORDINGS_DIR.is_dir():
             for pattern in (f"{base}_webcam_*.webm", f"{base}_webcam_*.mp4"):
@@ -816,17 +850,16 @@ async def export_result_bundle(filename: str, export_path: str = ""):
             if zip_path.is_dir():
                 zip_path = zip_path / f"{folder_name}.zip"
             zip_path.parent.mkdir(parents=True, exist_ok=True)
-            _zip_directory(run_dir, zip_path)
-            return {"path": str(zip_path), "folder": folder_name, "size": zip_path.stat().st_size}
+            _zip_directory(run_dir, zip_path, progress=_zip_prog)
+            return {"mode": "saved", "path": str(zip_path), "folder": folder_name,
+                    "size": zip_path.stat().st_size}
         else:
-            buf = io.BytesIO()
-            _zip_directory_to_buffer(run_dir, buf)
-            buf.seek(0)
-            return StreamingResponse(
-                buf,
-                media_type="application/zip",
-                headers={"Content-Disposition": _content_disposition(f"{folder_name}.zip")},
-            )
+            # 다운로드: 임시 ZIP 파일로 저장 → 다운로드 엔드포인트가 서빙 후 삭제
+            fd, tmp_zip = tempfile.mkstemp(suffix=".zip", prefix="rk_export_")
+            os.close(fd)
+            _zip_directory(run_dir, Path(tmp_zip), progress=_zip_prog)
+            return {"mode": "download", "zip_path": tmp_zip, "folder": folder_name,
+                    "size": Path(tmp_zip).stat().st_size}
     finally:
         # ZIP용 임시 assets 정리 + HTML 경로 복원 (런 폴더가 원본이면 패치 원복)
         if _patched_html:
@@ -842,6 +875,135 @@ async def export_result_bundle(filename: str, export_path: str = ""):
                 )
         if _tmp_assets_dir.is_dir() and _tabulator_src.is_dir():
             shutil.rmtree(str(_tmp_assets_dir), ignore_errors=True)
+
+
+# ---------- 내보내기 백그라운드 잡 (진행률 폴링) ----------
+_EXPORT_JOBS: dict[str, dict] = {}
+_EXPORT_JOBS_LOCK = threading.Lock()
+_EXPORT_JOB_TTL = 3600  # 완료/실패 잡 보관 시간(초)
+
+
+def _cleanup_export_jobs() -> None:
+    """오래된 완료/실패 잡과 임시 ZIP 파일 정리."""
+    now = time.monotonic()
+    with _EXPORT_JOBS_LOCK:
+        stale = [
+            jid for jid, j in _EXPORT_JOBS.items()
+            if j.get("status") in ("done", "error")
+            and now - j.get("finished", now) > _EXPORT_JOB_TTL
+        ]
+        for jid in stale:
+            j = _EXPORT_JOBS.pop(jid, None)
+            if j and j.get("zip_path"):
+                try:
+                    os.unlink(j["zip_path"])
+                except OSError:
+                    pass
+
+
+def _run_export_job(job_id: str, filename: str, export_path: str) -> None:
+    """백그라운드 스레드에서 번들을 생성하며 잡 진행률을 갱신한다."""
+    def _prog(pct, phase):
+        with _EXPORT_JOBS_LOCK:
+            j = _EXPORT_JOBS.get(job_id)
+            if j:
+                j["percent"] = max(j.get("percent", 0), min(99, int(pct)))
+                j["phase"] = phase
+
+    try:
+        result = _export_bundle_sync(filename, export_path, _prog)
+        with _EXPORT_JOBS_LOCK:
+            j = _EXPORT_JOBS.get(job_id)
+            if j:
+                j.update(result)
+                j["percent"] = 100
+                j["phase"] = "완료"
+                j["status"] = "done"
+                j["finished"] = time.monotonic()
+    except Exception as e:
+        logger.exception("export bundle job failed: %s", filename)
+        with _EXPORT_JOBS_LOCK:
+            j = _EXPORT_JOBS.get(job_id)
+            if j:
+                j["status"] = "error"
+                j["error"] = str(e)
+                j["finished"] = time.monotonic()
+
+
+@router.post("/export-bundle/{filename:path}")
+async def export_result_bundle(filename: str, export_path: str = ""):
+    """결과 내보내기 시작 — 백그라운드 잡으로 result.html/result.xlsx 재생성 + ZIP을
+    처리하고 job_id를 즉시 반환한다.
+
+    진행률: GET /api/results/export-job/{job_id}
+    다운로드: GET /api/results/export-job/{job_id}/download (브라우저 다운로드 모드)
+
+    Args:
+        export_path: 저장 경로. 빈 값이면 브라우저 다운로드.
+    """
+    filepath = RESULTS_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    _cleanup_export_jobs()
+    job_id = uuid.uuid4().hex
+    with _EXPORT_JOBS_LOCK:
+        _EXPORT_JOBS[job_id] = {
+            "status": "running", "percent": 0, "phase": "준비 중",
+            "error": None, "mode": None, "folder": "", "created": time.monotonic(),
+        }
+    threading.Thread(
+        target=_run_export_job, args=(job_id, filename, export_path), daemon=True
+    ).start()
+    return {"job_id": job_id}
+
+
+@router.get("/export-job/{job_id}")
+async def export_job_status(job_id: str):
+    """내보내기 잡 진행률 조회."""
+    with _EXPORT_JOBS_LOCK:
+        j = _EXPORT_JOBS.get(job_id)
+        if not j:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return {
+            "status": j["status"],
+            "percent": j.get("percent", 0),
+            "phase": j.get("phase", ""),
+            "error": j.get("error"),
+            "mode": j.get("mode"),
+            "folder": j.get("folder", ""),
+            "size": j.get("size"),
+            "path": j.get("path"),  # saved 모드 저장 경로
+        }
+
+
+@router.get("/export-job/{job_id}/download")
+async def export_job_download(job_id: str):
+    """완료된 내보내기 잡의 ZIP 다운로드(브라우저 다운로드 모드). 전송 후 임시파일·잡 정리."""
+    with _EXPORT_JOBS_LOCK:
+        j = _EXPORT_JOBS.get(job_id)
+    if not j or j.get("status") != "done" or j.get("mode") != "download":
+        raise HTTPException(status_code=404, detail="Export not ready")
+    zip_path = j.get("zip_path")
+    if not zip_path or not Path(zip_path).exists():
+        raise HTTPException(status_code=404, detail="Export file missing")
+    folder = j.get("folder", "export")
+
+    def _after():
+        with _EXPORT_JOBS_LOCK:
+            jj = _EXPORT_JOBS.pop(job_id, None)
+        try:
+            if jj and jj.get("zip_path"):
+                os.unlink(jj["zip_path"])
+        except OSError:
+            pass
+
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        headers={"Content-Disposition": _content_disposition(f"{folder}.zip")},
+        background=BackgroundTask(_after),
+    )
 
 
 @router.post("/open-folder")
@@ -876,20 +1038,34 @@ def _iter_run_dir_files(source_dir: Path):
             yield item
 
 
-def _zip_directory(source_dir: Path, zip_path: Path) -> None:
-    """디렉토리를 ZIP 파일로 압축."""
+def _zip_directory(source_dir: Path, zip_path: Path, progress=None) -> None:
+    """디렉토리를 ZIP 파일로 압축. progress(done, total): 파일 단위 진행 콜백(선택)."""
+    files = list(_iter_run_dir_files(source_dir))
+    total = len(files)
     with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
-        for file in _iter_run_dir_files(source_dir):
+        for i, file in enumerate(files, start=1):
             arcname = file.relative_to(source_dir.parent).as_posix()
             zf.write(str(file), arcname)
+            if progress is not None:
+                try:
+                    progress(i, total)
+                except Exception:
+                    pass
 
 
-def _zip_directory_to_buffer(source_dir: Path, buf: io.BytesIO) -> None:
-    """디렉토리를 BytesIO 버퍼에 ZIP 압축."""
+def _zip_directory_to_buffer(source_dir: Path, buf: io.BytesIO, progress=None) -> None:
+    """디렉토리를 BytesIO 버퍼에 ZIP 압축. progress(done, total): 파일 단위 콜백(선택)."""
+    files = list(_iter_run_dir_files(source_dir))
+    total = len(files)
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file in _iter_run_dir_files(source_dir):
+        for i, file in enumerate(files, start=1):
             arcname = file.relative_to(source_dir.parent).as_posix()
             zf.write(str(file), arcname)
+            if progress is not None:
+                try:
+                    progress(i, total)
+                except Exception:
+                    pass
 
 
 @router.delete("/{filename:path}")

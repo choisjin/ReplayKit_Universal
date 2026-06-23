@@ -231,10 +231,16 @@ export const resultsApi = {
     api.delete(`/results/recordings/${filename}`),
   trimRecording: (filename: string, start: number, end: number) =>
     api.post(`/results/recordings/${filename}/trim?start=${start}&end=${end}`),
+  // 내보내기 시작 — 백그라운드 잡 id 반환 ({ job_id })
   exportBundle: (filename: string, exportPath?: string) =>
-    exportPath
-      ? api.post(`/results/export-bundle/${filename}`, null, { params: { export_path: exportPath } })
-      : api.post(`/results/export-bundle/${filename}`, null, { responseType: 'blob' }),
+    api.post(`/results/export-bundle/${filename}`, null,
+      exportPath ? { params: { export_path: exportPath } } : undefined),
+  // 내보내기 진행률 폴링
+  exportJobStatus: (jobId: string) =>
+    api.get(`/results/export-job/${jobId}`),
+  // 완료된 번들 ZIP 다운로드
+  exportJobDownload: (jobId: string) =>
+    api.get(`/results/export-job/${jobId}/download`, { responseType: 'blob' }),
   updateStepResult: (filename: string, stepIndex: number, message: string, status?: string) =>
     api.post(`/results/update-step/${filename}`, { step_index: stepIndex, message, ...(status ? { status } : {}) }),
   openFolder: (filename: string) =>

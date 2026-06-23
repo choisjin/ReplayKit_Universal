@@ -174,9 +174,51 @@ const AnnotatedOverlay = React.memo(({ subResults, expectedImage }: {
   );
 });
 
+// 내보내기 버튼 — 진행 중에는 비활성화 + 좌→우 색 채우기로 진행률(%) 표시
+const ExportProgressButton: React.FC<{
+  progress?: { percent: number; phase: string };
+  onClick: () => void;
+  size?: 'small' | 'middle' | 'large';
+  children?: React.ReactNode;
+}> = ({ progress, onClick, size, children }) => {
+  const busy = !!progress;
+  const pct = Math.max(0, Math.min(100, progress?.percent ?? 0));
+  return (
+    <Button
+      size={size}
+      icon={<DownloadOutlined />}
+      disabled={busy}
+      onClick={onClick}
+      title={busy ? `${progress?.phase ?? ''} (${pct}%)` : undefined}
+      style={busy ? { position: 'relative', overflow: 'hidden' } : undefined}
+    >
+      {busy && (
+        <span
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: `${pct}%`,
+            background: 'rgba(24,144,255,0.30)',
+            transition: 'width 0.3s ease',
+            pointerEvents: 'none',
+            zIndex: 0,
+          }}
+        />
+      )}
+      <span style={{ position: 'relative', zIndex: 1 }}>
+        {busy ? `${pct}%` : children}
+      </span>
+    </Button>
+  );
+};
+
 export default function ResultsPage() {
   const { settings } = useSettings();
   const { t, lang } = useTranslation();
+  // 내보내기 진행 상태: filename → { percent, phase } (진행 중인 항목만 존재)
+  const [exportProgress, setExportProgress] = useState<Record<string, { percent: number; phase: string }>>({});
   const [results, setResults] = useState<ResultSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState<ResultDetail | null>(null);
@@ -704,10 +746,38 @@ export default function ResultsPage() {
     });
   };
 
+  // 잡 진행률을 done/error 까지 폴링하며 exportProgress 갱신
+  const pollExportJob = (jobId: string, filename: string): Promise<void> =>
+    new Promise((resolve, reject) => {
+      const tick = async () => {
+        try {
+          const { data } = await resultsApi.exportJobStatus(jobId);
+          setExportProgress((prev) =>
+            prev[filename]
+              ? { ...prev, [filename]: { percent: data.percent ?? 0, phase: data.phase ?? '' } }
+              : prev,
+          );
+          if (data.status === 'done') { resolve(); return; }
+          if (data.status === 'error') { reject(new Error(data.error || 'export failed')); return; }
+          setTimeout(tick, 500);
+        } catch (e) {
+          reject(e);
+        }
+      };
+      tick();
+    });
+
   const exportBundle = async (filename: string) => {
+    if (exportProgress[filename]) return; // 이미 진행 중이면 무시
+    setExportProgress((prev) => ({ ...prev, [filename]: { percent: 0, phase: '준비 중' } }));
     try {
-      const res = await resultsApi.exportBundle(filename);
-      // ZIP blob 다운로드
+      // 1) 백그라운드 잡 시작
+      const { data: started } = await resultsApi.exportBundle(filename);
+      const jobId: string = started.job_id;
+      // 2) 진행률 폴링
+      await pollExportJob(jobId, filename);
+      // 3) 완료된 ZIP 다운로드
+      const res = await resultsApi.exportJobDownload(jobId);
       const blob = new Blob([res.data], { type: 'application/zip' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -720,7 +790,13 @@ export default function ResultsPage() {
       URL.revokeObjectURL(url);
       message.success(t('results.exportBundleComplete', { path: `${baseName}.zip`, count: '1' }));
     } catch (e: any) {
-      message.error(e.response?.data?.detail || t('results.exportBundleFailed'));
+      message.error(e.response?.data?.detail || e.message || t('results.exportBundleFailed'));
+    } finally {
+      setExportProgress((prev) => {
+        const next = { ...prev };
+        delete next[filename];
+        return next;
+      });
     }
   };
 
@@ -989,7 +1065,7 @@ export default function ResultsPage() {
             <Space size={4}>
               <Button size="small" icon={<FolderOpenOutlined />} onClick={() => openFolder(r.filename)} />
               <Button size="small" icon={<EyeOutlined />} onClick={() => viewDetail(r.filename)}>{t('common.details')}</Button>
-              <Button size="small" icon={<DownloadOutlined />} onClick={() => exportBundle(r.filename)} />
+              <ExportProgressButton size="small" progress={exportProgress[r.filename]} onClick={() => exportBundle(r.filename)} />
               <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteResult(r.filename)} />
             </Space>
           );
@@ -1230,7 +1306,7 @@ export default function ResultsPage() {
                     </Space>
                     <Button size="small" icon={<FolderOpenOutlined />} onClick={() => openFolder(r.filename)} />
                     <Button size="small" icon={<EyeOutlined />} onClick={() => viewDetail(r.filename)}>{t('common.details')}</Button>
-                    <Button size="small" icon={<DownloadOutlined />} onClick={() => exportBundle(r.filename)} />
+                    <ExportProgressButton size="small" progress={exportProgress[r.filename]} onClick={() => exportBundle(r.filename)} />
                   </div>
                 ))}
               </div>
@@ -1260,12 +1336,12 @@ export default function ResultsPage() {
             >
               {t('results.openFolder')}
             </Button>
-            <Button
-              icon={<DownloadOutlined />}
+            <ExportProgressButton
+              progress={detailFilename ? exportProgress[detailFilename] : undefined}
               onClick={() => detailFilename && exportBundle(detailFilename)}
             >
               {t('results.exportBundle')}
-            </Button>
+            </ExportProgressButton>
             <Button
               danger
               icon={<DeleteOutlined />}
