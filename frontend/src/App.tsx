@@ -15,6 +15,7 @@ import {
   SettingOutlined,
   VideoCameraOutlined,
   MessageOutlined,
+  NotificationOutlined,
 } from '@ant-design/icons';
 import axios from 'axios';
 import { deviceApi, serverApi } from './services/api';
@@ -33,6 +34,8 @@ import WebcamPip from './components/WebcamPip';
 import CompositorEditor from './components/CompositorEditor';
 import AnnouncementBanner from './components/AnnouncementBanner';
 import PopupNotice from './components/PopupNotice';
+import AnnouncementListModal from './components/AnnouncementListModal';
+import { AnnouncementsProvider, useAnnouncements } from './context/AnnouncementsContext';
 import PlaybackStatusBanner from './components/PlaybackStatusBanner';
 import ChatWidget from './components/ChatWidget';
 import { WebcamProvider } from './context/WebcamContext';
@@ -88,6 +91,7 @@ function AppContent() {
   const initialBootIdRef = useRef<string>('');
   const reloadingRef = useRef<boolean>(false);
   const { settings, uploadWebcamRecording, fetchSettings } = useSettings();
+  const { openList: openAnnouncements } = useAnnouncements();
   const { t } = useTranslation();
 
   // 백엔드 version 또는 boot_id 가 페이지 로드 후 바뀌면 강제 새로고침.
@@ -430,6 +434,15 @@ function AppContent() {
                 {!siderCollapsed && 'Results 폴더'}
               </Button>
             </Tooltip>
+            <Tooltip title="공지사항" placement="right">
+              <Button
+                block
+                icon={<NotificationOutlined />}
+                onClick={openAnnouncements}
+              >
+                {!siderCollapsed && '공지사항'}
+              </Button>
+            </Tooltip>
             <Tooltip title={t('chat.title')} placement="right">
               <Button
                 block
@@ -527,6 +540,8 @@ function AppContent() {
 
       <CompositorEditor open={compositorOpen} onClose={() => setCompositorOpen(false)} isDark={isDark} />
 
+      <AnnouncementListModal />
+
       <ChatWidget open={chatOpen} onClose={() => setChatOpen(false)} />
 
       <Modal
@@ -598,7 +613,9 @@ function App() {
       <AntdApp>
         <SettingsProvider>
           <DeviceProvider>
-            <AppContent />
+            <AnnouncementsProvider>
+              <AppContent />
+            </AnnouncementsProvider>
           </DeviceProvider>
         </SettingsProvider>
       </AntdApp>

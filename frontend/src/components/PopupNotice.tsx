@@ -1,58 +1,58 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Modal, Space, Tag, Typography } from 'antd';
 import { NotificationOutlined } from '@ant-design/icons';
-import {
-  Announcement,
-  dismissPopupsToday,
-  readDismiss,
-  todayStr,
-  useManagerUrl,
-} from '../lib/manager';
+import { dismissPopupsToday, readDismiss, todayStr } from '../lib/manager';
+import { useAnnouncements } from '../context/AnnouncementsContext';
+
+const priorityLabel: Record<string, string> = { urgent: '긴급', important: '중요', normal: '일반' };
+const priorityColor: Record<string, string> = { urgent: 'red', important: 'orange', normal: 'blue' };
 
 /**
  * 시작 시 팝업 공지.
- * 매니저(관리 서버)의 공개 API 에서 활성 공지를 가져와
- * `is_popup === 1` 이고 오늘 "그만 보기" 처리되지 않은 항목을 모달로 표시한다.
- * "오늘 하루 그만 보기" 체크 후 닫으면 그 공지들은 오늘(로컬 날짜) 동안 다시 뜨지 않는다.
- * 읽기 전용 — 수정/삭제 UI 없음.
+ * 여러 팝업 공지(is_popup === 1)가 있어도 **최신 1개만** 모달로 표시하고,
+ * "전체 목록" 버튼으로 다른 공지를 골라 볼 수 있게 한다(목록 모달 오픈).
+ * "오늘 하루 그만 보기" 체크 후 닫으면 오늘 표시 대상 팝업 전체가 오늘 동안 다시 뜨지 않는다
+ * (이후에는 사이드바 "공지사항" 버튼으로 언제든 열람 가능).
  */
 export default function PopupNotice() {
-  const managerUrl = useManagerUrl();
-  const [popups, setPopups] = useState<Announcement[]>([]);
+  const { announcements, openList } = useAnnouncements();
   const [open, setOpen] = useState(false);
   const [dontShowToday, setDontShowToday] = useState(false);
+  const shownRef = useRef(false);
 
+  // 시작 시 1회: 오늘 미차단인 팝업 공지가 생기면 표시.
   useEffect(() => {
-    if (!managerUrl) return;
-    let cancelled = false;
-    // 시작 시 1회 fetch (실시간 갱신은 AnnouncementBanner 의 WebSocket 이 담당).
-    fetch(`${managerUrl}/api/announcements?active_only=true`)
-      .then((r) => r.json())
-      .then((list: Announcement[]) => {
-        if (cancelled || !Array.isArray(list)) return;
-        const t = todayStr();
-        const dismiss = readDismiss();
-        const toShow = list.filter((a) => a.is_popup === 1 && dismiss[a.id] !== t);
-        if (toShow.length > 0) {
-          setPopups(toShow);
-          setOpen(true);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [managerUrl]);
+    if (shownRef.current || announcements.length === 0) return;
+    const t = todayStr();
+    const dismiss = readDismiss();
+    if (announcements.some((a) => a.is_popup === 1 && dismiss[a.id] !== t)) {
+      shownRef.current = true;
+      setOpen(true);
+    }
+  }, [announcements]);
 
+  const t = todayStr();
+  const dismiss = readDismiss();
+  const candidates = announcements
+    .filter((a) => a.is_popup === 1 && dismiss[a.id] !== t)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const top = candidates[0];
+
+  const applyDismiss = () => {
+    if (dontShowToday) dismissPopupsToday(candidates.map((c) => c.id));
+  };
   const handleClose = () => {
-    if (dontShowToday) dismissPopupsToday(popups.map((p) => p.id));
+    applyDismiss();
     setOpen(false);
   };
+  const handleOpenList = () => {
+    applyDismiss();
+    setOpen(false);
+    openList();
+  };
 
-  if (popups.length === 0) return null;
-
-  const priorityLabel: Record<string, string> = { urgent: '긴급', important: '중요', normal: '일반' };
-  const priorityColor: Record<string, string> = { urgent: 'red', important: 'orange', normal: 'blue' };
+  if (!open || !top) return null;
+  const others = candidates.length - 1;
 
   return (
     <Modal
@@ -70,52 +70,38 @@ export default function PopupNotice() {
           <Checkbox checked={dontShowToday} onChange={(e) => setDontShowToday(e.target.checked)}>
             오늘 하루 그만 보기
           </Checkbox>
-          <Button type="primary" onClick={handleClose}>
-            닫기
-          </Button>
+          <Space>
+            <Button onClick={handleOpenList}>{others > 0 ? `전체 목록 (외 ${others}건)` : '전체 목록'}</Button>
+            <Button type="primary" onClick={handleClose}>
+              닫기
+            </Button>
+          </Space>
         </div>
       }
       width={640}
     >
-      <div style={{ maxHeight: '70vh', overflow: 'auto' }}>
-        {popups.map((ann, idx) => {
-          const imgUrl = ann.image_data || null;
-          const last = idx === popups.length - 1;
-          return (
-            <div
-              key={ann.id}
-              style={{
-                marginBottom: last ? 0 : 16,
-                paddingBottom: last ? 0 : 16,
-                borderBottom: last ? undefined : '1px solid rgba(128,128,128,0.2)',
-              }}
-            >
-              <Space style={{ marginBottom: 8 }}>
-                <Tag color={priorityColor[ann.priority] || 'blue'}>{priorityLabel[ann.priority] || '일반'}</Tag>
-                <Typography.Title level={5} style={{ margin: 0 }}>
-                  {ann.title}
-                </Typography.Title>
-              </Space>
-              {imgUrl && (
-                <div style={{ margin: '8px 0' }}>
-                  <img
-                    src={imgUrl}
-                    alt={ann.title}
-                    style={{ maxWidth: '100%', borderRadius: 6, display: 'block' }}
-                    // 로드 실패 시 텍스트만 표시 (깨진 이미지 숨김)
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).style.display = 'none';
-                    }}
-                  />
-                </div>
-              )}
-              <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                {ann.content}
-              </Typography.Paragraph>
-            </div>
-          );
-        })}
+      <Space style={{ marginBottom: 8 }}>
+        <Tag color={priorityColor[top.priority] || 'blue'}>{priorityLabel[top.priority] || '일반'}</Tag>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          {top.title}
+        </Typography.Title>
+      </Space>
+      <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>
+        {new Date(top.created_at).toLocaleString('ko-KR')}
       </div>
+      {top.image_data && (
+        <div style={{ margin: '8px 0' }}>
+          <img
+            src={top.image_data}
+            alt={top.title}
+            style={{ maxWidth: '100%', borderRadius: 6, display: 'block' }}
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = 'none';
+            }}
+          />
+        </div>
+      )}
+      <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{top.content}</Typography.Paragraph>
     </Modal>
   );
 }
