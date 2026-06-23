@@ -165,7 +165,7 @@
     </div>
 
     <h2 id="overview">전체 모듈 목록</h2>
-    <p>총 <strong>13개</strong> 모듈, <strong>121개</strong> 함수가 등록되어 있습니다.</p>
+    <p>총 <strong>13개</strong> 모듈, <strong>122개</strong> 함수가 등록되어 있습니다.</p>
     <table>
       <thead><tr><th>모듈</th><th>설명</th><th>함수 수</th></tr></thead>
       <tbody>
@@ -187,7 +187,7 @@
 표준 사용 패턴:
   1) StartLogging()                              ← 시나리오 첫 스텝 (캡처 시작, 포트는 Device 탭에서 미리 Connect)
   2) SendCommand / SendCommand_*_on_keyword ...  ← 중간 스텝들
-  3) StopLogging()                               ← 시나리오 마지막 스텝 (로그 파일 저장 + 캡처 종료, 포트는 유지)</td><td style="text-align:center">7</td></tr>
+  3) StopLogging()                               ← 시나리오 마지막 스텝 (로그 파일 저장 + 캡처 종료, 포트는 유지)</td><td style="text-align:center">8</td></tr>
 <tr><td><a href="#mod-SmartBench"><strong>SmartBench</strong></a></td><td>TCP 소켓으로 Smart Bench 장비의 전원, 버튼, 전류, LED를 제어하는 모듈</td><td style="text-align:center">15</td></tr>
 <tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>UDP 통신으로 차량 전원(IGN/ACC/배터리) 제어 + CAN FD 신호 송신을 지원하는 통합 테스트 벤치</td><td style="text-align:center">25</td></tr>
 <tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Windows 명령 프롬프트(CMD) 명령을 실행하는 모듈. 외부 프로그램 실행이나 시스템 명령에 사용</td><td style="text-align:center">5</td></tr>
@@ -705,6 +705,11 @@
 <td><code>SendCommand</code></td>
 <td>시리얼 포트로 문자열 명령어를 전송합니다.</td>
 <td style="font-size:12px"><code>command</code>: 전송할 명령어. 예: &#x27;reboot&#x27;, &#x27;cat /proc/version&#x27;<br><code>encoding</code>: 인코딩 (기본 utf-8)<br><code>append_newline</code>: 개행 문자 자동 추가. true/false (기본 true)</td>
+</tr>
+<tr>
+<td><code>Send_Packet</code></td>
+<td>raw hex 바이트 패킷을 시리얼 포트로 전송합니다. 공백으로 구분된 hex 토큰을 각각 1바이트로 변환해 송신하며, 송신 후 flush로 실제 회선 도달을 보장합니다 (1자리/2자리/0x 접두사 혼용 가능).</td>
+<td style="font-size:12px"><code>data</code>: 공백 구분 hex 문자열. 예: &#x27;79 6D F2 0F&#x27; 또는 &#x27;00 77 42 37 02 F2 00 FE&#x27;</td>
 </tr>
 <tr>
 <td><code>SendCommand_fail_on_keyword</code></td>

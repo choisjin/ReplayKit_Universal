@@ -165,7 +165,7 @@
     </div>
 
     <h2 id="overview">All Modules</h2>
-    <p>Total <strong>13</strong> modules, <strong>120</strong> functions registered.</p>
+    <p>Total <strong>13</strong> modules, <strong>121</strong> functions registered.</p>
     <table>
       <thead><tr><th>Module</th><th>Description</th><th>Functions</th></tr></thead>
       <tbody>
@@ -187,7 +187,7 @@
 Standard usage pattern:
   1) StartLogging()                              ← first step (capture starts; port pre-opened via Device tab Connect)
   2) SendCommand / SendCommand_*_on_keyword ...  ← middle steps
-  3) StopLogging()                               ← last step (writes log file + ends capture, port stays open)</td><td style="text-align:center">7</td></tr>
+  3) StopLogging()                               ← last step (writes log file + ends capture, port stays open)</td><td style="text-align:center">8</td></tr>
 <tr><td><a href="#mod-SmartBench"><strong>SmartBench</strong></a></td><td>Controls power, buttons, current, and LEDs on Smart Bench equipment via TCP socket</td><td style="text-align:center">15</td></tr>
 <tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>Integrated UDP test bench: vehicle power control (IGN/ACC/Battery) + CAN FD signal transmission</td><td style="text-align:center">25</td></tr>
 <tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Executes Windows command prompt (CMD) commands. Used for running external programs or system commands</td><td style="text-align:center">4</td></tr>
@@ -705,6 +705,11 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td><code>SendCommand</code></td>
 <td>Sends a text command via the serial port.</td>
 <td style="font-size:12px"><code>command</code>: Command to send. e.g. &#x27;reboot&#x27;, &#x27;cat /proc/version&#x27;<br><code>encoding</code>: Encoding (default: utf-8)<br><code>append_newline</code>: Auto-append newline. true/false (default: true)</td>
+</tr>
+<tr>
+<td><code>Send_Packet</code></td>
+<td>Sends a raw hex byte packet over the serial port. Each space-separated hex token is converted to a single byte and sent, then flushed to guarantee it reaches the wire (1-digit / 2-digit / 0x-prefixed tokens are all accepted).</td>
+<td style="font-size:12px"><code>data</code>: Space-separated hex string. e.g. &#x27;79 6D F2 0F&#x27; or &#x27;00 77 42 37 02 F2 00 FE&#x27;</td>
 </tr>
 <tr>
 <td><code>SendCommand_fail_on_keyword</code></td>

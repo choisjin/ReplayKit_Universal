@@ -1107,6 +1107,12 @@
           "append_newline": "Auto-append newline. true/false (default: true)"
         }
       },
+      "Send_Packet": {
+        "description": "Sends a raw hex byte packet over the serial port. Each space-separated hex token is converted to a single byte and sent, then flushed to guarantee it reaches the wire (1-digit / 2-digit / 0x-prefixed tokens are all accepted).",
+        "params": {
+          "data": "Space-separated hex string. e.g. '79 6D F2 0F' or '00 77 42 37 02 F2 00 FE'"
+        }
+      },
       "SendCommand_fail_on_keyword": {
         "description": "Sends a command, then **FAILS if the keyword appears** in the response. Used to detect abnormal keywords like 'ERROR'/'Fail'/'crash'. After sending, monitors only newly captured lines for 'time' seconds; every matching line is appended as a fail row and displayed inline (Fail_Count_N). Returns PASS if no match.",
         "params": {

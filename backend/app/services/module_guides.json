@@ -1107,6 +1107,12 @@
           "append_newline": "개행 문자 자동 추가. true/false (기본 true)"
         }
       },
+      "Send_Packet": {
+        "description": "raw hex 바이트 패킷을 시리얼 포트로 전송합니다. 공백으로 구분된 hex 토큰을 각각 1바이트로 변환해 송신하며, 송신 후 flush로 실제 회선 도달을 보장합니다 (1자리/2자리/0x 접두사 혼용 가능).",
+        "params": {
+          "data": "공백 구분 hex 문자열. 예: '79 6D F2 0F' 또는 '00 77 42 37 02 F2 00 FE'"
+        }
+      },
       "SendCommand_fail_on_keyword": {
         "description": "명령어 전송 후 응답에 keyword가 **포함되면 FAIL 판정**. 'ERROR'/'Fail'/'crash' 등 비정상 키워드 검출용. 전송 직후 'time' 초간 새 라인만 모니터링 — 매칭된 라인은 모두 fail row로 누적되어 결과 표에 인라인(Fail_Count_N) 표시됨. 매칭 없으면 PASS 반환.",
         "params": {
