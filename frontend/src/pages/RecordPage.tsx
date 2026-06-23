@@ -288,7 +288,7 @@ export default function RecordPage() {
     screenshotDeviceId, setScreenshotDeviceId, screenshot,
     h264Mode, h264Size, videoRef, h264RendererRef, sendControl,
     screenType, setScreenType, refreshScreenshot,
-    screenAlive, streamFps,
+    screenStatus, streamFps,
     screenPausedForPlayback,
     pauseScreenStream, resumeScreenStream,
   } = useDevice();
@@ -4649,13 +4649,18 @@ export default function RecordPage() {
                     ))}
                   </Select>
                   {screenDevice && (
-                    <Tag color={screenAlive ? 'green' : 'red'} style={{ marginLeft: 0 }}>
-                      {screenAlive
+                    <Tag
+                      color={screenStatus === 'live' ? 'green' : screenStatus === 'idle' ? 'gold' : 'red'}
+                      style={{ marginLeft: 0 }}
+                    >
+                      {screenStatus === 'live'
                         ? `${h264Mode ? 'H.264' : 'JPEG'} ${streamFps}fps`
-                        : t('record.deviceDisconnected')}
+                        : screenStatus === 'idle'
+                          ? `${h264Mode ? 'H.264' : 'JPEG'} · ${t('record.screenStatic')}`
+                          : t('record.deviceDisconnected')}
                     </Tag>
                   )}
-                  {!screenAlive && isScreenAdb && (
+                  {screenStatus === 'disconnected' && isScreenAdb && (
                     <Button
                       size="small"
                       danger

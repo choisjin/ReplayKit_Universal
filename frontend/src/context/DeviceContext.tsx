@@ -37,6 +37,11 @@ interface DeviceContextType {
   refreshScreenshot: () => void;
   // Screen streaming alive indicator (true = frames arriving)
   screenAlive: boolean;
+  // 미러 스트림 상태 3분류:
+  //   'live'         — 프레임 수신 중 (초록)
+  //   'idle'         — 프레임만 정지(정적 화면). 연결은 살아있음 → 끊김 아님 (노랑)
+  //   'disconnected' — 재연결 시도 소진(진성 끊김) 또는 poll 연속 실패 (빨강)
+  screenStatus: 'live' | 'idle' | 'disconnected';
   // H.264 direct streaming mode
   h264Mode: boolean;
   h264Size: { width: number; height: number };
@@ -72,6 +77,11 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const [pollInterval, setPollInterval] = useState(500);
   const [screenType, setScreenType] = useState('front_center');
   const [screenAlive, setScreenAlive] = useState(false);
+  // 진성 끊김 여부 — WS 재연결 시도 소진 또는 poll 연속 실패 시 true.
+  // 정적 화면(프레임만 정지)에서는 false 로 유지되어 '끊김(빨강)'이 아닌 '정지(노랑)'로 표기된다.
+  const [streamGaveUp, setStreamGaveUp] = useState(false);
+  const pollFailRef = useRef(0); // poll 경로 연속 실패 카운트
+  const POLL_FAIL_LIMIT = 5; // 연속 실패 이 횟수 이상이면 진성 끊김 처리
   const [h264Mode, setH264Mode] = useState(false);
   const [h264Size, setH264Size] = useState({ width: 1080, height: 1920 });
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -105,6 +115,9 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   //   1개 = 프레임 1장이라 countFps=true 로 메시지 단위 카운트가 정확하다.
   const markFrameAlive = useCallback((countFps = true) => {
     setScreenAlive(true);
+    // 프레임이 도착했다 = 연결 정상 → 진성 끊김 해제, poll 실패 카운트 리셋.
+    setStreamGaveUp(false);
+    pollFailRef.current = 0;
     if (countFps) fpsCountRef.current += 1;
     if (screenAliveTimerRef.current) clearTimeout(screenAliveTimerRef.current);
     screenAliveTimerRef.current = setTimeout(() => setScreenAlive(false), 3000);
@@ -272,6 +285,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
 
   const startWsStream = useCallback((deviceId: string, st: string) => {
     closeWs();
+    setStreamGaveUp(false); // 새 연결 시도 시작 → 끊김 상태 해제 (성공/소진 시 갱신)
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${wsProto}//${window.location.host}/ws/screen`);
     ws.binaryType = 'arraybuffer';
@@ -280,7 +294,11 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     // 예기치 않은 종료 시 재연결 스케줄링
     const scheduleReconnect = () => {
       if (screenshotDeviceIdRef.current !== deviceId) return;
-      if (wsRetryCountRef.current >= MAX_WS_RETRIES) return;
+      if (wsRetryCountRef.current >= MAX_WS_RETRIES) {
+        // 재연결 시도 모두 소진 → 진성 끊김 확정 (빨강 표기).
+        setStreamGaveUp(true);
+        return;
+      }
       wsRetryCountRef.current += 1;
       const delay = 500 * wsRetryCountRef.current;
       wsRetryTimerRef.current = setTimeout(() => {
@@ -295,6 +313,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       ws.send(JSON.stringify({ device_id: deviceId, screen_type: st }));
       startFpsCounter();
       wsRetryCountRef.current = 0; // 연결 성공 → 재시도 카운터 초기화
+      setStreamGaveUp(false); // 연결 성공 → 끊김 해제 (첫 프레임 전이라도 '정지/노랑'으로)
     };
 
     ws.onmessage = (event) => {
@@ -402,9 +421,14 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         const fmt = res.data.format || 'jpeg';
         const mime = fmt === 'jpeg' ? 'image/jpeg' : 'image/png';
         setScreenshot(`data:${mime};base64,${res.data.image}`);
-        markFrameAlive();
+        markFrameAlive(); // 성공 → streamGaveUp/pollFail 리셋 포함
       }
-    } catch { /* ignore */ }
+    } catch {
+      // poll 경로는 정적 화면에서도 매번 성공(markFrameAlive 호출)하므로,
+      // 연속 실패는 곧 진성 끊김 → 임계 초과 시 '끊김(빨강)' 처리.
+      pollFailRef.current += 1;
+      if (pollFailRef.current >= POLL_FAIL_LIMIT) setStreamGaveUp(true);
+    }
     pollInFlightRef.current = false;
   }, []);
 
@@ -607,6 +631,13 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const pauseScreenStream = useCallback(() => { /* deprecated no-op */ }, []);
   const resumeScreenStream = useCallback(() => { /* deprecated no-op */ }, []);
 
+  // 미러 스트림 표기 상태 계산:
+  //   프레임 수신 중 → live(초록)
+  //   프레임 정지 + 진성 끊김(재연결 소진/poll 연속실패) → disconnected(빨강)
+  //   프레임 정지 + 연결은 살아있음(정적 화면·재연결 중) → idle(노랑)
+  const screenStatus: 'live' | 'idle' | 'disconnected' =
+    screenAlive ? 'live' : streamGaveUp ? 'disconnected' : 'idle';
+
   return (
     <DeviceContext.Provider value={{
       primaryDevices,
@@ -625,6 +656,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       setScreenType,
       refreshScreenshot,
       screenAlive,
+      screenStatus,
       h264Mode,
       h264Size,
       videoRef,
