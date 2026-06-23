@@ -1,17 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Badge, Button, Modal, Space, Tag, Typography } from 'antd';
 import { NotificationOutlined, ExpandOutlined } from '@ant-design/icons';
-
-const ADMIN_URL = 'http://10.176.144.70:9000';
-
-interface Announcement {
-  id: number;
-  title: string;
-  content: string;
-  priority: string;
-  active: number;
-  created_at: string;
-}
+import { Announcement, managerImageUrl, useManagerUrl } from '../lib/manager';
 
 export default function AnnouncementBanner() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -19,7 +9,7 @@ export default function AnnouncementBanner() {
   const [dismissed, setDismissed] = useState<Set<number>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
 
-  const adminUrl = ADMIN_URL;
+  const adminUrl = useManagerUrl();
 
   useEffect(() => {
     if (!adminUrl) return;
@@ -119,6 +109,7 @@ export default function AnnouncementBanner() {
         {visibleAnnouncements.map(ann => {
           const priorityLabel: Record<string, string> = { urgent: '긴급', important: '중요', normal: '일반' };
           const priorityColor: Record<string, string> = { urgent: 'red', important: 'orange', normal: 'blue' };
+          const imgUrl = managerImageUrl(adminUrl, ann.image_path);
           return (
             <div key={ann.id} style={{ marginBottom: 13, padding: 13, background: 'rgba(255,255,255,0.04)', borderRadius: 8 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -130,6 +121,16 @@ export default function AnnouncementBanner() {
                   {new Date(ann.created_at).toLocaleString('ko-KR')}
                 </Typography.Text>
               </div>
+              {imgUrl && (
+                <div style={{ margin: '6px 0' }}>
+                  <img
+                    src={imgUrl}
+                    alt={ann.title}
+                    style={{ maxWidth: '100%', borderRadius: 6, display: 'block' }}
+                    onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                  />
+                </div>
+              )}
               <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
                 {ann.content}
               </Typography.Paragraph>

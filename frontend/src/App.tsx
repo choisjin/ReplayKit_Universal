@@ -32,6 +32,7 @@ import AdminPage from './pages/AdminPage';
 import WebcamPip from './components/WebcamPip';
 import CompositorEditor from './components/CompositorEditor';
 import AnnouncementBanner from './components/AnnouncementBanner';
+import PopupNotice from './components/PopupNotice';
 import PlaybackStatusBanner from './components/PlaybackStatusBanner';
 import ChatWidget from './components/ChatWidget';
 import { WebcamProvider } from './context/WebcamContext';
@@ -485,6 +486,7 @@ function AppContent() {
         <Layout style={layoutBg ? { background: layoutBg } : undefined}>
           <Content style={{ margin: 6, padding: 10, background: contentBg, borderRadius: 8 }}>
             <AnnouncementBanner />
+            <PopupNotice />
             <PlaybackStatusBanner />
             {backendReady ? (
               <>
