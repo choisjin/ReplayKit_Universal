@@ -3,6 +3,7 @@
 import html as _html
 import io
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -13,6 +14,8 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import FileResponse, StreamingResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/results", tags=["results"])
 
@@ -723,16 +726,23 @@ async def export_result_bundle(filename: str, export_path: str = ""):
     if filepath.name == "result.json" and filepath.parent != RESULTS_DIR:
         run_dir = filepath.parent
         folder_name = run_dir.name
-        # 런 폴더에는 result.html만 자동 생성되고 xlsx는 없을 수 있다.
-        # 번들 다운로드 시점에만 lazy로 xlsx를 생성하여 파일에 포함시킨다.
-        excel_path = run_dir / "result.xlsx"
-        if not excel_path.exists():
+        # 내보내기 시점에 result.html / result.xlsx 를 항상 최신 코드로 재생성한다.
+        # (저장 당시 옛 버전으로 구워진 리포트도 최신 렌더링/포맷으로 갱신됨)
+        try:
+            data = json.loads(filepath.read_text(encoding="utf-8"))
+        except Exception:
+            data = None
+        if data is not None:
             try:
-                data = json.loads(filepath.read_text(encoding="utf-8"))
+                html_path = run_dir / "result.html"
+                html_path.write_text(_build_html_report(data, html_path), encoding="utf-8")
+            except Exception as e:
+                logger.warning("HTML report regeneration failed: %s", e)
+            try:
                 wb = _build_excel_workbook(data, filepath)
-                wb.save(str(excel_path))
-            except Exception:
-                pass
+                wb.save(str(run_dir / "result.xlsx"))
+            except Exception as e:
+                logger.warning("Excel report regeneration failed: %s", e)
     else:
         # 레거시: 임시 폴더에 결과물 수집
         data = json.loads(filepath.read_text(encoding="utf-8"))
@@ -755,8 +765,15 @@ async def export_result_bundle(filename: str, export_path: str = ""):
         try:
             wb = _build_excel_workbook(data, filepath)
             wb.save(str(run_dir / filepath.name.replace(".json", ".xlsx")))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Excel report generation failed: %s", e)
+
+        # HTML 리포트 생성 (레거시도 내보내기 시점에 최신 코드로 생성)
+        try:
+            html_path = run_dir / "result.html"
+            html_path.write_text(_build_html_report(data, html_path), encoding="utf-8")
+        except Exception as e:
+            logger.warning("HTML report generation failed: %s", e)
 
         # 웹캠 녹화 복사 (webm + mp4)
         base = filename.replace(".json", "")
