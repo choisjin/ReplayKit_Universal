@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { Alert, Badge, Button, Space } from 'antd';
 import { NotificationOutlined, ExpandOutlined } from '@ant-design/icons';
 import { useAnnouncements } from '../context/AnnouncementsContext';
+import { annContent, annTitle } from '../lib/manager';
+import { useTranslation } from '../i18n';
 
 /**
  * 상단 배너 — 활성 공지의 대표 1건을 띄우고, "크게보기" 로 공통 목록 모달을 연다.
@@ -9,6 +11,7 @@ import { useAnnouncements } from '../context/AnnouncementsContext';
  */
 export default function AnnouncementBanner() {
   const { announcements, openList } = useAnnouncements();
+  const { t, lang } = useTranslation();
   const [dismissed, setDismissed] = useState<Set<number>>(new Set());
 
   const visible = announcements.filter((a) => !dismissed.has(a.id));
@@ -21,6 +24,8 @@ export default function AnnouncementBanner() {
   };
 
   const top = visible[0];
+  const title = annTitle(top, lang);
+  const content = annContent(top, lang);
 
   return (
     <Alert
@@ -31,16 +36,16 @@ export default function AnnouncementBanner() {
       message={
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Space size={8}>
-            <strong>{top.title}</strong>
-            <span style={{ color: 'rgba(255,255,255,0.65)', fontSize: 11 }}>
-              {top.content.length > 80 ? top.content.slice(0, 80) + '...' : top.content}
+            <strong>{title}</strong>
+            <span style={{ fontSize: 11, opacity: 0.7 }}>
+              {content.length > 80 ? content.slice(0, 80) + '...' : content}
             </span>
             {visible.length > 1 && (
               <Badge count={visible.length} size="small" style={{ backgroundColor: '#1677ff' }} />
             )}
           </Space>
           <Button type="text" size="small" icon={<ExpandOutlined />} onClick={openList} style={{ color: 'inherit' }}>
-            크게보기
+            {t('announce.expand')}
           </Button>
         </div>
       }

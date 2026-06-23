@@ -434,13 +434,13 @@ function AppContent() {
                 {!siderCollapsed && 'Results 폴더'}
               </Button>
             </Tooltip>
-            <Tooltip title="공지사항" placement="right">
+            <Tooltip title={t('announce.title')} placement="right">
               <Button
                 block
                 icon={<NotificationOutlined />}
                 onClick={openAnnouncements}
               >
-                {!siderCollapsed && '공지사항'}
+                {!siderCollapsed && t('announce.title')}
               </Button>
             </Tooltip>
             <Tooltip title={t('chat.title')} placement="right">

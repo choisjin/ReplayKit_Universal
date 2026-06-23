@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Modal, Space, Tag, Typography } from 'antd';
 import { NotificationOutlined } from '@ant-design/icons';
-import { dismissPopupsToday, isGuide, readDismiss, todayStr } from '../lib/manager';
+import { annTitle, dismissPopupsToday, isGuide, readDismiss, todayStr } from '../lib/manager';
 import { useAnnouncements } from '../context/AnnouncementsContext';
+import { useTranslation } from '../i18n';
 import AnnouncementBody from './AnnouncementBody';
 
-const priorityLabel: Record<string, string> = { urgent: '긴급', important: '중요', normal: '일반' };
 const priorityColor: Record<string, string> = { urgent: 'red', important: 'orange', normal: 'blue' };
 
 /**
@@ -17,6 +17,9 @@ const priorityColor: Record<string, string> = { urgent: 'red', important: 'orang
  */
 export default function PopupNotice() {
   const { announcements, openList } = useAnnouncements();
+  const { t: tr, lang } = useTranslation();
+  const pLabel = (p: string) =>
+    tr(p === 'urgent' ? 'announce.priorityUrgent' : p === 'important' ? 'announce.priorityImportant' : 'announce.priorityNormal');
   const [open, setOpen] = useState(false);
   const [dontShowToday, setDontShowToday] = useState(false);
   const shownRef = useRef(false);
@@ -60,7 +63,7 @@ export default function PopupNotice() {
       title={
         <Space>
           <NotificationOutlined />
-          <span>공지사항</span>
+          <span>{tr('announce.title')}</span>
         </Space>
       }
       open={open}
@@ -69,12 +72,14 @@ export default function PopupNotice() {
       footer={
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Checkbox checked={dontShowToday} onChange={(e) => setDontShowToday(e.target.checked)}>
-            오늘 하루 그만 보기
+            {tr('announce.dontShowToday')}
           </Checkbox>
           <Space>
-            <Button onClick={handleOpenList}>{others > 0 ? `전체 목록 (외 ${others}건)` : '전체 목록'}</Button>
+            <Button onClick={handleOpenList}>
+              {others > 0 ? tr('announce.viewAllOthers', { n: others }) : tr('announce.viewAll')}
+            </Button>
             <Button type="primary" onClick={handleClose}>
-              닫기
+              {tr('announce.close')}
             </Button>
           </Space>
         </div>
@@ -82,14 +87,14 @@ export default function PopupNotice() {
       width={640}
     >
       <Space style={{ marginBottom: 8 }}>
-        <Tag color={priorityColor[top.priority] || 'blue'}>{priorityLabel[top.priority] || '일반'}</Tag>
-        {isGuide(top) && <Tag color="purple">가이드</Tag>}
+        <Tag color={priorityColor[top.priority] || 'blue'}>{pLabel(top.priority)}</Tag>
+        {isGuide(top) && <Tag color="purple">{tr('announce.guide')}</Tag>}
         <Typography.Title level={5} style={{ margin: 0 }}>
-          {top.title}
+          {annTitle(top, lang)}
         </Typography.Title>
       </Space>
       <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>
-        {new Date(top.created_at).toLocaleString('ko-KR')}
+        {new Date(top.created_at).toLocaleString(lang === 'en' ? 'en-US' : 'ko-KR')}
       </div>
       <div style={{ maxHeight: '60vh', overflow: 'auto' }}>
         <AnnouncementBody ann={top} />

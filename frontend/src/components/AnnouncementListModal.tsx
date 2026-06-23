@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Empty, Modal, Space, Tag, Typography } from 'antd';
 import { NotificationOutlined } from '@ant-design/icons';
-import { isGuide } from '../lib/manager';
+import { annTitle, isGuide } from '../lib/manager';
 import { useAnnouncements } from '../context/AnnouncementsContext';
+import { useTranslation } from '../i18n';
 import AnnouncementBody from './AnnouncementBody';
 
-const priorityLabel: Record<string, string> = { urgent: '긴급', important: '중요', normal: '일반' };
 const priorityColor: Record<string, string> = { urgent: 'red', important: 'orange', normal: 'blue' };
 
 /**
@@ -15,6 +15,10 @@ const priorityColor: Record<string, string> = { urgent: 'red', important: 'orang
  */
 export default function AnnouncementListModal() {
   const { announcements, listOpen, closeList } = useAnnouncements();
+  const { t, lang } = useTranslation();
+  const pLabel = (p: string) =>
+    t(p === 'urgent' ? 'announce.priorityUrgent' : p === 'important' ? 'announce.priorityImportant' : 'announce.priorityNormal');
+  const dateLocale = lang === 'en' ? 'en-US' : 'ko-KR';
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const sorted = useMemo(
@@ -37,7 +41,7 @@ export default function AnnouncementListModal() {
       title={
         <Space>
           <NotificationOutlined />
-          <span>공지사항</span>
+          <span>{t('announce.title')}</span>
         </Space>
       }
       open={listOpen}
@@ -46,7 +50,7 @@ export default function AnnouncementListModal() {
       width={780}
     >
       {sorted.length === 0 ? (
-        <Empty description="공지사항이 없습니다" />
+        <Empty description={t('announce.empty')} />
       ) : (
         <div style={{ display: 'flex', gap: 12, height: 460 }}>
           {/* 좌: 목록 */}
@@ -72,7 +76,7 @@ export default function AnnouncementListModal() {
                 }}
               >
                 <Tag color={priorityColor[a.priority] || 'blue'} style={{ marginInlineEnd: 0, marginBottom: 2 }}>
-                  {priorityLabel[a.priority] || '일반'}
+                  {pLabel(a.priority)}
                 </Tag>
                 <div
                   style={{
@@ -83,10 +87,10 @@ export default function AnnouncementListModal() {
                     textOverflow: 'ellipsis',
                   }}
                 >
-                  {a.title}
+                  {annTitle(a, lang)}
                 </div>
                 <div style={{ fontSize: 10, color: '#888' }}>
-                  {new Date(a.created_at).toLocaleDateString('ko-KR')}
+                  {new Date(a.created_at).toLocaleDateString(dateLocale)}
                 </div>
               </div>
             ))}
@@ -97,15 +101,15 @@ export default function AnnouncementListModal() {
               <>
                 <Space style={{ marginBottom: 8 }}>
                   <Tag color={priorityColor[selected.priority] || 'blue'}>
-                    {priorityLabel[selected.priority] || '일반'}
+                    {pLabel(selected.priority)}
                   </Tag>
-                  {isGuide(selected) && <Tag color="purple">가이드</Tag>}
+                  {isGuide(selected) && <Tag color="purple">{t('announce.guide')}</Tag>}
                   <Typography.Title level={5} style={{ margin: 0 }}>
-                    {selected.title}
+                    {annTitle(selected, lang)}
                   </Typography.Title>
                 </Space>
                 <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>
-                  {new Date(selected.created_at).toLocaleString('ko-KR')}
+                  {new Date(selected.created_at).toLocaleString(dateLocale)}
                 </div>
                 <AnnouncementBody ann={selected} />
               </>

@@ -1,5 +1,6 @@
 import { Image, Typography } from 'antd';
-import { Announcement, announcementImages, isGuide, stepImage, stepText } from '../lib/manager';
+import { Announcement, announcementImages, annContent, isGuide, stepImage, stepText } from '../lib/manager';
+import { useTranslation } from '../i18n';
 
 /**
  * 공지 본문 공용 렌더러 (매니저 공개 페이지의 AnnouncementBody 와 동일한 레이아웃).
@@ -8,18 +9,20 @@ import { Announcement, announcementImages, isGuide, stepImage, stepText } from '
  *  - 하위호환: images 없으면 image_data(단일) 사용. type 없으면 notice 처리.
  */
 export default function AnnouncementBody({ ann }: { ann: Announcement }) {
+  const { lang } = useTranslation();
+  const content = annContent(ann, lang);
   if (isGuide(ann)) {
     return (
       <div>
-        {ann.content && (
+        {content && (
           <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 14 }}>
-            {ann.content}
+            {content}
           </Typography.Paragraph>
         )}
         <Image.PreviewGroup>
           {ann.steps!.map((s, i) => {
             const img = stepImage(s);
-            const text = stepText(s);
+            const text = stepText(s, lang);
             return (
               <div key={i} style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
                 <div
@@ -61,9 +64,9 @@ export default function AnnouncementBody({ ann }: { ann: Announcement }) {
   const imgs = announcementImages(ann);
   return (
     <div>
-      {ann.content && (
+      {content && (
         <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: imgs.length > 0 ? 10 : 0 }}>
-          {ann.content}
+          {content}
         </Typography.Paragraph>
       )}
       {imgs.length > 0 && (

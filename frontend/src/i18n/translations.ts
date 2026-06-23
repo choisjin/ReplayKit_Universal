@@ -76,6 +76,19 @@ const translations = {
     'server.guide': '사용자 가이드',
     'server.moduleGuide': '모듈 가이드',
 
+    // === Announcements ===
+    'announce.title': '공지사항',
+    'announce.guide': '가이드',
+    'announce.priorityUrgent': '긴급',
+    'announce.priorityImportant': '중요',
+    'announce.priorityNormal': '일반',
+    'announce.dontShowToday': '오늘 하루 그만 보기',
+    'announce.close': '닫기',
+    'announce.viewAll': '전체 목록',
+    'announce.viewAllOthers': '전체 목록 (외 {n}건)',
+    'announce.expand': '크게보기',
+    'announce.empty': '공지사항이 없습니다',
+
     // === Nav ===
     'nav.device': '디바이스',
     'nav.record': '녹화',
@@ -957,6 +970,19 @@ const translations = {
     'server.restarting': 'Server restarting...',
     'server.guide': 'User Guide',
     'server.moduleGuide': 'Module Guide',
+
+    // === Announcements ===
+    'announce.title': 'Notices',
+    'announce.guide': 'Guide',
+    'announce.priorityUrgent': 'Urgent',
+    'announce.priorityImportant': 'Important',
+    'announce.priorityNormal': 'Normal',
+    'announce.dontShowToday': "Don't show again today",
+    'announce.close': 'Close',
+    'announce.viewAll': 'View all',
+    'announce.viewAllOthers': 'View all (+{n} more)',
+    'announce.expand': 'Expand',
+    'announce.empty': 'No announcements',
 
     // === Nav ===
     'nav.device': 'Devices',

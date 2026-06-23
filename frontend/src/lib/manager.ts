@@ -4,10 +4,13 @@ import { useSettings } from '../context/SettingsContext';
 // 설정(admin_server_url)이 비어 있을 때만 이 값으로 폴백한다.
 const DEFAULT_MANAGER_URL = 'http://10.176.144.70:9000';
 
+export type Lang = 'ko' | 'en';
+
 // 가이드(type === 'guide')의 단계.
 // 매니저 GuideStep 모델의 필드명이 달라질 수 있어 방어적으로 여러 키를 허용한다.
 export interface GuideStep {
   text?: string;
+  text_en?: string; // 영문 자동 번역 (비어 있으면 한국어로 폴백)
   description?: string;
   content?: string;
   image?: string | null;
@@ -18,7 +21,9 @@ export interface GuideStep {
 export interface Announcement {
   id: number;
   title: string;
+  title_en?: string; // 영문 자동 번역 (비어 있으면 title 로 폴백)
   content: string;
+  content_en?: string; // 영문 자동 번역 (비어 있으면 content 로 폴백)
   priority: string; // "normal" | "important" | "urgent"
   active: number;
   type?: string; // "notice"(기본) | "guide"
@@ -30,6 +35,16 @@ export interface Announcement {
   updated_at?: string;
 }
 
+/** 앱 언어에 맞는 제목 — en 이고 title_en 있으면 영문, 아니면 한국어 폴백. */
+export function annTitle(a: Announcement, lang: Lang): string {
+  return lang === 'en' ? a.title_en || a.title : a.title;
+}
+
+/** 앱 언어에 맞는 본문 — en 이고 content_en 있으면 영문, 아니면 한국어 폴백. */
+export function annContent(a: Announcement, lang: Lang): string {
+  return lang === 'en' ? a.content_en || a.content : a.content;
+}
+
 /** 표시할 이미지 배열 — images 우선, 없으면 image_data(단일)로 폴백. */
 export function announcementImages(a: Announcement): string[] {
   if (Array.isArray(a.images)) {
@@ -39,8 +54,9 @@ export function announcementImages(a: Announcement): string[] {
   return a.image_data ? [a.image_data] : [];
 }
 
-/** 가이드 단계의 글 (필드명 방어). */
-export function stepText(s: GuideStep): string {
+/** 가이드 단계의 글 (필드명 방어 + 언어 선택). en 이고 text_en 있으면 영문, 아니면 한국어 폴백. */
+export function stepText(s: GuideStep, lang: Lang = 'ko'): string {
+  if (lang === 'en' && s.text_en) return s.text_en;
   return s.text ?? s.description ?? s.content ?? '';
 }
 
