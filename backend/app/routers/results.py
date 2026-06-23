@@ -375,11 +375,17 @@ _HTML_SCRIPT = r"""
       columns: buildColumns(data),
       layout: "fitDataStretch",
       maxHeight: "calc(100vh - 170px)",
-      renderVertical: "basic",
+      // 대용량(수천~수만 행) 리포트 대응: 가상 스크롤로 보이는 행만 렌더.
+      // 'basic'은 전 행을 DOM에 마운트해 13744행 같은 경우 브라우저가 멈춘다.
+      renderVertical: "virtual",
       placeholder: "표시할 결과가 없습니다",
       headerSortClickElement: "icon",
       rowHeight: false,
       cellVertAlign: "middle",
+      // PDF 저장은 table.print('all')로 전 행을 별도 렌더 → 가상 스크롤과 무관하게 전체 출력
+      printAsHtml: true,
+      printRowRange: "all",
+      printConfig: { columnHeaders: true },
     });
     window.__table = table;
 
@@ -402,8 +408,8 @@ _HTML_SCRIPT = r"""
       table.removeFilter(globalFilter);
     });
 
-    // PDF 저장 — window.print()로 전체 행 출력 (가상 렌더링 우회)
-    document.getElementById('pdf-btn').addEventListener('click', function(){ window.print(); });
+    // PDF 저장 — Tabulator 내장 print로 전 행 출력(가상 스크롤이어도 전체가 나옴)
+    document.getElementById('pdf-btn').addEventListener('click', function(){ table.print("all", true); });
 
     // 이미지 프리뷰
     document.getElementById('results-table').addEventListener('click', onImgClick);
