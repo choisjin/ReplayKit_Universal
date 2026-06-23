@@ -237,6 +237,16 @@ h1 { font-size: 20px; font-weight: 700; margin: 0 0 6px; color: #1a1a2e; letter-
 .img-thumb { max-width: 170px; max-height: 130px; display: block; margin: 0 auto;
   cursor: pointer; border-radius: 4px; border: 1px solid #e5e7eb; transition: transform 0.15s; }
 .img-thumb:hover { transform: scale(1.03); box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+/* 로딩 오버레이 (테이블 빌드 전) */
+.table-wrap { position: relative; }
+.report-loading { position: absolute; inset: 0; min-height: 200px; background: rgba(255,255,255,0.92);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  z-index: 30; }
+.report-loading .spinner { width: 38px; height: 38px; border: 4px solid #dbeafe;
+  border-top-color: #3b82f6; border-radius: 50%; animation: rk-spin 0.8s linear infinite; }
+.report-loading-text { color: #475569; font-size: 14px; font-weight: 500; }
+.report-loading-text b { color: #1e3a5f; }
+@keyframes rk-spin { to { transform: rotate(360deg); } }
 /* 이미지 프리뷰 */
 .preview-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.88); display: none;
   align-items: center; justify-content: center; z-index: 9999; cursor: zoom-out; }
@@ -246,6 +256,7 @@ h1 { font-size: 20px; font-weight: 700; margin: 0 0 6px; color: #1a1a2e; letter-
 @media print {
   body { margin: 8px; padding: 0; background: #fff; }
   .controls { display: none !important; }
+  .report-loading { display: none !important; }
   .tabulator .tabulator-header .tabulator-header-filter { display: none !important; }
   .tabulator { box-shadow: none; border: 1px solid #ccc; height: auto !important;
     max-height: none !important; overflow: visible !important; }
@@ -305,6 +316,20 @@ _HTML_SCRIPT = r"""
     };
   }
 
+  /* ---------- 적응형 헤더 필터 ----------
+     고유값이 많은 컬럼(timestamp/command 등)은 드롭다운 대신 텍스트 부분일치 입력으로
+     전환한다. <select>에 수천~수만 옵션을 만들면 init/필터링이 멈추기 때문. */
+  var MAX_DROPDOWN = 50;
+  function filterFor(field, data, placeholder){
+    var vals = uniqueVals(data, field);
+    if (vals.length > MAX_DROPDOWN){
+      return { headerFilter: "input", headerFilterFunc: "like",
+               headerFilterPlaceholder: (placeholder || '검색') };
+    }
+    return { headerFilter: listEditor(field, placeholder),
+             headerFilterParams: { values: vals }, headerFilterFunc: "=" };
+  }
+
   /* ---------- 이미지 프리뷰 ---------- */
   function onImgClick(e){
     if (e.target && e.target.classList.contains('img-thumb')){
@@ -319,25 +344,17 @@ _HTML_SCRIPT = r"""
 
   /* ---------- 컬럼 정의 ---------- */
   function buildColumns(data){
-    var tsVals   = uniqueVals(data, 'timestamp');
-    var cyVals   = uniqueVals(data, 'cycle');
-    var stepVals = uniqueVals(data, 'step_id');
-    var devVals  = uniqueVals(data, 'device');
-    var delVals  = uniqueVals(data, 'delay');
-    var durVals  = uniqueVals(data, 'duration');
-
     var va = "middle";
+    function col(base, field, placeholder){
+      // base 컬럼 정의에 적응형 필터(드롭다운 또는 텍스트 입력)를 병합
+      return Object.assign(base, filterFor(field, data, placeholder));
+    }
     return [
-      { title:"Time Stamp", field:"timestamp", width:150, vertAlign:va,
-        headerFilter:listEditor('timestamp','전체'), headerFilterParams:{values:tsVals}, headerFilterFunc:"=" },
-      { title:"Cycle", field:"cycle", width:70, hozAlign:"center", vertAlign:va,
-        headerFilter:listEditor('cycle','전체'), headerFilterParams:{values:cyVals}, headerFilterFunc:"=" },
-      { title:"Step", field:"step_id", width:70, hozAlign:"center", vertAlign:va,
-        headerFilter:listEditor('step_id','전체'), headerFilterParams:{values:stepVals}, headerFilterFunc:"=" },
-      { title:"Device", field:"device", width:120, hozAlign:"center", vertAlign:va,
-        headerFilter:listEditor('device','전체'), headerFilterParams:{values:devVals}, headerFilterFunc:"=" },
-      { title:"Command", field:"command", widthGrow:2, vertAlign:va,
-        headerFilter:listEditor('command','전체'), headerFilterParams:{values:uniqueVals(data,'command')}, headerFilterFunc:"=" },
+      col({ title:"Time Stamp", field:"timestamp", width:150, vertAlign:va }, 'timestamp', '전체'),
+      col({ title:"Cycle", field:"cycle", width:70, hozAlign:"center", vertAlign:va }, 'cycle', '전체'),
+      col({ title:"Step", field:"step_id", width:70, hozAlign:"center", vertAlign:va }, 'step_id', '전체'),
+      col({ title:"Device", field:"device", width:120, hozAlign:"center", vertAlign:va }, 'device', '전체'),
+      col({ title:"Command", field:"command", widthGrow:2, vertAlign:va }, 'command', '전체'),
       { title:"Output", field:"output", widthGrow:3, vertAlign:va,
         formatter:function(cell){
           var v = cell.getValue();
@@ -345,15 +362,12 @@ _HTML_SCRIPT = r"""
           var safe = String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
           return '<pre style="margin:0;font-size:10px;font-family:monospace;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto">' + safe + '</pre>';
         },
-        headerFilter:"input" },
-      { title:"Remark", field:"description", widthGrow:2, vertAlign:va,
-        headerFilter:listEditor('description','전체'), headerFilterParams:{values:uniqueVals(data,'description')}, headerFilterFunc:"=" },
+        headerFilter:"input", headerFilterFunc:"like" },
+      col({ title:"Remark", field:"description", widthGrow:2, vertAlign:va }, 'description', '전체'),
       { title:"Status", field:"status", width:90, hozAlign:"center", vertAlign:va, formatter:statusFmt,
         headerFilter:listEditor('status','전체'), headerFilterParams:{values:["pass","fail","warning","error"]}, headerFilterFunc:"=" },
-      { title:"Delay", field:"delay", width:80, hozAlign:"center", vertAlign:va,
-        headerFilter:listEditor('delay','전체'), headerFilterParams:{values:delVals}, headerFilterFunc:"=" },
-      { title:"Duration", field:"duration", width:90, hozAlign:"center", vertAlign:va,
-        headerFilter:listEditor('duration','전체'), headerFilterParams:{values:durVals}, headerFilterFunc:"=" },
+      col({ title:"Delay", field:"delay", width:80, hozAlign:"center", vertAlign:va }, 'delay', '전체'),
+      col({ title:"Duration", field:"duration", width:90, hozAlign:"center", vertAlign:va }, 'duration', '전체'),
       { title:"Expected", field:"expected_src", width:200, hozAlign:"center", vertAlign:va,
         formatter:imgFmt, headerSort:false },
       { title:"Actual", field:"actual_src", width:200, hozAlign:"center", vertAlign:va,
@@ -373,15 +387,36 @@ _HTML_SCRIPT = r"""
     return false;
   }
 
+  /* ---------- 로딩 오버레이 ---------- */
+  function showLoading(n){
+    var el = document.getElementById('report-loading');
+    if (!el) return;
+    var cnt = document.getElementById('report-loading-count');
+    if (cnt) cnt.textContent = n ? (n.toLocaleString() + '건') : '';
+    el.style.display = 'flex';
+  }
+  function hideLoading(){
+    var el = document.getElementById('report-loading');
+    if (el) el.style.display = 'none';
+  }
+
   /* ---------- 초기화 ---------- */
   function init(){
     var data = (window.__REPORT_DATA__ && window.__REPORT_DATA__.rows) || [];
     document.getElementById('filter-total').textContent = data.length;
 
+    // 데이터가 많으면 빌드에 시간이 걸리므로 로딩 표시를 먼저 그리고,
+    // 한 틱 뒤 테이블을 빌드(브라우저가 로딩 오버레이를 먼저 페인트하도록).
+    showLoading(data.length);
+    setTimeout(function(){ buildTable(data); }, 0);
+  }
+
+  function buildTable(data){
     var table = new Tabulator("#results-table", {
       data: data,
       columns: buildColumns(data),
-      layout: "fitDataStretch",
+      // fitColumns: 데이터 기반 폭 측정을 생략해 대용량에서 빌드가 더 빠르다.
+      layout: "fitColumns",
       maxHeight: "calc(100vh - 170px)",
       // 대용량(수천~수만 행) 리포트 대응: 가상 스크롤로 보이는 행만 렌더.
       // 'basic'은 전 행을 DOM에 마운트해 13744행 같은 경우 브라우저가 멈춘다.
@@ -396,6 +431,9 @@ _HTML_SCRIPT = r"""
       printConfig: { columnHeaders: true },
     });
     window.__table = table;
+    // 빌드가 끝나면 로딩 표시 제거
+    table.on("tableBuilt", hideLoading);
+    table.on("renderComplete", hideLoading);
 
     table.on("dataFiltered", function(filters, rows){
       document.getElementById('filter-visible').textContent = rows.length;
@@ -531,8 +569,17 @@ def _build_html_report(data: dict, output_path: Path) -> str:
     parts.append('<span class="count"><b id="filter-visible">0</b> / <b id="filter-total">0</b></span>')
     parts.append("</div>")
 
-    # Tabulator 렌더 타겟
+    # Tabulator 렌더 타겟 + 로딩 오버레이 (빌드 완료 전까지 표시)
+    parts.append('<div class="table-wrap">')
     parts.append('<div id="results-table"></div>')
+    parts.append(
+        '<div id="report-loading" class="report-loading">'
+        '<div class="spinner"></div>'
+        '<div class="report-loading-text">데이터 로딩 중… '
+        '<b id="report-loading-count"></b></div>'
+        '</div>'
+    )
+    parts.append("</div>")
 
     # 이미지 프리뷰 오버레이
     parts.append('<div id="preview-overlay" class="preview-overlay"><img id="preview-img" src="" alt=""></div>')
