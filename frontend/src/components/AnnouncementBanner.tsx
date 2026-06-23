@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Badge, Button, Modal, Space, Tag, Typography } from 'antd';
 import { NotificationOutlined, ExpandOutlined } from '@ant-design/icons';
-import { Announcement, managerImageUrl, useManagerUrl } from '../lib/manager';
+import { Announcement, useManagerUrl } from '../lib/manager';
 
 export default function AnnouncementBanner() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -109,7 +109,7 @@ export default function AnnouncementBanner() {
         {visibleAnnouncements.map(ann => {
           const priorityLabel: Record<string, string> = { urgent: '긴급', important: '중요', normal: '일반' };
           const priorityColor: Record<string, string> = { urgent: 'red', important: 'orange', normal: 'blue' };
-          const imgUrl = managerImageUrl(adminUrl, ann.image_path);
+          const imgUrl = ann.image_data || null;
           return (
             <div key={ann.id} style={{ marginBottom: 13, padding: 13, background: 'rgba(255,255,255,0.04)', borderRadius: 8 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>

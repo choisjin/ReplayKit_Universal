@@ -11,7 +11,7 @@ export interface Announcement {
   content: string;
   priority: string; // "normal" | "important" | "urgent"
   active: number;
-  image_path?: string | null; // 매니저 이미지 폴더 내 파일명. 있으면 이미지 URL 구성
+  image_data?: string | null; // base64 data URL (예: "data:image/png;base64,..."). <img src> 에 그대로 사용
   is_popup?: number; // 1이면 시작 시 팝업으로 표시
   created_at: string;
   updated_at?: string;
@@ -21,12 +21,6 @@ export interface Announcement {
 export function useManagerUrl(): string {
   const { settings } = useSettings();
   return (settings.admin_server_url || '').trim() || DEFAULT_MANAGER_URL;
-}
-
-/** image_path → `${base}/images/<파일명>` URL. 없으면 null. */
-export function managerImageUrl(base: string, imagePath?: string | null): string | null {
-  if (!imagePath) return null;
-  return `${base.replace(/\/$/, '')}/images/${imagePath}`;
 }
 
 // ── "오늘 하루 그만 보기" 영구 저장 (localStorage) ──

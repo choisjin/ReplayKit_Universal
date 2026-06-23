@@ -4,7 +4,6 @@ import { NotificationOutlined } from '@ant-design/icons';
 import {
   Announcement,
   dismissPopupsToday,
-  managerImageUrl,
   readDismiss,
   todayStr,
   useManagerUrl,
@@ -80,7 +79,7 @@ export default function PopupNotice() {
     >
       <div style={{ maxHeight: '70vh', overflow: 'auto' }}>
         {popups.map((ann, idx) => {
-          const imgUrl = managerImageUrl(managerUrl, ann.image_path);
+          const imgUrl = ann.image_data || null;
           const last = idx === popups.length - 1;
           return (
             <div
