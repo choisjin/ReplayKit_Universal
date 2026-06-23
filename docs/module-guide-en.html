@@ -150,6 +150,7 @@
       <a href="#mod-CMD" class="toc-h3">CMD</a>
       <a href="#cat-etc" class="toc-h2">Others</a>
       <a href="#mod-SHELL" class="toc-h3">SHELL</a>
+      <a href="#mod-HKMC6th" class="toc-h3">HKMC6th</a>
     </nav>
   </aside>
 
@@ -164,7 +165,7 @@
     </div>
 
     <h2 id="overview">All Modules</h2>
-    <p>Total <strong>12</strong> modules, <strong>121</strong> functions registered.</p>
+    <p>Total <strong>13</strong> modules, <strong>125</strong> functions registered.</p>
     <table>
       <thead><tr><th>Module</th><th>Description</th><th>Functions</th></tr></thead>
       <tbody>
@@ -191,6 +192,7 @@ Standard usage pattern:
 <tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>Integrated UDP test bench: vehicle power control (IGN/ACC/Battery) + CAN FD signal transmission</td><td style="text-align:center">25</td></tr>
 <tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Executes Windows command prompt (CMD) commands. Used for running external programs or system commands</td><td style="text-align:center">4</td></tr>
 <tr><td><a href="#mod-SHELL"><strong>SHELL</strong></a></td><td>Executes Linux/macOS bash commands. Linux counterpart of CMD. Used for running external programs or system commands.</td><td style="text-align:center">4</td></tr>
+<tr><td><a href="#mod-HKMC6th"><strong>HKMC6th</strong></a></td><td>Screen capture / touch / swipe / HW key control over a TCP socket protocol. Calls the HKMC6thService functions of the connected hkmc_agent device directly.</td><td style="text-align:center">4</td></tr>
 <tr><td><a href="#mod-Android"><strong>Android</strong></a></td><td></td><td style="text-align:center">5</td></tr>
       </tbody>
     </table>
@@ -931,6 +933,34 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td><code>Kill</code></td>
 <td>Terminates a background process (SIGKILL).</td>
 <td style="font-size:12px"><code>pid</code>: PID of the process to terminate</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-HKMC6th">HKMC6th</h3>
+<div class="callout callout-info">HKMC 6th-gen IVI device — Screen capture / touch / swipe / HW key control over a TCP socket protocol. Calls the HKMC6thService functions of the connected hkmc_agent device directly.</div>
+<table>
+<thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
+<tbody>
+<tr>
+<td><code>screencap</code></td>
+<td>Captures the current screen and saves it to a file.</td>
+<td style="font-size:12px"><code>output_path</code>: Save path (PNG/BMP)<br><code>screen_type</code>: Screen type<br><code>left</code>: ROI left (0 if omitted)<br><code>top</code>: ROI top (0 if omitted)<br><code>right</code>: ROI right (screen edge if omitted)<br><code>bottom</code>: ROI bottom (screen edge if omitted)<br><code>format</code>: Save format (png/bmp)</td>
+</tr>
+<tr>
+<td><code>ethernet_signal</code></td>
+<td>Sends an Ethernet signal (payload + signal_id).</td>
+<td style="font-size:12px"><code>n_signal_payload</code>: Signal payload value<br><code>n_signal_id</code>: Signal ID</td>
+</tr>
+<tr>
+<td><code>execute_shell</code></td>
+<td>Sends a shell command packet (low-level — specify cmd/sub_cmd/resp directly).</td>
+<td style="font-size:12px"><code>cmd</code>: Packet cmd<br><code>sub_cmd</code>: Sub cmd<br><code>resp</code>: Response code<br><code>str_data</code>: String to send</td>
+</tr>
+<tr>
+<td><code>send_shell_cmd</code></td>
+<td>Sends a simple shell string command to the device.</td>
+<td style="font-size:12px"><code>str_data</code>: Command string to send</td>
 </tr>
 </tbody>
 </table>

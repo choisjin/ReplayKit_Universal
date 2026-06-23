@@ -1520,6 +1520,116 @@
       }
     }
   },
+  "HKMC6th": {
+    "_description": "HKMC 6th-gen IVI device — Screen capture / touch / swipe / HW key control over a TCP socket protocol. Calls the HKMC6thService functions of the connected hkmc_agent device directly.",
+    "functions": {
+      "tap": {
+        "description": "Taps (touches) the given coordinate.",
+        "params": {
+          "x": "X coordinate (px)",
+          "y": "Y coordinate (px)",
+          "screen_type": "Screen type. front_center / rear_left / rear_right / cluster"
+        }
+      },
+      "repeat_tap": {
+        "description": "Taps the same coordinate N times in a row (for fast double/multi taps).",
+        "params": {
+          "x": "X coordinate (px)",
+          "y": "Y coordinate (px)",
+          "count": "Number of taps (default 5)",
+          "interval_ms": "Interval between taps in ms (default 100)",
+          "screen_type": "Screen type. front_center / rear_left / rear_right / cluster"
+        }
+      },
+      "long_press": {
+        "description": "Presses the given coordinate, holds for duration_ms, then releases.",
+        "params": {
+          "x": "X coordinate (px)",
+          "y": "Y coordinate (px)",
+          "duration_ms": "Hold time in ms (default 3000)",
+          "screen_type": "Screen type. front_center / rear_left / rear_right / cluster"
+        }
+      },
+      "swipe": {
+        "description": "Drags (swipes) from (x1,y1) to (x2,y2).",
+        "params": {
+          "x1": "Start X",
+          "y1": "Start Y",
+          "x2": "End X",
+          "y2": "End Y",
+          "screen_type": "Screen type. front_center / rear_left / rear_right / cluster"
+        }
+      },
+      "send_key": {
+        "description": "Sends a HW key event (6th-gen keyExt6th packet). See the HKMC spec for cmd/sub_cmd/key_data values.",
+        "params": {
+          "cmd": "Key category cmd value (e.g. CMD_MKBD/CCP/RRC/SWC/MIRROR)",
+          "sub_cmd": "Sub cmd (SHORT_KEY/LONG_KEY/PRESS_KEY/RELEASE_KEY/DIAL_ACTION)",
+          "key_data": "Key code (int)",
+          "monitor": "Target monitor (0x00=NONE, 0x01=LEFT, 0x02=RIGHT)",
+          "direction": "Dial/knob direction byte (if any)"
+        }
+      },
+      "send_key_by_name": {
+        "description": "Sends a HW key event by key name (applies spec default + device override).",
+        "params": {
+          "key_name": "Key name (HKMC_KEYS dictionary key)",
+          "sub_cmd": "Sub cmd (default SHORT_KEY)",
+          "screen_type": "Target screen",
+          "direction": "Dial/knob direction byte (if any)",
+          "key_source": "Key source (if any)"
+        }
+      },
+      "screencap": {
+        "description": "Captures the current screen and saves it to a file.",
+        "params": {
+          "output_path": "Save path (PNG/BMP)",
+          "screen_type": "Screen type",
+          "left": "ROI left (0 if omitted)",
+          "top": "ROI top (0 if omitted)",
+          "right": "ROI right (screen edge if omitted)",
+          "bottom": "ROI bottom (screen edge if omitted)",
+          "format": "Save format (png/bmp)"
+        }
+      },
+      "screencap_bytes": {
+        "description": "Captures the current screen and returns the bytes (BMP/PNG) without saving to a file.",
+        "params": {
+          "screen_type": "Screen type. front_center / rear_left / rear_right / cluster",
+          "fmt": "Format (png/bmp)",
+          "timeout": "Response wait timeout in seconds"
+        }
+      },
+      "get_screen_size": {
+        "description": "Returns the (width, height) size of the given screen.",
+        "params": {
+          "screen_type": "Screen type. front_center / rear_left / rear_right / cluster"
+        }
+      },
+      "ethernet_signal": {
+        "description": "Sends an Ethernet signal (payload + signal_id).",
+        "params": {
+          "n_signal_payload": "Signal payload value",
+          "n_signal_id": "Signal ID"
+        }
+      },
+      "execute_shell": {
+        "description": "Sends a shell command packet (low-level — specify cmd/sub_cmd/resp directly).",
+        "params": {
+          "cmd": "Packet cmd",
+          "sub_cmd": "Sub cmd",
+          "resp": "Response code",
+          "str_data": "String to send"
+        }
+      },
+      "send_shell_cmd": {
+        "description": "Sends a simple shell string command to the device.",
+        "params": {
+          "str_data": "Command string to send"
+        }
+      }
+    }
+  },
   "Android": {
     "functions": {
       "StartLogging": {
