@@ -789,7 +789,6 @@ def _export_bundle_sync(filename: str, export_path: str, progress=None) -> dict:
         safe_name = scenario_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
         folder_name = f"{ts}_{safe_name}"
 
-        import tempfile
         run_dir = Path(tempfile.mkdtemp()) / folder_name
         run_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(filepath), str(run_dir / filepath.name))
