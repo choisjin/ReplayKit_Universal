@@ -1049,36 +1049,20 @@
   "DLTLogging": {
     "_description": "DLT Logging — Captures and saves logs via direct TCP connection to the DLT daemon, with keyword-based PASS/FAIL evaluation (no GUI required)",
     "functions": {
-      "StartSave": {
-        "description": "Connects to the DLT daemon and starts log capture + file saving in one step (connect -> capture -> save).",
-        "params": {
-          "save_path": "Save file path. Auto-generates in backend/logs/ if empty"
-        }
-      },
-      "StopSave": {
-        "description": "Stops log file saving and disconnects from the DLT daemon.",
+      "StartLogging": {
+        "description": "Connects to DLT and starts capture. Streams all logs immediately to a text file (auto path) while keeping only recent entries in memory (stays fast even for long runs). The viewer modal opens automatically.",
         "params": {}
       },
-      "MarkStep": {
-        "description": "Marks a step boundary at the current log position. Used with SearchRange for range-based searching.",
+      "StopLogging": {
+        "description": "Stops DLT capture. Logs are already saved to file in real time; specifying save_path only moves the file to that location.",
         "params": {
-          "step_index": "Step index number"
+          "save_path": "Save file path. If empty, keeps the streaming file as-is (during replay: run_dir/logs/dlt_*.log, step test: backend/results/Temp_logs/dlt_*.log)"
         }
       },
-      "SearchAll": {
-        "description": "Searches the entire log from the beginning to the current position for a keyword, returning PASS/FAIL.",
+      "reset_fail_on_keyword": {
+        "description": "Resets fail_on_keyword detectors. If name is empty, removes all detectors.",
         "params": {
-          "keyword": "Search keyword (space-separated = AND condition). e.g. 'BootComplete', 'ERROR crash'",
-          "count": "Maximum number of matching results (default: 5)"
-        }
-      },
-      "SearchRange": {
-        "description": "Searches for a keyword within the step range marked by MarkStep, returning PASS/FAIL.",
-        "params": {
-          "keyword": "Search keyword (space-separated = AND condition)",
-          "from_step": "Start step index",
-          "to_step": "End step index",
-          "count": "Maximum number of matching results (default: 5)"
+          "name": "Name of the detector to reset. Empty resets all"
         }
       },
       "WaitLog": {
@@ -1103,14 +1087,6 @@
           "timeout": "Total check time in seconds (default: 60)",
           "max_retries": "Maximum check count (default: 5). Interval = timeout / max_retries"
         }
-      },
-      "GetStatus": {
-        "description": "Returns the current module status (connection, capture, save, step marks, etc.).",
-        "params": {}
-      },
-      "ClearLogs": {
-        "description": "Clears the log buffer and step markings.",
-        "params": {}
       }
     }
   },

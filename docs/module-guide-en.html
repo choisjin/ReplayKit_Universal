@@ -165,7 +165,7 @@
     </div>
 
     <h2 id="overview">All Modules</h2>
-    <p>Total <strong>13</strong> modules, <strong>125</strong> functions registered.</p>
+    <p>Total <strong>13</strong> modules, <strong>121</strong> functions registered.</p>
     <table>
       <thead><tr><th>Module</th><th>Description</th><th>Functions</th></tr></thead>
       <tbody>
@@ -174,7 +174,7 @@
 <tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Sends/receives CAN/CAN FD messages, saves ASC logs, and runs ISO-TP (UDS) diagnostics via Vector CAN hardware (python-can VectorBus). No CANoe application required.</td><td style="text-align:center">11</td></tr>
 <tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>Comprehensive control of relays, power, sensors, audio, LCD, buttons, and USB on the serial-connected QE test bench</td><td style="text-align:center">8</td></tr>
 <tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>Connects to remote devices via SSH for command execution and file transfer</td><td style="text-align:center">9</td></tr>
-<tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>Captures and saves logs via direct TCP connection to the DLT daemon, with keyword-based PASS/FAIL evaluation (no GUI required)</td><td style="text-align:center">10</td></tr>
+<tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>Captures and saves logs via direct TCP connection to the DLT daemon, with keyword-based PASS/FAIL evaluation (no GUI required)</td><td style="text-align:center">6</td></tr>
 <tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>Captures serial port logs with keyword-based fail detection.
 
 **Connection lifecycle**: The serial port itself is opened/closed by the Device tab&#x27;s Connect/Disconnect. StartLogging does NOT reopen an already-open port, so devices that reset their settings on every connect are safe.
@@ -788,29 +788,19 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
 <tbody>
 <tr>
-<td><code>StartSave</code></td>
-<td>Connects to the DLT daemon and starts log capture + file saving in one step (connect -&gt; capture -&gt; save).</td>
-<td style="font-size:12px"><code>save_path</code>: Save file path. Auto-generates in backend/logs/ if empty</td>
-</tr>
-<tr>
-<td><code>StopSave</code></td>
-<td>Stops log file saving and disconnects from the DLT daemon.</td>
+<td><code>StartLogging</code></td>
+<td>Connects to DLT and starts capture. Streams all logs immediately to a text file (auto path) while keeping only recent entries in memory (stays fast even for long runs). The viewer modal opens automatically.</td>
 <td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 <tr>
-<td><code>MarkStep</code></td>
-<td>Marks a step boundary at the current log position. Used with SearchRange for range-based searching.</td>
-<td style="font-size:12px"><code>step_index</code>: Step index number</td>
+<td><code>StopLogging</code></td>
+<td>Stops DLT capture. Logs are already saved to file in real time; specifying save_path only moves the file to that location.</td>
+<td style="font-size:12px"><code>save_path</code>: Save file path. If empty, keeps the streaming file as-is (during replay: run_dir/logs/dlt_*.log, step test: backend/results/Temp_logs/dlt_*.log)</td>
 </tr>
 <tr>
-<td><code>SearchAll</code></td>
-<td>Searches the entire log from the beginning to the current position for a keyword, returning PASS/FAIL.</td>
-<td style="font-size:12px"><code>keyword</code>: Search keyword (space-separated = AND condition). e.g. &#x27;BootComplete&#x27;, &#x27;ERROR crash&#x27;<br><code>count</code>: Maximum number of matching results (default: 5)</td>
-</tr>
-<tr>
-<td><code>SearchRange</code></td>
-<td>Searches for a keyword within the step range marked by MarkStep, returning PASS/FAIL.</td>
-<td style="font-size:12px"><code>keyword</code>: Search keyword (space-separated = AND condition)<br><code>from_step</code>: Start step index<br><code>to_step</code>: End step index<br><code>count</code>: Maximum number of matching results (default: 5)</td>
+<td><code>reset_fail_on_keyword</code></td>
+<td>Resets fail_on_keyword detectors. If name is empty, removes all detectors.</td>
+<td style="font-size:12px"><code>name</code>: Name of the detector to reset. Empty resets all</td>
 </tr>
 <tr>
 <td><code>WaitLog</code></td>
@@ -826,16 +816,6 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td><code>ExpectNotFound</code></td>
 <td>Periodically checks the entire log to confirm the keyword is absent. Returns FAIL immediately if found. Rechecks at intervals (timeout / max_retries). Returns PASS if not found after all checks.</td>
 <td style="font-size:12px"><code>keyword</code>: Search keyword (space-separated = AND condition)<br><code>timeout</code>: Total check time in seconds (default: 60)<br><code>max_retries</code>: Maximum check count (default: 5). Interval = timeout / max_retries</td>
-</tr>
-<tr>
-<td><code>GetStatus</code></td>
-<td>Returns the current module status (connection, capture, save, step marks, etc.).</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>ClearLogs</code></td>
-<td>Clears the log buffer and step markings.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 </tbody>
 </table>

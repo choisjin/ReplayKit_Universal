@@ -1059,76 +1059,10 @@
           "save_path": "저장 파일 경로. 빈 값이면 스트리밍 파일 그대로 유지 (재생 중: run_dir/logs/dlt_*.log, 스텝 테스트: backend/results/Temp_logs/dlt_*.log)"
         }
       },
-      "count_keyword": {
-        "description": "로그에서 keyword가 등장할 때마다 실시간 카운트하고 발생 시간을 누적. 같은 name으로 첫 호출=시작, 재호출=결과 반환. 통계 용도 (시나리오 fail에 영향 없음).",
-        "params": {
-          "keyword": "찾을 부분 문자열. 예: 'Pass', 'BootComplete'",
-          "name": "카운터 식별자. 빈 값이면 keyword 자체. 같은 name 재호출 시 결과 조회"
-        }
-      },
-      "reset_count_keyword": {
-        "description": "count_keyword 카운터를 리셋합니다. name 빈 값이면 모든 카운터 제거.",
-        "params": {
-          "name": "리셋할 카운터 이름. 빈 값이면 전체"
-        }
-      },
-      "assert_keyword": {
-        "description": "캡처되는 모든 라인이 keyword를 **포함해야** 정상. **미포함 라인이 들어오면 fail step row 자동 누적**. 정상 키워드(예: 'OK', 'Pass', 'BootComplete')를 단언할 때 사용. 비정상 키워드 검출은 fail_on_keyword 사용.",
-        "params": {
-          "keyword": "라인에 반드시 포함되어야 하는 부분 문자열. 예: 'Pass', 'OK'",
-          "name": "단언 식별자. 빈 값이면 'assert_<keyword>'. 같은 name 재호출 시 miss 통계 반환"
-        }
-      },
-      "reset_assert_keyword": {
-        "description": "assert_keyword 단언을 리셋합니다. name 빈 값이면 모든 단언 제거.",
-        "params": {
-          "name": "리셋할 단언 이름. 빈 값이면 전체"
-        }
-      },
-      "fail_on_keyword": {
-        "description": "캡처되는 라인에 keyword가 **포함되면 fail row 누적**. assert_keyword의 반대. 'ERROR'/'Fail'/'crash' 등 비정상 키워드 검출용. **time>0이면 동기 모드** (해당 시간 동안만 모니터링 후 자동 종료, 검출 fail은 이 스텝 바로 아래 Fail_Count_N으로 인라인 표시). time=0이면 백그라운드 모드.",
-        "params": {
-          "keyword": "검출할 부분 문자열. 이 단어가 라인에 들어오면 fail로 보고. 예: 'Fail', 'ERROR'",
-          "time": "동기 모니터링 시간(초). >0이면 해당 시간 동안만 감시 후 자동 unregister + 다음 스텝으로. 0(기본)이면 백그라운드.",
-          "name": "검출기 식별자. 빈 값이면 'fail_<keyword>'. 같은 name 재호출 시 hit 통계 반환"
-        }
-      },
       "reset_fail_on_keyword": {
         "description": "fail_on_keyword 검출기를 리셋합니다. name 빈 값이면 모든 검출기 제거.",
         "params": {
           "name": "리셋할 검출기 이름. 빈 값이면 전체"
-        }
-      },
-      "StartSave": {
-        "description": "DLT 데몬에 연결하고 로그 캡처 + 파일 저장을 시작합니다. (연결 → 캡처 → 저장 한번에 수행)",
-        "params": {
-          "save_path": "저장 파일 경로. 빈 값이면 backend/logs/에 자동 생성"
-        }
-      },
-      "StopSave": {
-        "description": "로그 파일 저장을 중단하고 DLT 연결을 해제합니다.",
-        "params": {}
-      },
-      "MarkStep": {
-        "description": "현재 로그 위치에 스텝 경계를 표시합니다. SearchRange로 구간 검색할 때 사용합니다.",
-        "params": {
-          "step_index": "스텝 인덱스 번호"
-        }
-      },
-      "SearchAll": {
-        "description": "처음부터 현재까지 전체 로그에서 키워드를 검색하여 PASS/FAIL 판정합니다.",
-        "params": {
-          "keyword": "검색 키워드 (공백 구분 시 AND 조건). 예: 'BootComplete', 'ERROR crash'",
-          "count": "최대 매칭 결과 수 (기본 5)"
-        }
-      },
-      "SearchRange": {
-        "description": "MarkStep으로 표시된 스텝 구간 내에서 키워드를 검색하여 PASS/FAIL 판정합니다.",
-        "params": {
-          "keyword": "검색 키워드 (공백 구분 시 AND 조건)",
-          "from_step": "시작 스텝 인덱스",
-          "to_step": "종료 스텝 인덱스",
-          "count": "최대 매칭 결과 수 (기본 5)"
         }
       },
       "WaitLog": {
@@ -1153,14 +1087,6 @@
           "timeout": "총 확인 시간 (초, 기본 60)",
           "max_retries": "최대 확인 횟수 (기본 5). 간격 = timeout ÷ max_retries"
         }
-      },
-      "GetStatus": {
-        "description": "현재 모듈 상태를 조회합니다 (연결, 캡처, 저장, 스텝마크 등).",
-        "params": {}
-      },
-      "ClearLogs": {
-        "description": "로그 버퍼와 스텝 마킹을 초기화합니다.",
-        "params": {}
       }
     }
   },

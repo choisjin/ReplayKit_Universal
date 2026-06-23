@@ -165,7 +165,7 @@
     </div>
 
     <h2 id="overview">전체 모듈 목록</h2>
-    <p>총 <strong>13개</strong> 모듈, <strong>134개</strong> 함수가 등록되어 있습니다.</p>
+    <p>총 <strong>13개</strong> 모듈, <strong>122개</strong> 함수가 등록되어 있습니다.</p>
     <table>
       <thead><tr><th>모듈</th><th>설명</th><th>함수 수</th></tr></thead>
       <tbody>
@@ -174,7 +174,7 @@
 <tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Vector CAN 하드웨어(python-can VectorBus)로 CAN/CAN FD 메시지 송수신, ASC 로그 저장, ISO-TP(UDS) 진단을 수행하는 모듈 (CANoe 앱 불필요)</td><td style="text-align:center">11</td></tr>
 <tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>시리얼 연결된 QE 테스트 벤치의 릴레이, 전원, 센서, 오디오, LCD, 버튼, USB 등을 종합 제어하는 모듈</td><td style="text-align:center">8</td></tr>
 <tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>SSH로 원격 장비에 접속하여 명령 실행, 파일 전송을 수행하는 모듈</td><td style="text-align:center">9</td></tr>
-<tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>DLT 데몬에 TCP 직접 연결하여 로그를 캡처·저장하고 키워드 PASS/FAIL 판정하는 모듈 (GUI 불필요)</td><td style="text-align:center">18</td></tr>
+<tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>DLT 데몬에 TCP 직접 연결하여 로그를 캡처·저장하고 키워드 PASS/FAIL 판정하는 모듈 (GUI 불필요)</td><td style="text-align:center">6</td></tr>
 <tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>시리얼 포트의 로그를 캡처·저장하고 키워드 검출하는 모듈.
 
 **연결 수명 주기**: 시리얼 포트의 open/close는 Device 탭의 Connect/Disconnect가 관리합니다. StartLogging은 포트가 이미 열려 있으면 재open하지 않고 캡처 세션만 시작하므로, connect 시 설정이 초기화되는 장비도 안전하게 사용할 수 있습니다.
@@ -799,59 +799,9 @@
 <td style="font-size:12px"><code>save_path</code>: 저장 파일 경로. 빈 값이면 스트리밍 파일 그대로 유지 (재생 중: run_dir/logs/dlt_*.log, 스텝 테스트: backend/results/Temp_logs/dlt_*.log)</td>
 </tr>
 <tr>
-<td><code>count_keyword</code></td>
-<td>로그에서 keyword가 등장할 때마다 실시간 카운트하고 발생 시간을 누적. 같은 name으로 첫 호출=시작, 재호출=결과 반환. 통계 용도 (시나리오 fail에 영향 없음).</td>
-<td style="font-size:12px"><code>keyword</code>: 찾을 부분 문자열. 예: &#x27;Pass&#x27;, &#x27;BootComplete&#x27;<br><code>name</code>: 카운터 식별자. 빈 값이면 keyword 자체. 같은 name 재호출 시 결과 조회</td>
-</tr>
-<tr>
-<td><code>reset_count_keyword</code></td>
-<td>count_keyword 카운터를 리셋합니다. name 빈 값이면 모든 카운터 제거.</td>
-<td style="font-size:12px"><code>name</code>: 리셋할 카운터 이름. 빈 값이면 전체</td>
-</tr>
-<tr>
-<td><code>assert_keyword</code></td>
-<td>캡처되는 모든 라인이 keyword를 **포함해야** 정상. **미포함 라인이 들어오면 fail step row 자동 누적**. 정상 키워드(예: &#x27;OK&#x27;, &#x27;Pass&#x27;, &#x27;BootComplete&#x27;)를 단언할 때 사용. 비정상 키워드 검출은 fail_on_keyword 사용.</td>
-<td style="font-size:12px"><code>keyword</code>: 라인에 반드시 포함되어야 하는 부분 문자열. 예: &#x27;Pass&#x27;, &#x27;OK&#x27;<br><code>name</code>: 단언 식별자. 빈 값이면 &#x27;assert_&lt;keyword&gt;&#x27;. 같은 name 재호출 시 miss 통계 반환</td>
-</tr>
-<tr>
-<td><code>reset_assert_keyword</code></td>
-<td>assert_keyword 단언을 리셋합니다. name 빈 값이면 모든 단언 제거.</td>
-<td style="font-size:12px"><code>name</code>: 리셋할 단언 이름. 빈 값이면 전체</td>
-</tr>
-<tr>
-<td><code>fail_on_keyword</code></td>
-<td>캡처되는 라인에 keyword가 **포함되면 fail row 누적**. assert_keyword의 반대. &#x27;ERROR&#x27;/&#x27;Fail&#x27;/&#x27;crash&#x27; 등 비정상 키워드 검출용. **time&gt;0이면 동기 모드** (해당 시간 동안만 모니터링 후 자동 종료, 검출 fail은 이 스텝 바로 아래 Fail_Count_N으로 인라인 표시). time=0이면 백그라운드 모드.</td>
-<td style="font-size:12px"><code>keyword</code>: 검출할 부분 문자열. 이 단어가 라인에 들어오면 fail로 보고. 예: &#x27;Fail&#x27;, &#x27;ERROR&#x27;<br><code>time</code>: 동기 모니터링 시간(초). &gt;0이면 해당 시간 동안만 감시 후 자동 unregister + 다음 스텝으로. 0(기본)이면 백그라운드.<br><code>name</code>: 검출기 식별자. 빈 값이면 &#x27;fail_&lt;keyword&gt;&#x27;. 같은 name 재호출 시 hit 통계 반환</td>
-</tr>
-<tr>
 <td><code>reset_fail_on_keyword</code></td>
 <td>fail_on_keyword 검출기를 리셋합니다. name 빈 값이면 모든 검출기 제거.</td>
 <td style="font-size:12px"><code>name</code>: 리셋할 검출기 이름. 빈 값이면 전체</td>
-</tr>
-<tr>
-<td><code>StartSave</code></td>
-<td>DLT 데몬에 연결하고 로그 캡처 + 파일 저장을 시작합니다. (연결 → 캡처 → 저장 한번에 수행)</td>
-<td style="font-size:12px"><code>save_path</code>: 저장 파일 경로. 빈 값이면 backend/logs/에 자동 생성</td>
-</tr>
-<tr>
-<td><code>StopSave</code></td>
-<td>로그 파일 저장을 중단하고 DLT 연결을 해제합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>MarkStep</code></td>
-<td>현재 로그 위치에 스텝 경계를 표시합니다. SearchRange로 구간 검색할 때 사용합니다.</td>
-<td style="font-size:12px"><code>step_index</code>: 스텝 인덱스 번호</td>
-</tr>
-<tr>
-<td><code>SearchAll</code></td>
-<td>처음부터 현재까지 전체 로그에서 키워드를 검색하여 PASS/FAIL 판정합니다.</td>
-<td style="font-size:12px"><code>keyword</code>: 검색 키워드 (공백 구분 시 AND 조건). 예: &#x27;BootComplete&#x27;, &#x27;ERROR crash&#x27;<br><code>count</code>: 최대 매칭 결과 수 (기본 5)</td>
-</tr>
-<tr>
-<td><code>SearchRange</code></td>
-<td>MarkStep으로 표시된 스텝 구간 내에서 키워드를 검색하여 PASS/FAIL 판정합니다.</td>
-<td style="font-size:12px"><code>keyword</code>: 검색 키워드 (공백 구분 시 AND 조건)<br><code>from_step</code>: 시작 스텝 인덱스<br><code>to_step</code>: 종료 스텝 인덱스<br><code>count</code>: 최대 매칭 결과 수 (기본 5)</td>
 </tr>
 <tr>
 <td><code>WaitLog</code></td>
@@ -867,16 +817,6 @@
 <td><code>ExpectNotFound</code></td>
 <td>키워드가 끝까지 없는지 전체 로그를 주기적으로 확인합니다. 즉시 검색 후 발견 시 즉시 FAIL. 없으면 간격(timeout/max_retries)마다 재확인. 끝까지 없으면 PASS.</td>
 <td style="font-size:12px"><code>keyword</code>: 검색 키워드 (공백 구분 시 AND 조건)<br><code>timeout</code>: 총 확인 시간 (초, 기본 60)<br><code>max_retries</code>: 최대 확인 횟수 (기본 5). 간격 = timeout ÷ max_retries</td>
-</tr>
-<tr>
-<td><code>GetStatus</code></td>
-<td>현재 모듈 상태를 조회합니다 (연결, 캡처, 저장, 스텝마크 등).</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>ClearLogs</code></td>
-<td>로그 버퍼와 스텝 마킹을 초기화합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
 </tr>
 </tbody>
 </table>

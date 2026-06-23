@@ -895,6 +895,15 @@ def get_module_functions(module_name: str) -> list[dict]:
             "CompareValue", "CompareString", "compareDIAG",
             "GetByteDataList", "make_timestamp_log_dir",
         },
+        # DLTLogging: 사용 빈도가 낮거나 중복되는 함수는 콤보 목록/가이드에서 제외.
+        "DLTLogging": {
+            "count_keyword", "reset_count_keyword",
+            "assert_keyword", "reset_assert_keyword",
+            "fail_on_keyword",
+            "StartSave", "StopSave", "MarkStep",
+            "SearchAll", "SearchRange",
+            "GetStatus", "ClearLogs",
+        },
     }
     excluded = per_module_excluded.get(module_name, set())
 
