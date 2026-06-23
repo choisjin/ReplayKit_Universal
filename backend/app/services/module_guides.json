@@ -55,6 +55,213 @@
       }
     }
   },
+  "CANoe_RBS": {
+    "_description": "CANoe RBS 제어 (py_canoe/COM) — CANoe 애플리케이션을 COM으로 구동하여 cfg(RBS) 기반 측정 시작/정지, 시그널·시스템/환경 변수 제어, UDS 진단을 수행하는 모듈",
+    "functions": {
+      "Init_CANoe_Plugin": {
+        "description": "CANoe를 초기화하고 cfg를 엽니다 (기존 CANoe 프로세스 종료, win32com gen_py 캐시 정리, COM 초기화 포함). 측정/진단 전에 가장 먼저 호출하세요.",
+        "params": {
+          "cfg_file": "CANoe cfg 파일 경로. 예: 'D:/RBS/Cluster.cfg'",
+          "canoe_log_dir": "py_canoe 로그 폴더. 기본 '.\\Log' (타임스탬프 하위 폴더 자동 생성)"
+        }
+      },
+      "Start": {
+        "description": "측정(Measurement)을 시작합니다.",
+        "params": {}
+      },
+      "Stop": {
+        "description": "측정을 정지합니다.",
+        "params": {}
+      },
+      "Quit": {
+        "description": "CANoe를 종료합니다 (실패 시 프로세스 강제 종료).",
+        "params": {}
+      },
+      "SendSignal": {
+        "description": "메시지의 시그널 값을 설정합니다.",
+        "params": {
+          "bus": "버스 타입. 예: 'CAN'",
+          "channel": "채널 번호",
+          "messageName": "메시지 이름",
+          "signalName": "시그널 이름",
+          "value": "설정할 값"
+        }
+      },
+      "GetSignal": {
+        "description": "시그널 값을 읽습니다 (측정 중 수신된 값만 반환, 아니면 에러).",
+        "params": {
+          "bus": "버스 타입. 예: 'CAN'",
+          "channel": "채널 번호",
+          "messageName": "메시지 이름",
+          "signalName": "시그널 이름"
+        }
+      },
+      "SetSysVar": {
+        "description": "시스템 변수 값을 설정합니다.",
+        "params": {
+          "namespace_name": "네임스페이스 이름",
+          "sys_var_name": "시스템 변수 이름",
+          "value": "설정할 값 (int/float/str)"
+        }
+      },
+      "GetSysVar": {
+        "description": "시스템 변수 값을 읽습니다 (py_canoe가 None 반환 시 raw COM으로 실제 원인을 진단).",
+        "params": {
+          "namespace_name": "네임스페이스 이름",
+          "sys_var_name": "시스템 변수 이름",
+          "return_symbolic_name": "심볼릭 이름 반환 여부. 기본 False",
+          "islog": "로그 출력 여부. 기본 True"
+        }
+      },
+      "CheckSysVar": {
+        "description": "시스템 변수 값을 기대값과 비교하여 합부 판정합니다.",
+        "params": {
+          "namespace_name": "네임스페이스 이름",
+          "sys_var_name": "시스템 변수 이름",
+          "expect_value": "기대값. 비교식 지원: '>', '<', '~'(범위), '|'(or), '&'(and)"
+        }
+      },
+      "SetEnvVar": {
+        "description": "환경 변수 값을 설정합니다.",
+        "params": {
+          "env_var_name": "환경 변수 이름",
+          "value": "설정할 값 (int/float/str/tuple)"
+        }
+      },
+      "GetEnvVar": {
+        "description": "환경 변수 값을 읽습니다 (System Variables 네임스페이스 변수라면 GetSysVar 사용).",
+        "params": {
+          "env_var_name": "환경 변수 이름",
+          "islog": "로그 출력 여부. 기본 True"
+        }
+      },
+      "CheckEnvVar": {
+        "description": "환경 변수 값을 기대값과 비교하여 합부 판정합니다.",
+        "params": {
+          "env_var_name": "환경 변수 이름",
+          "expect_value": "기대값. 비교식 지원: '>', '<', '~', '|', '&'"
+        }
+      },
+      "DIAG_TestPresent": {
+        "description": "지정 ECU의 Tester Present 주기 전송을 켜거나 끕니다.",
+        "params": {
+          "diag_ecu_qualifier_name": "진단 ECU qualifier 이름",
+          "value": "True = 활성화, False = 비활성화"
+        }
+      },
+      "DIAG_Request": {
+        "description": "UDS 진단 요청을 전송하고 응답을 반환합니다.",
+        "params": {
+          "diag_ecu_qualifier_name": "진단 ECU qualifier 이름",
+          "request": "요청 데이터. 예: '10 01'",
+          "request_in_bytes": "요청을 바이트로 해석. 기본 True",
+          "return_sender_name": "응답에 송신자 이름 포함. 기본 False",
+          "timeout": "(미사용 — py_canoe가 미지원)",
+          "islog": "로그 출력 여부. 기본 True"
+        }
+      },
+      "CheckDIAG": {
+        "description": "UDS 진단 요청을 보내고 응답을 기대 패턴과 비교하여 합부 판정합니다 (인덱스 지정 비교 지원).",
+        "params": {
+          "diag_ecu_qualifier_name": "진단 ECU qualifier 이름",
+          "request": "요청 데이터. 예: '10 01'",
+          "expect_value": "기대 응답 패턴. 예: '50 01 00 32 01 F4'",
+          "request_in_bytes": "요청을 바이트로 해석. 기본 True",
+          "return_sender_name": "응답에 송신자 이름 포함. 기본 False"
+        }
+      },
+      "SendDiagMsg": {
+        "description": "UDS 진단 요청을 전송하고 PRC/NRC를 파싱하여 dict로 반환합니다 (타임아웃 시 재시도).",
+        "params": {
+          "diag_ecu_qualifier_name": "진단 ECU qualifier 이름",
+          "request": "요청 데이터. 예: '10 01'",
+          "timeout": "(미사용 — py_canoe가 미지원)",
+          "request_in_bytes": "요청을 바이트로 해석. 기본 True",
+          "return_sender_name": "응답에 송신자 이름 포함. 기본 False",
+          "max_retries": "최대 재시도 횟수. 기본 5",
+          "retry_delay": "재시도 간격 (초). 기본 10.0"
+        }
+      }
+    }
+  },
+  "CANoe_Ctrl": {
+    "_description": "CANoe 직접 제어 (Vector) — Vector CAN 하드웨어(python-can VectorBus)로 CAN/CAN FD 메시지 송수신, ASC 로그 저장, ISO-TP(UDS) 진단을 수행하는 모듈 (CANoe 앱 불필요)",
+    "functions": {
+      "canoe_full_log_save_start": {
+        "description": "전체 CAN 트래픽을 ASC 로그 파일로 저장 시작 (모든 버스 채널 수신). 타임스탬프가 붙은 최종 저장 경로를 반환합니다.",
+        "params": {
+          "path": "로그 저장 폴더 경로. 예: 'D:/log'",
+          "file_name": "로그 파일명(확장자 포함). 예: 'Auto.asc' — 파일명에 '_YYMMDD_HHMMSS'가 자동으로 붙습니다."
+        }
+      },
+      "canoe_full_log_save_stop": {
+        "description": "전체 로그 저장을 중지하고 주기 송신 작업을 정리합니다.",
+        "params": {}
+      },
+      "canoe_log_save_start": {
+        "description": "구간 로그 저장을 시작합니다 (전체 로그 저장이 켜진 상태에서 추가 구간 로그를 별도 파일로 분리 저장).",
+        "params": {
+          "path": "로그 저장 폴더 경로",
+          "file_name": "로그 파일명(확장자 포함). 예: 'section.asc'"
+        }
+      },
+      "canoe_log_save_stop": {
+        "description": "구간 로그 저장을 중지합니다.",
+        "params": {}
+      },
+      "canoe_send_message": {
+        "description": "CAN/CAN FD 메시지를 전송합니다. 주기를 지정하면 주기 송신, 0이면 1회 송신.",
+        "params": {
+          "message_id": "CAN ID(16진수 문자열). 예: '0x288'",
+          "cycle_time": "전송 주기 (ms). 0이면 1회 전송",
+          "can_message": "메시지 데이터 (공백 구분 16진수). 예: '01 02 03 04 05 06 07 08'",
+          "bus_channel": "버스 채널 인덱스 (0부터, device_info 등록 순서)",
+          "message_type": "'FD'(기본) 또는 그 외 문자열 = Classic CAN"
+        }
+      },
+      "canoe_send_msg_all_stop": {
+        "description": "지정 채널의 모든 주기 송신을 중지합니다.",
+        "params": {
+          "bus_channel": "버스 채널 인덱스"
+        }
+      },
+      "find_msg_from_latest_log": {
+        "description": "로그 파일에서 특정 CAN ID와 데이터가 포함된 라인을 검색합니다. ('pass', 라인) 또는 ('fail', '')을 반환.",
+        "params": {
+          "log_file": "검색할 로그 파일 경로",
+          "message_id": "찾을 CAN ID. 예: '0x288'",
+          "can_message": "포함 여부를 확인할 데이터 (공백 구분 16진수)"
+        }
+      },
+      "canoe_set_diag_env": {
+        "description": "ISO-TP(진단) 환경을 설정합니다. 진단 송수신 전에 1회 호출 필요.",
+        "params": {
+          "bus_ch": "진단에 사용할 버스 채널 인덱스",
+          "tx_id": "요청(Tx) CAN ID(16진수). 예: '0x7E0'",
+          "rx_id": "응답(Rx) CAN ID(16진수). 예: '0x7E8'",
+          "can_type": "'FD' 또는 'CC'(Classic CAN, 기본)"
+        }
+      },
+      "canoe_start_tester_present": {
+        "description": "주기적으로 Tester Present(3E 00)를 전송하기 시작합니다 (진단 세션 유지).",
+        "params": {
+          "interval": "전송 간격 (초). 기본 2.0"
+        }
+      },
+      "canoe_stop_tester_present": {
+        "description": "주기적 Tester Present 전송을 중지합니다.",
+        "params": {}
+      },
+      "canoe_send_diag_msg": {
+        "description": "ISO-TP로 진단 메시지(UDS)를 전송하고 응답(PRC/NRC)을 판정합니다. status/response/service_id 등을 담은 dict를 반환. (canoe_set_diag_env 선행 필요)",
+        "params": {
+          "can_message": "전송할 진단 데이터 (공백 구분 16진수). 예: '22 F1 90'",
+          "timeout": "응답 대기 시간 (초). 기본 '5'",
+          "wait_response": "응답 대기 및 판정 여부. 기본 True"
+        }
+      }
+    }
+  },
   "IVIQEBenchIOClient": {
     "_description": "IVI QE 벤치 — 시리얼 연결된 QE 테스트 벤치의 릴레이, 전원, 센서, 오디오, LCD, 버튼, USB 등을 종합 제어하는 모듈",
     "functions": {
@@ -787,7 +994,7 @@
         "params": {}
       },
       "send_command": {
-        "description": "SSH로 명령어를 실행하고 완료 후 전체 출력을 반환합니다 (블로킹). 한국어 Windows 출력은 cp949/euc-kr 인코딩으로 자동 처리.",
+        "description": "SSH로 명령어를 실행하고 완료 후 전체 출력을 반환합니다 (블로킹). 한국어 Windows 출력은 cp949/euc-kr 인코딩으로 자동 처리. 명령을 'bash -s < 로컬경로' 형식으로 적으면 해당 로컬(PC) 파일을 stdin으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다.",
         "params": {
           "command": "실행할 명령어. 예: 'ls -al', 'cat /etc/version'. 'bash -s < 로컬경로' 형태로 적으면 해당 로컬(PC) 파일을 stdin 으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다. 예: 'sudo bash -s < C:\\ReplayKit\\scripts\\Check_Battery.sh'"
         }
@@ -799,7 +1006,7 @@
         }
       },
       "Check": {
-        "description": "SSH로 명령어를 실행하고 출력 결과를 기대값과 비교합니다(블로킹). 실패 시 'FAIL:' 접두사를 반환하여 스텝이 fail로 판정됩니다. 한국어 출력은 cp949/euc-kr 인코딩으로 자동 처리.",
+        "description": "SSH로 명령어를 실행하고 출력 결과를 기대값과 비교합니다(블로킹). 실패 시 'FAIL:' 접두사를 반환하여 스텝이 fail로 판정됩니다. 한국어 출력은 cp949/euc-kr 인코딩으로 자동 처리. 명령을 'bash -s < 로컬경로' 형식으로 적으면 해당 로컬(PC) 파일을 stdin으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다.",
         "params": {
           "command": "실행할 명령어. 'bash -s < 로컬경로' 형태로 적으면 해당 로컬(PC) 파일을 stdin 으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다. 예: 'sudo bash -s < C:\\ReplayKit\\scripts\\Check_Battery.sh'",
           "expected": "출력에 포함되거나 완전히 일치해야 할 기대 문자열. 비워두면 '출력이 없을 때만 pass'(no-output 검증)로 동작",
@@ -808,7 +1015,7 @@
         }
       },
       "Check_Logic": {
-        "description": "SSH로 명령어를 실행하고 출력에 대해 여러 키워드를 and/or 로직으로 합부 판정합니다(블로킹). 실패 시 'FAIL:' 접두사를 반환하여 스텝이 fail로 판정됩니다.",
+        "description": "SSH로 명령어를 실행하고 출력에 대해 여러 키워드를 and/or 로직으로 합부 판정합니다(블로킹). 실패 시 'FAIL:' 접두사를 반환하여 스텝이 fail로 판정됩니다. 명령을 'bash -s < 로컬경로' 형식으로 적으면 해당 로컬(PC) 파일을 stdin으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다.",
         "params": {
           "command": "실행할 명령어. 'bash -s < 로컬경로' 형태로 적으면 해당 로컬(PC) 파일을 stdin 으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다. 예: 'sudo bash -s < C:\\ReplayKit\\scripts\\Check_Battery.sh'",
           "keywords": "키워드 목록. 쉼표로 구분. 예: 'OK,ready,done'",

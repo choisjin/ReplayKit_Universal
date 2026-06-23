@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import importlib
+import importlib.util  # importlib.util 은 import importlib 만으로는 로드되지 않음 — file-based 플러그인 폴백에서 필요
 import inspect
 import functools
 import json
@@ -887,6 +888,13 @@ def get_module_functions(module_name: str) -> list[dict]:
         "CMD": {"CheckCapture", "RunCapture", "ListBackground"},
         # SHELL 은 CMD 의 Linux/macOS 대응 모듈 — 노출 정책 동일
         "SHELL": {"CheckCapture", "RunCapture", "RunBackground", "ListBackground"},
+        # CANoe_RBS 내부 비교/유틸 헬퍼는 시나리오 스텝에 노출할 필요 없음
+        # (CompareValue/CompareString/compareDIAG/GetByteDataList 는 Check* 함수가 내부 사용,
+        #  make_timestamp_log_dir 는 Init 내부 사용).
+        "CANoe_RBS": {
+            "CompareValue", "CompareString", "compareDIAG",
+            "GetByteDataList", "make_timestamp_log_dir",
+        },
     }
     excluded = per_module_excluded.get(module_name, set())
 

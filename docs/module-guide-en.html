@@ -138,12 +138,15 @@
       <a href="#mod-SmartBench" class="toc-h3">SmartBench</a>
       <a href="#mod-WoohyunBench" class="toc-h3">WoohyunBench</a>
       <a href="#cat-can" class="toc-h2">CAN Communication</a>
+      <a href="#mod-CANoe_RBS" class="toc-h3">CANoe_RBS</a>
+      <a href="#mod-CANoe_Ctrl" class="toc-h3">CANoe_Ctrl</a>
       <a href="#mod-CANAT" class="toc-h3">CANAT</a>
       <a href="#cat-comm" class="toc-h2">Communication (Serial/SSH/UART/DLT)</a>
       <a href="#mod-SerialLogging" class="toc-h3">SerialLogging</a>
       <a href="#mod-SSHManager" class="toc-h3">SSHManager</a>
       <a href="#mod-DLTLogging" class="toc-h3">DLTLogging</a>
       <a href="#cat-system" class="toc-h2">System & Utilities</a>
+      <a href="#mod-Android" class="toc-h3">Android</a>
       <a href="#mod-CMD" class="toc-h3">CMD</a>
       <a href="#cat-etc" class="toc-h2">Others</a>
       <a href="#mod-SHELL" class="toc-h3">SHELL</a>
@@ -161,13 +164,15 @@
     </div>
 
     <h2 id="overview">All Modules</h2>
-    <p>Total <strong>9</strong> modules, <strong>84</strong> functions registered.</p>
+    <p>Total <strong>12</strong> modules, <strong>121</strong> functions registered.</p>
     <table>
       <thead><tr><th>Module</th><th>Description</th><th>Functions</th></tr></thead>
       <tbody>
         <tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>Sends and receives CAN bus messages via CANat hardware</td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-CANoe_RBS"><strong>CANoe_RBS</strong></a></td><td>Drives the CANoe application via COM to start/stop cfg (RBS)-based measurement, control signals and system/environment variables, and run UDS diagnostics.</td><td style="text-align:center">16</td></tr>
+<tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Sends/receives CAN/CAN FD messages, saves ASC logs, and runs ISO-TP (UDS) diagnostics via Vector CAN hardware (python-can VectorBus). No CANoe application required.</td><td style="text-align:center">11</td></tr>
 <tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>Comprehensive control of relays, power, sensors, audio, LCD, buttons, and USB on the serial-connected QE test bench</td><td style="text-align:center">8</td></tr>
-<tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>Connects to remote devices via SSH for command execution and file transfer</td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>Connects to remote devices via SSH for command execution and file transfer</td><td style="text-align:center">9</td></tr>
 <tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>Captures and saves logs via direct TCP connection to the DLT daemon, with keyword-based PASS/FAIL evaluation (no GUI required)</td><td style="text-align:center">10</td></tr>
 <tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>Captures serial port logs with keyword-based fail detection.
 
@@ -181,11 +186,12 @@
 Standard usage pattern:
   1) StartLogging()                              ← first step (capture starts; port pre-opened via Device tab Connect)
   2) SendCommand / SendCommand_*_on_keyword ...  ← middle steps
-  3) StopLogging()                               ← last step (writes log file + ends capture, port stays open)</td><td style="text-align:center">5</td></tr>
+  3) StopLogging()                               ← last step (writes log file + ends capture, port stays open)</td><td style="text-align:center">7</td></tr>
 <tr><td><a href="#mod-SmartBench"><strong>SmartBench</strong></a></td><td>Controls power, buttons, current, and LEDs on Smart Bench equipment via TCP socket</td><td style="text-align:center">15</td></tr>
 <tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>Integrated UDP test bench: vehicle power control (IGN/ACC/Battery) + CAN FD signal transmission</td><td style="text-align:center">25</td></tr>
-<tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Executes Windows command prompt (CMD) commands. Used for running external programs or system commands</td><td style="text-align:center">3</td></tr>
+<tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Executes Windows command prompt (CMD) commands. Used for running external programs or system commands</td><td style="text-align:center">4</td></tr>
 <tr><td><a href="#mod-SHELL"><strong>SHELL</strong></a></td><td>Executes Linux/macOS bash commands. Linux counterpart of CMD. Used for running external programs or system commands.</td><td style="text-align:center">4</td></tr>
+<tr><td><a href="#mod-Android"><strong>Android</strong></a></td><td></td><td style="text-align:center">5</td></tr>
       </tbody>
     </table>
 
@@ -460,6 +466,157 @@ Standard usage pattern:
 
 <h2 id="cat-can">CAN Communication</h2>
 
+<h3 id="mod-CANoe_RBS">CANoe_RBS</h3>
+<div class="callout callout-info">CANoe RBS control (py_canoe/COM) — Drives the CANoe application via COM to start/stop cfg (RBS)-based measurement, control signals and system/environment variables, and run UDS diagnostics.</div>
+<table>
+<thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
+<tbody>
+<tr>
+<td><code>Init_CANoe_Plugin</code></td>
+<td>Initializes CANoe and opens the cfg (kills existing CANoe processes, clears the win32com gen_py cache, initializes COM). Call this first before measurement/diagnostics.</td>
+<td style="font-size:12px"><code>cfg_file</code>: CANoe cfg file path. e.g. &#x27;D:/RBS/Cluster.cfg&#x27;<br><code>canoe_log_dir</code>: py_canoe log folder. Default &#x27;.\Log&#x27; (a timestamped subfolder is created automatically)</td>
+</tr>
+<tr>
+<td><code>Start</code></td>
+<td>Starts the measurement.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>Stop</code></td>
+<td>Stops the measurement.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>Quit</code></td>
+<td>Quits CANoe (force-kills the process on failure).</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>SendSignal</code></td>
+<td>Sets a signal value of a message.</td>
+<td style="font-size:12px"><code>bus</code>: Bus type. e.g. &#x27;CAN&#x27;<br><code>channel</code>: Channel number<br><code>messageName</code>: Message name<br><code>signalName</code>: Signal name<br><code>value</code>: Value to set</td>
+</tr>
+<tr>
+<td><code>GetSignal</code></td>
+<td>Reads a signal value (returns only values received during measurement; otherwise errors).</td>
+<td style="font-size:12px"><code>bus</code>: Bus type. e.g. &#x27;CAN&#x27;<br><code>channel</code>: Channel number<br><code>messageName</code>: Message name<br><code>signalName</code>: Signal name</td>
+</tr>
+<tr>
+<td><code>SetSysVar</code></td>
+<td>Sets a system variable value.</td>
+<td style="font-size:12px"><code>namespace_name</code>: Namespace name<br><code>sys_var_name</code>: System variable name<br><code>value</code>: Value to set (int/float/str)</td>
+</tr>
+<tr>
+<td><code>GetSysVar</code></td>
+<td>Reads a system variable value (falls back to raw COM to surface the real cause when py_canoe returns None).</td>
+<td style="font-size:12px"><code>namespace_name</code>: Namespace name<br><code>sys_var_name</code>: System variable name<br><code>return_symbolic_name</code>: Whether to return the symbolic name. Default False<br><code>islog</code>: Whether to print a log. Default True</td>
+</tr>
+<tr>
+<td><code>CheckSysVar</code></td>
+<td>Compares a system variable value against an expected value (pass/fail).</td>
+<td style="font-size:12px"><code>namespace_name</code>: Namespace name<br><code>sys_var_name</code>: System variable name<br><code>expect_value</code>: Expected value. Supports expressions: &#x27;&gt;&#x27;, &#x27;&lt;&#x27;, &#x27;~&#x27; (range), &#x27;|&#x27; (or), &#x27;&amp;&#x27; (and)</td>
+</tr>
+<tr>
+<td><code>SetEnvVar</code></td>
+<td>Sets an environment variable value.</td>
+<td style="font-size:12px"><code>env_var_name</code>: Environment variable name<br><code>value</code>: Value to set (int/float/str/tuple)</td>
+</tr>
+<tr>
+<td><code>GetEnvVar</code></td>
+<td>Reads an environment variable value (use GetSysVar if it&#x27;s a System Variables namespace variable).</td>
+<td style="font-size:12px"><code>env_var_name</code>: Environment variable name<br><code>islog</code>: Whether to print a log. Default True</td>
+</tr>
+<tr>
+<td><code>CheckEnvVar</code></td>
+<td>Compares an environment variable value against an expected value (pass/fail).</td>
+<td style="font-size:12px"><code>env_var_name</code>: Environment variable name<br><code>expect_value</code>: Expected value. Supports expressions: &#x27;&gt;&#x27;, &#x27;&lt;&#x27;, &#x27;~&#x27;, &#x27;|&#x27;, &#x27;&amp;&#x27;</td>
+</tr>
+<tr>
+<td><code>DIAG_TestPresent</code></td>
+<td>Turns periodic Tester Present transmission on or off for the given ECU.</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: Diagnostic ECU qualifier name<br><code>value</code>: True = activate, False = deactivate</td>
+</tr>
+<tr>
+<td><code>DIAG_Request</code></td>
+<td>Sends a UDS diagnostic request and returns the response.</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: Diagnostic ECU qualifier name<br><code>request</code>: Request data. e.g. &#x27;10 01&#x27;<br><code>request_in_bytes</code>: Interpret request as bytes. Default True<br><code>return_sender_name</code>: Include sender name in the response. Default False<br><code>timeout</code>: (unused — not supported by py_canoe)<br><code>islog</code>: Whether to print a log. Default True</td>
+</tr>
+<tr>
+<td><code>CheckDIAG</code></td>
+<td>Sends a UDS diagnostic request and compares the response against an expected pattern (supports indexed comparison).</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: Diagnostic ECU qualifier name<br><code>request</code>: Request data. e.g. &#x27;10 01&#x27;<br><code>expect_value</code>: Expected response pattern. e.g. &#x27;50 01 00 32 01 F4&#x27;<br><code>request_in_bytes</code>: Interpret request as bytes. Default True<br><code>return_sender_name</code>: Include sender name in the response. Default False</td>
+</tr>
+<tr>
+<td><code>SendDiagMsg</code></td>
+<td>Sends a UDS diagnostic request, parses PRC/NRC, and returns a dict (retries on timeout).</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: Diagnostic ECU qualifier name<br><code>request</code>: Request data. e.g. &#x27;10 01&#x27;<br><code>timeout</code>: (unused — not supported by py_canoe)<br><code>request_in_bytes</code>: Interpret request as bytes. Default True<br><code>return_sender_name</code>: Include sender name in the response. Default False<br><code>max_retries</code>: Maximum number of retries on timeout. Default 5<br><code>retry_delay</code>: Delay between retries (seconds). Default 10.0</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-CANoe_Ctrl">CANoe_Ctrl</h3>
+<div class="callout callout-info">CANoe direct control (Vector) — Sends/receives CAN/CAN FD messages, saves ASC logs, and runs ISO-TP (UDS) diagnostics via Vector CAN hardware (python-can VectorBus). No CANoe application required.</div>
+<table>
+<thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
+<tbody>
+<tr>
+<td><code>canoe_full_log_save_start</code></td>
+<td>Starts saving all CAN traffic to an ASC log file (receives from all bus channels). Returns the final timestamped save path.</td>
+<td style="font-size:12px"><code>path</code>: Log save folder path. e.g. &#x27;D:/log&#x27;<br><code>file_name</code>: Log file name (with extension). e.g. &#x27;Auto.asc&#x27; — &#x27;_YYMMDD_HHMMSS&#x27; is appended automatically.</td>
+</tr>
+<tr>
+<td><code>canoe_full_log_save_stop</code></td>
+<td>Stops full log saving and cleans up periodic transmit tasks.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>canoe_log_save_start</code></td>
+<td>Starts a section log (saves an additional section to a separate file while full logging is active).</td>
+<td style="font-size:12px"><code>path</code>: Log save folder path<br><code>file_name</code>: Log file name (with extension). e.g. &#x27;section.asc&#x27;</td>
+</tr>
+<tr>
+<td><code>canoe_log_save_stop</code></td>
+<td>Stops the section log.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>canoe_send_message</code></td>
+<td>Sends a CAN/CAN FD message. A non-zero cycle time sends periodically; 0 sends once.</td>
+<td style="font-size:12px"><code>message_id</code>: CAN ID (hex string). e.g. &#x27;0x288&#x27;<br><code>cycle_time</code>: Transmit cycle (ms). 0 = send once<br><code>can_message</code>: Message data (space-separated hex). e.g. &#x27;01 02 03 04 05 06 07 08&#x27;<br><code>bus_channel</code>: Bus channel index (from 0, in device_info order)<br><code>message_type</code>: &#x27;FD&#x27; (default) or any other string = Classic CAN</td>
+</tr>
+<tr>
+<td><code>canoe_send_msg_all_stop</code></td>
+<td>Stops all periodic transmits on the given channel.</td>
+<td style="font-size:12px"><code>bus_channel</code>: Bus channel index</td>
+</tr>
+<tr>
+<td><code>find_msg_from_latest_log</code></td>
+<td>Searches a log file for a line containing a specific CAN ID and data. Returns (&#x27;pass&#x27;, line) or (&#x27;fail&#x27;, &#x27;&#x27;).</td>
+<td style="font-size:12px"><code>log_file</code>: Path of the log file to search<br><code>message_id</code>: CAN ID to find. e.g. &#x27;0x288&#x27;<br><code>can_message</code>: Data to check for inclusion (space-separated hex)</td>
+</tr>
+<tr>
+<td><code>canoe_set_diag_env</code></td>
+<td>Configures the ISO-TP (diagnostic) environment. Must be called once before sending/receiving diagnostics.</td>
+<td style="font-size:12px"><code>bus_ch</code>: Bus channel index used for diagnostics<br><code>tx_id</code>: Request (Tx) CAN ID (hex). e.g. &#x27;0x7E0&#x27;<br><code>rx_id</code>: Response (Rx) CAN ID (hex). e.g. &#x27;0x7E8&#x27;<br><code>can_type</code>: &#x27;FD&#x27; or &#x27;CC&#x27; (Classic CAN, default)</td>
+</tr>
+<tr>
+<td><code>canoe_start_tester_present</code></td>
+<td>Starts sending periodic Tester Present (3E 00) messages (keeps the diagnostic session alive).</td>
+<td style="font-size:12px"><code>interval</code>: Interval between messages (seconds). Default 2.0</td>
+</tr>
+<tr>
+<td><code>canoe_stop_tester_present</code></td>
+<td>Stops sending periodic Tester Present messages.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>canoe_send_diag_msg</code></td>
+<td>Sends a diagnostic (UDS) message via ISO-TP and evaluates the response (PRC/NRC). Returns a dict with status/response/service_id, etc. (requires canoe_set_diag_env first)</td>
+<td style="font-size:12px"><code>can_message</code>: Diagnostic data to send (space-separated hex). e.g. &#x27;22 F1 90&#x27;<br><code>timeout</code>: Response wait time (seconds). Default &#x27;5&#x27;<br><code>wait_response</code>: Whether to wait for and evaluate the response. Default True</td>
+</tr>
+</tbody>
+</table>
+
 <h3 id="mod-CANAT">CANAT</h3>
 <div class="callout callout-info">CANat Device — Sends and receives CAN bus messages via CANat hardware</div>
 <table>
@@ -557,6 +714,16 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td>Sends a command, then **PASSES if the keyword appears** in the response. Used for normal-response keywords like &#x27;OK&#x27;/&#x27;Pass&#x27;/&#x27;BootComplete&#x27;. Returns PASS immediately on first match (early exit). If not found within &#x27;time&#x27; seconds, appends one fail row and returns FAIL.</td>
 <td style="font-size:12px"><code>command</code>: Command to send. e.g. &#x27;ping&#x27;, &#x27;getversion&#x27;<br><code>keyword</code>: Substring required for PASS. e.g. &#x27;OK&#x27;, &#x27;Pass&#x27;, &#x27;BootComplete&#x27;<br><code>time</code>: Response wait duration (seconds). Default 5<br><code>encoding</code>: Encoding (default: utf-8)<br><code>append_newline</code>: Auto-append newline. true/false (default: true)</td>
 </tr>
+<tr>
+<td><code>Monitor_pass_on_keyword</code></td>
+<td>WITHOUT sending any command (no write), PASS if keyword is found in the log. If include_past=True, first scans logs captured so far, then monitors new lines for `time` seconds; PASS on first match. Sends nothing (not even a newline), so it does not disturb a webcam on the same USB hub.</td>
+<td style="font-size:12px"><code>keyword</code>: Keyword to PASS on (substring match)<br><code>time</code>: Seconds to wait for future log lines. Default 5. 0 = scan past buffer only<br><code>include_past</code>: Whether to also scan logs captured so far. true/false (default true)</td>
+</tr>
+<tr>
+<td><code>Monitor_fail_on_keyword</code></td>
+<td>WITHOUT sending any command (no write), FAIL if keyword is found in the log. For monitoring abnormal keywords (ERROR/crash). Scans past buffer (if include_past) and new lines for `time` seconds, accumulating all matches.</td>
+<td style="font-size:12px"><code>keyword</code>: Keyword that triggers FAIL (substring match)<br><code>time</code>: Seconds to monitor future log lines. Default 5. 0 = scan past buffer only<br><code>include_past</code>: Whether to also scan logs captured so far. true/false (default true)</td>
+</tr>
 </tbody>
 </table>
 
@@ -577,13 +744,23 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 </tr>
 <tr>
 <td><code>send_command</code></td>
-<td>Executes a command via SSH and returns the full output on completion (blocking). Korean Windows output is automatically handled via cp949/euc-kr encoding.</td>
-<td style="font-size:12px"><code>command</code>: Command to execute. e.g. &#x27;ls -al&#x27;, &#x27;cat /etc/version&#x27;</td>
+<td>Executes a command via SSH and returns the full output on completion (blocking). Korean Windows output is automatically handled via cp949/euc-kr encoding. Writing the command as &#x27;bash -s &lt; &lt;local path&gt;&#x27; auto-injects that local (PC) file as stdin, running a local script remotely without uploading.</td>
+<td style="font-size:12px"><code>command</code>: Command to execute. e.g. &#x27;ls -al&#x27;, &#x27;cat /etc/version&#x27;. Writing it as &#x27;bash -s &lt; &lt;local path&gt;&#x27; auto-injects that local (PC) file as stdin so a local script runs remotely without uploading. e.g. &#x27;sudo bash -s &lt; C:\ReplayKit\scripts\Check_Battery.sh&#x27;</td>
 </tr>
 <tr>
 <td><code>send_command_stream</code></td>
 <td>Executes a command via SSH and immediately returns a [BG_TASK:bg_x] placeholder (non-blocking). Output streams in real time and can be observed via the polling endpoint. Useful for long-running commands (netstat, tail -f, etc.).</td>
 <td style="font-size:12px"><code>command</code>: Command to execute. e.g. &#x27;netstat -a&#x27;, &#x27;tail -f /var/log/syslog&#x27;</td>
+</tr>
+<tr>
+<td><code>Check</code></td>
+<td>Executes a command via SSH and compares the output against an expected value (blocking). Returns a &#x27;FAIL:&#x27; prefix on failure so the step is judged as failed. Korean output is automatically handled via cp949/euc-kr encoding. Writing the command as &#x27;bash -s &lt; &lt;local path&gt;&#x27; auto-injects that local (PC) file as stdin, running a local script remotely without uploading.</td>
+<td style="font-size:12px"><code>command</code>: Command to execute. Writing it as &#x27;bash -s &lt; &lt;local path&gt;&#x27; auto-injects that local (PC) file as stdin so a local script runs remotely without uploading. e.g. &#x27;sudo bash -s &lt; C:\ReplayKit\scripts\Check_Battery.sh&#x27;<br><code>expected</code>: Expected string that must be contained in or exactly match the output. Leave empty for &#x27;pass only when there is no output&#x27; (no-output check)<br><code>match_mode</code>: Comparison mode: &#x27;contains&#x27; (substring) or &#x27;exact&#x27; (full match). Default: contains<br><code>timeout</code>: Maximum wait time (seconds). Default: 60s</td>
+</tr>
+<tr>
+<td><code>Check_Logic</code></td>
+<td>Executes a command via SSH and judges pass/fail against multiple keywords using and/or logic (blocking). Returns a &#x27;FAIL:&#x27; prefix on failure so the step is judged as failed. Writing the command as &#x27;bash -s &lt; &lt;local path&gt;&#x27; auto-injects that local (PC) file as stdin, running a local script remotely without uploading.</td>
+<td style="font-size:12px"><code>command</code>: Command to execute. Writing it as &#x27;bash -s &lt; &lt;local path&gt;&#x27; auto-injects that local (PC) file as stdin so a local script runs remotely without uploading. e.g. &#x27;sudo bash -s &lt; C:\ReplayKit\scripts\Check_Battery.sh&#x27;<br><code>keywords</code>: Comma-separated keyword list. e.g. &#x27;OK,ready,done&#x27;<br><code>logic</code>: Logic: &#x27;and&#x27; (pass when all keywords present) or &#x27;or&#x27; (pass when at least one present). Default: and<br><code>timeout</code>: Maximum wait time (seconds). Default: 60s</td>
 </tr>
 <tr>
 <td><code>send_file</code></td>
@@ -665,6 +842,39 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 
 <h2 id="cat-system">System & Utilities</h2>
 
+<h3 id="mod-Android">Android</h3>
+<div class="callout callout-info"></div>
+<table>
+<thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
+<tbody>
+<tr>
+<td><code>StartLogging</code></td>
+<td>Start capturing logcat for the given Android device (in-memory buffer). If clear=True, flushes the logcat ring buffer first. Auto-restarts logcat into the same buffer if the device reboots/disconnects.</td>
+<td style="font-size:12px"><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device<br><code>clear</code>: Clear logcat buffer before starting. true/false (default true)</td>
+</tr>
+<tr>
+<td><code>StopLogging</code></td>
+<td>Stop logcat capture and save the buffer to a file ({run_dir}/logs/logcat_*.log during playback, results/Temp_logs/ for step tests).</td>
+<td style="font-size:12px"><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device<br><code>save_path</code>: Save path. Empty = automatic path</td>
+</tr>
+<tr>
+<td><code>ClearLog</code></td>
+<td>Clear the device&#x27;s logcat ring buffer (adb logcat -c).</td>
+<td style="font-size:12px"><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device</td>
+</tr>
+<tr>
+<td><code>Monitor_pass_on_keyword</code></td>
+<td>PASS if keyword is found in the captured logcat. If include_past=True, scans logs captured so far first, then monitors new lines for `time` seconds. Requires StartLogging first.</td>
+<td style="font-size:12px"><code>keyword</code>: Keyword to PASS on (substring match)<br><code>time</code>: Seconds to wait for future log lines. Default 5. 0 = past buffer only<br><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device<br><code>include_past</code>: Whether to also scan logs captured so far. true/false (default true)</td>
+</tr>
+<tr>
+<td><code>Monitor_fail_on_keyword</code></td>
+<td>FAIL if keyword is found in the captured logcat. For monitoring abnormal keywords (FATAL/ANR/Exception). Scans past buffer (if include_past) and new lines for `time` seconds.</td>
+<td style="font-size:12px"><code>keyword</code>: Keyword that triggers FAIL (substring match)<br><code>time</code>: Seconds to monitor future log lines. Default 5. 0 = past buffer only<br><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device<br><code>include_past</code>: Whether to also scan logs captured so far. true/false (default true)</td>
+</tr>
+</tbody>
+</table>
+
 <h3 id="mod-CMD">CMD</h3>
 <div class="callout callout-info">Command Execution — Executes Windows command prompt (CMD) commands. Used for running external programs or system commands</div>
 <table>
@@ -679,6 +889,11 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td><code>Check</code></td>
 <td>Executes a command and verifies the output against an expected string (blocking). Returns a &#x27;FAIL:&#x27; prefix on mismatch, which causes the step to be marked as fail.</td>
 <td style="font-size:12px"><code>command</code>: Command to execute<br><code>expected</code>: Expected substring or full match value<br><code>match_mode</code>: Comparison mode: &#x27;contains&#x27; (substring) or &#x27;exact&#x27; (full match). Default: contains<br><code>timeout</code>: Max wait time in seconds. Default: 300</td>
+</tr>
+<tr>
+<td><code>RunBackground</code></td>
+<td>Spawns a subprocess fire-and-forget. Returns the PID but the output cannot be retrieved.</td>
+<td style="font-size:12px"><code>command</code>: Command to execute. e.g. &#x27;notepad&#x27;, &#x27;python script.py&#x27;</td>
 </tr>
 <tr>
 <td><code>Kill</code></td>

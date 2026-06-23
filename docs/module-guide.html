@@ -138,12 +138,15 @@
       <a href="#mod-SmartBench" class="toc-h3">SmartBench</a>
       <a href="#mod-WoohyunBench" class="toc-h3">WoohyunBench</a>
       <a href="#cat-can" class="toc-h2">CAN 통신</a>
+      <a href="#mod-CANoe_RBS" class="toc-h3">CANoe_RBS</a>
+      <a href="#mod-CANoe_Ctrl" class="toc-h3">CANoe_Ctrl</a>
       <a href="#mod-CANAT" class="toc-h3">CANAT</a>
       <a href="#cat-comm" class="toc-h2">통신 (시리얼/SSH/UART/DLT)</a>
       <a href="#mod-SerialLogging" class="toc-h3">SerialLogging</a>
       <a href="#mod-SSHManager" class="toc-h3">SSHManager</a>
       <a href="#mod-DLTLogging" class="toc-h3">DLTLogging</a>
       <a href="#cat-system" class="toc-h2">시스템 & 유틸리티</a>
+      <a href="#mod-Android" class="toc-h3">Android</a>
       <a href="#mod-CMD" class="toc-h3">CMD</a>
       <a href="#cat-etc" class="toc-h2">기타</a>
       <a href="#mod-SHELL" class="toc-h3">SHELL</a>
@@ -162,13 +165,15 @@
     </div>
 
     <h2 id="overview">전체 모듈 목록</h2>
-    <p>총 <strong>10개</strong> 모듈, <strong>97개</strong> 함수가 등록되어 있습니다.</p>
+    <p>총 <strong>13개</strong> 모듈, <strong>134개</strong> 함수가 등록되어 있습니다.</p>
     <table>
       <thead><tr><th>모듈</th><th>설명</th><th>함수 수</th></tr></thead>
       <tbody>
         <tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>CANat 하드웨어를 통해 CAN 버스 메시지를 송수신하는 모듈</td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-CANoe_RBS"><strong>CANoe_RBS</strong></a></td><td>CANoe 애플리케이션을 COM으로 구동하여 cfg(RBS) 기반 측정 시작/정지, 시그널·시스템/환경 변수 제어, UDS 진단을 수행하는 모듈</td><td style="text-align:center">16</td></tr>
+<tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Vector CAN 하드웨어(python-can VectorBus)로 CAN/CAN FD 메시지 송수신, ASC 로그 저장, ISO-TP(UDS) 진단을 수행하는 모듈 (CANoe 앱 불필요)</td><td style="text-align:center">11</td></tr>
 <tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>시리얼 연결된 QE 테스트 벤치의 릴레이, 전원, 센서, 오디오, LCD, 버튼, USB 등을 종합 제어하는 모듈</td><td style="text-align:center">8</td></tr>
-<tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>SSH로 원격 장비에 접속하여 명령 실행, 파일 전송을 수행하는 모듈</td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>SSH로 원격 장비에 접속하여 명령 실행, 파일 전송을 수행하는 모듈</td><td style="text-align:center">9</td></tr>
 <tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>DLT 데몬에 TCP 직접 연결하여 로그를 캡처·저장하고 키워드 PASS/FAIL 판정하는 모듈 (GUI 불필요)</td><td style="text-align:center">18</td></tr>
 <tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>시리얼 포트의 로그를 캡처·저장하고 키워드 검출하는 모듈.
 
@@ -182,12 +187,13 @@
 표준 사용 패턴:
   1) StartLogging()                              ← 시나리오 첫 스텝 (캡처 시작, 포트는 Device 탭에서 미리 Connect)
   2) SendCommand / SendCommand_*_on_keyword ...  ← 중간 스텝들
-  3) StopLogging()                               ← 시나리오 마지막 스텝 (로그 파일 저장 + 캡처 종료, 포트는 유지)</td><td style="text-align:center">5</td></tr>
+  3) StopLogging()                               ← 시나리오 마지막 스텝 (로그 파일 저장 + 캡처 종료, 포트는 유지)</td><td style="text-align:center">7</td></tr>
 <tr><td><a href="#mod-SmartBench"><strong>SmartBench</strong></a></td><td>TCP 소켓으로 Smart Bench 장비의 전원, 버튼, 전류, LED를 제어하는 모듈</td><td style="text-align:center">15</td></tr>
 <tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>UDP 통신으로 차량 전원(IGN/ACC/배터리) 제어 + CAN FD 신호 송신을 지원하는 통합 테스트 벤치</td><td style="text-align:center">25</td></tr>
-<tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Windows 명령 프롬프트(CMD) 명령을 실행하는 모듈. 외부 프로그램 실행이나 시스템 명령에 사용</td><td style="text-align:center">4</td></tr>
+<tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Windows 명령 프롬프트(CMD) 명령을 실행하는 모듈. 외부 프로그램 실행이나 시스템 명령에 사용</td><td style="text-align:center">5</td></tr>
 <tr><td><a href="#mod-SHELL"><strong>SHELL</strong></a></td><td>Linux/macOS bash 명령을 실행하는 모듈. CMD 의 Linux 대응. 외부 프로그램 실행이나 시스템 명령에 사용</td><td style="text-align:center">4</td></tr>
 <tr><td><a href="#mod-HKMC6th"><strong>HKMC6th</strong></a></td><td>TCP 소켓 프로토콜로 화면 캡처/터치/스와이프/HW 키 제어. 연결된 hkmc_agent 디바이스의 HKMC6thService 함수를 그대로 호출합니다.</td><td style="text-align:center">4</td></tr>
+<tr><td><a href="#mod-Android"><strong>Android</strong></a></td><td></td><td style="text-align:center">5</td></tr>
       </tbody>
     </table>
 
@@ -462,6 +468,157 @@
 
 <h2 id="cat-can">CAN 통신</h2>
 
+<h3 id="mod-CANoe_RBS">CANoe_RBS</h3>
+<div class="callout callout-info">CANoe RBS 제어 (py_canoe/COM) — CANoe 애플리케이션을 COM으로 구동하여 cfg(RBS) 기반 측정 시작/정지, 시그널·시스템/환경 변수 제어, UDS 진단을 수행하는 모듈</div>
+<table>
+<thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
+<tbody>
+<tr>
+<td><code>Init_CANoe_Plugin</code></td>
+<td>CANoe를 초기화하고 cfg를 엽니다 (기존 CANoe 프로세스 종료, win32com gen_py 캐시 정리, COM 초기화 포함). 측정/진단 전에 가장 먼저 호출하세요.</td>
+<td style="font-size:12px"><code>cfg_file</code>: CANoe cfg 파일 경로. 예: &#x27;D:/RBS/Cluster.cfg&#x27;<br><code>canoe_log_dir</code>: py_canoe 로그 폴더. 기본 &#x27;.\Log&#x27; (타임스탬프 하위 폴더 자동 생성)</td>
+</tr>
+<tr>
+<td><code>Start</code></td>
+<td>측정(Measurement)을 시작합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>Stop</code></td>
+<td>측정을 정지합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>Quit</code></td>
+<td>CANoe를 종료합니다 (실패 시 프로세스 강제 종료).</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>SendSignal</code></td>
+<td>메시지의 시그널 값을 설정합니다.</td>
+<td style="font-size:12px"><code>bus</code>: 버스 타입. 예: &#x27;CAN&#x27;<br><code>channel</code>: 채널 번호<br><code>messageName</code>: 메시지 이름<br><code>signalName</code>: 시그널 이름<br><code>value</code>: 설정할 값</td>
+</tr>
+<tr>
+<td><code>GetSignal</code></td>
+<td>시그널 값을 읽습니다 (측정 중 수신된 값만 반환, 아니면 에러).</td>
+<td style="font-size:12px"><code>bus</code>: 버스 타입. 예: &#x27;CAN&#x27;<br><code>channel</code>: 채널 번호<br><code>messageName</code>: 메시지 이름<br><code>signalName</code>: 시그널 이름</td>
+</tr>
+<tr>
+<td><code>SetSysVar</code></td>
+<td>시스템 변수 값을 설정합니다.</td>
+<td style="font-size:12px"><code>namespace_name</code>: 네임스페이스 이름<br><code>sys_var_name</code>: 시스템 변수 이름<br><code>value</code>: 설정할 값 (int/float/str)</td>
+</tr>
+<tr>
+<td><code>GetSysVar</code></td>
+<td>시스템 변수 값을 읽습니다 (py_canoe가 None 반환 시 raw COM으로 실제 원인을 진단).</td>
+<td style="font-size:12px"><code>namespace_name</code>: 네임스페이스 이름<br><code>sys_var_name</code>: 시스템 변수 이름<br><code>return_symbolic_name</code>: 심볼릭 이름 반환 여부. 기본 False<br><code>islog</code>: 로그 출력 여부. 기본 True</td>
+</tr>
+<tr>
+<td><code>CheckSysVar</code></td>
+<td>시스템 변수 값을 기대값과 비교하여 합부 판정합니다.</td>
+<td style="font-size:12px"><code>namespace_name</code>: 네임스페이스 이름<br><code>sys_var_name</code>: 시스템 변수 이름<br><code>expect_value</code>: 기대값. 비교식 지원: &#x27;&gt;&#x27;, &#x27;&lt;&#x27;, &#x27;~&#x27;(범위), &#x27;|&#x27;(or), &#x27;&amp;&#x27;(and)</td>
+</tr>
+<tr>
+<td><code>SetEnvVar</code></td>
+<td>환경 변수 값을 설정합니다.</td>
+<td style="font-size:12px"><code>env_var_name</code>: 환경 변수 이름<br><code>value</code>: 설정할 값 (int/float/str/tuple)</td>
+</tr>
+<tr>
+<td><code>GetEnvVar</code></td>
+<td>환경 변수 값을 읽습니다 (System Variables 네임스페이스 변수라면 GetSysVar 사용).</td>
+<td style="font-size:12px"><code>env_var_name</code>: 환경 변수 이름<br><code>islog</code>: 로그 출력 여부. 기본 True</td>
+</tr>
+<tr>
+<td><code>CheckEnvVar</code></td>
+<td>환경 변수 값을 기대값과 비교하여 합부 판정합니다.</td>
+<td style="font-size:12px"><code>env_var_name</code>: 환경 변수 이름<br><code>expect_value</code>: 기대값. 비교식 지원: &#x27;&gt;&#x27;, &#x27;&lt;&#x27;, &#x27;~&#x27;, &#x27;|&#x27;, &#x27;&amp;&#x27;</td>
+</tr>
+<tr>
+<td><code>DIAG_TestPresent</code></td>
+<td>지정 ECU의 Tester Present 주기 전송을 켜거나 끕니다.</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: 진단 ECU qualifier 이름<br><code>value</code>: True = 활성화, False = 비활성화</td>
+</tr>
+<tr>
+<td><code>DIAG_Request</code></td>
+<td>UDS 진단 요청을 전송하고 응답을 반환합니다.</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: 진단 ECU qualifier 이름<br><code>request</code>: 요청 데이터. 예: &#x27;10 01&#x27;<br><code>request_in_bytes</code>: 요청을 바이트로 해석. 기본 True<br><code>return_sender_name</code>: 응답에 송신자 이름 포함. 기본 False<br><code>timeout</code>: (미사용 — py_canoe가 미지원)<br><code>islog</code>: 로그 출력 여부. 기본 True</td>
+</tr>
+<tr>
+<td><code>CheckDIAG</code></td>
+<td>UDS 진단 요청을 보내고 응답을 기대 패턴과 비교하여 합부 판정합니다 (인덱스 지정 비교 지원).</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: 진단 ECU qualifier 이름<br><code>request</code>: 요청 데이터. 예: &#x27;10 01&#x27;<br><code>expect_value</code>: 기대 응답 패턴. 예: &#x27;50 01 00 32 01 F4&#x27;<br><code>request_in_bytes</code>: 요청을 바이트로 해석. 기본 True<br><code>return_sender_name</code>: 응답에 송신자 이름 포함. 기본 False</td>
+</tr>
+<tr>
+<td><code>SendDiagMsg</code></td>
+<td>UDS 진단 요청을 전송하고 PRC/NRC를 파싱하여 dict로 반환합니다 (타임아웃 시 재시도).</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: 진단 ECU qualifier 이름<br><code>request</code>: 요청 데이터. 예: &#x27;10 01&#x27;<br><code>timeout</code>: (미사용 — py_canoe가 미지원)<br><code>request_in_bytes</code>: 요청을 바이트로 해석. 기본 True<br><code>return_sender_name</code>: 응답에 송신자 이름 포함. 기본 False<br><code>max_retries</code>: 최대 재시도 횟수. 기본 5<br><code>retry_delay</code>: 재시도 간격 (초). 기본 10.0</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-CANoe_Ctrl">CANoe_Ctrl</h3>
+<div class="callout callout-info">CANoe 직접 제어 (Vector) — Vector CAN 하드웨어(python-can VectorBus)로 CAN/CAN FD 메시지 송수신, ASC 로그 저장, ISO-TP(UDS) 진단을 수행하는 모듈 (CANoe 앱 불필요)</div>
+<table>
+<thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
+<tbody>
+<tr>
+<td><code>canoe_full_log_save_start</code></td>
+<td>전체 CAN 트래픽을 ASC 로그 파일로 저장 시작 (모든 버스 채널 수신). 타임스탬프가 붙은 최종 저장 경로를 반환합니다.</td>
+<td style="font-size:12px"><code>path</code>: 로그 저장 폴더 경로. 예: &#x27;D:/log&#x27;<br><code>file_name</code>: 로그 파일명(확장자 포함). 예: &#x27;Auto.asc&#x27; — 파일명에 &#x27;_YYMMDD_HHMMSS&#x27;가 자동으로 붙습니다.</td>
+</tr>
+<tr>
+<td><code>canoe_full_log_save_stop</code></td>
+<td>전체 로그 저장을 중지하고 주기 송신 작업을 정리합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>canoe_log_save_start</code></td>
+<td>구간 로그 저장을 시작합니다 (전체 로그 저장이 켜진 상태에서 추가 구간 로그를 별도 파일로 분리 저장).</td>
+<td style="font-size:12px"><code>path</code>: 로그 저장 폴더 경로<br><code>file_name</code>: 로그 파일명(확장자 포함). 예: &#x27;section.asc&#x27;</td>
+</tr>
+<tr>
+<td><code>canoe_log_save_stop</code></td>
+<td>구간 로그 저장을 중지합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>canoe_send_message</code></td>
+<td>CAN/CAN FD 메시지를 전송합니다. 주기를 지정하면 주기 송신, 0이면 1회 송신.</td>
+<td style="font-size:12px"><code>message_id</code>: CAN ID(16진수 문자열). 예: &#x27;0x288&#x27;<br><code>cycle_time</code>: 전송 주기 (ms). 0이면 1회 전송<br><code>can_message</code>: 메시지 데이터 (공백 구분 16진수). 예: &#x27;01 02 03 04 05 06 07 08&#x27;<br><code>bus_channel</code>: 버스 채널 인덱스 (0부터, device_info 등록 순서)<br><code>message_type</code>: &#x27;FD&#x27;(기본) 또는 그 외 문자열 = Classic CAN</td>
+</tr>
+<tr>
+<td><code>canoe_send_msg_all_stop</code></td>
+<td>지정 채널의 모든 주기 송신을 중지합니다.</td>
+<td style="font-size:12px"><code>bus_channel</code>: 버스 채널 인덱스</td>
+</tr>
+<tr>
+<td><code>find_msg_from_latest_log</code></td>
+<td>로그 파일에서 특정 CAN ID와 데이터가 포함된 라인을 검색합니다. (&#x27;pass&#x27;, 라인) 또는 (&#x27;fail&#x27;, &#x27;&#x27;)을 반환.</td>
+<td style="font-size:12px"><code>log_file</code>: 검색할 로그 파일 경로<br><code>message_id</code>: 찾을 CAN ID. 예: &#x27;0x288&#x27;<br><code>can_message</code>: 포함 여부를 확인할 데이터 (공백 구분 16진수)</td>
+</tr>
+<tr>
+<td><code>canoe_set_diag_env</code></td>
+<td>ISO-TP(진단) 환경을 설정합니다. 진단 송수신 전에 1회 호출 필요.</td>
+<td style="font-size:12px"><code>bus_ch</code>: 진단에 사용할 버스 채널 인덱스<br><code>tx_id</code>: 요청(Tx) CAN ID(16진수). 예: &#x27;0x7E0&#x27;<br><code>rx_id</code>: 응답(Rx) CAN ID(16진수). 예: &#x27;0x7E8&#x27;<br><code>can_type</code>: &#x27;FD&#x27; 또는 &#x27;CC&#x27;(Classic CAN, 기본)</td>
+</tr>
+<tr>
+<td><code>canoe_start_tester_present</code></td>
+<td>주기적으로 Tester Present(3E 00)를 전송하기 시작합니다 (진단 세션 유지).</td>
+<td style="font-size:12px"><code>interval</code>: 전송 간격 (초). 기본 2.0</td>
+</tr>
+<tr>
+<td><code>canoe_stop_tester_present</code></td>
+<td>주기적 Tester Present 전송을 중지합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>canoe_send_diag_msg</code></td>
+<td>ISO-TP로 진단 메시지(UDS)를 전송하고 응답(PRC/NRC)을 판정합니다. status/response/service_id 등을 담은 dict를 반환. (canoe_set_diag_env 선행 필요)</td>
+<td style="font-size:12px"><code>can_message</code>: 전송할 진단 데이터 (공백 구분 16진수). 예: &#x27;22 F1 90&#x27;<br><code>timeout</code>: 응답 대기 시간 (초). 기본 &#x27;5&#x27;<br><code>wait_response</code>: 응답 대기 및 판정 여부. 기본 True</td>
+</tr>
+</tbody>
+</table>
+
 <h3 id="mod-CANAT">CANAT</h3>
 <div class="callout callout-info">CANat 디바이스 — CANat 하드웨어를 통해 CAN 버스 메시지를 송수신하는 모듈</div>
 <table>
@@ -559,6 +716,17 @@
 <td>명령어 전송 후 응답에 keyword가 **포함되면 PASS 판정**. &#x27;OK&#x27;/&#x27;Pass&#x27;/&#x27;BootComplete&#x27; 등 정상 응답 키워드 검출용. 발견 즉시 PASS 반환 (조기 종료). &#x27;time&#x27; 초 안에 발견되지 않으면 fail row 1건 누적 후 FAIL 반환.</td>
 <td style="font-size:12px"><code>command</code>: 전송할 명령어. 예: &#x27;ping&#x27;, &#x27;getversion&#x27;<br><code>keyword</code>: PASS를 만족할 키워드. 예: &#x27;OK&#x27;, &#x27;Pass&#x27;, &#x27;BootComplete&#x27;<br><code>time</code>: 응답 대기 시간(초). 기본 5<br><code>encoding</code>: 인코딩 (기본 utf-8)<br><code>append_newline</code>: 개행 문자 자동 추가. true/false (기본 true)</td>
 </tr>
+<tr>
+<td><code>Monitor_pass_on_keyword</code></td>
+<td>명령을 전송하지 않고(write 없음) 로그에서 keyword를 찾으면 PASS. include_past=True면 현재까지 캡처된 로그(과거)를 먼저 검사하고, 이후 time초 동안 새로 들어오는 로그도 검사하여 발견 즉시 PASS. 못 찾으면 FAIL. 빈 명령(
+)조차 보내지 않아 같은 USB 허브의 웹캠 녹화 등에 영향을 주지 않음.</td>
+<td style="font-size:12px"><code>keyword</code>: PASS를 만족할 키워드 (부분 문자열 매칭). 예: &#x27;[3 to 4] SD_Reason 0&#x27;<br><code>time</code>: 미래 로그 대기 시간(초). 기본 5. 0이면 과거 버퍼만 1회 검사<br><code>include_past</code>: 현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)</td>
+</tr>
+<tr>
+<td><code>Monitor_fail_on_keyword</code></td>
+<td>명령을 전송하지 않고(write 없음) 로그에서 keyword가 발견되면 FAIL. &#x27;ERROR&#x27;/&#x27;crash&#x27; 등 비정상 키워드 모니터링용. include_past=True면 과거 로그도 검사하고, time초 동안 들어오는 로그도 검사하여 매칭된 모든 라인을 fail로 누적. 발견 없으면 PASS.</td>
+<td style="font-size:12px"><code>keyword</code>: FAIL을 일으킬 검출 키워드 (부분 문자열 매칭). 예: &#x27;ERROR&#x27;, &#x27;crash&#x27;<br><code>time</code>: 미래 로그 모니터링 시간(초). 기본 5. 0이면 과거 버퍼만 검사<br><code>include_past</code>: 현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)</td>
+</tr>
 </tbody>
 </table>
 
@@ -579,13 +747,23 @@
 </tr>
 <tr>
 <td><code>send_command</code></td>
-<td>SSH로 명령어를 실행하고 완료 후 전체 출력을 반환합니다 (블로킹). 한국어 Windows 출력은 cp949/euc-kr 인코딩으로 자동 처리.</td>
-<td style="font-size:12px"><code>command</code>: 실행할 명령어. 예: &#x27;ls -al&#x27;, &#x27;cat /etc/version&#x27;</td>
+<td>SSH로 명령어를 실행하고 완료 후 전체 출력을 반환합니다 (블로킹). 한국어 Windows 출력은 cp949/euc-kr 인코딩으로 자동 처리. 명령을 &#x27;bash -s &lt; 로컬경로&#x27; 형식으로 적으면 해당 로컬(PC) 파일을 stdin으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 명령어. 예: &#x27;ls -al&#x27;, &#x27;cat /etc/version&#x27;. &#x27;bash -s &lt; 로컬경로&#x27; 형태로 적으면 해당 로컬(PC) 파일을 stdin 으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다. 예: &#x27;sudo bash -s &lt; C:\ReplayKit\scripts\Check_Battery.sh&#x27;</td>
 </tr>
 <tr>
 <td><code>send_command_stream</code></td>
 <td>SSH로 명령어를 실행하고 즉시 [BG_TASK:bg_x] placeholder를 반환 (논블로킹). 결과는 실시간으로 스트리밍되며 폴링 엔드포인트로 진행 상황을 볼 수 있습니다. 오래 걸리는 명령(netstat, tail -f 등)에 유용.</td>
 <td style="font-size:12px"><code>command</code>: 실행할 명령어. 예: &#x27;netstat -a&#x27;, &#x27;tail -f /var/log/syslog&#x27;</td>
+</tr>
+<tr>
+<td><code>Check</code></td>
+<td>SSH로 명령어를 실행하고 출력 결과를 기대값과 비교합니다(블로킹). 실패 시 &#x27;FAIL:&#x27; 접두사를 반환하여 스텝이 fail로 판정됩니다. 한국어 출력은 cp949/euc-kr 인코딩으로 자동 처리. 명령을 &#x27;bash -s &lt; 로컬경로&#x27; 형식으로 적으면 해당 로컬(PC) 파일을 stdin으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 명령어. &#x27;bash -s &lt; 로컬경로&#x27; 형태로 적으면 해당 로컬(PC) 파일을 stdin 으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다. 예: &#x27;sudo bash -s &lt; C:\ReplayKit\scripts\Check_Battery.sh&#x27;<br><code>expected</code>: 출력에 포함되거나 완전히 일치해야 할 기대 문자열. 비워두면 &#x27;출력이 없을 때만 pass&#x27;(no-output 검증)로 동작<br><code>match_mode</code>: 비교 방식: &#x27;contains&#x27;(부분 일치) 또는 &#x27;exact&#x27;(완전 일치). 기본값: contains<br><code>timeout</code>: 최대 대기 시간 (초). 기본값: 60초</td>
+</tr>
+<tr>
+<td><code>Check_Logic</code></td>
+<td>SSH로 명령어를 실행하고 출력에 대해 여러 키워드를 and/or 로직으로 합부 판정합니다(블로킹). 실패 시 &#x27;FAIL:&#x27; 접두사를 반환하여 스텝이 fail로 판정됩니다. 명령을 &#x27;bash -s &lt; 로컬경로&#x27; 형식으로 적으면 해당 로컬(PC) 파일을 stdin으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 명령어. &#x27;bash -s &lt; 로컬경로&#x27; 형태로 적으면 해당 로컬(PC) 파일을 stdin 으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다. 예: &#x27;sudo bash -s &lt; C:\ReplayKit\scripts\Check_Battery.sh&#x27;<br><code>keywords</code>: 키워드 목록. 쉼표로 구분. 예: &#x27;OK,ready,done&#x27;<br><code>logic</code>: 판정 로직: &#x27;and&#x27;(모든 키워드 포함 시 pass) 또는 &#x27;or&#x27;(하나 이상 포함 시 pass). 기본값: and<br><code>timeout</code>: 최대 대기 시간 (초). 기본값: 60초</td>
 </tr>
 <tr>
 <td><code>send_file</code></td>
@@ -612,13 +790,13 @@
 <tbody>
 <tr>
 <td><code>StartLogging</code></td>
-<td>DLT 연결 + 캡처 시작 (메모리만, 파일 저장 없음). 뷰어 모달이 자동 오픈됩니다. 종료 시 StopLogging으로 일괄 저장.</td>
+<td>DLT 연결 + 캡처 시작. 모든 로그를 즉시 텍스트 파일(자동 경로)에 스트리밍 저장하고 메모리는 최근분만 유지합니다 (장시간 로깅에도 느려지지 않음). 뷰어 모달이 자동 오픈됩니다.</td>
 <td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
 </tr>
 <tr>
 <td><code>StopLogging</code></td>
-<td>DLT 캡처 종료 + 메모리 버퍼를 파일로 일괄 저장. 자동 경로 또는 지정 경로.</td>
-<td style="font-size:12px"><code>save_path</code>: 저장 파일 경로. 빈 값이면 자동 (재생 중: run_dir/logs/dlt_*.log, 스텝 테스트: backend/results/Temp_logs/dlt_*.log)</td>
+<td>DLT 캡처 종료. 로그는 이미 파일에 실시간 저장되어 있으며, save_path 지정 시 그 위치로 이동만 합니다.</td>
+<td style="font-size:12px"><code>save_path</code>: 저장 파일 경로. 빈 값이면 스트리밍 파일 그대로 유지 (재생 중: run_dir/logs/dlt_*.log, 스텝 테스트: backend/results/Temp_logs/dlt_*.log)</td>
 </tr>
 <tr>
 <td><code>count_keyword</code></td>
@@ -707,6 +885,39 @@
 
 <h2 id="cat-system">시스템 & 유틸리티</h2>
 
+<h3 id="mod-Android">Android</h3>
+<div class="callout callout-info"></div>
+<table>
+<thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
+<tbody>
+<tr>
+<td><code>StartLogging</code></td>
+<td>지정한 Android 디바이스의 logcat 캡처를 시작합니다(메모리 버퍼). clear=True면 시작 전 logcat 링버퍼를 비웁니다. 디바이스가 reboot/끊겨도 자동으로 logcat을 재기동해 같은 버퍼에 이어서 캡처합니다.</td>
+<td style="font-size:12px"><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정<br><code>clear</code>: 시작 전 logcat 버퍼 비우기. true/false (기본 true)</td>
+</tr>
+<tr>
+<td><code>StopLogging</code></td>
+<td>logcat 캡처를 종료하고 메모리 버퍼를 파일로 저장합니다. 재생 중이면 {run_dir}/logs/logcat_*.log, 스텝 테스트면 results/Temp_logs/에 저장됩니다.</td>
+<td style="font-size:12px"><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정<br><code>save_path</code>: 저장 경로. 비우면 자동 경로 사용</td>
+</tr>
+<tr>
+<td><code>ClearLog</code></td>
+<td>디바이스의 logcat 링버퍼를 비웁니다(adb logcat -c).</td>
+<td style="font-size:12px"><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정</td>
+</tr>
+<tr>
+<td><code>Monitor_pass_on_keyword</code></td>
+<td>캡처된 logcat에서 keyword를 찾으면 PASS. include_past=True면 현재까지 캡처된 로그(과거)를 먼저 검사하고, 이후 time초 동안 들어오는 로그도 검사하여 발견 즉시 PASS. StartLogging이 선행되어야 합니다.</td>
+<td style="font-size:12px"><code>keyword</code>: PASS를 만족할 키워드 (부분 문자열 매칭)<br><code>time</code>: 미래 로그 대기 시간(초). 기본 5. 0이면 과거 버퍼만 검사<br><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정<br><code>include_past</code>: 현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)</td>
+</tr>
+<tr>
+<td><code>Monitor_fail_on_keyword</code></td>
+<td>캡처된 logcat에서 keyword가 발견되면 FAIL. &#x27;FATAL&#x27;/&#x27;ANR&#x27;/&#x27;Exception&#x27; 등 비정상 키워드 모니터링용. include_past=True면 과거 로그도 검사하고 time초 동안 들어오는 로그도 검사하여 매칭 라인을 fail로 누적.</td>
+<td style="font-size:12px"><code>keyword</code>: FAIL을 일으킬 검출 키워드 (부분 문자열 매칭)<br><code>time</code>: 미래 로그 모니터링 시간(초). 기본 5. 0이면 과거 버퍼만 검사<br><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정<br><code>include_past</code>: 현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)</td>
+</tr>
+</tbody>
+</table>
+
 <h3 id="mod-CMD">CMD</h3>
 <div class="callout callout-info">명령어 실행 — Windows 명령 프롬프트(CMD) 명령을 실행하는 모듈. 외부 프로그램 실행이나 시스템 명령에 사용</div>
 <table>
@@ -726,6 +937,11 @@
 <td><code>Check_Logic</code></td>
 <td>명령어를 실행하고 출력에 대해 여러 키워드를 and/or 로직으로 합부 판정합니다(블로킹). 실패 시 &#x27;FAIL:&#x27; 접두사를 반환하여 스텝이 fail로 판정됩니다.</td>
 <td style="font-size:12px"><code>command</code>: 실행할 명령어<br><code>keywords</code>: 키워드 목록. 쉼표로 구분. 예: &#x27;OK,ready,done&#x27;<br><code>logic</code>: 판정 로직: &#x27;and&#x27;(모든 키워드 포함 시 pass) 또는 &#x27;or&#x27;(하나 이상 포함 시 pass). 기본값: and<br><code>timeout</code>: 최대 대기 시간 (초). 기본값: 30초</td>
+</tr>
+<tr>
+<td><code>RunBackground</code></td>
+<td>명령어를 서브프로세스로 실행합니다(fire-and-forget). PID가 반환되지만 결과는 회수할 수 없습니다.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 명령어. 예: &#x27;notepad&#x27;, &#x27;python script.py&#x27;</td>
 </tr>
 <tr>
 <td><code>Kill</code></td>

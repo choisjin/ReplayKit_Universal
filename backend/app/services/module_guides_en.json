@@ -55,6 +55,213 @@
       }
     }
   },
+  "CANoe_RBS": {
+    "_description": "CANoe RBS control (py_canoe/COM) — Drives the CANoe application via COM to start/stop cfg (RBS)-based measurement, control signals and system/environment variables, and run UDS diagnostics.",
+    "functions": {
+      "Init_CANoe_Plugin": {
+        "description": "Initializes CANoe and opens the cfg (kills existing CANoe processes, clears the win32com gen_py cache, initializes COM). Call this first before measurement/diagnostics.",
+        "params": {
+          "cfg_file": "CANoe cfg file path. e.g. 'D:/RBS/Cluster.cfg'",
+          "canoe_log_dir": "py_canoe log folder. Default '.\\Log' (a timestamped subfolder is created automatically)"
+        }
+      },
+      "Start": {
+        "description": "Starts the measurement.",
+        "params": {}
+      },
+      "Stop": {
+        "description": "Stops the measurement.",
+        "params": {}
+      },
+      "Quit": {
+        "description": "Quits CANoe (force-kills the process on failure).",
+        "params": {}
+      },
+      "SendSignal": {
+        "description": "Sets a signal value of a message.",
+        "params": {
+          "bus": "Bus type. e.g. 'CAN'",
+          "channel": "Channel number",
+          "messageName": "Message name",
+          "signalName": "Signal name",
+          "value": "Value to set"
+        }
+      },
+      "GetSignal": {
+        "description": "Reads a signal value (returns only values received during measurement; otherwise errors).",
+        "params": {
+          "bus": "Bus type. e.g. 'CAN'",
+          "channel": "Channel number",
+          "messageName": "Message name",
+          "signalName": "Signal name"
+        }
+      },
+      "SetSysVar": {
+        "description": "Sets a system variable value.",
+        "params": {
+          "namespace_name": "Namespace name",
+          "sys_var_name": "System variable name",
+          "value": "Value to set (int/float/str)"
+        }
+      },
+      "GetSysVar": {
+        "description": "Reads a system variable value (falls back to raw COM to surface the real cause when py_canoe returns None).",
+        "params": {
+          "namespace_name": "Namespace name",
+          "sys_var_name": "System variable name",
+          "return_symbolic_name": "Whether to return the symbolic name. Default False",
+          "islog": "Whether to print a log. Default True"
+        }
+      },
+      "CheckSysVar": {
+        "description": "Compares a system variable value against an expected value (pass/fail).",
+        "params": {
+          "namespace_name": "Namespace name",
+          "sys_var_name": "System variable name",
+          "expect_value": "Expected value. Supports expressions: '>', '<', '~' (range), '|' (or), '&' (and)"
+        }
+      },
+      "SetEnvVar": {
+        "description": "Sets an environment variable value.",
+        "params": {
+          "env_var_name": "Environment variable name",
+          "value": "Value to set (int/float/str/tuple)"
+        }
+      },
+      "GetEnvVar": {
+        "description": "Reads an environment variable value (use GetSysVar if it's a System Variables namespace variable).",
+        "params": {
+          "env_var_name": "Environment variable name",
+          "islog": "Whether to print a log. Default True"
+        }
+      },
+      "CheckEnvVar": {
+        "description": "Compares an environment variable value against an expected value (pass/fail).",
+        "params": {
+          "env_var_name": "Environment variable name",
+          "expect_value": "Expected value. Supports expressions: '>', '<', '~', '|', '&'"
+        }
+      },
+      "DIAG_TestPresent": {
+        "description": "Turns periodic Tester Present transmission on or off for the given ECU.",
+        "params": {
+          "diag_ecu_qualifier_name": "Diagnostic ECU qualifier name",
+          "value": "True = activate, False = deactivate"
+        }
+      },
+      "DIAG_Request": {
+        "description": "Sends a UDS diagnostic request and returns the response.",
+        "params": {
+          "diag_ecu_qualifier_name": "Diagnostic ECU qualifier name",
+          "request": "Request data. e.g. '10 01'",
+          "request_in_bytes": "Interpret request as bytes. Default True",
+          "return_sender_name": "Include sender name in the response. Default False",
+          "timeout": "(unused — not supported by py_canoe)",
+          "islog": "Whether to print a log. Default True"
+        }
+      },
+      "CheckDIAG": {
+        "description": "Sends a UDS diagnostic request and compares the response against an expected pattern (supports indexed comparison).",
+        "params": {
+          "diag_ecu_qualifier_name": "Diagnostic ECU qualifier name",
+          "request": "Request data. e.g. '10 01'",
+          "expect_value": "Expected response pattern. e.g. '50 01 00 32 01 F4'",
+          "request_in_bytes": "Interpret request as bytes. Default True",
+          "return_sender_name": "Include sender name in the response. Default False"
+        }
+      },
+      "SendDiagMsg": {
+        "description": "Sends a UDS diagnostic request, parses PRC/NRC, and returns a dict (retries on timeout).",
+        "params": {
+          "diag_ecu_qualifier_name": "Diagnostic ECU qualifier name",
+          "request": "Request data. e.g. '10 01'",
+          "timeout": "(unused — not supported by py_canoe)",
+          "request_in_bytes": "Interpret request as bytes. Default True",
+          "return_sender_name": "Include sender name in the response. Default False",
+          "max_retries": "Maximum number of retries on timeout. Default 5",
+          "retry_delay": "Delay between retries (seconds). Default 10.0"
+        }
+      }
+    }
+  },
+  "CANoe_Ctrl": {
+    "_description": "CANoe direct control (Vector) — Sends/receives CAN/CAN FD messages, saves ASC logs, and runs ISO-TP (UDS) diagnostics via Vector CAN hardware (python-can VectorBus). No CANoe application required.",
+    "functions": {
+      "canoe_full_log_save_start": {
+        "description": "Starts saving all CAN traffic to an ASC log file (receives from all bus channels). Returns the final timestamped save path.",
+        "params": {
+          "path": "Log save folder path. e.g. 'D:/log'",
+          "file_name": "Log file name (with extension). e.g. 'Auto.asc' — '_YYMMDD_HHMMSS' is appended automatically."
+        }
+      },
+      "canoe_full_log_save_stop": {
+        "description": "Stops full log saving and cleans up periodic transmit tasks.",
+        "params": {}
+      },
+      "canoe_log_save_start": {
+        "description": "Starts a section log (saves an additional section to a separate file while full logging is active).",
+        "params": {
+          "path": "Log save folder path",
+          "file_name": "Log file name (with extension). e.g. 'section.asc'"
+        }
+      },
+      "canoe_log_save_stop": {
+        "description": "Stops the section log.",
+        "params": {}
+      },
+      "canoe_send_message": {
+        "description": "Sends a CAN/CAN FD message. A non-zero cycle time sends periodically; 0 sends once.",
+        "params": {
+          "message_id": "CAN ID (hex string). e.g. '0x288'",
+          "cycle_time": "Transmit cycle (ms). 0 = send once",
+          "can_message": "Message data (space-separated hex). e.g. '01 02 03 04 05 06 07 08'",
+          "bus_channel": "Bus channel index (from 0, in device_info order)",
+          "message_type": "'FD' (default) or any other string = Classic CAN"
+        }
+      },
+      "canoe_send_msg_all_stop": {
+        "description": "Stops all periodic transmits on the given channel.",
+        "params": {
+          "bus_channel": "Bus channel index"
+        }
+      },
+      "find_msg_from_latest_log": {
+        "description": "Searches a log file for a line containing a specific CAN ID and data. Returns ('pass', line) or ('fail', '').",
+        "params": {
+          "log_file": "Path of the log file to search",
+          "message_id": "CAN ID to find. e.g. '0x288'",
+          "can_message": "Data to check for inclusion (space-separated hex)"
+        }
+      },
+      "canoe_set_diag_env": {
+        "description": "Configures the ISO-TP (diagnostic) environment. Must be called once before sending/receiving diagnostics.",
+        "params": {
+          "bus_ch": "Bus channel index used for diagnostics",
+          "tx_id": "Request (Tx) CAN ID (hex). e.g. '0x7E0'",
+          "rx_id": "Response (Rx) CAN ID (hex). e.g. '0x7E8'",
+          "can_type": "'FD' or 'CC' (Classic CAN, default)"
+        }
+      },
+      "canoe_start_tester_present": {
+        "description": "Starts sending periodic Tester Present (3E 00) messages (keeps the diagnostic session alive).",
+        "params": {
+          "interval": "Interval between messages (seconds). Default 2.0"
+        }
+      },
+      "canoe_stop_tester_present": {
+        "description": "Stops sending periodic Tester Present messages.",
+        "params": {}
+      },
+      "canoe_send_diag_msg": {
+        "description": "Sends a diagnostic (UDS) message via ISO-TP and evaluates the response (PRC/NRC). Returns a dict with status/response/service_id, etc. (requires canoe_set_diag_env first)",
+        "params": {
+          "can_message": "Diagnostic data to send (space-separated hex). e.g. '22 F1 90'",
+          "timeout": "Response wait time (seconds). Default '5'",
+          "wait_response": "Whether to wait for and evaluate the response. Default True"
+        }
+      }
+    }
+  },
   "IVIQEBenchIOClient": {
     "_description": "IVI QE Bench — Comprehensive control of relays, power, sensors, audio, LCD, buttons, and USB on the serial-connected QE test bench",
     "functions": {
@@ -787,7 +994,7 @@
         "params": {}
       },
       "send_command": {
-        "description": "Executes a command via SSH and returns the full output on completion (blocking). Korean Windows output is automatically handled via cp949/euc-kr encoding.",
+        "description": "Executes a command via SSH and returns the full output on completion (blocking). Korean Windows output is automatically handled via cp949/euc-kr encoding. Writing the command as 'bash -s < <local path>' auto-injects that local (PC) file as stdin, running a local script remotely without uploading.",
         "params": {
           "command": "Command to execute. e.g. 'ls -al', 'cat /etc/version'. Writing it as 'bash -s < <local path>' auto-injects that local (PC) file as stdin so a local script runs remotely without uploading. e.g. 'sudo bash -s < C:\\ReplayKit\\scripts\\Check_Battery.sh'"
         }
@@ -799,7 +1006,7 @@
         }
       },
       "Check": {
-        "description": "Executes a command via SSH and compares the output against an expected value (blocking). Returns a 'FAIL:' prefix on failure so the step is judged as failed. Korean output is automatically handled via cp949/euc-kr encoding.",
+        "description": "Executes a command via SSH and compares the output against an expected value (blocking). Returns a 'FAIL:' prefix on failure so the step is judged as failed. Korean output is automatically handled via cp949/euc-kr encoding. Writing the command as 'bash -s < <local path>' auto-injects that local (PC) file as stdin, running a local script remotely without uploading.",
         "params": {
           "command": "Command to execute. Writing it as 'bash -s < <local path>' auto-injects that local (PC) file as stdin so a local script runs remotely without uploading. e.g. 'sudo bash -s < C:\\ReplayKit\\scripts\\Check_Battery.sh'",
           "expected": "Expected string that must be contained in or exactly match the output. Leave empty for 'pass only when there is no output' (no-output check)",
@@ -808,7 +1015,7 @@
         }
       },
       "Check_Logic": {
-        "description": "Executes a command via SSH and judges pass/fail against multiple keywords using and/or logic (blocking). Returns a 'FAIL:' prefix on failure so the step is judged as failed.",
+        "description": "Executes a command via SSH and judges pass/fail against multiple keywords using and/or logic (blocking). Returns a 'FAIL:' prefix on failure so the step is judged as failed. Writing the command as 'bash -s < <local path>' auto-injects that local (PC) file as stdin, running a local script remotely without uploading.",
         "params": {
           "command": "Command to execute. Writing it as 'bash -s < <local path>' auto-injects that local (PC) file as stdin so a local script runs remotely without uploading. e.g. 'sudo bash -s < C:\\ReplayKit\\scripts\\Check_Battery.sh'",
           "keywords": "Comma-separated keyword list. e.g. 'OK,ready,done'",
