@@ -895,15 +895,6 @@ def get_module_functions(module_name: str) -> list[dict]:
             "CompareValue", "CompareString", "compareDIAG",
             "GetByteDataList", "make_timestamp_log_dir",
         },
-        # DLTLogging: 사용 빈도가 낮거나 중복되는 함수는 콤보 목록/가이드에서 제외.
-        "DLTLogging": {
-            "count_keyword", "reset_count_keyword",
-            "assert_keyword", "reset_assert_keyword",
-            "fail_on_keyword",
-            "StartSave", "StopSave", "MarkStep",
-            "SearchAll", "SearchRange",
-            "GetStatus", "ClearLogs",
-        },
     }
     excluded = per_module_excluded.get(module_name, set())
 
@@ -915,6 +906,14 @@ def get_module_functions(module_name: str) -> list[dict]:
             "ACCOnOff", "AccVoltage",
             "IGNControl", "IGN3Control",
             "USBFrontSwitchControl", "USBRearSwitchControl",
+        },
+        # DLTLogging: 콤보 목록/가이드에는 문서화된 핵심 함수만 노출.
+        # (count/assert/fail_on/StartSave/StopSave/MarkStep/SearchAll/SearchRange/GetStatus/
+        #  ClearLogs 및 미문서 헬퍼 GetRecentLogs/GetStepMarks/IsConnected/SearchAllDetailed/
+        #  SearchSection/SearchSectionDetailed/WatchAndStop/get_count_details 등은 제외)
+        "DLTLogging": {
+            "StartLogging", "StopLogging",
+            "WaitLog", "ExpectFound", "ExpectNotFound",
         },
     }
     included = per_module_included.get(module_name)

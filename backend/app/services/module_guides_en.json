@@ -1059,12 +1059,6 @@
           "save_path": "Save file path. If empty, keeps the streaming file as-is (during replay: run_dir/logs/dlt_*.log, step test: backend/results/Temp_logs/dlt_*.log)"
         }
       },
-      "reset_fail_on_keyword": {
-        "description": "Resets fail_on_keyword detectors. If name is empty, removes all detectors.",
-        "params": {
-          "name": "Name of the detector to reset. Empty resets all"
-        }
-      },
       "WaitLog": {
         "description": "Waits (blocking) until a log containing the keyword appears. Returns FAIL on timeout.",
         "params": {

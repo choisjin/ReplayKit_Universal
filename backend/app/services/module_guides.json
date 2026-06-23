@@ -1059,12 +1059,6 @@
           "save_path": "저장 파일 경로. 빈 값이면 스트리밍 파일 그대로 유지 (재생 중: run_dir/logs/dlt_*.log, 스텝 테스트: backend/results/Temp_logs/dlt_*.log)"
         }
       },
-      "reset_fail_on_keyword": {
-        "description": "fail_on_keyword 검출기를 리셋합니다. name 빈 값이면 모든 검출기 제거.",
-        "params": {
-          "name": "리셋할 검출기 이름. 빈 값이면 전체"
-        }
-      },
       "WaitLog": {
         "description": "키워드가 포함된 로그가 나타날 때까지 대기합니다 (블로킹). 타임아웃 시 FAIL 반환.",
         "params": {

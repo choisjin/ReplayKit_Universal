@@ -165,7 +165,7 @@
     </div>
 
     <h2 id="overview">All Modules</h2>
-    <p>Total <strong>13</strong> modules, <strong>121</strong> functions registered.</p>
+    <p>Total <strong>13</strong> modules, <strong>120</strong> functions registered.</p>
     <table>
       <thead><tr><th>Module</th><th>Description</th><th>Functions</th></tr></thead>
       <tbody>
@@ -174,7 +174,7 @@
 <tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Sends/receives CAN/CAN FD messages, saves ASC logs, and runs ISO-TP (UDS) diagnostics via Vector CAN hardware (python-can VectorBus). No CANoe application required.</td><td style="text-align:center">11</td></tr>
 <tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>Comprehensive control of relays, power, sensors, audio, LCD, buttons, and USB on the serial-connected QE test bench</td><td style="text-align:center">8</td></tr>
 <tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>Connects to remote devices via SSH for command execution and file transfer</td><td style="text-align:center">9</td></tr>
-<tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>Captures and saves logs via direct TCP connection to the DLT daemon, with keyword-based PASS/FAIL evaluation (no GUI required)</td><td style="text-align:center">6</td></tr>
+<tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>Captures and saves logs via direct TCP connection to the DLT daemon, with keyword-based PASS/FAIL evaluation (no GUI required)</td><td style="text-align:center">5</td></tr>
 <tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>Captures serial port logs with keyword-based fail detection.
 
 **Connection lifecycle**: The serial port itself is opened/closed by the Device tab&#x27;s Connect/Disconnect. StartLogging does NOT reopen an already-open port, so devices that reset their settings on every connect are safe.
@@ -796,11 +796,6 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td><code>StopLogging</code></td>
 <td>Stops DLT capture. Logs are already saved to file in real time; specifying save_path only moves the file to that location.</td>
 <td style="font-size:12px"><code>save_path</code>: Save file path. If empty, keeps the streaming file as-is (during replay: run_dir/logs/dlt_*.log, step test: backend/results/Temp_logs/dlt_*.log)</td>
-</tr>
-<tr>
-<td><code>reset_fail_on_keyword</code></td>
-<td>Resets fail_on_keyword detectors. If name is empty, removes all detectors.</td>
-<td style="font-size:12px"><code>name</code>: Name of the detector to reset. Empty resets all</td>
 </tr>
 <tr>
 <td><code>WaitLog</code></td>

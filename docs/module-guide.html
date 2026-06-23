@@ -165,7 +165,7 @@
     </div>
 
     <h2 id="overview">전체 모듈 목록</h2>
-    <p>총 <strong>13개</strong> 모듈, <strong>122개</strong> 함수가 등록되어 있습니다.</p>
+    <p>총 <strong>13개</strong> 모듈, <strong>121개</strong> 함수가 등록되어 있습니다.</p>
     <table>
       <thead><tr><th>모듈</th><th>설명</th><th>함수 수</th></tr></thead>
       <tbody>
@@ -174,7 +174,7 @@
 <tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Vector CAN 하드웨어(python-can VectorBus)로 CAN/CAN FD 메시지 송수신, ASC 로그 저장, ISO-TP(UDS) 진단을 수행하는 모듈 (CANoe 앱 불필요)</td><td style="text-align:center">11</td></tr>
 <tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>시리얼 연결된 QE 테스트 벤치의 릴레이, 전원, 센서, 오디오, LCD, 버튼, USB 등을 종합 제어하는 모듈</td><td style="text-align:center">8</td></tr>
 <tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>SSH로 원격 장비에 접속하여 명령 실행, 파일 전송을 수행하는 모듈</td><td style="text-align:center">9</td></tr>
-<tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>DLT 데몬에 TCP 직접 연결하여 로그를 캡처·저장하고 키워드 PASS/FAIL 판정하는 모듈 (GUI 불필요)</td><td style="text-align:center">6</td></tr>
+<tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>DLT 데몬에 TCP 직접 연결하여 로그를 캡처·저장하고 키워드 PASS/FAIL 판정하는 모듈 (GUI 불필요)</td><td style="text-align:center">5</td></tr>
 <tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>시리얼 포트의 로그를 캡처·저장하고 키워드 검출하는 모듈.
 
 **연결 수명 주기**: 시리얼 포트의 open/close는 Device 탭의 Connect/Disconnect가 관리합니다. StartLogging은 포트가 이미 열려 있으면 재open하지 않고 캡처 세션만 시작하므로, connect 시 설정이 초기화되는 장비도 안전하게 사용할 수 있습니다.
@@ -797,11 +797,6 @@
 <td><code>StopLogging</code></td>
 <td>DLT 캡처 종료. 로그는 이미 파일에 실시간 저장되어 있으며, save_path 지정 시 그 위치로 이동만 합니다.</td>
 <td style="font-size:12px"><code>save_path</code>: 저장 파일 경로. 빈 값이면 스트리밍 파일 그대로 유지 (재생 중: run_dir/logs/dlt_*.log, 스텝 테스트: backend/results/Temp_logs/dlt_*.log)</td>
-</tr>
-<tr>
-<td><code>reset_fail_on_keyword</code></td>
-<td>fail_on_keyword 검출기를 리셋합니다. name 빈 값이면 모든 검출기 제거.</td>
-<td style="font-size:12px"><code>name</code>: 리셋할 검출기 이름. 빈 값이면 전체</td>
 </tr>
 <tr>
 <td><code>WaitLog</code></td>
