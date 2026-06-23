@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Modal, Space, Tag, Typography } from 'antd';
 import { NotificationOutlined } from '@ant-design/icons';
-import { dismissPopupsToday, readDismiss, todayStr } from '../lib/manager';
+import { dismissPopupsToday, isGuide, readDismiss, todayStr } from '../lib/manager';
 import { useAnnouncements } from '../context/AnnouncementsContext';
+import AnnouncementBody from './AnnouncementBody';
 
 const priorityLabel: Record<string, string> = { urgent: '긴급', important: '중요', normal: '일반' };
 const priorityColor: Record<string, string> = { urgent: 'red', important: 'orange', normal: 'blue' };
@@ -82,6 +83,7 @@ export default function PopupNotice() {
     >
       <Space style={{ marginBottom: 8 }}>
         <Tag color={priorityColor[top.priority] || 'blue'}>{priorityLabel[top.priority] || '일반'}</Tag>
+        {isGuide(top) && <Tag color="purple">가이드</Tag>}
         <Typography.Title level={5} style={{ margin: 0 }}>
           {top.title}
         </Typography.Title>
@@ -89,19 +91,9 @@ export default function PopupNotice() {
       <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>
         {new Date(top.created_at).toLocaleString('ko-KR')}
       </div>
-      {top.image_data && (
-        <div style={{ margin: '8px 0' }}>
-          <img
-            src={top.image_data}
-            alt={top.title}
-            style={{ maxWidth: '100%', borderRadius: 6, display: 'block' }}
-            onError={(e) => {
-              (e.currentTarget as HTMLImageElement).style.display = 'none';
-            }}
-          />
-        </div>
-      )}
-      <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{top.content}</Typography.Paragraph>
+      <div style={{ maxHeight: '60vh', overflow: 'auto' }}>
+        <AnnouncementBody ann={top} />
+      </div>
     </Modal>
   );
 }

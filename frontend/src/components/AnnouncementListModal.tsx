@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Empty, Modal, Space, Tag, Typography } from 'antd';
 import { NotificationOutlined } from '@ant-design/icons';
+import { isGuide } from '../lib/manager';
 import { useAnnouncements } from '../context/AnnouncementsContext';
+import AnnouncementBody from './AnnouncementBody';
 
 const priorityLabel: Record<string, string> = { urgent: '긴급', important: '중요', normal: '일반' };
 const priorityColor: Record<string, string> = { urgent: 'red', important: 'orange', normal: 'blue' };
@@ -97,6 +99,7 @@ export default function AnnouncementListModal() {
                   <Tag color={priorityColor[selected.priority] || 'blue'}>
                     {priorityLabel[selected.priority] || '일반'}
                   </Tag>
+                  {isGuide(selected) && <Tag color="purple">가이드</Tag>}
                   <Typography.Title level={5} style={{ margin: 0 }}>
                     {selected.title}
                   </Typography.Title>
@@ -104,21 +107,7 @@ export default function AnnouncementListModal() {
                 <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>
                   {new Date(selected.created_at).toLocaleString('ko-KR')}
                 </div>
-                {selected.image_data && (
-                  <div style={{ margin: '8px 0' }}>
-                    <img
-                      src={selected.image_data}
-                      alt={selected.title}
-                      style={{ maxWidth: '100%', borderRadius: 6, display: 'block' }}
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).style.display = 'none';
-                      }}
-                    />
-                  </div>
-                )}
-                <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                  {selected.content}
-                </Typography.Paragraph>
+                <AnnouncementBody ann={selected} />
               </>
             )}
           </div>
