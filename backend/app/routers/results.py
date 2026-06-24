@@ -235,7 +235,8 @@ h1 { font-size: 20px; font-weight: 700; margin: 0 0 6px; color: #1a1a2e; letter-
 .st-badge.fail { background: #fee2e2; color: #b91c1c; }
 .st-badge.warning { background: #fef9c3; color: #854d0e; }
 .st-badge.error { background: #ffedd5; color: #9a3412; }
-.img-thumb { max-width: 170px; max-height: 130px; display: block; margin: 0 auto;
+.img-thumb { width: 160px; height: 118px; object-fit: contain; background: #fff;
+  display: block; margin: 0 auto;
   cursor: pointer; border-radius: 4px; border: 1px solid #e5e7eb; transition: transform 0.15s; }
 .img-thumb:hover { transform: scale(1.03); box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
 /* 로딩 오버레이 (테이블 빌드 전) */
@@ -279,7 +280,9 @@ _HTML_SCRIPT = r"""
   function imgFmt(cell){
     var v = cell.getValue();
     if (!v) return '<span style="color:#bbb">—</span>';
-    return '<img class="img-thumb" loading="lazy" src="' + v + '" alt="">';
+    // width/height를 고정 예약 → lazy 이미지 로드 시 행 높이가 변하지 않아
+    // 가상 스크롤이 튀지 않는다(예약 없으면 로드 전 0px→로드 후 커짐).
+    return '<img class="img-thumb" width="160" height="118" loading="lazy" src="' + v + '" alt="">';
   }
 
   /* ---------- 고유값 수집 헬퍼 ---------- */
@@ -413,12 +416,11 @@ _HTML_SCRIPT = r"""
   }
 
   function buildTable(data){
-    var table = new Tabulator("#results-table", {
+    var opts = {
       data: data,
       columns: buildColumns(data),
       // fitColumns: 데이터 기반 폭 측정을 생략해 대용량에서 빌드가 더 빠르다.
       layout: "fitColumns",
-      maxHeight: "calc(100vh - 170px)",
       // 대용량(수천~수만 행) 리포트 대응: 가상 스크롤로 보이는 행만 렌더.
       // 'basic'은 전 행을 DOM에 마운트해 13744행 같은 경우 브라우저가 멈춘다.
       renderVertical: "virtual",
@@ -430,7 +432,11 @@ _HTML_SCRIPT = r"""
       printAsHtml: true,
       printRowRange: "all",
       printConfig: { columnHeaders: true },
-    });
+    };
+    // 대용량은 고정 height(가상 스크롤이 가장 안정적), 소량은 maxHeight로 내용 맞춤.
+    if (data.length > 200) opts.height = "calc(100vh - 175px)";
+    else opts.maxHeight = "calc(100vh - 175px)";
+    var table = new Tabulator("#results-table", opts);
     window.__table = table;
     // 빌드가 끝나면 로딩 표시 제거
     table.on("tableBuilt", hideLoading);
