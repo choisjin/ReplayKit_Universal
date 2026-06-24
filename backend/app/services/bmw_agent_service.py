@@ -235,6 +235,12 @@ class BMWAgentService:
         # webosprojectionhmi(=WebOS 프로젝션) 인지 settingshmi 등 네이티브인지로 백엔드 결정.
         self._fg_cache: Optional[Tuple[float, dict]] = None
         self._fg_ttl = 1.0
+        # 스크린세이버(대기화면) 상태 — 정보용 라벨 전용. 대기화면은 DRM atomic state
+        # (/sys/kernel/debug/dri/N/state)의 활성 framebuffer 가 평소와 달라지는 것으로
+        # 구분한다(구체 판별 규칙은 디바이스 출력 확인 후 확정). TTL 캐시로 폴링 비용 억제.
+        self._ss_on = False
+        self._ss_ts = 0.0
+        self._ss_ttl = 1.0
         # 디바이스 Android 컨테이너 이름 (lxc-attach 대상). 환경변수로 override 가능.
         self._android_container = os.environ.get("BMW_ANDROID_CONTAINER", "android1")
         # 속도 최적화 캐시: screen_id → SurfaceFlinger display id, adb root 1회 플래그.
@@ -937,6 +943,26 @@ class BMWAgentService:
     def get_live_frame(self) -> Tuple[Optional[bytes], int]:
         with self._live_lock:
             return self._latest_live_jpeg, self._live_frame_id
+
+    def screensaver_active(self) -> bool:
+        """DRM atomic state 로 스크린세이버(대기화면) 여부 판별. 정보용 라벨 전용.
+
+        대기화면은 화면 전체가 스크린세이버 이미지로 덮이며, 이때 DRM 파이프라인의
+        활성 framebuffer(/sys/kernel/debug/dri/N/state 의 `fb=`)가 평소와 달라진다.
+        TODO: 디바이스의 정상/스크린세이버 상태 state 출력을 확인해 구분 규칙 확정.
+        TTL 캐시로 폴링 비용 억제. 미구현 동안은 항상 False.
+        """
+        now = time.monotonic()
+        if (now - self._ss_ts) < self._ss_ttl:
+            return self._ss_on
+        self._ss_ts = now
+        # TODO(DRM): adb shell 'grep -B3 fb= /sys/kernel/debug/dri/N/state' 파싱으로 판별
+        self._ss_on = False
+        return self._ss_on
+
+    async def async_screensaver_active(self) -> bool:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.screensaver_active)
 
     def stop_live_stream(self) -> None:
         self._live_stop.set()

@@ -627,6 +627,8 @@ async def websocket_screen_mirror(websocket: WebSocket):
     _ssh_seen_input_ts = -1.0
     # MIB 라이브 스트리밍: 마지막으로 보낸 프레임 id (중복 송신 방지)
     live_last_frame_id = -1
+    # BMW 스크린세이버(대기화면) 라벨 상태 — 변할 때만 screen_state 메시지 송신
+    bmw_last_ss: Optional[bool] = None
 
     async def _adaptive_ssh_pace(svc) -> None:
         """방금 1프레임을 보낸 뒤 다음 캡처까지 입력 유무에 따라 대기.
@@ -793,6 +795,19 @@ async def websocket_screen_mirror(websocket: WebSocket):
                 elif is_bmw:
                     bmw = device_manager.get_bmw_service(target_device_id)
                     if bmw and bmw.is_connected:
+                        # 스크린세이버(대기화면) 상태 — 내부 1s 캐시라 매 루프 호출해도 저렴.
+                        # 변할 때만 라벨용 screen_state 메시지 송신(라이브/폴백 경로 공통).
+                        try:
+                            ss_now = await bmw.async_screensaver_active()
+                            if ss_now != bmw_last_ss:
+                                bmw_last_ss = ss_now
+                                await websocket.send_json(
+                                    {"type": "screen_state", "screensaver": ss_now}
+                                )
+                        except WebSocketDisconnect:
+                            break
+                        except Exception:
+                            pass
                         # device-side 스트리머(host python) 우선 — 프레임당 adb 스폰/왕복 제거.
                         # 스트림이 죽었거나 screen 이 바뀌었으면 (재)기동. 실패 시 단발 캡처 폴백.
                         _sid = bmw._screen_id(screen_type)
