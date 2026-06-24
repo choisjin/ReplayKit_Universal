@@ -3222,10 +3222,36 @@ class PlaybackService:
         tpl_gray = cv2.cvtColor(tpl_img, cv2.COLOR_BGR2GRAY)
         if tpl_gray.shape[0] > src_gray.shape[0] or tpl_gray.shape[1] > src_gray.shape[1]:
             raise RuntimeError("image_tap: template 이 화면보다 큼")
-        res = cv2.matchTemplate(src_gray, tpl_gray, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        confidence = float(max_val)
+        def _best_match(src_g):
+            r = cv2.matchTemplate(src_g, tpl_gray, cv2.TM_CCOEFF_NORMED)
+            _, mv, _, ml = cv2.minMaxLoc(r)
+            return float(mv), ml
+
+        confidence, max_loc = _best_match(src_gray)
         threshold = float(params.get("similarity", 0.85))
+        if confidence < threshold:
+            # 압축 비대칭 보정: 라이브 미러는 캡처 프레임을 JPEG 으로 재인코딩해 프론트에
+            # 보여주고, image_tap 템플릿은 그 JPEG 에서 크롭된다(아티팩트가 구워짐). 반면
+            # 재생 캡처는 무손실 PNG(예: BMW Setting/Android screencap)라 JPEG 비대칭으로
+            # CCOEFF 가 떨어진다(WebOS 는 양쪽 다 JPEG 라 무영향). 소스를 같은 품질대 JPEG 으로
+            # 라운드트립해 아티팩트를 맞춘 뒤 재매칭한다. 근접 실패일 때만 동작 → 정상 매칭 무회귀.
+            best_c, best_loc = confidence, max_loc
+            for q in (75, 60):
+                ok, enc = cv2.imencode(".jpg", src_img, [cv2.IMWRITE_JPEG_QUALITY, q])
+                if not ok:
+                    continue
+                src2 = cv2.imdecode(enc, cv2.IMREAD_COLOR)
+                if src2 is None:
+                    continue
+                c2, l2 = _best_match(cv2.cvtColor(src2, cv2.COLOR_BGR2GRAY))
+                if c2 > best_c:
+                    best_c, best_loc = c2, l2
+            if best_c > confidence:
+                logger.info(
+                    "image_tap JPEG-normalize rescue: %.3f → %.3f (tpl=%s)",
+                    confidence, best_c, tpl_name,
+                )
+            confidence, max_loc = best_c, best_loc
         if confidence < threshold:
             raise RuntimeError(
                 f"image_tap: template not found (confidence={confidence:.3f} < {threshold:.3f})"
