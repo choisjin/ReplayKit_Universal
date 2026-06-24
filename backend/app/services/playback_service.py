@@ -2285,6 +2285,9 @@ class PlaybackService:
                 if ss_dev.type == "mib_agent":
                     screen_type = step.screen_type or step.params.get("screen_type", "HU")
                     return {"type": "mib_agent", "id": ss_dev.id, "screen_type": screen_type}
+                if ss_dev.type == "bmw_agent":
+                    screen_type = step.screen_type or step.params.get("screen_type", "0")
+                    return {"type": "bmw_agent", "id": ss_dev.id, "screen_type": screen_type}
                 if ss_dev.type == "vision_camera":
                     return {"type": "vision_camera", "id": ss_dev.id}
                 if ss_dev.type == "webcam":
@@ -2330,6 +2333,9 @@ class PlaybackService:
             elif dev and dev.type == "mib_agent":
                 screen_type = step.screen_type or step.params.get("screen_type", "HU")
                 return {"type": "mib_agent", "id": dev.id, "screen_type": screen_type}
+            elif dev and dev.type == "bmw_agent":
+                screen_type = step.screen_type or step.params.get("screen_type", "0")
+                return {"type": "bmw_agent", "id": dev.id, "screen_type": screen_type}
             elif dev and dev.type == "vision_camera":
                 return {"type": "vision_camera", "id": dev.id}
             elif dev and dev.type == "webcam":
