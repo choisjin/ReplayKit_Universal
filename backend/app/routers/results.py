@@ -631,11 +631,43 @@ def _build_html_report(data: dict, output_path: Path) -> str:
     return "".join(parts)
 
 
+# Excel 썸네일 한계 — 원본 전체 해상도를 임베드하면 파일이 수 GB로 폭증한다.
+# (XlImage.width/height는 '표시' 크기만 바꿀 뿐 저장 바이트는 원본 그대로이기 때문.)
+_EXCEL_THUMB_MAX = (300, 230)              # 썸네일 픽셀 상한
+_EXCEL_IMG_BUDGET = 150 * 1024 * 1024      # 누적 임베드 이미지 바이트 상한(초과 시 경로 텍스트)
+
+
+def _excel_thumb(path):
+    """이미지를 축소한 JPEG 썸네일 XlImage와 바이트 수를 반환. 실패 시 (None, 0).
+
+    원본 전체 바이트 대신 축소본만 임베드해 xlsx 용량/생성시간 폭증을 막는다.
+    """
+    try:
+        from openpyxl.drawing.image import Image as XlImage
+        from PIL import Image as _PILImage
+    except Exception:
+        return None, 0
+    try:
+        with _PILImage.open(str(path)) as im:
+            im = im.convert("RGB")
+            im.thumbnail(_EXCEL_THUMB_MAX)
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=70)
+        nbytes = buf.tell()
+        buf.seek(0)
+        return XlImage(buf), nbytes
+    except Exception:
+        return None, 0
+
+
 def _build_excel_workbook(data: dict, filepath: Path = None, progress=None):
     """Build an openpyxl Workbook from result data. Reusable by settings router.
 
     progress(done:int, total:int): 스텝 단위 진행 콜백(선택). 이미지 임베드가
     무거우므로 내보내기 진행률 표시에 사용한다.
+
+    이미지는 원본이 아니라 축소 썸네일을 임베드하고, 누적 바이트가 상한을 넘으면
+    경로 텍스트로 대체한다(대용량 결과의 xlsx 용량 폭증 방지).
     """
     import openpyxl
     from openpyxl.drawing.image import Image as XlImage
@@ -696,6 +728,7 @@ def _build_excel_workbook(data: dict, filepath: Path = None, progress=None):
 
     _steps = data.get("step_results", [])
     _total_steps = len(_steps)
+    _img_bytes = 0  # 누적 임베드 이미지 바이트(상한 초과 시 이미지 대신 경로 텍스트)
     for ri, sr in enumerate(_steps, start=3):
         if progress is not None:
             try:
@@ -757,13 +790,17 @@ def _build_excel_workbook(data: dict, filepath: Path = None, progress=None):
         ws.cell(row=ri, column=12).border = thin_border
         ws.cell(row=ri, column=12).alignment = center
         if exp_path:
-            try:
-                img = XlImage(str(exp_path))
-                img.width = 180
-                img.height = 140
-                ws.add_image(img, f"L{ri}")
-                ws.row_dimensions[ri].height = img_row_height
-            except Exception:
+            thumb, nb = _excel_thumb(exp_path) if _img_bytes < _EXCEL_IMG_BUDGET else (None, 0)
+            if thumb is not None:
+                try:
+                    thumb.width = 180
+                    thumb.height = 140
+                    ws.add_image(thumb, f"L{ri}")
+                    ws.row_dimensions[ri].height = img_row_height
+                    _img_bytes += nb
+                except Exception:
+                    ws.cell(row=ri, column=12, value=str(sr.get("expected_image", "")))
+            else:
                 ws.cell(row=ri, column=12, value=str(sr.get("expected_image", "")))
 
         act_img_path = sr.get("actual_annotated_image") or sr.get("actual_image")
@@ -771,14 +808,18 @@ def _build_excel_workbook(data: dict, filepath: Path = None, progress=None):
         ws.cell(row=ri, column=13).border = thin_border
         ws.cell(row=ri, column=13).alignment = center
         if act_path:
-            try:
-                img = XlImage(str(act_path))
-                img.width = 180
-                img.height = 140
-                ws.add_image(img, f"M{ri}")
-                if ws.row_dimensions[ri].height is None or ws.row_dimensions[ri].height < img_row_height:
-                    ws.row_dimensions[ri].height = img_row_height
-            except Exception:
+            thumb, nb = _excel_thumb(act_path) if _img_bytes < _EXCEL_IMG_BUDGET else (None, 0)
+            if thumb is not None:
+                try:
+                    thumb.width = 180
+                    thumb.height = 140
+                    ws.add_image(thumb, f"M{ri}")
+                    if ws.row_dimensions[ri].height is None or ws.row_dimensions[ri].height < img_row_height:
+                        ws.row_dimensions[ri].height = img_row_height
+                    _img_bytes += nb
+                except Exception:
+                    ws.cell(row=ri, column=13, value=str(act_img_path or ""))
+            else:
                 ws.cell(row=ri, column=13, value=str(act_img_path or ""))
 
     return wb
