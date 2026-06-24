@@ -1091,6 +1091,34 @@ async def export_job_download(job_id: str):
     )
 
 
+@router.post("/regenerate-html/{filename:path}")
+def regenerate_result_html(filename: str):
+    """결과의 result.html을 현재 코드로 재생성한다(상세 모달 'HTML 생성' 버튼).
+
+    저장 당시 옛 버전으로 구워진 리포트를 최신 렌더링/압축/포맷으로 갱신할 때 사용.
+    sync def라 FastAPI가 스레드풀에서 실행 → 이벤트 루프를 막지 않는다.
+    """
+    filepath = RESULTS_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Result not found")
+    try:
+        data = json.loads(filepath.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"결과 JSON 읽기 실패: {e}")
+
+    # 런 폴더면 폴더 내 result.html, 레거시 플랫 파일이면 같은 이름의 .html
+    html_path = (filepath.with_name("result.html")
+                 if filepath.name == "result.json"
+                 else filepath.with_suffix(".html"))
+    try:
+        html_path.write_text(_build_html_report(data, html_path), encoding="utf-8")
+    except Exception as e:
+        logger.exception("HTML report regeneration failed: %s", filename)
+        raise HTTPException(status_code=500, detail=f"HTML 생성 실패: {e}")
+
+    return {"path": str(html_path), "size": html_path.stat().st_size}
+
+
 @router.post("/open-folder")
 async def open_result_folder(body: dict):
     """결과 폴더를 파일 탐색기로 열기."""

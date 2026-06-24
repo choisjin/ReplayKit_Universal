@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card, Collapse, Col, Descriptions, Image, Input, InputNumber, Modal, Row, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
-import { DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, ShrinkOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import { DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, ShrinkOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { resultsApi, scenarioApi } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
@@ -226,6 +226,8 @@ export default function ResultsPage() {
   const { t, lang } = useTranslation();
   // 내보내기 진행 상태: filename → { percent, phase } (진행 중인 항목만 존재)
   const [exportProgress, setExportProgress] = useState<Record<string, { percent: number; phase: string }>>({});
+  // HTML 생성(재생성) 진행 중 여부
+  const [htmlGenLoading, setHtmlGenLoading] = useState(false);
   const [results, setResults] = useState<ResultSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState<ResultDetail | null>(null);
@@ -823,6 +825,19 @@ export default function ResultsPage() {
     } catch { /* ignore */ }
   };
 
+  // 상세 모달 'HTML 생성' — 해당 결과의 result.html을 현재 코드로 재생성
+  const regenerateHtml = async (filename: string) => {
+    setHtmlGenLoading(true);
+    try {
+      const { data } = await resultsApi.regenerateHtml(filename);
+      message.success(t('results.generateHtmlComplete', { path: data.path }));
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || t('results.generateHtmlFailed'));
+    } finally {
+      setHtmlGenLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchResults();
     const onTabChange = (e: Event) => {
@@ -1352,6 +1367,13 @@ export default function ResultsPage() {
               onClick={() => detailFilename && openFolder(detailFilename)}
             >
               {t('results.openFolder')}
+            </Button>
+            <Button
+              icon={<FileTextOutlined />}
+              loading={htmlGenLoading}
+              onClick={() => detailFilename && regenerateHtml(detailFilename)}
+            >
+              {t('results.generateHtml')}
             </Button>
             <ExportProgressButton
               progress={detailFilename ? exportProgress[detailFilename] : undefined}

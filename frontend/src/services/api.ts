@@ -243,6 +243,9 @@ export const resultsApi = {
     api.get(`/results/export-job/${jobId}/download`, { responseType: 'blob' }),
   updateStepResult: (filename: string, stepIndex: number, message: string, status?: string) =>
     api.post(`/results/update-step/${filename}`, { step_index: stepIndex, message, ...(status ? { status } : {}) }),
+  // result.html 재생성 (상세 모달 'HTML 생성' 버튼)
+  regenerateHtml: (filename: string) =>
+    api.post(`/results/regenerate-html/${filename}`),
   openFolder: (filename: string) =>
     api.post('/results/open-folder', { filename }),
   migrateLegacy: () => api.post('/results/migrate-legacy'),
