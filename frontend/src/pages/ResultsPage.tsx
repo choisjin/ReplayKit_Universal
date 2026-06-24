@@ -499,6 +499,12 @@ export default function ResultsPage() {
     });
     pending.applied = true;
     pendingSeekRef.current = null;
+    // 점프 후 자동 재생 — 스텝 선택은 사용자 제스처라 자동재생 정책을 통과한다.
+    // (정책 거부 시 promise reject를 무시하고 일시정지 상태 유지)
+    try {
+      const playPromise = video.play();
+      if (playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {});
+    } catch { /* ignore */ }
   }, []);
 
   const seekToStep = (step: StepResultDetail) => {
