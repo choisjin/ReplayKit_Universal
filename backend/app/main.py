@@ -793,14 +793,15 @@ async def websocket_screen_mirror(websocket: WebSocket):
                 elif is_bmw:
                     bmw = device_manager.get_bmw_service(target_device_id)
                     if bmw and bmw.is_connected:
-                        # BMW: ADB/WebOS screencap (라이브 스트림 없음) — 적응형 페이싱으로
-                        # 입력 직후엔 빠르게, idle 엔 느리게 갱신해 디바이스 부하를 줄인다.
+                        # BMW: ADB/WebOS screencap (라이브 스트림 없음). 캡처 자체가 페이스를
+                        # 결정(ADB ~0.2s, WebOS 폴링 ~0.3s)하므로 SSH식 10s idle 스로틀 대신
+                        # 짧은 sleep 만 둬 반응성을 높인다(디바이스 화면 전환을 빠르게 반영).
                         try:
                             jpeg_bytes = await bmw.async_screencap_bytes(
                                 screen_type=screen_type, fmt="jpeg"
                             )
                             await websocket.send_bytes(jpeg_bytes)
-                            await _adaptive_ssh_pace(bmw)
+                            await asyncio.sleep(0.05)
                             continue
                         except WebSocketDisconnect:
                             break

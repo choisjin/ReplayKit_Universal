@@ -111,10 +111,14 @@ class BMWAgentService:
         self._auto_backend: dict[int, str] = {}
         # dumpsys 포그라운드 판별 캐시 (TTL 내 재사용). topResumedActivity 가
         # webosprojectionhmi(=WebOS 프로젝션) 인지 settingshmi 등 네이티브인지로 백엔드 결정.
-        self._fg_cache: Optional[Tuple[float, set]] = None
-        self._fg_ttl = 1.5
+        self._fg_cache: Optional[Tuple[float, dict]] = None
+        self._fg_ttl = 1.0
         # 디바이스 Android 컨테이너 이름 (lxc-attach 대상). 환경변수로 override 가능.
         self._android_container = os.environ.get("BMW_ANDROID_CONTAINER", "android1")
+        # 속도 최적화 캐시: screen_id → SurfaceFlinger display id, adb root 1회 플래그.
+        # 매 프레임 root/setenforce/get_display_ids(무거운 dumpsys) 반복 제거용.
+        self._display_id_map: dict[int, str] = {}
+        self._rooted = False
         # 입력(터치) 시각 — 라이브 미러 적응형 리프레시용 (main.py _adaptive_*_pace 호환)
         self.last_input_ts = 0.0
         # screen_id → (width, height). connect 시 채워지며 실패 시 기본 해상도.
@@ -222,75 +226,87 @@ class BMWAgentService:
     # ------------------------------------------------------------------
     # 캡처
     # ------------------------------------------------------------------
-    def _screencap_adb(self, screen_id: int) -> bytes:
-        """android1 컨테이너 screencap -d <display_id> → PNG 바이트."""
+    def _ensure_root(self) -> None:
+        """adb root + setenforce 0 를 연결당 1회만 수행 (매 프레임 반복 제거)."""
+        if self._rooted:
+            return
         self._adb_root()
         try:
             self._adb_shell("setenforce 0", timeout=5)
         except Exception:
             pass
-        display_id: Optional[str] = None
+        self._rooted = True
+
+    def _ensure_display_ids(self) -> None:
+        """screen_id → SurfaceFlinger display id 매핑을 1회 채운다 (비면 캡처 때까지 재시도)."""
+        if self._display_id_map:
+            return
         try:
             ids = self._get_display_ids()
-            if ids and int(screen_id) < len(ids):
-                display_id = ids[int(screen_id)][0]
+            for idx, t in enumerate(ids):
+                if t and t[0]:
+                    self._display_id_map[idx] = t[0]
         except Exception as e:
-            logger.debug("BMW screencap: display id lookup failed: %s", e)
+            logger.debug("BMW display-id map populate failed: %s", e)
 
-        remote_temp = f"/tmp/bmw_cap_{screen_id}.png"
+    def _display_id_for(self, screen_id: int) -> Optional[str]:
+        self._ensure_display_ids()
+        return self._display_id_map.get(int(screen_id))
+
+    def _screencap_adb(self, screen_id: int) -> bytes:
+        """android1 컨테이너 screencap → PNG 바이트.
+
+        exec-out 으로 PNG 를 stdout 으로 직접 받아 temp 파일/pull/rm 왕복을 제거(1회 왕복).
+        (adb shell 의 PTY LF→CRLF 변환에 의한 PNG 손상도 exec-out 으로 회피.)
+        root/setenforce/display-id 조회는 연결당 1회 캐시.
+        """
+        self._ensure_root()
+        display_id = self._display_id_for(screen_id)
         if display_id is not None:
-            cap_cmd = f"lxc-attach -n android1 -- screencap -d {display_id} -p > {remote_temp}"
-            r = self._adb_shell(cap_cmd, text=False, timeout=20)
+            inner = f"screencap -d {display_id} -p"
         else:
-            r = self._adb(["shell", "screencap", "-p", remote_temp], text=False, timeout=20)
-        if r.returncode != 0:
-            raise RuntimeError(f"BMW screencap 실패 (screen {screen_id})")
-
-        local = str(_TMP_DIR / f"bmw_adb_{screen_id}_{uuid.uuid4().hex[:8]}.png")
-        try:
-            pull = self._adb(["pull", remote_temp, local], timeout=20)
-            if pull.returncode != 0:
-                raise RuntimeError(f"BMW adb pull 실패: {pull.stderr}")
-            with open(local, "rb") as f:
-                return f.read()
-        finally:
-            self._adb_shell(f"rm -f {remote_temp}", timeout=5)
-            try:
-                os.remove(local)
-            except OSError:
-                pass
+            inner = "screencap -p"
+        cmd = f"lxc-attach -n {self._android_container} -- {inner}"
+        r = self._adb(["exec-out", cmd], text=False, timeout=20)
+        data = r.stdout or b""
+        if r.returncode != 0 or len(data) < 100:
+            raise RuntimeError(
+                f"BMW screencap 실패 (screen {screen_id}, rc={r.returncode}, {len(data)}B)")
+        return bytes(data)
 
     def _screencap_webos(self, screen_id: int) -> bytes:
-        """WebOS luna-send captureCompositorOutput → JPG 바이트."""
+        """WebOS luna-send captureCompositorOutput → JPG 바이트.
+
+        컴포지터가 /tmp/screenshot.JPG 를 비동기로 쓰므로, 고정 sleep 대신 exec-out cat 으로
+        짧게 폴링하며 완전한 JPEG(SOI..EOI)이 보이는 즉시 반환(cp/pull/temp 파일 제거).
+        """
         container = f"webos{int(screen_id) + 1}"
-        remote_host_path = f"/log_data/{container}/screenshot.JPG"
+        remote = "/tmp/screenshot.JPG"
         try:
-            self._adb_shell(f"rm -f {remote_host_path}", timeout=5)
+            self._adb_shell(f"lxc-attach -n {container} -- rm -f {remote}", timeout=5)
         except Exception:
             pass
         payload = r'{"output":"/tmp/screenshot.JPG","format":"JPG"}'
-        capture_cmd = (
+        self._adb_shell(
             f"lxc-attach -n {container} -- "
             f"luna-send -n 1 -f luna://com.webos.surfacemanager/captureCompositorOutput "
-            f"'{payload}'"
+            f"'{payload}'",
+            timeout=15,
         )
-        self._adb_shell(capture_cmd, timeout=15)
-        # 컴포지터가 비동기로 파일을 쓰므로 잠시 대기 (standalone 은 2.0s 고정)
-        time.sleep(1.2)
-        copy_cmd = f"lxc-attach -n {container} -- cp /tmp/screenshot.JPG /var/log/screenshot.JPG"
-        self._adb_shell(copy_cmd, timeout=10)
-        local = str(_TMP_DIR / f"bmw_webos_{screen_id}_{uuid.uuid4().hex[:8]}.jpg")
-        try:
-            pull = self._adb(["pull", remote_host_path, local], timeout=20)
-            if pull.returncode != 0:
-                raise RuntimeError(f"WebOS 캡처 pull 실패: {pull.stderr}")
-            with open(local, "rb") as f:
-                return f.read()
-        finally:
-            try:
-                os.remove(local)
-            except OSError:
-                pass
+        cat_cmd = ["exec-out", f"lxc-attach -n {container} -- cat {remote}"]
+        deadline = time.monotonic() + 2.5
+        last = b""
+        time.sleep(0.1)  # luna-send 직후 첫 write 여유
+        while time.monotonic() < deadline:
+            r = self._adb(cat_cmd, text=False, timeout=10)
+            data = r.stdout or b""
+            if len(data) > 1000 and data[:2] == b"\xff\xd8" and data[-2:] == b"\xff\xd9":
+                return bytes(data)   # 완전한 JPEG
+            last = data
+            time.sleep(0.1)
+        if last and last[:2] == b"\xff\xd8" and len(last) > 1000:
+            return bytes(last)       # EOI 못 봤어도 SOI+충분한 크기면 부분 허용
+        raise RuntimeError(f"WebOS 캡처 실패 (screen {screen_id})")
 
     @staticmethod
     def _has_content(data: Optional[bytes]) -> bool:
@@ -375,10 +391,17 @@ class BMWAgentService:
                 return data
             raise RuntimeError(f"BMW capture failed (screen {screen_id}, backend {be})")
 
-        # ── auto: dumpsys per-display 힌트로 시도 순서 결정 + 픽셀 내용검사로 확정 ──
-        # Display #N ↔ screen_id N. 힌트가 있으면 그 백엔드를 1순위로(권위), 없으면
-        # 캐시→WebOS→ADB 순. 어느 쪽도 '내용'이 없으면(둘 다 검정) 힌트 백엔드 프레임을
-        # 반환(어두운 WebOS 화면 보존). 힌트가 틀려도 내용검사가 반대쪽으로 자가보정.
+        # ── auto 빠른 경로: 캐시된 백엔드를 dumpsys 없이 먼저 캡처. 내용이 있으면 즉시 반환
+        # (정상 상태 = 1회 캡처, dumpsys 0회). 비었을 때만 전환 의심 → dumpsys 로 판단. ──
+        cached = self._auto_backend.get(screen_id)
+        if cached in ("webos", "adb"):
+            data = self._capture_one(cached, screen_id)
+            if data is not None and self._has_content(data):
+                return data
+
+        # ── 전환 의심/최초: dumpsys per-display 힌트로 시도 순서 결정 + 내용검사로 확정 ──
+        # Display #N ↔ screen_id N. 힌트가 있으면 그 백엔드를 1순위로(권위). 어느 쪽도
+        # '내용'이 없으면(둘 다 검정) 힌트 백엔드 프레임 반환(어두운 WebOS 화면 보존).
         fg = self._dumpsys_foreground()
         hint = fg.get(screen_id)
         if hint in ("webos", "adb"):
@@ -540,7 +563,8 @@ class BMWAgentService:
             return False
 
         logger.info("BMW connect: %s state=device — probing displays", self.serial)
-        self._adb_root()
+        self._ensure_root()
+        self._ensure_display_ids()  # display-id 매핑 1회 워밍(매 프레임 dumpsys 제거)
         # 터치 스크립트 best-effort 업로드
         try:
             self._upload_touch_scripts()
