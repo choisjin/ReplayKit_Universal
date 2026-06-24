@@ -30,6 +30,13 @@ interface ResultGroup {
   total_repeat: number;
 }
 
+interface RecordingItem {
+  filename: string;
+  size: number;
+  url: string;
+  started_at?: string | null;
+}
+
 interface MatchLocation {
   x: number;
   y: number;
@@ -260,7 +267,7 @@ export default function ResultsPage() {
   const [scenarioFilter, setScenarioFilter] = useState('');
 
   // Webcam recordings
-  const [recordings, setRecordings] = useState<{ filename: string; size: number; url: string; started_at?: string | null }[]>([]);
+  const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [webcamPanelOpen, setWebcamPanelOpen] = useState(false);
   const [webcamExpanded, setWebcamExpanded] = useState(false);
   const [activeRecUrl, setActiveRecUrl] = useState('');
@@ -284,15 +291,23 @@ export default function ResultsPage() {
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
 
+  // 녹화 파일을 회차 번호 기준 숫자 정렬 (문자열 정렬이면 r1, r10, r11, r2... 로 뒤죽박죽).
+  const cycleIndexOf = (filename: string): number => {
+    const m = filename.match(/(?:webcam|composite)_r(\d+)\.(?:webm|mp4)$/);
+    return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+  };
+  const sortRecordingsByCycle = (recs: RecordingItem[]): RecordingItem[] =>
+    [...recs].sort((a, b) => cycleIndexOf(a.filename) - cycleIndexOf(b.filename));
+
   const fetchRecordings = async (resultFilename: string) => {
     try {
       const res = await resultsApi.listRecordings(resultFilename);
-      const recs = res.data.recordings || [];
+      const recs = sortRecordingsByCycle(res.data.recordings || []);
       setRecordings(recs);
       if (recs.length > 0) {
         setActiveRecUrl(recs[0].url);
-        const m = recs[0].filename.match(/webcam_r(\d+)\.(?:webm|mp4)$/);
-        setActiveRecRepeat(m ? parseInt(m[1]) : 1);
+        const ci = cycleIndexOf(recs[0].filename);
+        setActiveRecRepeat(ci === Number.MAX_SAFE_INTEGER ? 1 : ci);
       } else {
         setActiveRecUrl('');
       }
@@ -492,7 +507,7 @@ export default function ResultsPage() {
     if (!webcamPanelOpen) setWebcamPanelOpen(true);
 
     const targetRepeat = step.repeat_index || 1;
-    let rec = recordings.find(r => (r.filename.includes(`webcam_r${targetRepeat}.webm`) || r.filename.includes(`webcam_r${targetRepeat}.mp4`)));
+    let rec = recordings.find(r => cycleIndexOf(r.filename) === targetRepeat);
     if (!rec) {
       const fallback = recordings[0];
       if (!fallback) { message.info(`Cycle ${targetRepeat} 녹화가 없습니다`); return; }
@@ -691,14 +706,16 @@ export default function ResultsPage() {
           allRecs.push(...(recRes.data.recordings || []));
         } catch { /* ignore */ }
       }
-      // 중복 제거 (같은 파일명)
+      // 중복 제거 (같은 파일명) + 회차 숫자 정렬
       const seen = new Set<string>();
-      const uniqueRecs = allRecs.filter(r => { if (seen.has(r.filename)) return false; seen.add(r.filename); return true; });
+      const uniqueRecs = sortRecordingsByCycle(
+        allRecs.filter(r => { if (seen.has(r.filename)) return false; seen.add(r.filename); return true; })
+      );
       setRecordings(uniqueRecs);
       if (uniqueRecs.length > 0) {
         setActiveRecUrl(uniqueRecs[0].url);
-        const m = uniqueRecs[0].filename.match(/webcam_r(\d+)\.(?:webm|mp4)$/);
-        setActiveRecRepeat(m ? parseInt(m[1]) : 1);
+        const ci = cycleIndexOf(uniqueRecs[0].filename);
+        setActiveRecRepeat(ci === Number.MAX_SAFE_INTEGER ? 1 : ci);
       } else {
         setActiveRecUrl('');
       }
@@ -1524,21 +1541,20 @@ export default function ResultsPage() {
                           size="small"
                           value={activeRecRepeat}
                           onChange={(v) => {
-                            const rec = recordings.find(r => (r.filename.includes(`webcam_r${v}.webm`) || r.filename.includes(`webcam_r${v}.mp4`)));
+                            const rec = recordings.find(r => cycleIndexOf(r.filename) === v);
                             if (rec) { setActiveRecUrl(rec.url); setActiveRecRepeat(v); }
                           }}
                           style={{ width: '100%', marginBottom: 5 }}
                           options={recordings.map(r => {
-                            const m = r.filename.match(/webcam_r(\d+)\.(?:webm|mp4)$/);
-                            const ri = m ? parseInt(m[1]) : 1;
+                            const ri = cycleIndexOf(r.filename);
                             return { value: ri, label: `${t('webcam.repeat')} ${ri}  (${(r.size / 1024 / 1024).toFixed(1)} MB)` };
                           })}
                         />
                       )}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                         {recordings.map((rec) => {
-                          const m = rec.filename.match(/webcam_r(\d+)\.(?:webm|mp4)$/);
-                          const ri = m ? m[1] : '?';
+                          const ci = cycleIndexOf(rec.filename);
+                          const ri = ci === Number.MAX_SAFE_INTEGER ? '?' : String(ci);
                           const isActive = rec.url === activeRecUrl;
                           return (
                             <div key={rec.filename} style={{
@@ -1548,7 +1564,7 @@ export default function ResultsPage() {
                               border: isActive ? '1px solid var(--accent, #1677ff)' : '1px solid transparent',
                               cursor: 'pointer',
                             }}
-                              onClick={() => { setActiveRecUrl(rec.url); const recCycle = m ? parseInt(m[1]) : 1; setActiveRecRepeat(recCycle); }}
+                              onClick={() => { setActiveRecUrl(rec.url); setActiveRecRepeat(ci === Number.MAX_SAFE_INTEGER ? 1 : ci); }}
                             >
                               <Tag color={isActive ? 'processing' : 'blue'} style={{ margin: 0, fontSize: 9 }}>R{ri}</Tag>
                               <span style={{ flex: 1, color: isActive ? 'var(--accent, #1677ff)' : '#888', fontWeight: isActive ? 600 : 400 }}>{(rec.size / 1024 / 1024).toFixed(1)}MB</span>

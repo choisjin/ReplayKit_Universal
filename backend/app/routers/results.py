@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -1216,42 +1217,70 @@ def _read_recording_started_at(video_path: Path) -> str | None:
         return None
 
 
+_CYCLE_RE = re.compile(r"(?:webcam|composite)_r(\d+)\.(?:webm|mp4)$")
+
+
+def _recording_cycle_index(filename: str) -> int:
+    """녹화 파일명에서 회차 번호를 추출. 매칭 실패 시 큰 값(맨 뒤 정렬)."""
+    m = _CYCLE_RE.search(filename)
+    return int(m.group(1)) if m else 10**9
+
+
 @router.get("/recordings-for/{result_filename:path}")
 async def list_recordings_for_result(result_filename: str):
-    """List webcam recordings linked to a test result (both .webm and .mp4)."""
+    """List webcam recordings linked to a test result (both .webm and .mp4).
+
+    - 회차 번호 기준 **숫자 정렬** (문자열 정렬이면 r1, r10, r11, r2... 로 뒤죽박죽 됨).
+    - **0바이트 파일 제외** (카메라 끊김 등으로 생긴 재생불가 파일이 깨진 회차로 보이는 것 방지).
+    - 같은 회차에 webm/mp4 가 둘 다 있으면 **하나만** 노출 (mp4 우선 → 더 큰 파일 우선).
+    """
     RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
     base = result_filename.replace(".json", "").replace("/result", "")
-    recordings = []
-    seen: set[str] = set()
+
+    # 회차별 후보 수집 — key=cycle index, value=record dict
+    candidates: dict[int, dict] = {}
+
+    def _consider(f: Path, url: str) -> None:
+        try:
+            size = f.stat().st_size
+        except OSError:
+            return
+        if size == 0:
+            return  # 빈/손상 파일 제외
+        cycle = _recording_cycle_index(f.name)
+        rec = {
+            "filename": f.name,
+            "size": size,
+            "url": url,
+            "started_at": _read_recording_started_at(f),
+            "_is_mp4": f.suffix.lower() == ".mp4",
+        }
+        prev = candidates.get(cycle)
+        if prev is None:
+            candidates[cycle] = rec
+            return
+        # 우선순위: mp4 > webm, 동급이면 큰 파일 우선
+        better = (rec["_is_mp4"], rec["size"]) > (prev["_is_mp4"], prev["size"])
+        if better:
+            candidates[cycle] = rec
 
     # 런 폴더 내 recordings/ 확인 (webm + mp4)
     run_dir = RESULTS_DIR / base
     rec_dir = run_dir / "recordings" if run_dir.is_dir() else None
     if rec_dir and rec_dir.is_dir():
         for pattern in ("*.webm", "*.mp4"):
-            for f in sorted(rec_dir.glob(pattern)):
-                if f.name in seen:
-                    continue
-                seen.add(f.name)
-                recordings.append({
-                    "filename": f.name,
-                    "size": f.stat().st_size,
-                    "url": f"/results-files/{base}/recordings/{f.name}",
-                    "started_at": _read_recording_started_at(f),
-                })
+            for f in rec_dir.glob(pattern):
+                _consider(f, f"/results-files/{base}/recordings/{f.name}")
 
     # 레거시: Results/Video/ 에서도 탐색 (webm + mp4)
     for pattern in (f"{base}_webcam_*.webm", f"{base}_webcam_*.mp4"):
-        for f in sorted(RECORDINGS_DIR.glob(pattern)):
-            if f.name in seen:
-                continue
-            seen.add(f.name)
-            recordings.append({
-                "filename": f.name,
-                "size": f.stat().st_size,
-                "url": f"/recordings/{f.name}",
-                "started_at": _read_recording_started_at(f),
-            })
+        for f in RECORDINGS_DIR.glob(pattern):
+            _consider(f, f"/recordings/{f.name}")
+
+    recordings = [
+        {k: v for k, v in rec.items() if k != "_is_mp4"}
+        for _, rec in sorted(candidates.items(), key=lambda kv: kv[0])
+    ]
     return {"recordings": recordings}
 
 

@@ -831,6 +831,20 @@ class CompositorService:
             try: cv_writer.release()
             except Exception: pass
         logger.info("Compositor recording stopped: %s frames=%d duration=%.1fs", path, frames, duration)
+        # 빈/손상 녹화 정리 — 프레임 0개이거나 0바이트면 재생 불가 파일이므로 삭제.
+        if path is not None:
+            try:
+                size = path.stat().st_size if path.exists() else 0
+            except Exception:
+                size = 0
+            if frames == 0 or size == 0:
+                logger.warning("Compositor recording empty (frames=%d, size=%d) — deleting %s", frames, size, path)
+                try:
+                    if path.exists():
+                        path.unlink()
+                except Exception as e:
+                    logger.warning("Failed to delete empty compositor recording %s: %s", path, e)
+                return None
         return str(path) if path else None
 
     def pause_recording(self) -> None:

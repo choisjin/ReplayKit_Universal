@@ -353,16 +353,34 @@ class WebcamService:
         cap.read() 가 하드웨어 프레임 도착까지 블로킹하므로 인위적 pacing 없이도 busy-spin 이
         아니다. 프레임 타이밍 보존은 ffmpeg(VFR, 벽시계 PTS)이 담당하므로 여기서 레이트를
         고정하지 않는다 — 이렇게 해야 카메라 최대 fps 가 그대로 살아난다.
+
+        자가복구: USB 카메라가 장시간 stress run 중 일시적으로 끊기면 cap.read() 가 계속
+        실패한다. 이전에는 sleep 후 무한 재시도만 했기 때문에 한 번 끊기면 그 이후의 모든
+        회차 녹화가 프레임 0개 → 0바이트/재생불가 mp4 가 되는 문제가 있었다. 연속 read 실패가
+        임계치를 넘으면 같은 디바이스를 재오픈해 복구한다.
         """
+        # 연속 read 실패 카운트 — 임계치 초과 시 카메라 재오픈 시도.
+        # 0.03s sleep × ~100 ≈ 3초 무프레임이면 끊긴 것으로 판단.
+        read_failures = 0
+        _REOPEN_THRESHOLD = 100
         while not self._stop_flag.is_set():
             cap = self._cap
             if cap is None or not cap.isOpened():
                 time.sleep(0.05)
+                read_failures += 1
+                if read_failures >= _REOPEN_THRESHOLD:
+                    self._try_reopen_capture()
+                    read_failures = 0
                 continue
             ret, frame = cap.read()
             if not ret or frame is None:
                 time.sleep(0.03)
+                read_failures += 1
+                if read_failures >= _REOPEN_THRESHOLD:
+                    self._try_reopen_capture()
+                    read_failures = 0
                 continue
+            read_failures = 0
             # 최신 프레임 저장
             with self._latest_frame_lock:
                 self._latest_frame = frame
@@ -370,6 +388,36 @@ class WebcamService:
             with self._recording_lock:
                 if (self._ffmpeg_proc is not None or self._cv_writer is not None) and not self._recording_paused:
                     self._write_frame_unlocked(frame)
+
+    def _try_reopen_capture(self) -> None:
+        """캡처 루프 내에서 끊긴 카메라를 같은 디바이스/해상도로 재오픈한다.
+
+        녹화는 그대로 유지된다(_ffmpeg_proc/_cv_writer 는 건드리지 않음) — 복구 후
+        프레임이 다시 들어오면 진행 중이던 녹화에 이어서 기록된다. 재오픈 실패 시
+        다음 임계치에서 다시 시도한다.
+        """
+        if self._stop_flag.is_set():
+            return
+        logger.warning("Webcam read stalled — attempting reopen of device %d", self._device_index)
+        old = self._cap
+        self._cap = None
+        if old is not None:
+            try:
+                old.release()
+            except Exception:
+                pass
+        cap = _open_capture(self._device_index)
+        if cap is None:
+            logger.warning("Webcam reopen failed: device %d (will retry)", self._device_index)
+            return
+        try:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+            cap.set(cv2.CAP_PROP_FPS, 120.0)
+        except Exception:
+            pass
+        self._cap = cap
+        logger.info("Webcam reopened: device %d %dx%d", self._device_index, self._width, self._height)
 
     # ------------------------------------------------------------
     # Preview
@@ -479,6 +527,23 @@ class WebcamService:
         avg_fps = (frames / duration) if duration > 0 else 0.0
         logger.info("Webcam recording stopped: %s frames=%d duration=%.1fs (avg %.1ffps, VFR)",
                     path, frames, duration, avg_fps)
+
+        # 빈/손상 녹화 정리: 프레임이 한 장도 안 들어왔거나(카메라 끊김 등) 결과 파일이
+        # 0바이트면 재생 불가(SRC_NOT_SUPPORTED)한 쓰레기 파일이다. 목록에 남아 깨진 회차로
+        # 보이지 않도록 즉시 삭제하고 None 을 반환해 호출 측이 이동/등록하지 않게 한다.
+        if path is not None:
+            try:
+                size = path.stat().st_size if path.exists() else 0
+            except Exception:
+                size = 0
+            if frames == 0 or size == 0:
+                logger.warning("Webcam recording empty (frames=%d, size=%d) — deleting %s", frames, size, path)
+                try:
+                    if path.exists():
+                        path.unlink()
+                except Exception as e:
+                    logger.warning("Failed to delete empty recording %s: %s", path, e)
+                return None
         return str(path) if path else None
 
     def pause_recording(self) -> None:
