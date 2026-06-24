@@ -122,36 +122,52 @@ def fg_backend():
 
 out = sys.stdout.buffer
 cached = None
+_last_force = [0.0]   # 빈 프레임 시 dumpsys 강제갱신 rate-limit(전환 빠르게 + spam 방지)
+
+def emit(d, b):
+    out.write(b"BMWF" + struct.pack("<BI", 0 if b == "webos" else 1, len(d)) + d)
+    out.flush()
+
+def cap(b):
+    return cap_webos() if b == "webos" else cap_android()
+
 while True:
     try:
         fg = fg_backend()
-        order = []
         if fg in ("webos", "adb"):
-            order.append(fg)
-        if cached and cached not in order:
-            order.append(cached)
-        for b in ("webos", "adb"):
-            if b not in order:
-                order.append(b)
-        frame = b""; fmt = 0
-        for b in order:
-            d = cap_webos() if b == "webos" else cap_android()
+            # 권위 백엔드만 캡처 — 반대편으로 폴백 금지(블링크/디스플레이 혼입 방지).
+            d = cap(fg)
             if d:
-                frame = d
-                fmt = 0 if b == "webos" else 1
-                cached = b
-                break
-        if frame:
-            try:
-                out.write(b"BMWF" + struct.pack("<BI", fmt, len(frame)) + frame)
-                out.flush()
-            except (BrokenPipeError, IOError):
-                break   # 백엔드가 파이프를 닫음 → 스트리머 종료
+                cached = fg
+                emit(d, fg)
+            else:
+                # 권위 백엔드가 빈 프레임 → 전환 의심: dumpsys 강제 갱신(0.5s rate-limit)해
+                # 빠르게 전환 감지. 같은 백엔드면 프레임 skip(직전 프레임 유지) — 깜빡임 방지.
+                now = time.time()
+                if now - _last_force[0] > 0.5:
+                    _last_force[0] = now
+                    _fg[1] = 0.0
+                    fg2 = fg_backend()
+                    if fg2 in ("webos", "adb") and fg2 != fg:
+                        d2 = cap(fg2)
+                        if d2:
+                            cached = fg2
+                            emit(d2, fg2)
         else:
-            time.sleep(0.1)
+            # dumpsys 불명 → 캐시→webos→adb 중 첫 유효 프레임
+            order = [cached] if cached in ("webos", "adb") else []
+            for b in ("webos", "adb"):
+                if b not in order:
+                    order.append(b)
+            for b in order:
+                d = cap(b)
+                if d:
+                    cached = b
+                    emit(d, b)
+                    break
         time.sleep(0.02)
     except (BrokenPipeError, IOError):
-        break
+        break   # 백엔드가 파이프를 닫음 → 스트리머 종료
     except Exception:
         time.sleep(0.1)
 '''
@@ -233,6 +249,9 @@ class BMWAgentService:
         self._latest_live_jpeg: Optional[bytes] = None
         self._live_frame_id = 0
         self._live_screen: Optional[int] = None  # 현재 스트리밍 중인 screen_id
+        # 스트림 세대(epoch): 화면 전환/정지로 새 스트림이 뜨면 증가. 옛 리더 스레드가
+        # join 타임아웃 후에도 살아 있어도 epoch 불일치면 최신 프레임에 못 쓰게 차단(겹침 방지).
+        self._live_epoch = 0
         try:
             self._live_jpeg_q = int(os.environ.get("BMW_LIVE_JPEG_Q") or 75)
         except Exception:
@@ -803,12 +822,15 @@ class BMWAgentService:
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 creationflags=_NO_WINDOW,
             )
-            t = threading.Thread(target=self._live_reader, args=(proc,), daemon=True)
             with self._live_lock:
+                self._live_epoch += 1
+                epoch = self._live_epoch
                 self._live_proc = proc
-                self._live_thread = t
                 self._live_screen = sid
                 self._latest_live_jpeg = None
+            t = threading.Thread(target=self._live_reader, args=(proc, epoch), daemon=True)
+            with self._live_lock:
+                self._live_thread = t
             t.start()
             logger.info("BMW live stream started (screen=%d, display_id=%s)", sid, display_id or "-")
             return True
@@ -817,10 +839,11 @@ class BMWAgentService:
             self.stop_live_stream()
             return False
 
-    def _live_reader(self, proc: subprocess.Popen) -> None:
+    def _live_reader(self, proc: subprocess.Popen, epoch: int) -> None:
         """exec-out stdout 에서 BMWF 프레임을 파싱 → (PNG면 JPEG 변환) 최신본 보관.
 
         프레임: b"BMWF" + struct('<BI', fmt, length) + data. fmt 0=JPEG / 1=PNG.
+        epoch 가 현재 세대와 다르면(전환으로 새 스트림이 떴음) 쓰기 중단(겹침 방지).
         """
         from PIL import Image
         HDR = 9  # b"BMWF"(4) + '<BI'(5: fmt 1B + length 4B)
@@ -861,11 +884,13 @@ class BMWAgentService:
                         im.convert("RGB").save(bio, format="JPEG", quality=self._live_jpeg_q)
                         jpg = bio.getvalue()
                     with self._live_lock:
+                        if epoch != self._live_epoch:
+                            return  # 옛 세대 리더 → 최신 프레임 오염 금지
                         self._latest_live_jpeg = jpg
                         self._live_frame_id += 1
                 except Exception:
                     continue
-        logger.info("BMW live reader exited (screen=%s)", self._live_screen)
+        logger.info("BMW live reader exited (screen=%s, epoch=%d)", self._live_screen, epoch)
 
     def get_live_frame(self) -> Tuple[Optional[bytes], int]:
         with self._live_lock:
@@ -874,6 +899,7 @@ class BMWAgentService:
     def stop_live_stream(self) -> None:
         self._live_stop.set()
         with self._live_lock:
+            self._live_epoch += 1   # 살아남은 옛 리더의 프레임 쓰기 무효화
             proc = self._live_proc
             t = self._live_thread
             self._live_proc = None
