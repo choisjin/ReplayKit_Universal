@@ -3927,6 +3927,104 @@ export default function RecordPage() {
     );
   };
 
+  // ── Screen ID 일괄 전환 (멀티 디스플레이 모델: BMW 등) ──
+  // 한 화면(screen_type)으로 녹화한 시나리오를 복사해 다른 화면으로 일괄 전환.
+  const [screenSwapOpen, setScreenSwapOpen] = useState(false);
+  const [screenSwapMap, setScreenSwapMap] = useState<Record<string, string>>({});
+
+  // 스텝의 screen_type (top-level 우선, 없으면 params.screen_type)
+  const stepScreenType = (s: any): string | null => {
+    const st = (s?.screen_type != null && s.screen_type !== '') ? s.screen_type
+      : (s?.params?.screen_type != null && s.params.screen_type !== '') ? s.params.screen_type
+      : null;
+    return st != null ? String(st) : null;
+  };
+
+  // 스텝에 screen_type 이 하나라도 있으면 버튼 노출 (멀티 디스플레이 시나리오)
+  const hasScreenTypeSteps = useMemo(() => steps.some(s => stepScreenType(s) != null), [steps]);
+
+  // 전환 후보 screen_type 목록 — 스텝에 쓰인 device 들의 displays/screens + 실제 사용값
+  const screenSwapOptions = useMemo(() => {
+    const opts = new Map<string, string>(); // value -> label
+    const devIds = new Set<string>();
+    for (const s of steps) { if (s.device_id) devIds.add(s.device_id); }
+    for (const id of devIds) {
+      const dev = allDevices.find(d => d.id === id);
+      if (!dev) continue;
+      const displays = (dev as any).info?.displays;
+      if (Array.isArray(displays) && displays.length > 1) {
+        for (const d of displays) opts.set(String(d.id), `${d.name ?? d.id} (${String(d.id)})`);
+      }
+      const screens = (dev as any).info?.screens;
+      if (screens && typeof screens === 'object') {
+        for (const k of Object.keys(screens)) if (!opts.has(k)) opts.set(k, k);
+      }
+    }
+    // 스텝에 실제로 있는 값도 포함 (디바이스 미연결 등으로 displays 가 없을 때 대비)
+    for (const s of steps) {
+      const st = stepScreenType(s);
+      if (st != null && !opts.has(st)) opts.set(st, st);
+    }
+    return Array.from(opts.entries()).map(([value, label]) => ({ value, label }));
+  }, [steps, allDevices]);
+
+  const openScreenSwapPopover = () => {
+    const ids = new Set<string>();
+    for (const s of steps) { const st = stepScreenType(s); if (st != null) ids.add(st); }
+    const map: Record<string, string> = {};
+    ids.forEach(id => { map[id] = id; });
+    setScreenSwapMap(map);
+    setScreenSwapOpen(true);
+  };
+
+  const applyScreenSwap = () => {
+    const changed = Object.entries(screenSwapMap).filter(([from, to]) => from !== to);
+    if (changed.length === 0) {
+      setScreenSwapOpen(false);
+      return;
+    }
+    setSteps(prev => prev.map(s => {
+      const cur = stepScreenType(s);
+      if (cur == null) return s;
+      const to = screenSwapMap[cur];
+      if (to == null || to === cur) return s;
+      const updated: any = { ...s };
+      // 원래 있던 필드만 갱신 (top-level / params 각각)
+      if (s.screen_type != null && s.screen_type !== '') updated.screen_type = to;
+      if (s.params && s.params.screen_type != null && s.params.screen_type !== '') {
+        updated.params = { ...s.params, screen_type: to };
+      }
+      return updated;
+    }));
+    setScreenSwapOpen(false);
+    message.success(t('record.screenSwapDone'));
+  };
+
+  const renderScreenSwapContent = () => {
+    const entries = Object.entries(screenSwapMap);
+    if (entries.length === 0) {
+      return <div style={{ color: '#888', fontSize: 11, padding: 6 }}>{t('record.noScreenInSteps')}</div>;
+    }
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 260 }}>
+        {entries.map(([from, to]) => (
+          <div key={from} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Tag style={{ minWidth: 80, textAlign: 'center' }}>{from}</Tag>
+            <span style={{ color: '#888' }}>→</span>
+            <Select
+              size="small"
+              value={to}
+              onChange={(v) => setScreenSwapMap(prev => ({ ...prev, [from]: v }))}
+              style={{ flex: 1 }}
+              options={screenSwapOptions}
+            />
+          </div>
+        ))}
+        <Button size="small" type="primary" onClick={applyScreenSwap}>{t('common.apply')}</Button>
+      </div>
+    );
+  };
+
   const updateStepJump = useCallback((index: number, field: 'on_pass_goto' | 'on_fail_goto', value: number | null) => {
     setSteps((prev) => prev.map((s, i) => i === index ? { ...s, [field]: value } : s));
   }, []);
@@ -5876,6 +5974,17 @@ export default function RecordPage() {
                 >
                   <Button size="small" icon={<SwapOutlined />} disabled={steps.length === 0}>{t('record.deviceSwap')}</Button>
                 </Popover>
+                {hasScreenTypeSteps && (
+                  <Popover
+                    open={screenSwapOpen}
+                    onOpenChange={(v) => { if (v) openScreenSwapPopover(); else setScreenSwapOpen(false); }}
+                    trigger="click"
+                    placement="bottomRight"
+                    content={renderScreenSwapContent()}
+                  >
+                    <Button size="small" icon={<SwapOutlined />} disabled={steps.length === 0}>{t('record.screenSwap')}</Button>
+                  </Popover>
+                )}
                 <Popover
                   open={waitPopoverIndex === 'end'}
                   onOpenChange={(v) => setWaitPopoverIndex(v ? 'end' : null)}
