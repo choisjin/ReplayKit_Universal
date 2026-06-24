@@ -209,6 +209,26 @@ def _save_device_catalog(cat: dict) -> None:
     _DEVICE_CATALOG_FILE.write_text(_json.dumps(cat, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _agent_type_for_model(device_model: str) -> str | None:
+    """카탈로그에서 device_model 에 매핑된 에이전트 type 을 반환 (없으면 None).
+
+    모델 선택이 등록 경로(스캔/수동)와 무관하게 에이전트 type 을 결정하도록 하기 위함.
+    예: 모델 "BMWRSE27" → agent "BMWRSE_Agent" → type "bmw_agent".
+    """
+    if not device_model:
+        return None
+    try:
+        cat = _load_device_catalog()
+        agents_by_name = {a.get("name"): a.get("type") for a in cat.get("agents", []) or []}
+        for p in cat.get("projects", []) or []:
+            for m in p.get("models", []) or []:
+                if m.get("value") == device_model and m.get("agent"):
+                    return agents_by_name.get(m.get("agent"))
+    except Exception:
+        pass
+    return None
+
+
 def _parse_adb_display_id(screen_type: str | None) -> int | None:
     """screen_type 문자열에서 ADB display_id 추출. '0', '2' 등 숫자 또는 None."""
     if screen_type is None:
@@ -576,6 +596,15 @@ async def vision_force_ip(req: ForceIPRequest):
 async def connect_device(req: ConnectRequest):
     """Connect to a device."""
     custom_id = req.device_id or ""
+    # 모델→에이전트 자동 보정: ADB serial 기반 에이전트(bmw_agent)는 스캔/수동 등록 경로가
+    # type="adb"로 들어와도, device_model 이 카탈로그에서 해당 에이전트로 매핑되면 보정한다.
+    # (host:port 기반 에이전트(hkmc/icas/mib)는 주소 체계가 달라 자동 보정 대상에서 제외.)
+    if req.type == "adb":
+        _mapped = _agent_type_for_model(req.device_model or "")
+        if _mapped == "bmw_agent":
+            req.type = "bmw_agent"
+            logger.info("Auto-routed adb→bmw_agent by model '%s' (serial=%s)",
+                        req.device_model, req.address)
     if req.type == "adb":
         if ":" in req.address:
             # WiFi ADB — connect first
