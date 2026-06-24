@@ -33,6 +33,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -49,6 +50,110 @@ _TMP_DIR = Path(tempfile.gettempdir()) / "replaykit_bmw"
 
 # screen_id ↔ WebOS lxc 컨테이너 (0=webos1, 1=webos2)
 _DEFAULT_SCREEN_NAMES = {0: "rear_left", 1: "rear_right"}
+
+# ── device-side live 스트리머 (host python3 에서 상주 실행) ──
+# 디바이스 host(root)에 python3 3.10 이 있고 lxc-attach 로 컨테이너 진입 가능 → 프레임 캡처
+# 루프를 디바이스에서 돌려 단일 `adb exec-out` 파이프로 push (프레임당 adb 프로세스 스폰/왕복 제거).
+# 프레임 형식: b"BMWF" + struct('<BI', fmt, length) + data  (fmt 0=JPEG(WebOS) / 1=PNG(Android))
+# 백엔드(_live_reader)가 PNG→JPEG 통일 후 최신본 보관. 전환 판별은 dumpsys topResumedActivity
+# (Display #SCREEN, 1s 캐시) 권위 — webosprojectionhmi=WebOS, 그 외(settingshmi)=Android(screencap).
+# 컨테이너엔 python/sh 없음 → 직접 바이너리(dumpsys/screencap/luna-send/cat)만 호출.
+# __SCREEN__/__ANDROID__/__WEBOS__/__DISPLAY_ID__ 는 start_live_stream 에서 .replace() 주입.
+_BMW_LIVE_STREAMER = r'''
+import sys, os, time, struct, subprocess, re
+SCREEN = __SCREEN__
+ANDROID = "__ANDROID__"
+WEBOS = "__WEBOS__"
+DISPLAY_ID = "__DISPLAY_ID__"   # screencap -d 용 SF display id (빈 문자열이면 -d 생략)
+
+def run(args, timeout=10):
+    try:
+        p = subprocess.run(args, stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, timeout=timeout)
+        return p.stdout or b""
+    except Exception:
+        return b""
+
+def cap_android():
+    cmd = ["lxc-attach", "-n", ANDROID, "--", "screencap"]
+    if DISPLAY_ID:
+        cmd += ["-d", DISPLAY_ID]
+    cmd += ["-p"]
+    d = run(cmd, 8)
+    return d if (len(d) > 100 and d[:8] == b"\x89PNG\r\n\x1a\n") else b""
+
+_WEBOS_TMP = "/tmp/bmw_live.JPG"   # 단발 캡처(/tmp/screenshot.JPG)와 분리 — 파일 경합 방지
+def cap_webos():
+    run(["lxc-attach", "-n", WEBOS, "--", "rm", "-f", _WEBOS_TMP], 5)
+    run(["lxc-attach", "-n", WEBOS, "--", "luna-send", "-n", "1", "-f",
+         "luna://com.webos.surfacemanager/captureCompositorOutput",
+         '{"output":"' + _WEBOS_TMP + '","format":"JPG"}'], 10)
+    deadline = time.time() + 2.0
+    last = b""
+    time.sleep(0.05)
+    while time.time() < deadline:
+        d = run(["lxc-attach", "-n", WEBOS, "--", "cat", _WEBOS_TMP], 8)
+        if len(d) > 1000 and d[:2] == b"\xff\xd8" and d[-2:] == b"\xff\xd9":
+            return d
+        last = d
+        time.sleep(0.05)
+    return last if (len(last) > 1000 and last[:2] == b"\xff\xd8") else b""
+
+_fg = [None, 0.0]
+def fg_backend():
+    now = time.time()
+    if _fg[0] is not None and now - _fg[1] < 1.0:
+        return _fg[0]
+    txt = run(["lxc-attach", "-n", ANDROID, "--", "dumpsys", "activity", "activities"], 8)
+    txt = txt.decode("utf-8", "replace")
+    cur = None; res = None
+    for line in txt.splitlines():
+        m = re.search(r"Display\s+#(\d+)", line)
+        if m:
+            cur = int(m.group(1)); continue
+        if "topResumedActivity" in line and cur is not None:
+            be = "webos" if "webosprojectionhmi" in line else "adb"
+            if cur == SCREEN:
+                res = be
+            cur = None
+    _fg[0] = res; _fg[1] = now
+    return res
+
+out = sys.stdout.buffer
+cached = None
+while True:
+    try:
+        fg = fg_backend()
+        order = []
+        if fg in ("webos", "adb"):
+            order.append(fg)
+        if cached and cached not in order:
+            order.append(cached)
+        for b in ("webos", "adb"):
+            if b not in order:
+                order.append(b)
+        frame = b""; fmt = 0
+        for b in order:
+            d = cap_webos() if b == "webos" else cap_android()
+            if d:
+                frame = d
+                fmt = 0 if b == "webos" else 1
+                cached = b
+                break
+        if frame:
+            try:
+                out.write(b"BMWF" + struct.pack("<BI", fmt, len(frame)) + frame)
+                out.flush()
+            except (BrokenPipeError, IOError):
+                break   # 백엔드가 파이프를 닫음 → 스트리머 종료
+        else:
+            time.sleep(0.1)
+        time.sleep(0.02)
+    except (BrokenPipeError, IOError):
+        break
+    except Exception:
+        time.sleep(0.1)
+'''
 
 
 def _encode_to(data: bytes, fmt: str) -> bytes:
@@ -119,6 +224,18 @@ class BMWAgentService:
         # 매 프레임 root/setenforce/get_display_ids(무거운 dumpsys) 반복 제거용.
         self._display_id_map: dict[int, str] = {}
         self._rooted = False
+        # ── device-side 라이브 스트림 상태 (host python 스트리머) ──
+        self._live_proc: Optional[subprocess.Popen] = None
+        self._live_thread: Optional[threading.Thread] = None
+        self._live_stop = threading.Event()
+        self._live_lock = threading.Lock()
+        self._latest_live_jpeg: Optional[bytes] = None
+        self._live_frame_id = 0
+        self._live_screen: Optional[int] = None  # 현재 스트리밍 중인 screen_id
+        try:
+            self._live_jpeg_q = int(os.environ.get("BMW_LIVE_JPEG_Q") or 75)
+        except Exception:
+            self._live_jpeg_q = 75
         # 입력(터치) 시각 — 라이브 미러 적응형 리프레시용 (main.py _adaptive_*_pace 호환)
         self.last_input_ts = 0.0
         # screen_id → (width, height). connect 시 채워지며 실패 시 기본 해상도.
@@ -596,6 +713,10 @@ class BMWAgentService:
 
     def disconnect(self) -> None:
         self._connected = False
+        try:
+            self.stop_live_stream()
+        except Exception:
+            pass
         logger.debug("BMWAgentService(%s): disconnected", self.serial)
 
     def get_info(self) -> dict:
@@ -629,6 +750,154 @@ class BMWAgentService:
         w, h = self._get_screen_size(screen_id)
         self._screen_sizes[screen_id] = (w, h)
         return w, h
+
+    # ------------------------------------------------------------------
+    # Device-side live stream (host python streamer over `adb exec-out`)
+    # ------------------------------------------------------------------
+    def is_live_running(self) -> bool:
+        t = self._live_thread
+        p = self._live_proc
+        return bool(t and t.is_alive() and p and p.poll() is None)
+
+    def live_screen(self) -> Optional[int]:
+        return self._live_screen
+
+    def start_live_stream(self, screen_type=None) -> bool:
+        """host python 스트리머를 push+실행하고 리더 스레드 기동. 이미 같은 screen이면 True.
+
+        screen 이 바뀌면 기존 스트림을 정리하고 재시작. 실패 시 False(호출자 단발 캡처 폴백).
+        """
+        sid = self._screen_id(screen_type)
+        with self._live_lock:
+            if (self._live_thread and self._live_thread.is_alive()
+                    and self._live_proc and self._live_proc.poll() is None
+                    and self._live_screen == sid):
+                return True
+        # 다른 screen 이거나 죽었으면 정리 후 재시작
+        self.stop_live_stream()
+        try:
+            self._ensure_root()
+            display_id = self._display_id_for(sid) or ""
+            script = (_BMW_LIVE_STREAMER
+                      .replace("__SCREEN__", str(sid))
+                      .replace("__ANDROID__", self._android_container)
+                      .replace("__WEBOS__", f"webos{sid + 1}")
+                      .replace("__DISPLAY_ID__", str(display_id)))
+            # 스크립트를 host /tmp 에 push 후 실행 (shell 파싱 회피 — 컨테이너/host sh 무관).
+            local = _TMP_DIR / f"bmw_streamer_s{sid}_{uuid.uuid4().hex[:6]}.py"
+            local.write_text(script, encoding="utf-8")
+            remote = f"/tmp/bmw_streamer_s{sid}.py"
+            push = self._adb(["push", str(local), remote], timeout=20)
+            try:
+                os.remove(local)
+            except OSError:
+                pass
+            if push.returncode != 0:
+                logger.warning("BMW live: streamer push failed: %s", push.stderr)
+                return False
+            self._live_stop.clear()
+            proc = subprocess.Popen(
+                [resolve_adb_path(), "-s", self.serial, "exec-out",
+                 "python3", "-u", remote],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
+            )
+            t = threading.Thread(target=self._live_reader, args=(proc,), daemon=True)
+            with self._live_lock:
+                self._live_proc = proc
+                self._live_thread = t
+                self._live_screen = sid
+                self._latest_live_jpeg = None
+            t.start()
+            logger.info("BMW live stream started (screen=%d, display_id=%s)", sid, display_id or "-")
+            return True
+        except Exception as e:
+            logger.warning("BMW live stream start failed: %r", e)
+            self.stop_live_stream()
+            return False
+
+    def _live_reader(self, proc: subprocess.Popen) -> None:
+        """exec-out stdout 에서 BMWF 프레임을 파싱 → (PNG면 JPEG 변환) 최신본 보관.
+
+        프레임: b"BMWF" + struct('<BI', fmt, length) + data. fmt 0=JPEG / 1=PNG.
+        """
+        from PIL import Image
+        HDR = 9  # b"BMWF"(4) + '<BI'(5: fmt 1B + length 4B)
+        stdout = proc.stdout
+        buf = b""
+        while not self._live_stop.is_set():
+            try:
+                chunk = stdout.read(262144) if stdout else b""
+            except Exception:
+                break
+            if not chunk:
+                break  # 파이프 닫힘/스트리머 종료
+            buf += chunk
+            while True:
+                idx = buf.find(b"BMWF")
+                if idx < 0:
+                    if len(buf) > (1 << 24):
+                        buf = buf[-8:]
+                    break
+                if len(buf) < idx + HDR:
+                    break
+                fmt, length = struct.unpack("<BI", buf[idx + 4: idx + HDR])
+                if length <= 0 or length > (1 << 25):
+                    buf = buf[idx + 4:]  # 비정상 길이 → 동기 재탐색
+                    continue
+                total = idx + HDR + length
+                if len(buf) < total:
+                    break
+                data = buf[idx + HDR: total]
+                buf = buf[total:]
+                try:
+                    if fmt == 0 and data[:2] == b"\xff\xd8":
+                        jpg = data  # 이미 JPEG(WebOS)
+                    else:
+                        im = Image.open(io.BytesIO(data))
+                        im.load()
+                        bio = io.BytesIO()
+                        im.convert("RGB").save(bio, format="JPEG", quality=self._live_jpeg_q)
+                        jpg = bio.getvalue()
+                    with self._live_lock:
+                        self._latest_live_jpeg = jpg
+                        self._live_frame_id += 1
+                except Exception:
+                    continue
+        logger.info("BMW live reader exited (screen=%s)", self._live_screen)
+
+    def get_live_frame(self) -> Tuple[Optional[bytes], int]:
+        with self._live_lock:
+            return self._latest_live_jpeg, self._live_frame_id
+
+    def stop_live_stream(self) -> None:
+        self._live_stop.set()
+        with self._live_lock:
+            proc = self._live_proc
+            t = self._live_thread
+            self._live_proc = None
+            self._live_thread = None
+            self._live_screen = None
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=1.5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        if t and t.is_alive():
+            t.join(timeout=1.5)
+        with self._live_lock:
+            self._latest_live_jpeg = None
+
+    async def async_start_live_stream(self, screen_type=None) -> bool:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.start_live_stream, screen_type)
 
     # ------------------------------------------------------------------
     # Async API surface (DeviceManager/playback 호환)

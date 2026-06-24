@@ -793,9 +793,34 @@ async def websocket_screen_mirror(websocket: WebSocket):
                 elif is_bmw:
                     bmw = device_manager.get_bmw_service(target_device_id)
                     if bmw and bmw.is_connected:
-                        # BMW: ADB/WebOS screencap (라이브 스트림 없음). 캡처 자체가 페이스를
-                        # 결정(ADB ~0.2s, WebOS 폴링 ~0.3s)하므로 SSH식 10s idle 스로틀 대신
-                        # 짧은 sleep 만 둬 반응성을 높인다(디바이스 화면 전환을 빠르게 반영).
+                        # device-side 스트리머(host python) 우선 — 프레임당 adb 스폰/왕복 제거.
+                        # 스트림이 죽었거나 screen 이 바뀌었으면 (재)기동. 실패 시 단발 캡처 폴백.
+                        _sid = bmw._screen_id(screen_type)
+                        if not bmw.is_live_running() or bmw.live_screen() != _sid:
+                            started = await bmw.async_start_live_stream(screen_type)
+                            if started:
+                                live_last_frame_id = -1
+                        if bmw.is_live_running():
+                            try:
+                                jpeg_bytes, fid = bmw.get_live_frame()
+                                if jpeg_bytes is not None and fid != live_last_frame_id:
+                                    live_last_frame_id = fid
+                                    await websocket.send_bytes(jpeg_bytes)
+                                    await asyncio.sleep(0.015)
+                                else:
+                                    await asyncio.sleep(0.03)
+                                continue
+                            except WebSocketDisconnect:
+                                break
+                            except Exception as ce:
+                                cls_name = type(ce).__name__
+                                if cls_name in ("ClientDisconnected", "ConnectionClosed",
+                                                "ConnectionClosedOK", "ConnectionClosedError"):
+                                    break
+                                logger.warning("BMW live send error: type=%s repr=%r", cls_name, ce)
+                                await asyncio.sleep(0.3)
+                                continue
+                        # 폴백: 단발 exec-out 캡처 (스트리머 불가 환경)
                         try:
                             jpeg_bytes = await bmw.async_screencap_bytes(
                                 screen_type=screen_type, fmt="jpeg"
@@ -1129,6 +1154,16 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     )
                 except Exception as e:
                     logger.debug("ICAS live stream stop on disconnect failed: %s", e)
+        # BMW 라이브 스트림(host python 스트리머 + exec-out 파이프) 정리.
+        if is_bmw:
+            _bmw = device_manager.get_bmw_service(target_device_id)
+            if _bmw is not None and _bmw.is_live_running():
+                try:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, _bmw.stop_live_stream
+                    )
+                except Exception as e:
+                    logger.debug("BMW live stream stop on disconnect failed: %s", e)
 
 
 # 현재 백그라운드 재생 태스크 (단일 재생만 허용)
