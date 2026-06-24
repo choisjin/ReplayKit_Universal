@@ -30,6 +30,7 @@ import io
 import logging
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
