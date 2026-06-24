@@ -848,6 +848,15 @@ class PlaybackService:
                         Path(actual_path).write_bytes(img_bytes)
                     else:
                         raise RuntimeError(f"MIB device {ss_device['id']} not connected")
+                elif ss_device["type"] == "bmw_agent":
+                    bmw_svc = self.dm.get_bmw_service(ss_device["id"])
+                    if bmw_svc:
+                        img_bytes = await bmw_svc.async_screencap_bytes(
+                            screen_type=ss_device.get("screen_type", "0"), fmt="png"
+                        )
+                        Path(actual_path).write_bytes(img_bytes)
+                    else:
+                        raise RuntimeError(f"BMW device {ss_device['id']} not connected")
                 elif ss_device["type"] == "vision_camera":
                     cam = self.dm.get_vision_camera(ss_device["id"])
                     if cam:
@@ -1775,6 +1784,32 @@ class PlaybackService:
                             return
                 dev.status = "disconnected"
 
+        elif dev.type == "bmw_agent":
+            bmw = self.dm.get_bmw_service(device_id)
+            if bmw and bmw.is_connected:
+                return
+            # BMW 재연결도 device_manager.connect_device_by_id를 재사용.
+            lock = self.dm.get_reconnect_lock(device_id)
+            async with lock:
+                bmw = self.dm.get_bmw_service(device_id)
+                if bmw and bmw.is_connected:
+                    return
+                for attempt in range(1, max_retries + 1):
+                    if self._should_stop:
+                        return
+                    logger.info("Playback: BMW reconnect %s attempt %d/%d", device_id, attempt, max_retries)
+                    try:
+                        msg = await self.dm.connect_device_by_id(device_id)
+                        if "connected" in msg.lower() and "failed" not in msg.lower():
+                            logger.info("Playback: BMW reconnected %s", device_id)
+                            return
+                    except Exception as e:
+                        logger.debug("Playback: BMW reconnect %s failed: %s", device_id, e)
+                    if attempt < max_retries:
+                        if await self._interruptible_sleep(retry_interval):
+                            return
+                dev.status = "disconnected"
+
         elif dev.type == "adb":
             # 먼저 현재 상태 확인
             try:
@@ -1905,6 +1940,17 @@ class PlaybackService:
         dev = self.dm.get_device(device_id)
         return dev is not None and dev.type in ("icas_agent", "mib_agent")
 
+    def _is_bmw_device(self, device_id: Optional[str]) -> bool:
+        """디바이스가 BMW RSE 에이전트 타입인지 확인 (generic tap/swipe 스텝 라우팅용).
+
+        BMW는 ADB serial 기반이지만 일반 ADB 디바이스와 동일한 generic 스텝
+        (tap/swipe/long_press/repeat_tap)을 BMW 서비스로 라우팅한다.
+        """
+        if not device_id:
+            return False
+        dev = self.dm.get_device(device_id)
+        return dev is not None and dev.type == "bmw_agent"
+
     def _get_agent_service(self, device_id: Optional[str]):
         """Return (svc, kind) where kind ∈ {"hkmc", "isap", "icas", None}.
 
@@ -1943,7 +1989,7 @@ class PlaybackService:
                 return {"type": dev.type, "id": dev.id, "address": dev.address, "screen_type": screen_type}
         # fallback: 주 디바이스 중 첫 번째
         for d in self.dm.list_primary():
-            if d.type in ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent", "icas_agent", "mib_agent", "vision_camera", "webcam"):
+            if d.type in ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent", "icas_agent", "mib_agent", "bmw_agent", "vision_camera", "webcam"):
                 return {"type": d.type, "id": d.id, "address": d.address, "screen_type": "front_center"}
         return None
 
@@ -1975,6 +2021,10 @@ class PlaybackService:
                 svc = self.dm.get_mib_service(dev_id)
                 if svc:
                     return await svc.async_screencap_bytes(screen_type=screen_type or "HU", fmt="png")
+            elif dev_type == "bmw_agent":
+                svc = self.dm.get_bmw_service(dev_id)
+                if svc:
+                    return await svc.async_screencap_bytes(screen_type=screen_type, fmt="png")
             elif dev_type in ("webcam", "vision_camera"):
                 cam = (self.dm.get_webcam_device(dev_id) if dev_type == "webcam"
                        else self.dm.get_vision_camera(dev_id))
@@ -2012,6 +2062,10 @@ class PlaybackService:
             svc = self.dm.get_mib_service(dev_id)
             if svc:
                 await svc.async_tap(x, y, screen_type or "HU")
+        elif dev_type == "bmw_agent":
+            svc = self.dm.get_bmw_service(dev_id)
+            if svc:
+                await svc.async_tap(x, y, screen_type)
         else:
             logger.warning("OCR ClickText: 탭 미지원 디바이스 타입 %s", dev_type)
 
@@ -2979,6 +3033,29 @@ class PlaybackService:
                         functools.partial(wc.send_key_combos, combos,
                                           int(cfx) if cfx is not None else None,
                                           int(cfy) if cfy is not None else None))
+        elif self._is_bmw_device(real_id) and step.type in (
+                StepType.TAP, StepType.SWIPE, StepType.LONG_PRESS, StepType.REPEAT_TAP):
+            # BMW RSE — 일반 ADB 디바이스처럼 generic 스텝을 BMW 서비스(WebOS 듀얼 디스플레이)로 라우팅.
+            svc = self.dm.get_bmw_service(real_id)
+            if not svc or not svc.is_connected:
+                await self._ensure_device_connected(real_id, max_retries=3, retry_interval=2.0)
+                svc = self.dm.get_bmw_service(real_id)
+            if not svc or not svc.is_connected:
+                raise ValueError(f"BMW device {real_id} not connected")
+            screen_type = step.screen_type or params.get("screen_type")
+            if step.type == StepType.TAP:
+                await svc.async_tap(params["x"], params["y"], screen_type)
+            elif step.type == StepType.REPEAT_TAP:
+                await svc.async_repeat_tap(params["x"], params["y"],
+                                           int(params.get("count", 5)),
+                                           int(params.get("interval_ms", 100)), screen_type)
+            elif step.type == StepType.LONG_PRESS:
+                await svc.async_long_press(params["x"], params["y"],
+                                           int(params.get("duration_ms", 1000)), screen_type)
+            elif step.type == StepType.SWIPE:
+                await svc.async_swipe(params["x1"], params["y1"], params["x2"], params["y2"],
+                                      screen_type, int(params.get("duration_ms", 0)))
+
         else:
             # ADB actions — real_id를 ADB 시리얼(dev.address)로 변환
             adb_serial = real_id

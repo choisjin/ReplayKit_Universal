@@ -205,7 +205,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       setScreenType('HU');
     } else if (dev.type === 'vision_camera' || dev.type === 'webcam') {
       setScreenType('default');
-    } else if (dev.type === 'adb' && (dev.info?.displays?.length ?? 0) > 1) {
+    } else if ((dev.type === 'adb' || dev.type === 'bmw_agent') && (dev.info?.displays?.length ?? 0) > 1) {
       setScreenType(String(dev.info.displays[0]?.id ?? 0));
     } else {
       setScreenType('0');

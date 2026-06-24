@@ -718,7 +718,7 @@ export default function RecordPage() {
       try {
         const dev = primaryDevices.find(d => d.id === targetId)
           || auxiliaryDevices.find(d => d.id === targetId);
-        const needsScreenType = (dev?.type === 'hkmc_agent' || dev?.type === 'isap_agent' || dev?.type === 'icas_agent' || dev?.type === 'mib_agent' || dev?.type === 'hkmc5th_wide_agent') || (dev?.type === 'adb' && (dev.info?.displays?.length ?? 0) > 1);
+        const needsScreenType = (dev?.type === 'hkmc_agent' || dev?.type === 'isap_agent' || dev?.type === 'icas_agent' || dev?.type === 'mib_agent' || dev?.type === 'hkmc5th_wide_agent') || ((dev?.type === 'adb' || dev?.type === 'bmw_agent') && (dev.info?.displays?.length ?? 0) > 1);
         const res = await deviceApi.screenshot(targetId, needsScreenType ? screenType : undefined, 'png');
         if (res.data.image) {
           const fmt = res.data.format || 'png';
@@ -829,10 +829,11 @@ export default function RecordPage() {
   // 녹화 중이면 의도치 않은 방향키 스텝이 추가되는 문제가 있었다.
   // 스크린샷은 capture 요청 시 screen_type 을 명시하므로 별도 포커스 조작 불필요.
   const isScreenAdb = screenDevice?.type === 'adb';
+  const isScreenBmw = screenDevice?.type === 'bmw_agent';
   // 카메라류(vision_camera/webcam)는 관찰 전용 — 조작(탭/스와이프/키) 금지
   const isScreenReadonly = screenDevice?.type === 'vision_camera' || screenDevice?.type === 'webcam';
   const adbDisplays: { id: number; name: string; sf_id?: string; width?: number; height?: number }[] = screenDevice?.info?.displays || [];
-  const hasMultiDisplay = isScreenAdb && adbDisplays.length > 1;
+  const hasMultiDisplay = (isScreenAdb || isScreenBmw) && adbDisplays.length > 1;
   // 멀티 디스플레이: 선택된 디스플레이 해상도 사용
   const selectedDisplay = hasMultiDisplay ? adbDisplays.find(d => String(d.id) === screenType) : null;
   // HKMC/ICAS: screens[screenType]에서 해상도 읽기, ADB 멀티: selectedDisplay, 기본: resolution
@@ -1132,8 +1133,8 @@ export default function RecordPage() {
     if ((dev?.type === 'hkmc_agent' || dev?.type === 'isap_agent' || dev?.type === 'hkmc5th_wide_agent') && (action === 'hkmc_touch' || action === 'hkmc_swipe' || action === 'hkmc_key' || action === 'hkmc_long_press' || action === 'repeat_tap')) {
       return { ...params, screen_type: screenType };
     }
-    // ADB multi-display: 모든 디스플레이에 screen_type 주입 (display 0 포함 — screencap에 SF display ID 필요)
-    if (dev?.type === 'adb' && screenType && screenType !== 'front_center') {
+    // ADB/BMW multi-display: 모든 디스플레이에 screen_type 주입 (display 0 포함 — screencap에 display 선택 필요)
+    if ((dev?.type === 'adb' || dev?.type === 'bmw_agent') && screenType && screenType !== 'front_center') {
       const isMultiDisplay = (dev.info?.displays?.length ?? 0) > 1;
       if (isMultiDisplay || screenType !== '0') {
         return { ...params, screen_type: screenType };
@@ -1286,7 +1287,7 @@ export default function RecordPage() {
     if (!dev) return undefined;
     const needsScreenType = dev.type === 'hkmc_agent' || dev.type === 'isap_agent'
       || dev.type === 'icas_agent' || dev.type === 'mib_agent' || dev.type === 'hkmc5th_wide_agent'
-      || (dev.type === 'adb' && (dev.info?.displays?.length ?? 0) > 1);
+      || ((dev.type === 'adb' || dev.type === 'bmw_agent') && (dev.info?.displays?.length ?? 0) > 1);
     return needsScreenType ? screenType : undefined;
   }, [primaryDevices, auxiliaryDevices, screenType]);
 
@@ -4972,7 +4973,7 @@ export default function RecordPage() {
                       </Button>
                     </Tooltip>
                     {/* 이미지 롱터치 — long press 를 지원하는 디바이스 타입에만 노출 */}
-                    {['adb', 'hkmc_agent', 'isap_agent', 'hkmc5th_wide_agent', 'icas_agent', 'mib_agent', 'wincontrol'].includes(screenDevice?.type || '') && (
+                    {['adb', 'hkmc_agent', 'isap_agent', 'hkmc5th_wide_agent', 'icas_agent', 'mib_agent', 'bmw_agent', 'wincontrol'].includes(screenDevice?.type || '') && (
                       <Tooltip title={recording ? t('record.imageLongPressTooltip') : t('record.imageTapDisabled')}>
                         <Button
                           size="small"

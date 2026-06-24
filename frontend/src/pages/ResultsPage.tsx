@@ -449,9 +449,12 @@ export default function ResultsPage() {
 
     const videoDuration = video.duration;
     const hasDuration = Number.isFinite(videoDuration) && videoDuration > 0;
+    // 스텝 시점 2초 전부터 재생(맥락을 보며 들어가도록). 0 미만은 0으로 클램프.
+    const PRE_ROLL_SEC = 2;
+    const targetOffset = Math.max(0, pending.offset - PRE_ROLL_SEC);
     const seekTime = hasDuration
-      ? Math.min(pending.offset, Math.max(0, videoDuration - 0.05))
-      : pending.offset;
+      ? Math.min(targetOffset, Math.max(0, videoDuration - 0.05))
+      : targetOffset;
 
     // 브라우저가 seekable 범위를 아직 확보하지 못했다면 set해도 0으로 snap된다.
     // preload="metadata"만 끝난 시점엔 seekable이 비거나 [0,0]에 머무르는 케이스가 있으므로,

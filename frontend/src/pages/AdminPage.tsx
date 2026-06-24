@@ -380,6 +380,7 @@ export default function AdminPage() {
                   {a.type === 'isap_agent' && '— iSAP Agent TCP 프로토콜'}
                   {a.type === 'icas_agent' && '— VW ICAS SSH 프로토콜'}
                   {a.type === 'mib_agent' && '— VW MIB SSH+ksend 프로토콜'}
+                  {a.type === 'bmw_agent' && '— BMW 후석 듀얼 디스플레이 ADB (WebOS+Android)'}
                   {a.type === 'vision_camera' && '— GigE 비전 카메라 (스크린샷 전용)'}
                   {a.type === 'webcam' && '— USB 웹캠 (관찰 전용)'}
                 </Typography.Text>

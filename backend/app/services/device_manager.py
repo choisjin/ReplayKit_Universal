@@ -21,6 +21,7 @@ from .hkmc5th_wide_service import HKMC5thWideService
 from .isap_agent_service import ISAPAgentService
 from .icas_agent_service import ICASAgentService
 from .mib_agent_service import MIBAgentService
+from .bmw_agent_service import BMWAgentService
 from .ssh_service import SSHConnection
 from .wincontrol_service import WinControlService
 from .lincontrol_service import LinControlService
@@ -839,6 +840,8 @@ class DeviceManager:
         self._icas_reconnect_attempts: dict[str, int] = {}
         self._mib_conns: dict[str, MIBAgentService] = {}  # device_id -> MIBAgentService
         self._mib_reconnect_attempts: dict[str, int] = {}
+        self._bmw_conns: dict[str, BMWAgentService] = {}  # device_id -> BMWAgentService
+        self._bmw_reconnect_attempts: dict[str, int] = {}
         self._adb_reconnect_attempts: dict[str, int] = {}  # device_id -> 연속 재연결 실패 횟수
         # 디바이스별 재연결 락: playback의 _ensure_device_connected와 백그라운드 monitor 루프가
         # 같은 디바이스를 동시에 재연결하지 못하도록 직렬화. race condition 제거용.
@@ -1031,6 +1034,8 @@ class DeviceManager:
             prefix = "ICAS"
         elif dev_type == "mib_agent":
             prefix = "MIB"
+        elif dev_type == "bmw_agent":
+            prefix = "BMW"
         elif dev_type == "vision_camera":
             prefix = "VisionCam"
         elif dev_type == "webcam":
@@ -1053,7 +1058,7 @@ class DeviceManager:
         aux = [
             d.to_dict()
             for d in self._devices.values()
-            if d.category == "auxiliary" or d.type in ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent", "icas_agent", "mib_agent", "vision_camera", "webcam", "ssh")
+            if d.category == "auxiliary" or d.type in ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent", "icas_agent", "mib_agent", "bmw_agent", "vision_camera", "webcam", "ssh")
         ]
         try:
             _AUX_DEVICES_FILE.write_text(json.dumps(aux, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1381,6 +1386,60 @@ class DeviceManager:
             return self._mib_conns.get(dev.id)
         return None
 
+    async def add_bmw_agent_device(self, serial: str, device_id: str = "",
+                                   name: str = "", device_model: str = "",
+                                   resolution: str = "1920x1080",
+                                   capture_backend: str = "adb",
+                                   host: str = "127.0.0.1",
+                                   port: int = 5037) -> ManagedDevice:
+        """BMW RSE Agent 디바이스 등록만 (연결은 connect_device_by_id로 별도 수행).
+
+        ADB serial 기반 후석 듀얼 디스플레이(WebOS+Android) 모델. 일반 ADB 디바이스처럼
+        generic tap/swipe/screenshot 스텝을 재사용하며, screen 0=후석 좌측 / 1=후석 우측.
+        address 필드에 ADB serial 을 저장한다.
+        """
+        final_id = device_id or self._generate_device_id("bmw_agent", device_model=device_model)
+        display_name = name or f"BMW ({serial})"
+        try:
+            rw_s, rh_s = str(resolution).upper().split("X")
+            res_dict = {"width": int(rw_s), "height": int(rh_s)}
+        except Exception:
+            res_dict = {"width": 1920, "height": 1080}
+
+        info: dict = {
+            "serial": serial,
+            "adb_host": host,
+            "adb_port": int(port),
+            "capture_backend": (capture_backend or "adb").strip().lower(),
+            "resolution": res_dict,
+            "resolution_str": str(resolution),
+        }
+        if device_model:
+            info["device_model"] = device_model
+
+        dev = ManagedDevice(
+            id=final_id,
+            type="bmw_agent",
+            category="primary",
+            address=serial,
+            status="disconnected",
+            name=display_name,
+            info=info,
+        )
+        self._devices[final_id] = dev
+        self._save_auxiliary_devices()
+        return dev
+
+    def get_bmw_service(self, device_id: str) -> Optional[BMWAgentService]:
+        """Get BMWAgentService instance for a device. Returns None if not found."""
+        svc = self._bmw_conns.get(device_id)
+        if svc:
+            return svc
+        dev = self.get_device(device_id)
+        if dev and dev.type == "bmw_agent":
+            return self._bmw_conns.get(dev.id)
+        return None
+
     async def add_vision_camera_device(self, mac: str, model: str = "", serial: str = "",
                                        ip: str = "", subnetmask: str = "255.255.0.0",
                                        device_id: str = "", name: str = "") -> ManagedDevice:
@@ -1505,6 +1564,13 @@ class DeviceManager:
             if dev.type == "mib_agent":
                 mib = self._mib_conns.get(dev.id)
                 if mib and mib.is_connected:
+                    dev.status = "connected"
+                elif dev.status != "reconnecting":
+                    dev.status = "disconnected"
+                continue
+            if dev.type == "bmw_agent":
+                bmw = self._bmw_conns.get(dev.id)
+                if bmw and bmw.is_connected:
                     dev.status = "connected"
                 elif dev.status != "reconnecting":
                     dev.status = "disconnected"
@@ -3090,6 +3156,45 @@ class DeviceManager:
                 dev.status = "disconnected"
                 return f"SSH connect failed: {dev.id} — {e}"
 
+        elif dev.type == "bmw_agent":
+            serial = dev.info.get("serial") or dev.address
+            res_str = dev.info.get("resolution_str")
+            if not res_str:
+                res_val = dev.info.get("resolution")
+                if isinstance(res_val, dict) and "width" in res_val and "height" in res_val:
+                    res_str = f"{res_val['width']}x{res_val['height']}"
+                elif isinstance(res_val, str):
+                    res_str = res_val
+                else:
+                    res_str = "1920x1080"
+            try:
+                svc = BMWAgentService(
+                    serial,
+                    host=dev.info.get("adb_host", "127.0.0.1") or "127.0.0.1",
+                    port=int(dev.info.get("adb_port", 5037) or 5037),
+                    device_id=dev.id,
+                    resolution=res_str,
+                    capture_backend=dev.info.get("capture_backend", "adb") or "adb",
+                    scripts_dir=dev.info.get("scripts_dir"),
+                )
+                ok = await svc.async_connect()
+                if ok:
+                    self._bmw_conns[dev.id] = svc
+                    dev.status = "connected"
+                    _mark_connected()
+                    dev.info["agent_version"] = svc.agent_version
+                    _binfo = svc.get_info()
+                    dev.info["screens"] = _binfo["screens"]
+                    dev.info["displays"] = _binfo["displays"]
+                    dev.info["default_screen"] = _binfo["default_screen"]
+                    return f"BMW connected: {dev.id} ({serial})"
+                else:
+                    dev.status = "disconnected"
+                    return f"BMW connect failed: {dev.id}"
+            except Exception as e:
+                dev.status = "disconnected"
+                return f"BMW connect failed: {dev.id} — {e}"
+
         elif dev.type == "adb":
             try:
                 # WiFi: adb connect, USB: adb reconnect
@@ -3210,6 +3315,16 @@ class DeviceManager:
 
         elif dev.type == "mib_agent":
             svc = self._mib_conns.pop(device_id, None)
+            if svc:
+                try:
+                    svc.disconnect()
+                except Exception:
+                    pass
+            dev.status = "disconnected"
+            return f"Disconnected: {dev.id}"
+
+        elif dev.type == "bmw_agent":
+            svc = self._bmw_conns.pop(device_id, None)
             if svc:
                 try:
                     svc.disconnect()

@@ -247,7 +247,7 @@ def _build_constructor_kwargs(dev) -> dict | None:
 
 
 class ConnectRequest(BaseModel):
-    type: str  # "adb" | "serial" | "module" | "hkmc_agent" | "isap_agent" | "icas_agent" | "vision_camera" | "webcam" | "ssh"
+    type: str  # "adb" | "serial" | "module" | "hkmc_agent" | "isap_agent" | "icas_agent" | "mib_agent" | "bmw_agent" | "vision_camera" | "webcam" | "ssh"
     category: str = ""  # "primary" | "auxiliary" — auto-detected if empty
     address: str = ""  # COM port for serial, IP for socket/HKMC/SSH, etc.
     baudrate: Optional[int] = 115200
@@ -755,6 +755,30 @@ async def connect_device(req: ConnectRequest):
                 connect_msg = f"registered but connect failed: {e}"
             return {
                 "result": f"MIB registered: {dev.name} (ID: {dev.id}) — {connect_msg}",
+                "primary": _with_protected_flag(dm.list_primary()),
+                "auxiliary": _with_protected_flag(dm.list_auxiliary()),
+            }
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    elif req.type == "bmw_agent":
+        if not req.address:
+            raise HTTPException(status_code=400, detail="BMW Agent requires address (ADB serial)")
+        ef = req.extra_fields or {}
+        try:
+            dev = await dm.add_bmw_agent_device(
+                serial=req.address,
+                device_id=custom_id,
+                name=req.name or "",
+                device_model=req.device_model or "",
+                resolution=ef.get("resolution", "1920x1080") or "1920x1080",
+                capture_backend=str(ef.get("capture_backend", "adb") or "adb"),
+            )
+            try:
+                connect_msg = await dm.connect_device_by_id(dev.id)
+            except Exception as e:
+                connect_msg = f"registered but connect failed: {e}"
+            return {
+                "result": f"BMW registered: {dev.name} (ID: {dev.id}) — {connect_msg}",
                 "primary": _with_protected_flag(dm.list_primary()),
                 "auxiliary": _with_protected_flag(dm.list_auxiliary()),
             }
@@ -1297,6 +1321,28 @@ async def device_input(req: InputRequest):
                 except TimeoutError as te:
                     raise HTTPException(status_code=503, detail=str(te))
                 return {"result": "ok"}
+
+        # BMW RSE Agent — 일반 ADB 디바이스처럼 generic tap/swipe/long_press/repeat_tap
+        # 스텝을 재사용하되, BMW 서비스(WebOS 듀얼 디스플레이)로 라우팅한다.
+        if (req.action in ("tap", "swipe", "long_press", "repeat_tap")
+                and dev and dev.type == "bmw_agent"):
+            bmw = dm.get_bmw_service(req.device_id)
+            if not bmw:
+                raise HTTPException(status_code=400, detail=f"BMW device {req.device_id} not connected")
+            p = req.params
+            screen_type = p.get("screen_type")
+            if req.action == "tap":
+                await bmw.async_tap(p["x"], p["y"], screen_type)
+            elif req.action == "repeat_tap":
+                await bmw.async_repeat_tap(p["x"], p["y"], int(p.get("count", 5)),
+                                           int(p.get("interval_ms", 100)), screen_type)
+            elif req.action == "long_press":
+                await bmw.async_long_press(p["x"], p["y"],
+                                           int(p.get("duration_ms", 1000)), screen_type)
+            elif req.action == "swipe":
+                await bmw.async_swipe(p["x1"], p["y1"], p["x2"], p["y2"], screen_type,
+                                      int(p.get("duration_ms", 0)))
+            return {"result": "ok"}
 
         # ADB actions — allow even if device is not in managed list (race with refresh)
         if dev and dev.type not in ("adb", None):

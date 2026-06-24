@@ -319,7 +319,10 @@ export default function DevicePage() {
   const [forceIpSubnet, setForceIpSubnet] = useState('255.255.255.0');
   const [forceIpGateway, setForceIpGateway] = useState('0.0.0.0');
   const [forceIpLoading, setForceIpLoading] = useState(false);
-  const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
+  const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'bmw_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
+  // BMW RSE Agent 전용 — 캡처 백엔드(adb screencap vs WebOS 컴포지터) + 해상도 fallback
+  const [bmwCaptureBackend, setBmwCaptureBackend] = useState<'adb' | 'webos'>('adb');
+  const [bmwResolution, setBmwResolution] = useState<string>('1920x1080');
   // MIB Agent 전용 — 등록 시 입력하는 해상도 ("WxH")
   const MIB_RESOLUTION_PRESETS: { label: string; value: string }[] = [
     { label: '10.0" — 1560x700',                  value: '1560x700'  },
@@ -503,7 +506,7 @@ export default function DevicePage() {
 
   // key → category 해석 (값 없으면 기본 정책 적용)
   const _defaultCategoryForKey = (key: string): ScanCategory => {
-    const primaryKeys = new Set(['adb', 'hkmc', 'isap', 'icas', 'mib', 'vision_camera', 'webcam']);
+    const primaryKeys = new Set(['adb', 'hkmc', 'isap', 'icas', 'mib', 'bmw', 'vision_camera', 'webcam']);
     return primaryKeys.has(key) ? 'primary' : 'auxiliary';
   };
   const scanItemCategory = (key: string): ScanCategory =>
@@ -763,7 +766,7 @@ export default function DevicePage() {
         }
       }
       const tcpPort = (devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent') ? hkmcPort : undefined;
-      const model = (devType === 'adb' || devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent') ? (deviceModel || undefined) : undefined;
+      const model = (devType === 'adb' || devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent' || devType === 'bmw_agent') ? (deviceModel || undefined) : undefined;
       // ICAS Agent는 SSH 자격증명이 필요 — extra_fields로 전달
       if (devType === 'icas_agent') {
         extra = extra || {};
@@ -777,6 +780,12 @@ export default function DevicePage() {
         extra.username = (sshUser && sshUser.trim()) || 'root';
         extra.password = sshPass || '';
         extra.resolution = (mibResolution || MIB_DEFAULT_RESOLUTION).trim();
+      }
+      // BMW RSE Agent: ADB serial 기반 (address=serial). 캡처 백엔드 + 해상도 fallback 전달.
+      if (devType === 'bmw_agent') {
+        extra = extra || {};
+        extra.capture_backend = bmwCaptureBackend || 'adb';
+        extra.resolution = (bmwResolution || '1920x1080').trim();
       }
       // HKMC Agent: 클러스터 캡처는 항상 QNX SSH+screenshot+SCP (legacy CLU_IMG_GET 호환).
       // 자격증명을 비워두면 ICAS QNX 패턴(root/빈 패스워드) 자동 사용. SSH 실패 시 backend가 TCP CMD_GETIMG로 폴백.
@@ -1167,7 +1176,7 @@ export default function DevicePage() {
 
   const groupOrder = useMemo(() => {
     // primary 그룹(Android, HKMC, VisionCam) 우선, 나머지는 알파벳
-    const primary = ['Android', 'HKMC', 'iSAP', 'VisionCam', 'Webcam'];
+    const primary = ['Android', 'HKMC', 'iSAP', 'BMW', 'VisionCam', 'Webcam'];
     const keys = Object.keys(deviceGroups);
     const first = primary.filter(k => keys.includes(k));
     const rest = keys.filter(k => !primary.includes(k)).sort();
@@ -2472,6 +2481,7 @@ export default function DevicePage() {
                         {modalCategory === 'primary' && <Option value="isap_agent">iSAP Agent (TCP)</Option>}
                         {modalCategory === 'primary' && <Option value="icas_agent">ICAS Agent (SSH)</Option>}
                         {modalCategory === 'primary' && <Option value="mib_agent">MIB Agent (SSH)</Option>}
+                        {modalCategory === 'primary' && <Option value="bmw_agent">BMW Agent (ADB)</Option>}
                         {modalCategory === 'primary' && <Option value="vision_camera">Vision Camera</Option>}
                         {modalCategory === 'primary' && <Option value="webcam">{t('device.webcam')}</Option>}
                         <Option value="serial">{t('device.serialPort')}</Option>
@@ -2697,6 +2707,39 @@ export default function DevicePage() {
                       </>
                     )}
 
+                    {!selectedModule && connectType === 'bmw_agent' && (
+                      <>
+                        <Input
+                          placeholder="BMW ADB serial (예: d4cb7d3d)"
+                          value={connectAddress}
+                          onChange={(e) => setConnectAddress(e.target.value)}
+                          onPressEnter={handleConnect}
+                        />
+                        <Space wrap>
+                          <span style={{ fontSize: 11, color: '#888' }}>Capture:</span>
+                          <Select
+                            value={bmwCaptureBackend}
+                            onChange={(v) => setBmwCaptureBackend(v)}
+                            style={{ width: 200 }}
+                            options={[
+                              { label: 'ADB screencap (빠름)', value: 'adb' },
+                              { label: 'WebOS 컴포지터 (정확/느림)', value: 'webos' },
+                            ]}
+                          />
+                          <span style={{ fontSize: 11, color: '#888' }}>Resolution:</span>
+                          <Input
+                            placeholder="WxH (기본 1920x1080)"
+                            value={bmwResolution}
+                            onChange={(e) => setBmwResolution(e.target.value)}
+                            style={{ width: 140 }}
+                          />
+                        </Space>
+                        <div style={{ fontSize: 10, color: '#888' }}>
+                          후석 듀얼 디스플레이 (screen 0=좌측 / 1=우측). 해상도는 연결 시 자동 감지되며 위 값은 fallback.
+                        </div>
+                      </>
+                    )}
+
                     {!selectedModule && connectType === 'vision_camera' && (
                       <>
                         <Input
@@ -2802,7 +2845,7 @@ export default function DevicePage() {
                       </>
                     )}
 
-                    {!selectedModule && connectType !== 'hkmc_agent' && connectType !== 'isap_agent' && connectType !== 'vision_camera' && connectType !== 'ssh' && (
+                    {!selectedModule && connectType !== 'hkmc_agent' && connectType !== 'isap_agent' && connectType !== 'bmw_agent' && connectType !== 'vision_camera' && connectType !== 'ssh' && (
                       <>
                         <Input
                           placeholder={connectType === 'adb' ? t('device.adbPlaceholder') : t('device.comPlaceholder')}

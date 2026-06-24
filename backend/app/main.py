@@ -572,6 +572,7 @@ async def websocket_screen_mirror(websocket: WebSocket):
     is_isap = dev and dev.type == "isap_agent"
     is_icas = dev and dev.type == "icas_agent"
     is_mib = dev and dev.type == "mib_agent"
+    is_bmw = dev and dev.type == "bmw_agent"
     is_vision_camera = dev and dev.type == "vision_camera"
     is_webcam = dev and dev.type == "webcam"
     is_wincontrol = dev and dev.type == "wincontrol"
@@ -782,6 +783,34 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                 break
                             logger.warning(
                                 "MIB capture error (%s): type=%s repr=%r",
+                                screen_type, cls_name, ce,
+                            )
+                            await asyncio.sleep(0.5)
+                            continue
+                    else:
+                        await asyncio.sleep(0.3)
+                        continue
+                elif is_bmw:
+                    bmw = device_manager.get_bmw_service(target_device_id)
+                    if bmw and bmw.is_connected:
+                        # BMW: ADB/WebOS screencap (라이브 스트림 없음) — 적응형 페이싱으로
+                        # 입력 직후엔 빠르게, idle 엔 느리게 갱신해 디바이스 부하를 줄인다.
+                        try:
+                            jpeg_bytes = await bmw.async_screencap_bytes(
+                                screen_type=screen_type, fmt="jpeg"
+                            )
+                            await websocket.send_bytes(jpeg_bytes)
+                            await _adaptive_ssh_pace(bmw)
+                            continue
+                        except WebSocketDisconnect:
+                            break
+                        except Exception as ce:
+                            cls_name = type(ce).__name__
+                            if cls_name in ("ClientDisconnected", "ConnectionClosed",
+                                            "ConnectionClosedOK", "ConnectionClosedError"):
+                                break
+                            logger.warning(
+                                "BMW capture error (%s): type=%s repr=%r",
                                 screen_type, cls_name, ce,
                             )
                             await asyncio.sleep(0.5)

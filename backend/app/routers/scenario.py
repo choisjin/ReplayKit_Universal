@@ -372,6 +372,11 @@ async def capture_expected_image(req: CaptureExpectedImageRequest):
                 raise HTTPException(status_code=400, detail=f"MIB device {req.device_id} not connected")
             st = req.screen_type if req.screen_type in ("HU", "IID", "HUD") else "HU"
             png_bytes = await mib.async_screencap_bytes(screen_type=st, fmt="png")
+        elif dev and dev.type == "bmw_agent":
+            bmw = dm.get_bmw_service(req.device_id)
+            if not bmw:
+                raise HTTPException(status_code=400, detail=f"BMW device {req.device_id} not connected")
+            png_bytes = await bmw.async_screencap_bytes(screen_type=req.screen_type, fmt="png")
         elif dev and dev.type == "vision_camera":
             cam = dm.get_vision_camera(req.device_id)
             if not cam or not cam.IsConnected():
@@ -687,6 +692,14 @@ async def record_image_tap(req: ImageTapRequest):
                 StepType.ICAS_LONG_PRESS if long_press else StepType.ICAS_TOUCH,
                 {"x": tap_x, "y": center_y, "duration_ms": duration_ms,
                  "screen_type": req.screen_type or "HU"},
+                req.device_id,
+            )
+        elif dev_type == "bmw_agent":
+            # BMW는 generic TAP/LONG_PRESS를 쓰되 선택된 디스플레이(screen_type)를 전달.
+            await recording_svc._execute_step_action(
+                StepType.LONG_PRESS if long_press else StepType.TAP,
+                {"x": center_x, "y": center_y, "duration_ms": duration_ms,
+                 "screen_type": req.screen_type or "0"},
                 req.device_id,
             )
         elif dev_type == "wincontrol":
