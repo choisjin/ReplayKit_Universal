@@ -109,6 +109,12 @@ class BMWAgentService:
         # auto 모드: screen_id → 직전에 "내용 있는 프레임"을 준 백엔드. 평상시 1회 캡처로
         # 끝내고, 화면 전환(WebOS↔Android Setting) 순간에만 반대쪽을 추가 시도하기 위함.
         self._auto_backend: dict[int, str] = {}
+        # dumpsys 포그라운드 판별 캐시 (TTL 내 재사용). topResumedActivity 가
+        # webosprojectionhmi(=WebOS 프로젝션) 인지 settingshmi 등 네이티브인지로 백엔드 결정.
+        self._fg_cache: Optional[Tuple[float, set]] = None
+        self._fg_ttl = 1.5
+        # 디바이스 Android 컨테이너 이름 (lxc-attach 대상). 환경변수로 override 가능.
+        self._android_container = os.environ.get("BMW_ANDROID_CONTAINER", "android1")
         # 입력(터치) 시각 — 라이브 미러 적응형 리프레시용 (main.py _adaptive_*_pace 호환)
         self.last_input_ts = 0.0
         # screen_id → (width, height). connect 시 채워지며 실패 시 기본 해상도.
@@ -318,6 +324,43 @@ class BMWAgentService:
             logger.debug("BMW %s capture failed (screen %s): %s", backend, screen_id, e)
             return None
 
+    def _dumpsys_foreground(self) -> dict:
+        """android1 컨테이너 dumpsys 로 Display 별 활성 백엔드 매핑 반환.
+
+        반환: {display_id: "webos"|"adb"} (Display #N ↔ screen_id N).
+          - topResumedActivity 에 webosprojectionhmi 포함 → "webos"(WebOS 프로젝션)
+          - 그 외 패키지(settingshmi 등 네이티브 Android) → "adb"
+        TTL(1.5s) 캐시. dumpsys 실패/파싱불가 시 빈 dict(=unknown → 픽셀 휴리스틱 폴백).
+
+        dumpsys 출력 형식:
+          Display #0 (activities from top to bottom):
+                topResumedActivity=ActivityRecord{... com.lge.app.car.settingshmi/... }
+          Display #1 (...):
+                topResumedActivity=ActivityRecord{... com.lge.app.car.webosprojectionhmi/... }
+        """
+        now = time.monotonic()
+        if self._fg_cache and (now - self._fg_cache[0]) < self._fg_ttl:
+            return self._fg_cache[1]
+        mapping: dict = {}
+        try:
+            cmd = (f"lxc-attach -n {self._android_container} -- "
+                   f"dumpsys activity activities | grep -iE 'Display #|topResumedActivity'")
+            r = self._adb_shell(cmd, timeout=8)
+            cur_display: Optional[int] = None
+            for line in (r.stdout or "").splitlines():
+                dm = re.search(r"Display\s+#(\d+)", line)
+                if dm:
+                    cur_display = int(dm.group(1))
+                    continue
+                if "topResumedActivity" in line and cur_display is not None:
+                    be = "webos" if "webosprojectionhmi" in line else "adb"
+                    mapping[cur_display] = be
+                    cur_display = None
+        except Exception as e:
+            logger.debug("BMW dumpsys foreground probe failed: %s", e)
+        self._fg_cache = (now, mapping)
+        return mapping
+
     def _capture(self, screen_id: int, backend: Optional[str] = None) -> bytes:
         be = (backend or self.capture_backend or "auto").lower()
 
@@ -332,26 +375,38 @@ class BMWAgentService:
                 return data
             raise RuntimeError(f"BMW capture failed (screen {screen_id}, backend {be})")
 
-        # ── auto: 캐시된 백엔드 우선 → 내용 있으면 채택, 없으면 반대쪽 시도 ──
-        cached = self._auto_backend.get(screen_id)
-        order = [cached] if cached in ("webos", "adb") else []
-        for b in ("webos", "adb"):   # 기본 우선순위: WebOS(대부분 화면) → ADB(Setting)
-            if b not in order:
-                order.append(b)
-        last_data: Optional[bytes] = None
+        # ── auto: dumpsys per-display 힌트로 시도 순서 결정 + 픽셀 내용검사로 확정 ──
+        # Display #N ↔ screen_id N. 힌트가 있으면 그 백엔드를 1순위로(권위), 없으면
+        # 캐시→WebOS→ADB 순. 어느 쪽도 '내용'이 없으면(둘 다 검정) 힌트 백엔드 프레임을
+        # 반환(어두운 WebOS 화면 보존). 힌트가 틀려도 내용검사가 반대쪽으로 자가보정.
+        fg = self._dumpsys_foreground()
+        hint = fg.get(screen_id)
+        if hint in ("webos", "adb"):
+            order = [hint, "adb" if hint == "webos" else "webos"]
+        else:
+            cached = self._auto_backend.get(screen_id)
+            order = [cached] if cached in ("webos", "adb") else []
+            for b in ("webos", "adb"):
+                if b not in order:
+                    order.append(b)
+
+        captured: dict = {}
         for b in order:
             data = self._capture_one(b, screen_id)
             if data is None:
                 continue
-            last_data = data
+            captured[b] = data
             if self._has_content(data):
                 if self._auto_backend.get(screen_id) != b:
-                    logger.info("BMW auto: screen %s → %s backend", screen_id, b)
+                    logger.info("BMW auto: screen %s → %s (hint=%s)", screen_id, b, hint)
                 self._auto_backend[screen_id] = b
                 return data
-        # 모두 내용 없음/실패 → 마지막으로 얻은 (디코딩 여부 무관) 프레임이라도 반환
-        if last_data is not None:
-            return last_data
+        # 모두 내용 없음 → 권위(dumpsys 힌트) 백엔드 우선, 없으면 얻은 것 아무거나
+        if hint in captured:
+            return captured[hint]
+        for b in order:
+            if b in captured:
+                return captured[b]
         raise RuntimeError(f"BMW auto capture failed (screen {screen_id})")
 
     # ------------------------------------------------------------------
