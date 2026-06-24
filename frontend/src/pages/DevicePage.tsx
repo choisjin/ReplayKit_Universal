@@ -321,7 +321,7 @@ export default function DevicePage() {
   const [forceIpLoading, setForceIpLoading] = useState(false);
   const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'bmw_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
   // BMW RSE Agent 전용 — 캡처 백엔드(adb screencap vs WebOS 컴포지터) + 해상도 fallback
-  const [bmwCaptureBackend, setBmwCaptureBackend] = useState<'adb' | 'webos'>('adb');
+  const [bmwCaptureBackend, setBmwCaptureBackend] = useState<'auto' | 'adb' | 'webos'>('auto');
   const [bmwResolution, setBmwResolution] = useState<string>('1920x1080');
   // MIB Agent 전용 — 등록 시 입력하는 해상도 ("WxH")
   const MIB_RESOLUTION_PRESETS: { label: string; value: string }[] = [
@@ -2720,8 +2720,9 @@ export default function DevicePage() {
                           <Select
                             value={bmwCaptureBackend}
                             onChange={(v) => setBmwCaptureBackend(v)}
-                            style={{ width: 200 }}
+                            style={{ width: 240 }}
                             options={[
+                              { label: '자동 (WebOS+ADB 전환 감지)', value: 'auto' },
                               { label: 'ADB screencap (빠름)', value: 'adb' },
                               { label: 'WebOS 컴포지터 (정확/느림)', value: 'webos' },
                             ]}
@@ -2735,7 +2736,7 @@ export default function DevicePage() {
                           />
                         </Space>
                         <div style={{ fontSize: 10, color: '#888' }}>
-                          후석 듀얼 디스플레이 (screen 0=좌측 / 1=우측). 해상도는 연결 시 자동 감지되며 위 값은 fallback.
+                          후석 듀얼 디스플레이 (screen 0=좌측 / 1=우측). 자동 모드는 Setting(ADB)·그 외(WebOS) 화면을 프레임마다 감지해 전환합니다. 해상도는 연결 시 자동 감지되며 위 값은 fallback.
                         </div>
                       </>
                     )}

@@ -99,13 +99,16 @@ class BMWAgentService:
         self.host = host
         self.port = int(port or 5037)
         self.device_id = device_id or f"BMW_{serial}"
-        self.capture_backend = (capture_backend or "adb").strip().lower()
-        if self.capture_backend not in ("adb", "webos"):
-            self.capture_backend = "adb"
+        self.capture_backend = (capture_backend or "auto").strip().lower()
+        if self.capture_backend not in ("adb", "webos", "auto"):
+            self.capture_backend = "auto"
         self.scripts_dir = scripts_dir
         self.agent_version = "BMWRSE Agent"
         self._connected = False
         self.last_error = ""
+        # auto 모드: screen_id → 직전에 "내용 있는 프레임"을 준 백엔드. 평상시 1회 캡처로
+        # 끝내고, 화면 전환(WebOS↔Android Setting) 순간에만 반대쪽을 추가 시도하기 위함.
+        self._auto_backend: dict[int, str] = {}
         # 입력(터치) 시각 — 라이브 미러 적응형 리프레시용 (main.py _adaptive_*_pace 호환)
         self.last_input_ts = 0.0
         # screen_id → (width, height). connect 시 채워지며 실패 시 기본 해상도.
@@ -283,16 +286,73 @@ class BMWAgentService:
             except OSError:
                 pass
 
-    def _capture(self, screen_id: int, backend: Optional[str] = None) -> bytes:
-        be = (backend or self.capture_backend or "adb").lower()
-        if be == "webos":
-            try:
+    @staticmethod
+    def _has_content(data: Optional[bytes]) -> bool:
+        """이미지가 디코딩 가능하고 '거의 검정'이 아니면 True (=현재 떠 있는 화면).
+
+        WebOS 화면일 때 ADB screencap 은 무효/검정, Android Setting 화면일 때 WebOS 캡처는
+        검정 → 이 판정으로 활성 백엔드를 가린다. 디코딩 실패(무효 PNG)도 '내용 없음'으로 본다.
+        """
+        if not data:
+            return False
+        try:
+            from PIL import Image
+            im = Image.open(io.BytesIO(data))
+            im.load()
+            g = im.convert("L")
+            g.thumbnail((64, 64))
+            px = list(g.getdata())
+            if not px:
+                return False
+            dark = sum(1 for p in px if p <= 12)
+            return dark < len(px) * 0.99   # 99% 이상이 검정이면 '내용 없음'
+        except Exception:
+            return False
+
+    def _capture_one(self, backend: str, screen_id: int) -> Optional[bytes]:
+        try:
+            if backend == "webos":
                 return self._screencap_webos(screen_id)
-            except Exception as e:
-                logger.warning("BMW WebOS capture failed (screen %s), falling back to adb: %s",
-                               screen_id, e)
-                return self._screencap_adb(screen_id)
-        return self._screencap_adb(screen_id)
+            return self._screencap_adb(screen_id)
+        except Exception as e:
+            logger.debug("BMW %s capture failed (screen %s): %s", backend, screen_id, e)
+            return None
+
+    def _capture(self, screen_id: int, backend: Optional[str] = None) -> bytes:
+        be = (backend or self.capture_backend or "auto").lower()
+
+        if be in ("webos", "adb"):
+            data = self._capture_one(be, screen_id)
+            if data is not None:
+                return data
+            # 단일 백엔드 실패 시 반대쪽 1회 폴백
+            other = "adb" if be == "webos" else "webos"
+            data = self._capture_one(other, screen_id)
+            if data is not None:
+                return data
+            raise RuntimeError(f"BMW capture failed (screen {screen_id}, backend {be})")
+
+        # ── auto: 캐시된 백엔드 우선 → 내용 있으면 채택, 없으면 반대쪽 시도 ──
+        cached = self._auto_backend.get(screen_id)
+        order = [cached] if cached in ("webos", "adb") else []
+        for b in ("webos", "adb"):   # 기본 우선순위: WebOS(대부분 화면) → ADB(Setting)
+            if b not in order:
+                order.append(b)
+        last_data: Optional[bytes] = None
+        for b in order:
+            data = self._capture_one(b, screen_id)
+            if data is None:
+                continue
+            last_data = data
+            if self._has_content(data):
+                if self._auto_backend.get(screen_id) != b:
+                    logger.info("BMW auto: screen %s → %s backend", screen_id, b)
+                self._auto_backend[screen_id] = b
+                return data
+        # 모두 내용 없음/실패 → 마지막으로 얻은 (디코딩 여부 무관) 프레임이라도 반환
+        if last_data is not None:
+            return last_data
+        raise RuntimeError(f"BMW auto capture failed (screen {screen_id})")
 
     # ------------------------------------------------------------------
     # 입력 (touch simulator 스크립트 경유)

@@ -1389,7 +1389,7 @@ class DeviceManager:
     async def add_bmw_agent_device(self, serial: str, device_id: str = "",
                                    name: str = "", device_model: str = "",
                                    resolution: str = "1920x1080",
-                                   capture_backend: str = "adb",
+                                   capture_backend: str = "auto",
                                    host: str = "127.0.0.1",
                                    port: int = 5037) -> ManagedDevice:
         """BMW RSE Agent 디바이스 등록만 (연결은 connect_device_by_id로 별도 수행).
@@ -1410,7 +1410,7 @@ class DeviceManager:
             "serial": serial,
             "adb_host": host,
             "adb_port": int(port),
-            "capture_backend": (capture_backend or "adb").strip().lower(),
+            "capture_backend": (capture_backend or "auto").strip().lower(),
             "resolution": res_dict,
             "resolution_str": str(resolution),
         }
@@ -3174,7 +3174,7 @@ class DeviceManager:
                     port=int(dev.info.get("adb_port", 5037) or 5037),
                     device_id=dev.id,
                     resolution=res_str,
-                    capture_backend=dev.info.get("capture_backend", "adb") or "adb",
+                    capture_backend=dev.info.get("capture_backend", "auto") or "auto",
                     scripts_dir=dev.info.get("scripts_dir"),
                 )
                 ok = await svc.async_connect()

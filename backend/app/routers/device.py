@@ -808,7 +808,7 @@ async def connect_device(req: ConnectRequest):
                 name=req.name or "",
                 device_model=req.device_model or "",
                 resolution=ef.get("resolution", "1920x1080") or "1920x1080",
-                capture_backend=str(ef.get("capture_backend", "adb") or "adb"),
+                capture_backend=str(ef.get("capture_backend", "auto") or "auto"),
             )
             try:
                 connect_msg = await dm.connect_device_by_id(dev.id)
