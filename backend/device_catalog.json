@@ -180,6 +180,17 @@
           "agent": "ICAS Agent"
         }
       ]
+    },
+    {
+      "name": "BMWRSE",
+      "enabled": true,
+      "models": [
+        {
+          "value": "BMWRSE27",
+          "enabled": true,
+          "agent": "BMWRSE_Agent"
+        }
+      ]
     }
   ],
   "module_visibility": {
@@ -247,6 +258,11 @@
     {
       "name": "MIB Agent",
       "type": "mib_agent",
+      "enabled": true
+    },
+    {
+      "name": "BMWRSE_Agent",
+      "type": "bmw_agent",
       "enabled": true
     }
   ]

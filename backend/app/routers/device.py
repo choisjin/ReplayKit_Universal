@@ -149,6 +149,13 @@ _DEFAULT_DEVICE_CATALOG: dict = {
                 {"value": "SSH",     "enabled": True},
             ],
         },
+        {
+            "name": "BMWRSE",
+            "enabled": True,
+            "models": [
+                {"value": "BMWRSE27", "enabled": True, "agent": "BMWRSE_Agent"},
+            ],
+        },
     ],
     # 모듈 표시 여부 (false = 아직 미구현/숨김). 리스트에 없으면 기본 표시.
     "module_visibility": {},
@@ -161,6 +168,7 @@ _DEFAULT_DEVICE_CATALOG: dict = {
         {"name": "iSAP Agent",   "type": "isap_agent",    "enabled": True},
         {"name": "ICAS Agent",   "type": "icas_agent",    "enabled": True},
         {"name": "MIB Agent",    "type": "mib_agent",     "enabled": True},
+        {"name": "BMWRSE_Agent", "type": "bmw_agent",     "enabled": True},
         {"name": "VisionCamera", "type": "vision_camera", "enabled": True},
         {"name": "Webcam",       "type": "webcam",        "enabled": True},
     ],
