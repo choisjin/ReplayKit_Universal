@@ -1,5 +1,7 @@
 """Test results API routes."""
 
+import base64
+import gzip
 import html as _html
 import io
 import json
@@ -404,15 +406,41 @@ _HTML_SCRIPT = r"""
     if (el) el.style.display = 'none';
   }
 
+  /* ---------- 압축 데이터 해제 ---------- */
+  function decodeBase64ToBytes(b64){
+    var bin = atob(b64 || '');
+    var len = bin.length;
+    var bytes = new Uint8Array(len);
+    for (var i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+  function loadReportData(){
+    // gzip+base64로 임베드된 데이터를 브라우저에서 해제 → JSON 파싱.
+    if (typeof DecompressionStream === 'undefined') {
+      return Promise.reject(new Error('DecompressionStream 미지원 브라우저'));
+    }
+    var bytes = decodeBase64ToBytes(window.__RD__);
+    var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return new Response(stream).text().then(function(txt){ return JSON.parse(txt); });
+  }
+
   /* ---------- 초기화 ---------- */
   function init(){
-    var data = (window.__REPORT_DATA__ && window.__REPORT_DATA__.rows) || [];
-    document.getElementById('filter-total').textContent = data.length;
-
-    // 데이터가 많으면 빌드에 시간이 걸리므로 로딩 표시를 먼저 그리고,
-    // 한 틱 뒤 테이블을 빌드(브라우저가 로딩 오버레이를 먼저 페인트하도록).
-    showLoading(data.length);
-    setTimeout(function(){ buildTable(data); }, 0);
+    showLoading(0);  // 해제 전부터 로딩 표시
+    loadReportData().then(function(payload){
+      window.__REPORT_DATA__ = payload;
+      var data = (payload && payload.rows) || [];
+      document.getElementById('filter-total').textContent = data.length;
+      // 한 틱 뒤 테이블 빌드(로딩 오버레이를 먼저 페인트하도록)
+      showLoading(data.length);
+      setTimeout(function(){ buildTable(data); }, 0);
+    }).catch(function(err){
+      hideLoading();
+      var el = document.getElementById('results-table');
+      if (el) el.innerHTML = '<div style="padding:48px;text-align:center;color:#b91c1c;font-size:14px">'
+        + '리포트 데이터를 여는 데 실패했습니다. 최신 Chrome/Edge/Firefox에서 열어 주세요.'
+        + '<div style="color:#888;font-size:12px;margin-top:8px">(' + (err && err.message ? err.message : err) + ')</div></div>';
+    });
   }
 
   function buildTable(data){
@@ -479,7 +507,8 @@ _HTML_SCRIPT = r"""
 def _build_html_report(data: dict, output_path: Path) -> str:
     """Tabulator 기반 경량 HTML 리포트.
 
-    데이터는 window.__REPORT_DATA__에 JSON으로 임베드되고,
+    데이터는 gzip+base64로 압축해 window.__RD__에 임베드되고, 브라우저에서
+    DecompressionStream으로 해제 후 window.__REPORT_DATA__로 사용한다.
     Tabulator가 열별 필터/정렬/검색/이미지 썸네일을 모두 렌더링한다.
     라이브러리 파일은 /static/tabulator/ 에서 서빙 (별도 복사 불필요).
     export-bundle ZIP에만 assets/로 포함된다.
@@ -541,8 +570,11 @@ def _build_html_report(data: dict, output_path: Path) -> str:
         "total_repeat": total_repeat,
         "rows": rows_json,
     }
-    # </script> 이스케이프 — 임베드 JSON 안에 script 종료 태그가 포함되면 파싱이 깨진다
-    payload_json = json.dumps(report_payload, ensure_ascii=False).replace("</", "<\\/")
+    # 데이터는 gzip→base64로 압축 임베드 → 대용량 리포트의 파일 크기를 10~20배 줄인다.
+    # (JSON은 반복이 많아 압축률이 높음.) base64 알파벳엔 < " \ 가 없어
+    # <script> 안 JS 문자열에 그대로 안전(별도 이스케이프 불필요).
+    _raw = json.dumps(report_payload, ensure_ascii=False).encode("utf-8")
+    payload_b64 = base64.b64encode(gzip.compress(_raw, compresslevel=9)).decode("ascii")
 
     parts: list[str] = []
     parts.append("<!DOCTYPE html>")
@@ -591,8 +623,8 @@ def _build_html_report(data: dict, output_path: Path) -> str:
     # 이미지 프리뷰 오버레이
     parts.append('<div id="preview-overlay" class="preview-overlay"><img id="preview-img" src="" alt=""></div>')
 
-    # 데이터 임베드 + 라이브러리 로드 + 초기화
-    parts.append(f'<script>window.__REPORT_DATA__ = {payload_json};</script>')
+    # 데이터 임베드(gzip+base64) + 라이브러리 로드 + 초기화
+    parts.append(f'<script>window.__RD__="{payload_b64}";</script>')
     parts.append('<script>document.write(\'<script src="\'+_tBase+\'tabulator.min.js"><\\/script>\');</script>')
     parts.append(f"<script>{_HTML_SCRIPT}</script>")
     parts.append("</body></html>")
