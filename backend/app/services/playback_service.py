@@ -3179,6 +3179,15 @@ class PlaybackService:
             png_bytes = await svc.async_screencap_bytes(
                 screen_type=screen_type or "HU", fmt="png",
             )
+        elif dev.type == "bmw_agent":
+            svc = self.dm.get_bmw_service(real_id)
+            if not svc:
+                raise RuntimeError(f"image_tap: BMW device {real_id} not connected")
+            # BMW 캡처는 android1 lxc 컨테이너 내부 screencap(또는 WebOS) 경유 —
+            # 호스트 adb exec-out screencap 으로 폴백하면 binary 채널이 깨진다.
+            png_bytes = await svc.async_screencap_bytes(
+                screen_type=screen_type, fmt="png",
+            )
         elif dev.type == "wincontrol":
             wc = self.dm.get_wincontrol_service()
             if not wc.is_attached():
@@ -3257,6 +3266,14 @@ class PlaybackService:
                 await svc.async_long_press(tap_x, center_y, duration_ms, screen_type or "HU")
             else:
                 await svc.async_tap(tap_x, center_y, screen_type or "HU")
+        elif dev.type == "bmw_agent":
+            svc = self.dm.get_bmw_service(real_id)
+            if not svc:
+                raise RuntimeError(f"image_tap: agent {real_id} not connected")
+            if long_press:
+                await svc.async_long_press(tap_x, center_y, duration_ms, screen_type)
+            else:
+                await svc.async_tap(tap_x, center_y, screen_type)
         elif dev.type == "wincontrol":
             wc = self.dm.get_wincontrol_service()
             import asyncio as _asyncio, functools as _ft
