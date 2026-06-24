@@ -105,6 +105,7 @@ class BMWAgentService:
         self.scripts_dir = scripts_dir
         self.agent_version = "BMWRSE Agent"
         self._connected = False
+        self.last_error = ""
         # 입력(터치) 시각 — 라이브 미러 적응형 리프레시용 (main.py _adaptive_*_pace 호환)
         self.last_input_ts = 0.0
         # screen_id → (width, height). connect 시 채워지며 실패 시 기본 해상도.
@@ -373,29 +374,71 @@ class BMWAgentService:
     # ------------------------------------------------------------------
     # Connect / info
     # ------------------------------------------------------------------
-    def _connect_sync(self) -> bool:
-        # serial 이 adb devices 에 보이는지 확인
+    def _list_adb_devices(self) -> list[tuple[str, str]]:
+        """`adb devices` 파싱 → [(serial, state), ...]. -s 없이 서버 전체 조회."""
         try:
-            r = self._adb(["get-state"], timeout=10)
-            state = (r.stdout or "").strip()
+            cmd = [resolve_adb_path(), "devices"]
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", creationflags=_NO_WINDOW, timeout=10)
         except Exception as e:
-            logger.warning("BMW connect: adb get-state failed for %s: %s", self.serial, e)
-            return False
+            logger.warning("BMW connect: `adb devices` failed: %s", e)
+            return []
+        out = []
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if not line or line.lower().startswith("list of devices"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                out.append((parts[0], parts[1]))
+        return out
+
+    def _connect_sync(self) -> bool:
+        self.last_error = ""
+        # 네트워크 ADB(serial 이 ip:port) 면 먼저 connect 시도
+        if ":" in self.serial:
+            try:
+                cr = self._adb(["connect", self.serial], timeout=10)
+                logger.info("BMW connect: adb connect %s → %s", self.serial,
+                            (cr.stdout or "").strip())
+            except Exception as e:
+                logger.debug("BMW connect: adb connect %s failed: %s", self.serial, e)
+
+        # adb 서버에서 serial 의 상태 확인 (get-state 단독보다 견고하게 devices 목록 파싱)
+        devices = self._list_adb_devices()
+        state = next((st for sn, st in devices if sn == self.serial), None)
+        if state is None:
+            # get-state 폴백 (일부 환경에서 devices 파싱이 비는 경우)
+            try:
+                r = self._adb(["get-state"], timeout=10)
+                state = (r.stdout or "").strip() or None
+            except Exception as e:
+                state = None
+                logger.debug("BMW connect: get-state fallback failed: %s", e)
         if state != "device":
-            logger.warning("BMW connect: device %s not ready (state=%s)", self.serial, state)
+            known = ", ".join(f"{sn}({st})" for sn, st in devices) or "(none)"
+            self.last_error = (
+                f"serial '{self.serial}' not in 'device' state (state={state}). "
+                f"adb devices: {known}"
+            )
+            logger.warning("BMW connect failed: %s", self.last_error)
             return False
+
+        logger.info("BMW connect: %s state=device — probing displays", self.serial)
         self._adb_root()
         # 터치 스크립트 best-effort 업로드
         try:
             self._upload_touch_scripts()
         except Exception as e:
             logger.debug("BMW touch script upload skipped: %s", e)
-        # 해상도 조회 (실패해도 연결은 유지)
+        # 해상도 조회 (실패해도 연결은 유지 — displays 는 get_info 가 항상 2개 반환)
         for sid in (0, 1):
             try:
                 self._screen_sizes[sid] = self._get_screen_size(sid)
-            except Exception:
+            except Exception as e:
+                logger.debug("BMW connect: screen %s size probe failed: %s", sid, e)
                 self._screen_sizes[sid] = self._default_res
+        logger.info("BMW connect OK: %s screen_sizes=%s", self.serial, self._screen_sizes)
         return True
 
     async def async_connect(self) -> bool:

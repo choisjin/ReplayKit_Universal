@@ -3190,7 +3190,8 @@ class DeviceManager:
                     return f"BMW connected: {dev.id} ({serial})"
                 else:
                     dev.status = "disconnected"
-                    return f"BMW connect failed: {dev.id}"
+                    reason = getattr(svc, "last_error", "") or "device not connected"
+                    return f"BMW connect failed: {dev.id} — {reason}"
             except Exception as e:
                 dev.status = "disconnected"
                 return f"BMW connect failed: {dev.id} — {e}"
