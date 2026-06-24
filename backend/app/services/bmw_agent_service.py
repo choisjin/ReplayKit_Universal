@@ -515,6 +515,22 @@ class BMWAgentService:
         return mapping
 
     def _capture(self, screen_id: int, backend: Optional[str] = None) -> bytes:
+        """캡처 진입점. off→on(재부팅)으로 root/SELinux 가 풀린 stale 상태면 1차 캡처가
+        실패(screencap rc!=0 / lxc-attach 권한거부)하므로, 캐시 무효화 후 root/setenforce 0
+        재획득 + display-id 재조회로 1회 재시도한다(입력 경로 `_run_input` 과 동일 전략).
+        """
+        try:
+            return self._capture_attempt(screen_id, backend)
+        except Exception as e:
+            logger.info("BMW capture 실패 → root/setenforce 재획득 후 재시도 (screen %s): %s",
+                        screen_id, e)
+            self._rooted = False
+            self._ensure_root()
+            # 재부팅 후 SurfaceFlinger display-id 가 바뀔 수 있어 매핑도 무효화 후 재조회
+            self._display_id_map.clear()
+            return self._capture_attempt(screen_id, backend)
+
+    def _capture_attempt(self, screen_id: int, backend: Optional[str] = None) -> bytes:
         be = (backend or self.capture_backend or "auto").lower()
 
         if be in ("webos", "adb"):
@@ -577,26 +593,52 @@ class BMWAgentService:
                 f"touch_simulator_update_webos_event{screen_id}.py")
 
     def _run_input(self, sub_args: str, screen_id: int, success_marker: str) -> str:
-        """webos/infotainment/android1/host 컨테이너 순으로 입력 스크립트 실행."""
+        """webos/infotainment/android1/host 컨테이너 순으로 입력 스크립트 실행.
+
+        장치 off→on(재부팅) 후에는 adbd 가 비-root 로 재기동되고 SELinux 가 다시
+        enforcing 으로 돌아가 device-side 스크립트가 /dev/input 을 못 열어
+        'Direct event setup error' 로 실패한다. 이때는 연결당 1회 캐시한 root 플래그
+        (self._rooted)가 stale 이므로, 캐시를 무효화하고 root/setenforce 0 를 재획득해
+        1회 재시도한다."""
         script = self._input_script(screen_id)
         containers: List[Optional[str]] = [
             f"webos{int(screen_id) + 1}", "infotainment", "android1", None,
         ]
-        last_err = ""
-        for container in containers:
-            if container:
-                cmd = f"lxc-attach -n {container} -- python3 {script} {sub_args}"
-            else:
-                cmd = f"python3 {script} {sub_args}"
-            try:
-                r = self._adb_shell(cmd, timeout=15)
-                out = (r.stdout or "").strip()
-                if out and success_marker in out:
-                    self.last_input_ts = time.monotonic()
-                    return out
-                last_err = out or (r.stderr or "").strip()
-            except Exception as e:
-                last_err = str(e)
+
+        def _attempt() -> Tuple[Optional[str], str]:
+            err = ""
+            for container in containers:
+                if container:
+                    cmd = f"lxc-attach -n {container} -- python3 {script} {sub_args}"
+                else:
+                    cmd = f"python3 {script} {sub_args}"
+                try:
+                    r = self._adb_shell(cmd, timeout=15)
+                    out = (r.stdout or "").strip()
+                    if out and success_marker in out:
+                        return out, ""
+                    err = out or (r.stderr or "").strip()
+                except Exception as e:
+                    err = str(e)
+            return None, err
+
+        # 1차: 캐시된 root 상태로 시도
+        self._ensure_root()
+        out, last_err = _attempt()
+        if out is not None:
+            self.last_input_ts = time.monotonic()
+            return out
+
+        # 2차: off→on(재부팅)으로 root/SELinux 가 풀린 stale 상태 → 재획득 후 재시도
+        logger.info("BMW input 실패 → root/setenforce 재획득 후 재시도 "
+                    "(screen %s, args=%s): %s", screen_id, sub_args, last_err[:160])
+        self._rooted = False
+        self._ensure_root()
+        out, last_err = _attempt()
+        if out is not None:
+            self.last_input_ts = time.monotonic()
+            return out
+
         raise RuntimeError(
             f"BMW input 실패 (screen {screen_id}, args={sub_args!r}): {last_err[:200]}")
 
