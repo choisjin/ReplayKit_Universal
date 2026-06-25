@@ -1160,9 +1160,14 @@ def _create_and_register(module_name: str, key: str, constructor_kwargs: Optiona
                     if callable(connect_fn):
                         try:
                             sig = inspect.signature(connect_fn)
-                            # Only call if it takes no args (besides self)
-                            non_self = [p for p in sig.parameters if p != "self"]
-                            if len(non_self) == 0:
+                            # Only auto-call if every non-self param is optional (has a default).
+                            # 예: WoohyunBench.Connect(self, rx_callback=None) — 선택 인자만 있으므로 자동 연결.
+                            required = [
+                                p for n, p in sig.parameters.items()
+                                if n != "self" and p.default is inspect.Parameter.empty
+                                and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+                            ]
+                            if len(required) == 0:
                                 result = connect_fn()
                                 logger.info("Auto-called %s.%s() → %s", module_name, method_name, result)
                                 if isinstance(result, str) and result.upper() in ("ERROR", "FAIL", "FAILED"):

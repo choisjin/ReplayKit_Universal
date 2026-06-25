@@ -1316,16 +1316,8 @@
         "description": "Measures the current power consumption. Returns: current (A), -1.0 on failure",
         "params": {}
       },
-      "SendCommand": {
-        "description": "Sends a raw UDP command to the bench. For advanced users; using the individual functions above is recommended.",
-        "params": {
-          "cmd1": "Command code 1 (integer, e.g. 0x24 = 36)",
-          "cmd2": "Command code 2 (integer, e.g. 0x21 = 33)",
-          "data_hex": "Additional data (space-separated hex string). e.g. 'FF 01'. Default: empty string"
-        }
-      },
       "GetInfo": {
-        "description": "Returns the bench's current connection information (IP, port, signal_file, loaded signal count, connection state).",
+        "description": "Returns the bench's current connection information (connected MCUs, signal_file, connection state).",
         "params": {}
       },
       "LoadSignals": {
@@ -1349,39 +1341,31 @@
         "description": "Sends every loaded CAN FD signal with its midpoint value. Useful for load/sanity testing.",
         "params": {}
       },
-      "CheckSignals": {
-        "description": "Dumps the loaded CAN FD signal definitions to the log.",
+      "SendTimeSync": {
+        "description": "Broadcasts a time-sync packet over UDP to all bench equipment. Automatically called on Connect, so manual invocation is usually unnecessary.",
         "params": {}
       },
-      "SendCanFd": {
-        "description": "Sends a raw CAN FD frame directly (no signal definition needed). Repeats 5 times at 200 ms.",
+      "SendCan": {
+        "description": "Sends a raw CAN frame. Transmits a standard/extended/FD frame to the given device (mcu) and channel, either once or periodically.",
         "params": {
-          "can_id": "CAN ID (integer or hex string, e.g. '0x448')",
-          "payload_hex": "Payload (spaces/commas/brackets allowed, e.g. '01,02,03' or '01 02 03')",
-          "can_type": "Frame type: 'STA' (standard, default) / 'EXT' (extended frame, AVN) / 'FD' (CAN FD, Cluster)"
+          "mcu": "Target MCU (default: 'mcu1' / e.g. 'mcu1', 'mcu2', 'mcu3')",
+          "msg_id": "CAN ID. Integer or hex string (parsed as hex regardless of '0x' prefix. e.g. '0x33E', '47A')",
+          "type": "Frame type (default: 'STA' / 'STA'=standard, 'EXT'=extended, 'FD'=CAN FD)",
+          "payload_hex": "Payload hex bytes (spaces/commas allowed, no brackets. e.g. '00,00,00,00,00,C0,00,00' or 'FF 01 02')",
+          "channel": "Transmit channel (default: 'A' / e.g. 'A', 'B', 'C', 'D')",
+          "repeat": "Send mode (default: 0 / 0=single shot, 1=periodic)",
+          "cycle_ms": "Send interval in ms when repeat=1 (default: 200)"
         }
       },
-      "SendAvnCan": {
-        "description": "Sends a raw CAN frame on the AVN channel (0x03 header). The destination is always fixed to AVN while the frame type is chosen via the type argument (both standard 0x33E and extended 1004001 are sent on the AVN channel). Repeats 5 times at 200 ms.",
+      "CanSaveStart": {
+        "description": "Starts unified real-time logging of Rx/Tx CAN data from every connected MCU/channel into a single CSV file.",
         "params": {
-          "msg_id": "CAN ID (integer or hex string, e.g. '0x33E', '0x414', '1004001')",
-          "type": "Frame type: 'STA' (standard frame) / 'EXT' (extended frame) / 'FD' (CAN FD)",
-          "payload_hex": "Payload hex bytes (spaces/commas/brackets allowed, e.g. '00,00,00,00,00,00,00,00')"
+          "save_dir": "CSV save folder path. Defaults to ./canlog when empty (filename CAN_LOG_<timestamp>.csv is auto-generated)"
         }
       },
-      "SendClusterCan": {
-        "description": "Sends a raw CAN FD frame on the Cluster channel. Identical to send_can.py TARGET=CLUSTER (CANTYPE.FD, frame_byte = 0x80 | DLC). Repeats 5 times at 200 ms.",
-        "params": {
-          "msg_id": "CAN ID (integer or hex string, e.g. '0x65')",
-          "payload_hex": "Payload hex bytes (spaces/commas/brackets allowed, e.g. '00,00,00,00,00,00,00,00')"
-        }
-      },
-      "ReinitCanFd": {
-        "description": "Re-initialises the CAN FD bus (when baudrate / data bit time needs to change). Defaults 500k/2M.",
-        "params": {
-          "baudrate": "Arbitration phase baudrate (2-byte integer, default 0x1F4)",
-          "databit_time": "Data phase bit time (2-byte integer, default 0x7D0)"
-        }
+      "CanSaveStop": {
+        "description": "Stops unified CAN logging and closes the CSV file.",
+        "params": {}
       }
     }
   },

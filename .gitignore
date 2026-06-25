@@ -10,6 +10,9 @@ __pycache__/
 logs/
 .launcher.log
 
+# 우현벤치 채널 설정 (런타임 자동 생성 — 배포 환경별 로컬 파일)
+backend/app/plugins/woohyunchannelconfig.txt
+
 # 빌드 산출물
 build/
 dist/

@@ -1,42 +1,59 @@
-# -*- coding: utf-8 -*-
-"""CCIC 우현벤치 UDP control plugin — 전원(IGN/ACC/BATTERY) + CAN FD 송신 통합.
 
-UDP 패킷 형식: [0x55, 0xAA, sender(100), seq(0), cmd1, cmd2, len_hi, len_lo, ...data]
-Reference: WoohyunBench_LIBRARY.py, CCIC_DEFINITION_LIBRARY.py (legacy)
+### 📌 [시스템 아키텍처 및 핵심 구조]
+'''
+1. **Multi-MCU & Multi-Channel 지원**:
+   - 장비는 최대 3개(`mcu1`, `mcu2`, `mcu3`), 각 장비는 최대 4개의 채널(`A`, `B`, `C`, `D`)을 가집니다.
+   - 단일 소켓(`self._sock`)이 아닌 `self._connected_mcus` 딕셔너리로 각 MCU의 UDP Tx 소켓을 관리합니다.
+   - Rx 수신 포트는 채널마다 다르며, `self._rx_sockets`와 `self._rx_threads`에 포트 번호를 Key로 하여 멀티스레드로 관리됩니다.
 
-벤치 기본값: BENCH_IP = 192.168.1.101, BENCH_PORT = 25000
+2. **명령어 전송 컨벤션 (`_send`)**:
+   - 장비로 제어 명령을 보낼 때 사용하는 `self._send()` 함수는 반드시 첫 번째 인자로 대상 장비 이름(`mcu`)을 명시해야 합니다. (예: `self._send("mcu1", data)`)
+   - 전원/상태 제어 함수(IGN1, ACC, BATTERY 등)들도 모두 `mcu` 파라미터를 받아 특정 장비에만 명령을 내릴 수 있도록 설계되어 있습니다.
 
-CAN FD 기능은 공용 UDP_CANFD 라이브러리(backend/app/lib/UDP_CANFD.py)를 composition
-방식으로 내부 보관하며, 단일 UDP 소켓을 공유해 동작한다(원본 라이브러리는 수정하지 않음).
-신호 정의 파일(signal_file, 선택)이 주어지면 Connect 시 자동 로드된다.
-"""
+3. **채널 속도 동적 할당 (`woohyunchannelconfig.txt`)**:
+   - `Connect()` 시 외부 txt 파일에서 `mcu`, `channel` 별 Speed와 DataSpeed(Baudrate)를 읽어와 `_send_canfd_init()`에 개별 적용합니다.
 
+4. **멀티스레드 기반 비동기 처리**:
+   - 수신(Rx): 채널별 포트마다 데몬 스레드가 돌며 데이터를 감지하고 `_write_log`를 호출합니다.
+   - 송신(Tx): `SendCan` 호출 시 주기 전송(Periodic)을 위해 개별 스레드가 생성됩니다. 
+   - 로그 저장 시 스레드 충돌을 막기 위해 `self._log_lock`을 사용 중입니다.
+
+5. **UDP 패킷 포맷**:
+   - 패킷 전송 시 헤더(8 Byte) 구조를 항상 유지해야 합니다. 
+   - `[START_1(0x55), START_2(0xAA), SENDER_ID, 0, cmd1, cmd2, data_len_hi, data_len_lo] + payload`
+
+### ⚠️ [수정 시 주의사항 (Golden Rules)]
+- 기존 레거시 코드의 **단일 장비 제어 구조(예: `self._sock`, 글로벌 전송 등)로 회귀시키는 코드를 작성하지 마세요.** 항상 `mcu` 변수를 식별자로 활용하세요.
+- `IsConnected()`는 `len(self._connected_mcus) > 0` 로 다중 장비 상태를 확인합니다. 이 로직을 훼손하지 마세요.
+- CAN 통신을 위해 `SendCan`이나 `CanSaveStart`를 건드릴 때, 스레드 플래그(`_rx_stop_event`, `stop_event`) 관리에 유의하여 메모리 누수나 데드락이 없도록 하세요.
+
+'''
 from __future__ import annotations
 
+import os
 import socket
 import logging
 import time
-from pathlib import Path
-from typing import Optional
+import datetime
+import threading
+import subprocess
+import platform
+from typing import Optional, Callable
+
+# 📌 UDP_CANFD 모듈 임포트 유지
+try:
+    from ..lib.UDP_CANFD import UDP_CANFD
+except ImportError:
+    logging.warning("UDP_CANFD 모듈을 찾을 수 없습니다. Signal 관련 기능이 제한될 수 있습니다.")
 
 logger = logging.getLogger(__name__)
 
 START_1 = 0x55
 START_2 = 0xAA
 SENDER_ID = 100
-DEFAULT_UDP_PORT = 25000
-
-# CAN FD 송신 패킷 헤더
-# cmd1 채널 번호: 0x02=CAN B, 0x03=CAN D(AVN/EXT), 0x04=CAN C(Cluster/FD)
-CANFD_SEND_PACKET_HEADER_AVN     = [START_1, START_2, SENDER_ID, 0x00, 0x03, 0x30]  # CAN D — AVN(EXT)
-CANFD_SEND_PACKET_HEADER_CLUSTER = [START_1, START_2, SENDER_ID, 0x00, 0x04, 0x30]  # CAN C — Cluster(FD)
-CANFD_SEND_PACKET_HEADER         = CANFD_SEND_PACKET_HEADER_CLUSTER  # 기존 기본값 유지 (STA/FD)
-# CAN FD INIT(OPEN write) 패킷 헤더. cmd=0x04 0x10 — 원본 UDP_CANFD_INIT()와 동일.
-CANFD_INIT_PACKET_HEADER = [START_1, START_2, SENDER_ID, 0x00, 0x04, 0x10]
 
 
 def _payload_size_to_dlc(payload_size: int) -> int:
-    """CAN FD payload 크기 → DLC. 매핑에 없으면 8."""
     _map = {
         0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
         8: 8, 12: 9, 16: 10, 20: 11, 24: 12, 32: 13, 48: 14, 64: 15,
@@ -45,515 +62,541 @@ def _payload_size_to_dlc(payload_size: int) -> int:
 
 
 class WoohyunBench:
-    """CCIC 우현벤치 UDP 제어 플러그인 (전원 + CAN FD)."""
-
-    def __init__(self, host: str = "", udp_port: int = DEFAULT_UDP_PORT,
-                 signal_file: str = "", signal_file_AVN: str = ""):
-        self._host = host
-        self._udp_port = int(udp_port) if udp_port else DEFAULT_UDP_PORT
+    logger.info('class WoohyunBench:')
+    def __init__(self, signal_file: str = "", signal_file_AVN: str = ""):
         self._signal_file = (signal_file or "").strip()
         self._signal_file_AVN = (signal_file_AVN or "").strip()
-        self._sock = None
-        # CAN FD 위임 객체. Connect 시 생성 + 이 플러그인의 _sock을 공유 바인딩.
+
+        # 📌 UDP_CANFD 객체 초기화
         self._canfd = None
-        # AVN용 CAN FD 인스턴스 (UDP_CANFD_AVN, signal list 방식, can_type 선택 가능)
-        self._canfd_AVN = None
-
-    # ------------------------------------------------------------------
-    # Connection
-    # ------------------------------------------------------------------
-
-    def Connect(self) -> str:
-        """UDP 소켓 연결 + CAN 버스 OPEN(INIT) + (선택) 신호 정의 로드.
-
-        원본 흐름과 동일하게 항상 CAN FD INIT 패킷(0x04 0x10)을 송신해 bench의
-        CAN 버스를 연다. signal_file이 지정된 경우 추가로 신호 정의를 로드한다.
-        """
-        if self._sock:
-            try:
-                self._sock.close()
-            except Exception:
-                pass
-            self._sock = None
-        if not self._host:
-            raise RuntimeError("Host not set")
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # 레거시 코드와 동일: connect()로 기본 목적지 설정 (타임아웃 미설정)
-        self._sock.connect((self._host, self._udp_port))
-        logger.info("WoohyunBench connected to %s:%d", self._host, self._udp_port)
-
-        # CAN 버스 OPEN — signal_file 유무와 무관하게 항상 송신
-        # (원본 UDP_CANFD_INIT()와 정확히 같은 패킷 구조: data 6바이트, length=6)
         try:
-            self._send_canfd_init()
+            # `from ..lib.UDP_CANFD import UDP_CANFD` 는 클래스를 직접 import 하므로
+            # UDP_CANFD() 로 인스턴스화한다 (UDP_CANFD.UDP_CANFD() 는 AttributeError).
+            if 'UDP_CANFD' in globals():
+                self._canfd = UDP_CANFD()
         except Exception as e:
-            logger.warning("WoohyunBench CAN FD INIT 실패 (CAN 송신 불가능할 수 있음): %s", e)
+            logger.warning(f"UDP_CANFD 인스턴스 초기화 실패: {e}")
 
-        # CAN FD 신호 정의용 lib (signal-name 기반 송신 기능에서만 필요)
-        try:
-            from ..lib.UDP_CANFD import UDP_CANFD
-        except Exception as e:
-            logger.warning("WoohyunBench: UDP_CANFD 라이브러리 로드 실패 — 신호 이름 기반 기능 비활성 (%s)", e)
-            self._canfd = None
-        else:
-            cf = UDP_CANFD()
-            cf.sock = self._sock          # 동일 소켓 공유 (별도 자원 없음)
-            cf.udp_ip = self._host
-            cf.udp_port = self._udp_port
-            self._canfd = cf
-            if self._signal_file:
-                try:
-                    self._load_signals_into(cf, self._signal_file)
-                    logger.info("WoohyunBench CAN FD signals loaded (count=%d from %s)",
-                                len(cf.signal_defs), self._signal_file)
-                except Exception as e:
-                    logger.warning("WoohyunBench 신호 정의 로드 실패 (비치명): %s", e)
+        self._mcu_configs = {
+            "mcu1": {
+                "ip": "192.168.1.101", "port": 25000,
+                "channels": {
+                    "A": {"cmd1": 0x02, "cmd2": 0x10, "rx_port": 25001},
+                    "B": {"cmd1": 0x03, "cmd2": 0x11, "rx_port": 25002},
+                    "C": {"cmd1": 0x04, "cmd2": 0x12, "rx_port": 25003},
+                    "D": {"cmd1": 0x05, "cmd2": 0x13, "rx_port": 25004},
+                }
+            },
+            "mcu2": {
+                "ip": "192.168.1.102", "port": 25005,
+                "channels": {
+                    "A": {"cmd1": 0x06, "cmd2": 0x10, "rx_port": 25006},
+                    "B": {"cmd1": 0x07, "cmd2": 0x11, "rx_port": 25007},
+                    "C": {"cmd1": 0x08, "cmd2": 0x12, "rx_port": 25008},
+                    "D": {"cmd1": 0x09, "cmd2": 0x13, "rx_port": 25009},
+                }
+            },
+            "mcu3": {
+                "ip": "192.168.1.103", "port": 25010,
+                "channels": {
+                    "A": {"cmd1": 0x0A, "cmd2": 0x10, "rx_port": 25011},
+                    "B": {"cmd1": 0x0B, "cmd2": 0x11, "rx_port": 25012},
+                    "C": {"cmd1": 0x0C, "cmd2": 0x12, "rx_port": 25013},
+                    "D": {"cmd1": 0x0D, "cmd2": 0x13, "rx_port": 25014},
+                }
+            }
+        }
 
-        return f"Connected to {self._host}:{self._udp_port}"
+        self._channel_speeds = self._load_channel_config()
 
-    def _send_canfd_init(self, baudrate: int = 0x1F4, databit_time: int = 0x7D0) -> None:
-        """원본 UDP_CANFD_INIT()와 동일한 CAN 버스 OPEN 패킷 송신.
+        self._connected_mcus = {}
+        self._rx_sockets = {}
+        self._rx_threads = {}
+        self._rx_stop_event = threading.Event()
+        self._rx_callbacks = {}
 
-        패킷 구조 (총 14B, length 필드=6):
-          55 AA 64 00 04 10 [00 06] 00 00 baud_h baud_l dbt_h dbt_l
-        """
-        if not self._sock:
-            raise RuntimeError("Not connected")
-        data = [
-            0x00, 0x00,                                  # can_type 1, 2
-            (baudrate >> 8) & 0xFF, baudrate & 0xFF,
-            (databit_time >> 8) & 0xFF, databit_time & 0xFF,
-        ]
-        length_bytes = [(len(data) >> 8) & 0xFF, len(data) & 0xFF]
-        packet = bytearray(CANFD_INIT_PACKET_HEADER + length_bytes + data)
-        self._sock.sendto(packet, (self._host, self._udp_port))
-        logger.info("WoohyunBench CANFD INIT TX (baud=0x%X, dbt=0x%X): [%s]",
-                    baudrate, databit_time,
-                    ", ".join(hex(b) for b in packet))
+        self._log_file = None
+        self._log_lock = threading.Lock()
+        self._flush_counter = 0
+        self._stop_events = {}
 
-    def Disconnect(self) -> str:
-        """UDP 소켓 해제. CAN FD 서브시스템도 함께 정리."""
-        # UDP_CANFD.UDP_DEINIT()가 내부적으로 sock.close() 후 None 처리. 소켓이 공유이므로
-        # 이 경로로 닫으면 self._sock도 같은 객체가 닫힌 상태가 된다.
-        if self._canfd is not None:
+    def _load_channel_config(self) -> dict:
+        logger.info('_load_channel_config')
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "woohyunchannelconfig.txt")
+        config = {}
+
+        # 1. 파일이 없을 경우 요청하신 내용으로 기본 파일 자동 생성
+        if not os.path.exists(config_path):
+            default_content = """# 우현 장비 채널별 속도 설정 파일
+            # [형식] 장비이름, 채널, Speed, DataSpeed
+            # Speed 기본값: 500 / DataSpeed 기본값: 2000
+            mcu1, A, 500, 2000
+            mcu1, B, 500, 2000
+            mcu1, C, 500, 2000
+            mcu1, D, 500, 1000
+            mcu2, A, 500, 1000
+            mcu2, B, 500, 2000
+            mcu2, C, 500, 2000
+            mcu2, D, 500, 2000
+            mcu3, A, 500, 2000
+            mcu3, B, 500, 2000
+            mcu3, C, 500, 2000
+            mcu3, D, 500, 2000
+            """
             try:
-                self._canfd.UDP_DEINIT()
-            except Exception:
-                pass
-            self._canfd = None
-        if self._sock:
+                with open(config_path, "w", encoding="utf-8") as f:
+                    f.write(default_content)
+                logger.info(f"[*] 채널 설정 파일이 없어 기본값으로 생성했습니다: {config_path}")
+            except Exception as e:
+                logger.warning(f"채널 설정 파일 생성 실패: {e}")
+
+        # 2. 파일이 존재할 경우 설정 읽어오기
+        if os.path.exists(config_path):
             try:
-                self._sock.close()
-            except Exception:
-                pass
-            self._sock = None
-        return "Disconnected"
+                with open(config_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        parts = [p.strip() for p in line.split(",")]
+                        if len(parts) >= 4:
+                            mcu, ch = parts[0], parts[1].upper()
+                            baud = int(parts[2])
+                            dbaud = int(parts[3])
+                            if mcu not in config:
+                                config[mcu] = {}
+                            config[mcu][ch] = (baud, dbaud)
+            except Exception as e:
+                logger.warning(f"설정 파일 읽기 오류 (기본값 500/2000 사용): {e}")
 
-    def IsConnected(self) -> bool:
-        """연결 상태 확인."""
-        return self._sock is not None
-
-    # ------------------------------------------------------------------
-    # CAN FD — 공용 UDP_CANFD 라이브러리 위임
-    # ------------------------------------------------------------------
+        return config
 
     @staticmethod
-    def _load_signals_into(canfd_impl, file_path: str) -> None:
-        """파일 확장자에 따라 UDP_CANFD에 신호 정의를 로드."""
-        p = Path(file_path)
-        if not p.is_file():
-            raise FileNotFoundError(f"signal file not found: {file_path}")
-        if file_path.lower().endswith('.can'):
-            canfd_impl.load_signal_definitions_from_xml(file_path)
-        else:
-            canfd_impl.load_signal_definitions_from_excel(file_path)
-
-    def LoadSignals(self, file_path: str) -> str:
-        """런타임에 CAN FD 신호 정의를 Excel/XML에서 다시 로드."""
-        if self._canfd is None:
-            return "FAIL: CAN FD 비활성 (UDP_CANFD 라이브러리 미설치 또는 연결 전)"
+    def SendTimeSync():
+        logger.info('SendTimeSync')
         try:
-            self._load_signals_into(self._canfd, file_path)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            packet = bytearray([0x55, 0xAA, 0x00])
+            sock.sendto(packet, ("255.255.255.255", 25100))
+            sock.close()
+        except:
+            pass
+
+    def _is_reachable(self, ip: str) -> bool:
+        param = '-n' if platform.system().lower() == 'windows' else '-c'
+        timeout_param = '-w' if platform.system().lower() == 'windows' else '-W'
+        timeout_val = '1000' if platform.system().lower() == 'windows' else '1'
+        command = ['ping', param, '1', timeout_param, timeout_val, ip]
+        try:
+            result = subprocess.call(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return result == 0
+        except Exception:
+            return False
+
+    def Connect(self, rx_callback: Optional[Callable] = None) -> str:
+        logger.info('Connect')
+        self.Disconnect()
+        self._rx_stop_event.clear()
+        self.SendTimeSync()
+
+        mcus_to_check = ["mcu1", "mcu2", "mcu3"]
+        connected_count = 0
+
+        for mcu in mcus_to_check:
+            conf = self._mcu_configs.get(mcu)
+            if not conf: continue
+
+            ip = conf["ip"]
+
+            # 📌 1. mcu1은 Ping 테스트를 완전히 생략하고 무조건 통신 연결 시도!
+            if mcu == "mcu1":
+                logger.info(f"[{mcu}] 필수 장비이므로 Ping 체크를 생략하고 강제 연결을 시도합니다 ({ip})...")
+            else:
+                # 📌 2. mcu2, mcu3는 기존처럼 Ping 테스트 진행
+                logger.info(f"Checking connection to {mcu} ({ip})...")
+                if not self._is_reachable(ip):
+                    logger.info(f"[{mcu}] No ping response. Skipping...")
+                    continue
+
+            # 소켓 연결 (mcu1은 무조건 여기로 내려옴)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.connect((ip, conf["port"]))
+            self._connected_mcus[mcu] = sock
+            logger.info(f"Connected to {mcu} ({ip}:{conf['port']})")
+
             try:
-                self._canfd.UDP_CANFD_INIT_MESSAGE()
+                self._send(mcu, [0x1F, 0x00], recv=False)
+                time.sleep(0.1)
+
+                for ch_key, ch_data in conf["channels"].items():
+                    ct = 2 if ch_key == "C" else 0
+                    baud, dbaud = self._channel_speeds.get(mcu, {}).get(ch_key, (500, 2000))
+                    logger.debug(f"[{mcu}-{ch_key}] Init - Baudrate: {baud}, DataBaudrate: {dbaud}")
+
+                    self._send_canfd_init(mcu, channel=ch_key, baudrate=baud, data_baudrate=dbaud, line_select=0,
+                                          can_type=ct)
+
+                    rx_port = ch_data["rx_port"]
+                    self._start_rx_listener(mcu, rx_port, channel_name=ch_key, callback=rx_callback)
             except Exception as e:
-                logger.warning("WoohyunBench CAN FD INIT 재전송 실패: %s", e)
-            return f"OK: {len(self._canfd.signal_defs)} signals loaded from {file_path}"
-        except Exception as e:
-            logger.error("WoohyunBench LoadSignals failed: %s", e)
-            return f"FAIL: LoadSignals: {e}"
+                logger.warning(f"연결 초기화 실패 [{mcu}]: {e}")
 
-    def SendSignal(self, signal_name: str, physical_value) -> str:
-        """이름으로 지정한 CAN 신호를 physical_value로 전송 (200ms × 5회 반복)."""
-        if self._canfd is None:
-            return "FAIL: CAN FD 비활성"
-        if not self._canfd.signal_defs:
-            return "FAIL: 신호 정의 미로드 — signal_file 설정 또는 LoadSignals 호출 필요"
-        ok = self._canfd.SEND_CANEthernetData(signal_name, physical_value)
-        return f"{'OK' if ok else 'FAIL'}: SendSignal {signal_name}={physical_value}"
+            connected_count += 1
 
-    def DoorTest(self) -> str:
-        """운전석 도어 스위치 신호(Warn_DrvDrSwSta)를 ON/OFF 반복 송신."""
-        if self._canfd is None:
-            return "FAIL: CAN FD 비활성"
-        ok = self._canfd.door_test()
-        return f"{'OK' if ok else 'FAIL'}: DoorTest"
+        if connected_count == 0:
+            return "FAIL: Ping 테스트 결과 연결 가능한 MCU가 없습니다."
 
-    def TestAllSignals(self) -> str:
-        """로드된 모든 신호를 중간값으로 순차 송신 (부하/연결 확인용)."""
-        if self._canfd is None:
-            return "FAIL: CAN FD 비활성"
-        ok = self._canfd.test_all_canfd_signals()
-        return f"{'OK' if ok else 'FAIL'}: TestAllSignals"
+        # Signal-based 전송(LoadSignals/SendSignal/DoorTest/TestAllSignals)이 사용하는
+        # UDP_CANFD 위임 객체에 mcu1 의 live 소켓을 공유 바인딩한다. 바인딩하지 않으면
+        # UDP_CANFD_SEND 가 self.sock=None 으로 조용히 no-op 된다.
+        if self._canfd is not None and "mcu1" in self._connected_mcus:
+            try:
+                self._canfd.sock = self._connected_mcus["mcu1"]
+                self._canfd.udp_ip = self._mcu_configs["mcu1"]["ip"]
+                self._canfd.udp_port = self._mcu_configs["mcu1"]["port"]
+                # 연결 시 signal_file 이 지정되어 있고 아직 로드 전이면 자동 로드
+                if self._signal_file and not getattr(self._canfd, "signal_defs", None):
+                    self.LoadSignals(self._signal_file)
+            except Exception as e:
+                logger.warning(f"UDP_CANFD 소켓 바인딩 실패 (signal 기능 제한): {e}")
 
-    def CheckSignals(self) -> str:
-        """로드된 CAN 신호 정의를 로그로 덤프."""
-        if self._canfd is None:
-            return "FAIL: CAN FD 비활성"
-        self._canfd.CHECK_CAN_SIGNAL()
-        return f"OK: {len(self._canfd.signal_defs)} signals"
+        return f"OK: Connected to {connected_count} MCU(s) (mcu1 forced)"
 
-    def SendCanFd(self, can_id, payload_hex: str = "", fd_mode: bool = False,
-                  can_type: str = "STA") -> str:
-        """Raw CAN FD 프레임 직접 송신 (신호 정의 불필요).
+    def _send_canfd_init(self, mcu: str, channel: str = "A", baudrate: int = 500, data_baudrate: int = 2000,
+                         line_select: int = 0, can_type: int = 0) -> None:
+        logger.info('_send_canfd_init')
+        sock = self._connected_mcus.get(mcu)
+        if not sock: return
 
-        Args:
-            can_id: int 또는 문자열("0x448"/"1096" 모두 허용).
-            payload_hex: 다음 형식 모두 허용:
-              - "0 0 0 0 0 0 1 0"  (공백 구분)
-              - "0,0,0,0,0,0,1,0"  (콤마 구분)
-              - "[0, 0, 0, 0, 0, 0, 1, 0]" (대괄호 리스트)
-              - "0000000100"       (붙여쓴 hex 문자열)
-            fd_mode: 레거시 호환. True면 can_type="FD"와 동일.
-            can_type: "STA"(기본) / "EXT"(확장 프레임, AVN) / "FD"(CAN FD, Cluster).
-                      fd_mode=True이면 자동으로 "FD"로 처리됨.
-        """
-        if not self._sock:
-            return "FAIL: 연결 안 됨 — Connect() 먼저 호출"
+        conf = self._mcu_configs.get(mcu)
+        ch_conf = conf["channels"].get(channel.upper())
+        if not ch_conf: return
+
+        cmd1, line_cmd2 = ch_conf["cmd1"], ch_conf["cmd2"]
+        host, port = conf["ip"], conf["port"]
+
+        line_packet = bytearray([START_1, START_2, SENDER_ID, 0x00, 0x30, line_cmd2, 0x00, 0x01, line_select])
+        sock.sendto(line_packet, (host, port))
+        time.sleep(0.05)
+
+        baud_hi, baud_lo = (baudrate >> 8) & 0xFF, baudrate & 0xFF
+        data_hi, data_lo = (data_baudrate >> 8) & 0xFF, data_baudrate & 0xFF
+
+        open_packet = bytearray([
+            START_1, START_2, SENDER_ID, 0x00, cmd1, 0x10, 0x00, 0x06,
+            can_type, 0x00, baud_hi, baud_lo, data_hi, data_lo
+        ])
+        sock.sendto(open_packet, (host, port))
+        time.sleep(0.05)
+
+    def SendCan(self, mcu: str = "mcu1", msg_id: str = "", type: str = "STA", payload_hex: str = "",
+                   channel: str = "A", repeat: int = 0, cycle_ms: int = 200) -> str:
+        logger.info('SendCan')
+        if mcu not in self._connected_mcus:
+            return f"FAIL: {mcu} 장비가 연결되어 있지 않습니다."
         try:
-            cid = self._parse_can_id(can_id)
-            payload = self._parse_payload(payload_hex)
-            if isinstance(fd_mode, str):
-                fd_mode = fd_mode.strip().lower() in ("1", "true", "yes", "on")
-            ct = str(can_type).upper() if can_type else "STA"
-            if fd_mode and ct == "STA":
-                ct = "FD"
-            self._send_canfd_raw(cid, payload, can_type=ct)
-            return (f"OK: SendCanFd ID=0x{cid:X} ({len(payload)}B, type={ct}, x5@200ms)")
+            cid = int(msg_id.replace("0x", ""), 16) if isinstance(msg_id, str) else int(msg_id)
+            clean_hex = payload_hex.replace(" ", "").replace(",", "").replace("0x", "")
+            if len(clean_hex) % 2 != 0: clean_hex = "0" + clean_hex
+            payload = bytearray.fromhex(clean_hex) if clean_hex else bytearray([0x00])
+
+            is_periodic = (int(repeat) == 1)
+            interval_sec = max(0.001, int(cycle_ms) / 1000.0)
+
+            stop_key = f"{mcu}_{cid}"
+            if stop_key in self._stop_events: self._stop_events[stop_key].set()
+
+            stop_event = threading.Event()
+            self._stop_events[stop_key] = stop_event
+
+            t = threading.Thread(
+                target=self._send_canfd_raw,
+                args=(mcu, cid, payload),
+                kwargs={"can_type": type, "channel": channel, "is_periodic": is_periodic, "interval_sec": interval_sec,
+                        "stop_event": stop_event},
+                daemon=True
+            )
+            t.start()
+            mode_str = "주기 전송" if is_periodic else "단발 전송"
+            return f"OK: SendCan ID=0x{cid:X} ({len(payload)}B, 장비 {mcu}, 채널 {channel.upper()}) [{mode_str} 시작]"
         except Exception as e:
-            logger.error("WoohyunBench SendCanFd failed: %s", e)
-            return f"FAIL: SendCanFd: {e}"
+            return f"FAIL: SendCan Error: {e}"
 
-    def SendAvnCan(self, msg_id, type, payload_hex: str = "") -> str:
-        """AVN 채널 Raw CAN 프레임 송신 (send_can.py TARGET="AVN" 동일 동작).
+    def _send_canfd_raw(self, mcu: str, can_id: int, payload: bytearray, can_type: str = "STA",
+                        channel: str = "A", is_periodic: bool = False, interval_sec: float = 0.2,
+                        stop_event: Optional[threading.Event] = None) -> None:
+        logger.info('_send_canfd_raw')
+        sock = self._connected_mcus.get(mcu)
+        if not sock: return
+        conf = self._mcu_configs[mcu]
+        ch_key = channel.upper()
+        ch_conf = conf["channels"].get(ch_key)
+        if not ch_conf: return
 
-        목적지를 항상 AVN 채널(0x03 헤더)로 고정하고, 프레임 타입은 type 인자로
-        독립 지정한다(표준 0x33E와 확장 1004001을 같은 AVN 채널로 송신 가능).
-        msg_id는 '0x' 접두 유무와 무관하게 항상 hex로 파싱.
+        cmd1 = ch_conf["cmd1"]
+        host, port = conf["ip"], conf["port"]
 
-        Args:
-            msg_id: CAN ID. 정수 또는 문자열("0x414", "414", "1004001" 모두 hex로 해석).
-            type: 프레임 타입 — "STA"(표준) / "EXT"(확장 프레임) / "FD"(CAN FD).
-            payload_hex: 페이로드. 다음 형식 모두 허용:
-              - 쉼표 구분 hex: "00,00,00,00,00,00,00,00"
-              - 공백 구분:     "00 00 00 00 00 00 00 00"
-              - 대괄호 리스트: "[0, 0, 0, 0, 0, 0, 0, 0]"
-        """
-        if not self._sock:
-            return "FAIL: 연결 안 됨 — Connect() 먼저 호출"
-        try:
-            cid = self._parse_can_id_hex(msg_id)
-            payload = self._parse_payload(payload_hex)
-            self._send_canfd_raw(cid, payload, can_type=type, target_ecu="AVN")
-            return f"OK: SendAvnCan ID=0x{cid:X} ({len(payload)}B, {type}, x5@200ms)"
-        except Exception as e:
-            logger.error("WoohyunBench SendAvnCan failed: %s", e)
-            return f"FAIL: SendAvnCan: {e}"
+        can_id_bytes = [(can_id >> 24) & 0xFF, (can_id >> 16) & 0xFF, (can_id >> 8) & 0xFF, can_id & 0xFF]
+        dlc = _payload_size_to_dlc(len(payload))
+        ct = str(can_type).upper()
 
-    def SendClusterCan(self, msg_id, payload_hex: str = "") -> str:
-        """Cluster 채널 Raw CAN FD 프레임 송신 (CANTYPE.FD, send_can.py 동일 동작).
-
-        send_can.py의 TARGET="CLUSTER" 과 완전히 동일한 패킷 포맷.
-        frame_byte = 0x80 | DLC  (FD Frame Flag)
-        msg_id는 '0x' 접두 유무와 무관하게 항상 hex로 파싱.
-
-        Args:
-            msg_id: CAN ID. 정수 또는 문자열("0x65", "65" 모두 0x65로 해석).
-            payload_hex: 페이로드. 다음 형식 모두 허용:
-              - 쉼표 구분 hex: "00,00,00,00,00,00,00,00"
-              - 공백 구분:     "00 00 00 00 00 00 00 00"
-              - 대괄호 리스트: "[0, 0, 0, 0, 0, 0, 0, 0]"
-        """
-        if not self._sock:
-            return "FAIL: 연결 안 됨 — Connect() 먼저 호출"
-        try:
-            cid = self._parse_can_id_hex(msg_id)
-            payload = self._parse_payload(payload_hex)
-            self._send_canfd_raw(cid, payload, can_type="FD")
-            return f"OK: SendClusterCan ID=0x{cid:X} ({len(payload)}B, FD, x5@200ms)"
-        except Exception as e:
-            logger.error("WoohyunBench SendClusterCan failed: %s", e)
-            return f"FAIL: SendClusterCan: {e}"
-
-    def _send_canfd_raw(self, can_id: int, payload: bytearray, fd_mode: bool = False,
-                        repeat: int = 5, interval_sec: float = 0.2,
-                        can_type: str = "STA", target_ecu: str = "CLUSTER") -> None:
-        """벤치 UDP_CANFD_SEND과 동일한 포맷으로 raw CAN FD 프레임 송신.
-
-        포맷: HEADER(6) + LEN(2) + CAN_ID(4) + frame_byte(1) + reserved(0x00,1) + payload
-        주기 송신: 벤치/ECU가 CAN 신호를 안정적으로 잡도록 5회 × 200ms 반복.
-
-        목적지 채널(target_ecu)과 프레임 타입(can_type)을 완전히 분리한다.
-        과거에는 프레임 타입이 채널을 강제로 결정해(STA→Cluster) AVN으로 보내야 할
-        표준 프레임(0x33E)이 Cluster로 잘못 라우팅되는 버그가 있었다.
-
-        target_ecu: 목적지 채널 헤더 선택.
-          "AVN"     → 0x03 헤더 (CAN D)
-          "CLUSTER" → 0x04 헤더 (CAN C, 기본값)
-
-        can_type: frame_byte(프레임 타입)만 결정 (채널과 무관).
-          "FD"  → frame_byte 0x80 | DLC  (CAN FD)
-          "EXT" → frame_byte 0x20 | DLC  (확장 프레임)
-          "STA" → frame_byte 0x00 | len  (표준 프레임, 기본값)
-        """
-        if not self._sock:
-            raise RuntimeError("Not connected")
-
-        ct = can_type.upper() if isinstance(can_type, str) else "STA"
-        # fd_mode=True 레거시 호환: can_type이 기본값 STA인 경우에만 FD로 승격
-        if fd_mode and ct == "STA":
-            ct = "FD"
-
-        # 목적지 채널(Header) — 프레임 타입과 독립적으로 결정
-        if str(target_ecu).upper() == "AVN":
-            send_header = CANFD_SEND_PACKET_HEADER_AVN      # 0x03 — CAN D (AVN)
-        else:
-            send_header = CANFD_SEND_PACKET_HEADER_CLUSTER  # 0x04 — CAN C (Cluster)
-
-        # 프레임 타입(frame_byte) — 채널과 독립적으로 결정
         if ct == "FD":
-            dlc = _payload_size_to_dlc(len(payload))
             can_frame = 0x80 | (dlc & 0x7F)
         elif ct == "EXT":
-            dlc = _payload_size_to_dlc(len(payload))
             can_frame = 0x20 | (dlc & 0x7F)
-        else:  # STA
-            can_frame = len(payload) & 0x7F
+        else:
+            can_frame = dlc & 0x7F
 
-        can_id_bytes = [
-            (can_id >> 24) & 0xFF,
-            (can_id >> 16) & 0xFF,
-            (can_id >> 8)  & 0xFF,
-             can_id        & 0xFF,
-        ]
-        data = can_id_bytes + [can_frame, 0x00] + list(payload)
-        length_bytes = [(len(data) >> 8) & 0xFF, len(data) & 0xFF]
-        packet = bytearray(send_header + length_bytes + data)
-        hex_str = ", ".join(hex(b) for b in packet)
+        padded_payload = list(payload)
+        if len(padded_payload) < 8: padded_payload += [0x00] * (8 - len(padded_payload))
 
-        for i in range(max(1, repeat)):
-            self._sock.sendto(packet, (self._host, self._udp_port))
-            logger.info("WoohyunBench CANFD TX [%d/%d] (ID=0x%X, payload=%dB): [%s]",
-                        i + 1, repeat, can_id, len(payload), hex_str)
-            if i + 1 < repeat:
-                time.sleep(interval_sec)
+        data_body = can_id_bytes + [can_frame, 0x00] + padded_payload
+        data_len = len(data_body)
+        header = [START_1, START_2, SENDER_ID, 0x00, cmd1, 0x30, (data_len >> 8) & 0xFF, data_len & 0xFF]
+        packet = bytearray(header + data_body)
 
-    @staticmethod
-    def _parse_can_id(can_id) -> int:
-        """can_id를 int로 정규화. '0x448', '1096', 1096 모두 허용."""
-        if isinstance(can_id, int):
-            return can_id
-        if isinstance(can_id, str):
-            s = can_id.strip()
-            if not s:
-                raise ValueError("can_id is empty")
-            # 0x 접두 또는 hex 문자가 섞여 있으면 hex로 해석
-            if s.lower().startswith("0x"):
-                return int(s, 16)
-            try:
-                return int(s)
-            except ValueError:
-                # 마지막 폴백: hex 시도
-                return int(s, 16)
-        return int(can_id)
+        if is_periodic:
+            while (mcu in self._connected_mcus) and not self._rx_stop_event.is_set():
+                if stop_event and stop_event.is_set(): break
+                try:
+                    sock.sendto(packet, (host, port))
+                    self._write_log(mcu, ch_key, "Tx", can_id, padded_payload)
+                except:
+                    break
+                if stop_event and stop_event.wait(interval_sec): break
+        else:
+            if (mcu in self._connected_mcus) and not (stop_event and stop_event.is_set()):
+                try:
+                    sock.sendto(packet, (host, port))
+                    self._write_log(mcu, ch_key, "Tx", can_id, padded_payload)
+                except:
+                    pass
 
-    @staticmethod
-    def _parse_can_id_hex(can_id) -> int:
-        """can_id를 항상 hex로 파싱. '0x' 접두 유무 무관.
-
-        SendAvnCan / SendClusterCan 전용. send_can.py와 동일한 동작 보장.
-        예) '1004001' → 0x1004001,  '0x414' → 0x414,  1044 → 1044
-        """
-        if isinstance(can_id, int):
-            return can_id
-        if isinstance(can_id, str):
-            s = can_id.strip()
-            if not s:
-                raise ValueError("can_id is empty")
-            s_clean = s[2:] if s.lower().startswith("0x") else s
-            return int(s_clean, 16)
-        return int(can_id)
-
-    @staticmethod
-    def _parse_payload(payload_hex: str) -> bytearray:
-        """payload 문자열을 bytearray로 정규화. 여러 형식 허용.
-
-        우선순위:
-          1) 대괄호 리스트  "[a, b, c]"          → 각 토큰 1byte
-          2) 구분자(공백/콤마/세미콜론) 포함     → 각 토큰 1byte
-             - 토큰이 "0x" 접두면 hex, 아니면 decimal로 해석 (0~255)
-          3) 그 외 (붙여쓴 문자열)               → hex 문자열로 디코드
-        """
-        if not payload_hex:
-            return bytearray()
-        s = payload_hex.strip()
-        if not s:
-            return bytearray()
-
-        # 1) 대괄호 리스트
-        if s.startswith("[") and s.endswith("]"):
-            return WoohyunBench._tokens_to_bytes(s[1:-1])
-
-        # 2) 구분자가 있으면 토큰별 byte로 해석
-        if any(ch in s for ch in (" ", ",", ";")):
-            return WoohyunBench._tokens_to_bytes(s)
-
-        # 3) 단일 hex 문자열
-        cleaned = s
-        if cleaned.lower().startswith("0x"):
-            cleaned = cleaned[2:]
-        if len(cleaned) % 2 != 0:
-            cleaned = "0" + cleaned
-        return bytearray.fromhex(cleaned)
-
-    @staticmethod
-    def _tokens_to_bytes(text: str) -> bytearray:
-        """공백/콤마/세미콜론으로 나뉜 토큰들을 byte 배열로 변환.
-
-        토큰이 "0x" 접두면 hex, 아니면 decimal로 해석. 각 값은 0~255 범위.
-        """
-        # 모든 구분자를 공백으로 통일 후 split
-        normalized = text.replace(",", " ").replace(";", " ")
-        tokens = [t.strip() for t in normalized.split() if t.strip()]
-        out = bytearray()
-        for t in tokens:
-            v = int(t, 16) if t.lower().startswith("0x") else int(t)
-            if not (0 <= v <= 0xFF):
-                raise ValueError(f"payload byte out of range: {t}")
-            out.append(v)
-        return out
-
-    def ReinitCanFd(self, baudrate=0x1F4, databit_time=0x7D0) -> str:
-        """CAN FD 버스 재초기화 (기본 500k/2M). 원본과 동일한 INIT 패킷 송신."""
-        if not self._sock:
-            return "FAIL: 연결 안 됨 — Connect() 먼저 호출"
+    def CanSaveStart(self, save_dir: str = "") -> str:
+        logger.info('CanSaveStart')
+        if not self._connected_mcus:
+            return "CanSaveStart FAIL: 연결된 장비가 없습니다.."
         try:
-            br = self._parse_int_arg(baudrate, default=0x1F4)
-            dbt = self._parse_int_arg(databit_time, default=0x7D0)
-            self._send_canfd_init(br, dbt)
-            return f"OK: ReinitCanFd baudrate=0x{br:X} databit=0x{dbt:X}"
+            abs_save_dir = os.path.abspath(save_dir) if save_dir else os.path.abspath("./canlog")
+            os.makedirs(abs_save_dir, exist_ok=True)
+
+            timestamp_str = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+            filename = f"CAN_LOG_{timestamp_str}.csv"
+            abs_save_path = os.path.join(abs_save_dir, filename)
+
+            self.CanSaveStop()
+
+            self._log_file = open(abs_save_path, "a", encoding="utf-8")
+            self._flush_counter = 0
+
+            if os.path.getsize(abs_save_path) == 0:
+                self._log_file.write("Date/Time,MCU,CH,Dir,MessageID,payload_hex\n")
+            self._log_file.flush()
+
+            # 📌 요청하신 장비 접속 로그 출력
+            logger.info(f"[*] 연결된 MCU 목록 : {self._connected_mcus}")
+
+            activated_channels = 0
+            for mcu in list(self._connected_mcus.keys()):
+                for ch_key, ch_data in self._mcu_configs[mcu]["channels"].items():
+                    ct = 2 if ch_key == "C" else 0
+                    baud, dbaud = self._channel_speeds.get(mcu, {}).get(ch_key, (500, 2000))
+
+                    # 📌 요청하신 채널별 속도 로그 출력
+                    logger.info(f"mcu, ch_key, baud, dbaud  {mcu} {ch_key} {baud} {dbaud}")
+
+                    self._send_canfd_init(mcu, ch_key, baudrate=baud, data_baudrate=dbaud, line_select=0, can_type=ct)
+
+                    rx_port = ch_data["rx_port"]
+                    if rx_port not in self._rx_threads or not self._rx_threads[rx_port].is_alive():
+                        self._start_rx_listener(mcu, rx_port, channel_name=ch_key)
+                    else:
+                        logger.info(f"[*] {mcu}-{ch_key} 채널 로깅 준비 완료 (Port: {rx_port})")
+                    activated_channels += 1
+
+            return f"OK: 총 {activated_channels}개 채널 로깅 통합 시작 (저장경로: {abs_save_path})"
         except Exception as e:
-            logger.error("WoohyunBench ReinitCanFd failed: %s", e)
-            return f"FAIL: ReinitCanFd: {e}"
+            return f"FAIL: 통합 채널 로깅 시작 실패 - {e}"
 
-    @staticmethod
-    def _parse_int_arg(val, default: int) -> int:
-        """UI에서 들어온 인자(int 또는 문자열)를 int로 정규화. '0x1F4'/'500'/500 모두 허용."""
-        if isinstance(val, int):
-            return val
-        if isinstance(val, str):
-            s = val.strip()
-            if not s:
-                return default
-            return int(s, 16) if s.lower().startswith("0x") else int(s)
-        return int(val) if val is not None else default
-
-    # ------------------------------------------------------------------
-    # Internal — 레거시 UDP_SEND()와 동일한 로직
-    # ------------------------------------------------------------------
-
-    def _drain_rx(self) -> int:
-        """수신 버퍼에 남아있는 이전 응답들을 모두 비워 현재 요청 응답과 섞이지 않게 한다.
-
-        Returns: drop된 패킷 수 (디버깅용).
-        """
-        if not self._sock:
-            return 0
-        dropped = 0
-        orig_timeout = self._sock.gettimeout()
+    def CanSaveStop(self) -> str:
+        logger.info('CanSaveStop')
         try:
-            self._sock.setblocking(False)
+            with self._log_lock:
+                if self._log_file is not None:
+                    self._log_file.flush()
+                    self._log_file.close()
+                    self._log_file = None
+                    return "OK: 모든 채널 통합 로그 저장 완전 종료"
+                return "OK: 현재 로깅 중인 파일이 없습니다."
+        except Exception as e:
+            return f"FAIL: 통합 로그 저장 종료 실패 - {e}"
+
+    def _write_log(self, mcu: str, ch_key: str, direction: str, can_id: int, payload_bytes) -> None:
+        if not self._log_file: return
+        try:
+            dt_str = datetime.datetime.now().strftime('%Y-%m-%d_%H:%M:%S.%f')
+            payload_hex = ",".join(f"{b:02X}" for b in payload_bytes)
+            log_line = f'{dt_str},{mcu},{ch_key},{direction},0x{can_id:X},"{payload_hex}"\n'
+
+            with self._log_lock:
+                if self._log_file:
+                    self._log_file.write(log_line)
+                    self._flush_counter += 1
+                    if self._flush_counter >= 5:
+                        self._log_file.flush()
+                        self._flush_counter = 0
+        except:
+            pass
+
+    def _start_rx_listener(self, mcu: str, port: int, channel_name: str, callback: Optional[Callable] = None) -> None:
+        logger.info('_start_rx_listener')
+        try:
+            # 스레드가 죽어서 소켓을 다시 열어야 할 때, 기존 소켓 닫아주기 (좀비 블랙홀 방지)
+            if port in self._rx_sockets:
+                try:
+                    self._rx_sockets[port].close()
+                except:
+                    pass
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("0.0.0.0", port))
+            sock.settimeout(1.0)
+            self._rx_sockets[port] = sock
+
+            # [핵심 수정] 외부에서 문자열(str)을 던져도 에러가 나지 않도록, 진짜 함수(callable)일 때만 등록!
+            if callback and callable(callback):
+                self._rx_callbacks[port] = callback
+
+            t = threading.Thread(target=self._rx_task, args=(sock, port, mcu, channel_name), daemon=True)
+            t.start()
+            self._rx_threads[port] = t
+
+            baud, dbaud = self._channel_speeds.get(mcu, {}).get(channel_name.upper(), (500, 2000))
+            logger.info(f"[*] {mcu}-{channel_name} 리스너 오픈 (Port: {port} | Speed: {baud}, {dbaud})")
+        except Exception as e:
+            logger.error(f"Rx listener start failed for port {port}: {e}")
+
+    def _rx_task(self, sock: socket.socket, port: int, mcu: str, channel_name: str) -> None:
+        ch_key = channel_name.upper()
+        cmd1 = self._mcu_configs[mcu]["channels"].get(ch_key, {}).get("cmd1")
+
+        while not self._rx_stop_event.is_set():
+            try:
+                data, addr = sock.recvfrom(4096)
+                if not data: continue
+
+                if cmd1 is not None and len(data) >= 18 and data[0] == 0x55 and data[1] == 0xAA and data[4] == cmd1 and \
+                        data[5] == 0x41:
+                    can_id = (data[12] << 24) | (data[13] << 16) | (data[14] << 8) | data[15]
+                    payload = data[18:]
+                    self._write_log(mcu, ch_key, "Rx", can_id, payload)
+                else:
+                    self._write_log(mcu, ch_key, "Rx", port, data)
+
+                # [핵심 수정] 콜백 실행 시 진짜 함수인지(callable) 한 번 더 확인!
+                if port in self._rx_callbacks and callable(self._rx_callbacks[port]):
+                    try:
+                        self._rx_callbacks[port](f"{mcu}_{ch_key}", data)
+                    except Exception as cb_err:
+                        logger.error(f"Callback Error: {cb_err}")  # 콜백 에러가 나도 스레드가 죽지 않게 방어
+            except socket.timeout:
+                continue
+            except OSError as e:
+                win_err = getattr(e, 'winerror', None)
+                # 1. Windows UDP 타겟 무응답(10054) 에러 방어
+                if win_err == 10054:
+                    continue
+                # 2. [추가] Disconnect로 인한 강제 소켓 종료(10038) 시 조용히 스레드 종료
+                if self._rx_stop_event.is_set() and win_err == 10038:
+                    break
+                logger.error(f"[{mcu}-{ch_key}] Rx OSError: {e}")
+                break
+            except Exception as e:
+                logger.error(f"[{mcu}-{ch_key}] Rx Exception: {e}")
+                break
+
+    def Disconnect(self) -> str:
+        logger.info('Disconnect')
+        self._rx_stop_event.set()
+        self.CanSaveStop()
+
+        for sock in self._rx_sockets.values():
+            try:
+                sock.close()
+            except:
+                pass
+        self._rx_sockets.clear()
+
+        for sock in self._connected_mcus.values():
+            try:
+                sock.close()
+            except:
+                pass
+        self._connected_mcus.clear()
+
+        return "Disconnected"
+
+    def _drain_rx(self, sock: socket.socket) -> int:
+        logger.info('_drain_rx')
+        dropped = 0
+        orig_timeout = sock.gettimeout()
+        try:
+            sock.setblocking(False)
             while True:
                 try:
-                    data = self._sock.recv(64)
-                    if not data:
-                        break
+                    data = sock.recv(64)
+                    if not data: break
                     dropped += 1
-                    if dropped > 32:
-                        break  # 안전장치
-                except BlockingIOError:
-                    break
-                except Exception:
+                    if dropped > 32: break
+                except:
                     break
         finally:
             try:
-                self._sock.settimeout(orig_timeout)
-            except Exception:
+                sock.settimeout(orig_timeout)
+            except:
                 pass
-        if dropped:
-            logger.debug("WoohyunBench drained %d stale packet(s) from rx buffer", dropped)
         return dropped
 
-    def _send(self, data: list, recv: bool = True, recv_timeout: float = 60.0) -> list | bool:
-        """UDP 패킷 전송 및 응답 수신.
+    def _send(self, mcu: str, data: list, recv: bool = True, recv_timeout: float = 3.0) -> list | bool:
+        logger.info('_send')
+        sock = self._connected_mcus.get(mcu)
+        if not sock: return False
 
-        레거시 UDP_SEND() 함수와 동일한 패킷 구조 및 응답 검증 로직.
-        단, 요청 전에 수신 버퍼를 비워 이전 응답이 섞이지 않도록 한다.
-        """
-        if not self._sock:
-            raise RuntimeError("Not connected — call Connect() first")
-
-        # 이전 명령 응답이 버퍼에 남아있으면 매칭 루프에서 오래 소모됨 → 보내기 전 비움
-        self._drain_rx()
-
+        conf = self._mcu_configs[mcu]
+        host, port = conf["ip"], conf["port"]
+        self._drain_rx(sock)
         data_len = len(data) - 2
-        packet = [START_1, START_2, SENDER_ID, 0,
-                  data[0], data[1],
-                  (data_len >> 8) & 0xFF, data_len & 0xFF]
-        for i in range(data_len):
-            packet.append(data[2 + i])
-
-        encoded = bytearray(packet)
-        hex_str = " ".join(f"0x{b:02X}" for b in packet)
+        packet = [START_1, START_2, SENDER_ID, 0, data[0], data[1], (data_len >> 8) & 0xFF, data_len & 0xFF] + data[2:]
 
         try:
-            self._sock.sendto(encoded, (self._host, self._udp_port))
+            sock.sendto(bytearray(packet), (host, port))
         except Exception as e:
-            logger.error("WoohyunBench send failed: %s", e)
+            logger.error(f"[{mcu}] _send Tx Error: {e}")
             return False
 
-        logger.info("WoohyunBench TX: %s", hex_str)
-
-        if not recv:
-            return True
-
-        # 레거시와 동일: recv_timeout(60초) 내에서 1초 타임아웃으로 반복 수신
+        if not recv: return True
         current_time = time.time()
         while (time.time() - current_time) < recv_timeout:
-            self._sock.settimeout(1)
+            sock.settimeout(1)
             try:
-                recv_data = self._sock.recv(16)
+                recv_data = sock.recv(16)
             except socket.timeout:
                 continue
+            except OSError as e:
+                # [핵심] UDP WinError 10054 발생 시 통신을 끊지 않고 다음 수신 대기
+                if getattr(e, 'winerror', None) == 10054:
+                    continue
+                logger.error(f"[{mcu}] _send Rx OSError: {e}")
+                return False
             except Exception as e:
-                logger.error("WoohyunBench recv error: %s", e)
+                logger.error(f"[{mcu}] _send Rx Error: {e}")
                 return False
             finally:
-                self._sock.settimeout(None)  # 레거시와 동일: recv 후 blocking 복원
+                sock.settimeout(None)
 
             recv_list = [int(c) for c in recv_data]
-
-            # 레거시와 동일: 송신 패킷과 응답 패킷의 [0],[1],[3],[4],[5] 비교
             res = True
             for idx, packet_value in enumerate(packet):
                 if idx == 2:
@@ -561,122 +604,249 @@ class WoohyunBench:
                 elif idx >= len(recv_list) or packet_value != recv_list[idx]:
                     res = False
                     break
-                if idx == 5:
-                    res = True
-                    break
-
-            if res:
-                recv_hex = " ".join(f"0x{b:02X}" for b in recv_list)
-                logger.info("WoohyunBench RX: %s", recv_hex)
-                return recv_list
-
-        logger.warning("WoohyunBench: no matching response within %ds", recv_timeout)
+                if idx == 5: res = True; break
+            if res: return recv_list
         return True
 
     # ------------------------------------------------------------------
-    # Power Control — 레거시 WOOHYUN_* 함수 동일
+    # Power & Status Control
     # ------------------------------------------------------------------
 
-    def IGN1(self, on_off: int = 1) -> str:
-        """IGN1 제어 (0=OFF, 1=ON). 레거시 WOOHYUN_IGN1()."""
-        data = [0x24, 0x22, on_off]
-        res = self._send(data)
-        status = "ON" if on_off else "OFF"
-        return f"IGN1 {status}: {'OK' if res else 'FAIL'}"
+    def IsConnected(self) -> bool:
+        return len(self._connected_mcus) > 0
 
-    def IGN1_Read(self) -> int:
-        """IGN1 상태 읽기. 응답이 3초 내 오지 않으면 -1."""
-        res = self._send([0x24, 0x32], recv_timeout=3.0)
-        # 응답 packet은 헤더 8바이트 + 1바이트 상태 = 9바이트 이상이어야 유효
-        if isinstance(res, list) and len(res) >= 9:
-            return res[-1]
-        return -1
-
-    def IGN2(self, on_off: int = 1) -> str:
-        """IGN2 제어 (0=OFF, 1=ON). 레거시 WOOHYUN_IGN2()."""
-        data = [0x24, 0x28, on_off]
-        res = self._send(data)
-        status = "ON" if on_off else "OFF"
-        return f"IGN2 {status}: {'OK' if res else 'FAIL'}"
-
-    def IGN2_Read(self) -> int:
-        """IGN2 상태 읽기. 응답이 3초 내 오지 않으면 -1."""
-        res = self._send([0x24, 0x38], recv_timeout=3.0)
-        if isinstance(res, list) and len(res) >= 9:
-            return res[-1]
-        return -1
-
-    def ACC(self, on_off: int = 1) -> str:
-        """ACC 제어 (0=OFF, 1=ON). 레거시 WOOHYUN_ACC()."""
-        data = [0x24, 0x21, on_off]
-        res = self._send(data)
-        status = "ON" if on_off else "OFF"
-        return f"ACC {status}: {'OK' if res else 'FAIL'}"
-
-    def ACC_Read(self) -> int:
-        """ACC 상태 읽기. 응답이 3초 내 오지 않으면 -1."""
-        res = self._send([0x24, 0x31], recv_timeout=3.0)
-        if isinstance(res, list) and len(res) >= 9:
-            return res[-1]
-        return -1
-
-    def BATTERY(self, on_off: int = 1) -> str:
-        """Battery relay 제어 (0=OFF, 1=ON). 레거시 WOOHYUN_BATTERY()."""
-        data = [0x24, 0x23, on_off]
-        res = self._send(data)
-        status = "ON" if on_off else "OFF"
-        return f"BATTERY {status}: {'OK' if res else 'FAIL'}"
-
-    def BATTERY_Read(self) -> int:
-        """Battery relay 상태 읽기. 응답이 3초 내 오지 않으면 -1.
-
-        장비가 echo만 반환(상태 payload 없음)하면 len(res)==8이어서 -1로 처리.
-        정상 응답은 헤더 8 + 상태 1 = 최소 9바이트.
+    def _ensure_mcu1_connected(self) -> bool:
         """
-        res = self._send([0x24, 0x33], recv_timeout=3.0)
-        if isinstance(res, list) and len(res) >= 9:
-            return res[-1]
-        return -1
+        [요청사항 반영: 사전 Connect 강제 실행]
+        ReplayKit 환경에서는 이전 스텝의 소켓이 닫혀있을 수 있으므로,
+        조건을 따지지 않고 무조건 Connect()를 먼저 실행하여 통신망을 확실히 연결합니다.
+        """
+        logger.info("👉 제어 명령 수행 전, 사전에 Connect()를 실행하여 통신을 초기화합니다.")
+        self.Connect()  # 📌 무조건 연결 함수 먼저 동작
 
-    def BatterySet(self, voltage: float = 14.4) -> str:
-        """배터리 전압 설정 (V). 레거시 BATTERY_SET()."""
-        data = [0x20, 0x01, int(voltage * 10)]
-        res = self._send(data)
-        return f"Battery set to {voltage}V: {'OK' if res else 'FAIL'}"
+        mcu = "mcu1"
+        # Connect 이후에도 연결 상태가 아니면 실패 처리
+        if mcu not in self._connected_mcus:
+            logger.error(f"[{mcu}] Connect() 실행 후에도 장비를 찾을 수 없습니다.")
+            return False
+        return True
 
-    def BatteryCheck(self) -> float:
-        """배터리 전압 읽기 (V). 레거시 BATTERY_CHECK()."""
-        res = self._send([0x20, 0x02], recv_timeout=3.0)
-        if isinstance(res, list) and len(res) >= 9:
-            return float(res[-1]) / 10
-        return -1.0
+    def _safe_val(self, on_off) -> int:
+        """ReplayKit UI에서 빈칸("")이나 None을 던져도 기본값(1, ON)으로 켜지도록 보정"""
+        val_str = str(on_off).strip().lower()
+        if val_str in ['', 'none']:
+            return 1
+        return 1 if val_str in ['1', 'on', 'true', 'y', 'yes'] else 0
 
-    def AmpereCheck(self) -> float:
-        """전류 읽기 (A). 레거시 AMPERE_CHECK()."""
-        res = self._send([0x20, 0x03], recv_timeout=3.0)
+    def IGN1(self, on_off: int = 1, mcu: str = "mcu1") -> str:
+        val = self._safe_val(on_off)
+        logger.info(f"👉 [IGN1] 제어값: {val} (1=ON, 0=OFF)")
+        if not self._ensure_mcu1_connected(): return "FAIL: 연결 에러"
+
+        self._send("mcu1", [0x24, 0x22, val], recv=False)
+        time.sleep(0.3)
+        return f"[mcu1] IGN1 {'ON' if val else 'OFF'}: OK"
+
+    def IGN1_Read(self, mcu: str = "mcu1") -> int:
+        logger.info('IGN1_Read')
+        if not self._ensure_mcu1_connected(): return -1
+        res = self._send("mcu1", [0x24, 0x32], recv_timeout=3.0)
+        return res[-1] if isinstance(res, list) and len(res) >= 9 else -1
+
+    def IGN2(self, on_off: int = 1, mcu: str = "mcu1") -> str:
+        val = self._safe_val(on_off)
+        logger.info(f"👉 [IGN2] 제어값: {val} (1=ON, 0=OFF)")
+        if not self._ensure_mcu1_connected(): return "FAIL: 연결 에러"
+
+        self._send("mcu1", [0x24, 0x28, val], recv=False)
+        time.sleep(0.3)
+        return f"[mcu1] IGN2 {'ON' if val else 'OFF'}: OK"
+
+    def IGN2_Read(self, mcu: str = "mcu1") -> int:
+        logger.info('IGN2_Read')
+        if not self._ensure_mcu1_connected(): return -1
+        res = self._send("mcu1", [0x24, 0x38], recv_timeout=3.0)
+        return res[-1] if isinstance(res, list) and len(res) >= 9 else -1
+
+    def ACC(self, on_off: int = 1, mcu: str = "mcu1") -> str:
+        val = self._safe_val(on_off)
+        logger.info(f"👉 [ACC] 제어값: {val} (1=ON, 0=OFF)")
+        if not self._ensure_mcu1_connected(): return "FAIL: 연결 에러"
+
+        self._send("mcu1", [0x24, 0x21, val], recv=False)
+        time.sleep(0.3)
+        return f"[mcu1] ACC {'ON' if val else 'OFF'}: OK"
+
+    def ACC_Read(self, mcu: str = "mcu1") -> int:
+        logger.info('ACC_Read')
+        if not self._ensure_mcu1_connected(): return -1
+        res = self._send("mcu1", [0x24, 0x31], recv_timeout=3.0)
+        return res[-1] if isinstance(res, list) and len(res) >= 9 else -1
+
+    def BATTERY(self, on_off: int = 1, mcu: str = "mcu1") -> str:
+        val = self._safe_val(on_off)
+        logger.info(f"👉 [BATTERY] 제어값: {val} (1=ON, 0=OFF)")
+        if not self._ensure_mcu1_connected(): return "FAIL: 연결 에러"
+
+        self._send("mcu1", [0x24, 0x23, val], recv=False)
+        time.sleep(0.3)
+        return f"[mcu1] BATTERY {'ON' if val else 'OFF'}: OK"
+
+    def BATTERY_Read(self, mcu: str = "mcu1") -> int:
+        logger.info('BATTERY_Read')
+        if not self._ensure_mcu1_connected(): return -1
+        res = self._send("mcu1", [0x24, 0x33], recv_timeout=3.0)
+        return res[-1] if isinstance(res, list) and len(res) >= 9 else -1
+
+    def BatterySet(self, voltage: float = 14.4, mcu: str = "mcu1") -> str:
+        logger.info(f"👉 [BatterySet] 입력 전압값: '{voltage}'")
+        if not self._ensure_mcu1_connected(): return "FAIL: 연결 에러"
+
+        try:
+            vol_str = str(voltage).replace('V', '').replace('v', '').strip()
+            vol_val = 14.4 if vol_str in ['', 'none'] else float(vol_str)
+        except:
+            vol_val = 14.4
+
+        self._send("mcu1", [0x20, 0x01, int(vol_val * 10)], recv=False)
+        time.sleep(0.3)
+        return f"[mcu1] Battery set to {vol_val}V: OK"
+
+    def BatteryCheck(self, mcu: str = "mcu1") -> float:
+        logger.info('BatteryCheck')
+        if not self._ensure_mcu1_connected(): return -1.0
+        res = self._send("mcu1", [0x20, 0x02], recv_timeout=3.0)
+        return float(res[-1]) / 10 if isinstance(res, list) and len(res) >= 9 else -1.0
+
+    def AmpereCheck(self, mcu: str = "mcu1") -> float:
+        logger.info('AmpereCheck')
+        if not self._ensure_mcu1_connected(): return -1.0
+        res = self._send("mcu1", [0x20, 0x03], recv_timeout=3.0)
         if isinstance(res, list) and len(res) >= 10:
             raw = (res[-1] << 8) | res[-2]
             return float(raw) / 1000
         return -1.0
 
-    # ------------------------------------------------------------------
-    # Generic
-    # ------------------------------------------------------------------
-
-    def SendCommand(self, cmd1: int, cmd2: int, data_hex: str = "") -> str:
-        """범용 UDP 명령 전송. data_hex: 공백 구분 hex (예: 'FF 01')."""
-        cmd = [cmd1, cmd2]
-        if data_hex:
-            cmd.extend(int(b, 16) for b in data_hex.split())
-        res = self._send(cmd)
-        if isinstance(res, list):
-            return " ".join(f"0x{b:02X}" for b in res)
-        return str(res)
-
     def GetInfo(self) -> str:
-        """연결 정보 (host/port + CAN FD 신호 수 포함)."""
-        sig_count = len(self._canfd.signal_defs) if self._canfd is not None else 0
-        return (f"host={self._host}, port={self._udp_port}, "
-                f"signal_file={self._signal_file}, signals={sig_count}, "
-                f"canfd={'on' if self._canfd is not None else 'off'}, "
-                f"connected={self.IsConnected()}")
+        connected_list = list(self._connected_mcus.keys())
+        return (f"connected_mcus={connected_list}, "
+                f"signal_file={self._signal_file}, "
+                f"is_connected={self.IsConnected()}")
+
+    # ------------------------------------------------------------------
+    # 📌 Signal-based 데이터 전송 (UDP_CANFD 연동)
+    # ------------------------------------------------------------------
+
+    def LoadSignals(self, file_path: str) -> str:
+        """
+        CAN 신호 정의 파일(Excel/XML)을 로드하고 장비의 버스를 일괄 초기화합니다.
+        """
+        if not self._canfd:
+            return "FAIL: UDP_CANFD 모듈이 초기화되지 않았습니다."
+        try:
+            ext = os.path.splitext(file_path)[-1].lower()
+            if ext in ['.xls', '.xlsx']:
+                self._canfd.load_signal_definitions_from_excel(file_path)
+            elif ext == '.can':
+                self._canfd.load_signal_definitions_from_xml(file_path)
+            else:
+                return f"FAIL: 지원하지 않는 파일 확장자입니다 ({ext})"
+            
+            # 📌 기존의 단일 UDP_CANFD_INIT_MESSAGE() 대신 Multi-MCU 환경에 맞게
+            # 현재 연결된 모든 MCU 및 채널에 대해 버스를 일괄 재동기화 합니다.
+            for mcu in list(self._connected_mcus.keys()):
+                for ch_key in self._mcu_configs[mcu]["channels"].keys():
+                    baud, dbaud = self._channel_speeds.get(mcu, {}).get(ch_key, (500, 2000))
+                    ct = 2 if ch_key == "C" else 0
+                    self._send_canfd_init(mcu, channel=ch_key, baudrate=baud, data_baudrate=dbaud, line_select=0, can_type=ct)
+
+            self._signal_file = file_path
+            return f"OK: {file_path} 파일 로드 및 연결된 장비 버스 초기화 완료."
+        except Exception as e:
+            return f"FAIL: LoadSignals Error - {e}"
+
+    def SendSignal(self, signal_name: str, physical_value) -> str:
+        """
+        신호명(Signal Name)과 물리값을 입력받아 CAN/CAN-FD 버스로 패킷을 조립 후 전송합니다.
+        """
+        if not self._canfd:
+            return "FAIL: UDP_CANFD 모듈을 찾을 수 없습니다."
+        try:
+            # 변환 및 전송을 기존 모듈(UDP_CANFD)로 위임합니다.
+            self._canfd.SEND_CANEthernetData(signal_name, physical_value)
+            return f"OK: SendSignal [{signal_name} = {physical_value}] 전송 완료."
+        except Exception as e:
+            return f"FAIL: SendSignal Error - {e}"
+
+    def DoorTest(self) -> str:
+        """
+        운전석 도어 스위치 신호 매크로 테스트를 실행합니다.
+        """
+        if not self._canfd:
+            return "FAIL: UDP_CANFD 모듈을 찾을 수 없습니다."
+        try:
+            self._canfd.door_test()
+            return "OK: DoorTest 매크로 동작 완료."
+        except Exception as e:
+            return f"FAIL: DoorTest Error - {e}"
+
+    def TestAllSignals(self) -> str:
+        """
+        로드된 모든 신호를 순회하며 중간값을 계산해 통신 상태를 전체 테스트합니다.
+        """
+        if not self._canfd:
+            return "FAIL: UDP_CANFD 모듈을 찾을 수 없습니다."
+        try:
+            self._canfd.test_all_canfd_signals()
+            return "OK: TestAllSignals 부하 테스트 실행 완료."
+        except Exception as e:
+            return f"FAIL: TestAllSignals Error - {e}"
+if __name__ == "__main__":
+    import sys
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stdout)
+
+    tool = WoohyunBench()
+
+    print("\n[Step 1] 장비 접속")
+    print(tool.Connect())
+    time.sleep(5)
+
+    print('장비 정보 출력')
+    print(tool.GetInfo())
+    # time.sleep(1)
+    # print(tool.BATTERY(0))
+    # time.sleep(1)
+    # print(tool.ACC(0))
+    # time.sleep(1)
+    # print(tool.IGN1(0))
+    # time.sleep(5)
+    # print(tool.BATTERY(1))
+    # time.sleep(1)
+    # print(tool.ACC(1))
+    # time.sleep(1)
+    # print(tool.IGN1(1))
+    # print('장비 연결 확인')
+    print(tool.IsConnected())
+    volts = tool.BatteryCheck("mcu1")
+    amps = tool.AmpereCheck("mcu1")
+    ign1_status = tool.IGN1_Read("mcu1")
+
+    print(f"배터리: {volts}V, 전류: {amps}A, IGN1 상태: {ign1_status}")
+    time.sleep(5)
+
+    print("\n[Step 2] 로깅 시작 (단일 파일)")
+    print(tool.CanSaveStart(save_dir=r"C:\ReplayKit\canlog"))
+    time.sleep(1)
+    #
+    # print("\n[Step 3] CAN 데이터 전송")
+    #
+    # print(tool.SendCan(msg_id="477", type="STA", payload_hex="00,00,00,00,00,C0,00,00",channel="A",  repeat=1, cycle_ms=100))
+    # print(tool.SendCan(msg_id="47A", type="STA", payload_hex="00,00,70,00,00,00,00,00", channel="A", repeat=1, cycle_ms=100))
+    # print(tool.SendCan(msg_id="479", type="STA", payload_hex="00,00,00,00,00,02,00,00", channel="A", repeat=1, cycle_ms=100))
+
+    time.sleep(5)
+    print("\n[Step 4] 전체 로깅 중지 및 연결 해제")
+    print(tool.CanSaveStop())
+    print(tool.Disconnect())
+    print("✅ 장비 연결 해제 완료")
