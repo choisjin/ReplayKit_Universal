@@ -1634,26 +1634,19 @@ class HKMC6thService:
 
         # 키 정의에 monitor 필드가 있으면 (L_RRC/R_RRC 계열) 우선 적용.
         # 호출자가 monitor를 명시하지 않은 경우에만 — 명시된 값이 항상 우선.
-        # ccRC(legacy ccIC_Agent) 펌웨어는 monitor 바이트를 1=RIGHT/2=LEFT 로 해석하므로
-        # 정의된 LEFT/RIGHT 를 좌우 swap해야 물리 화면과 일치한다. (터치 `_touch_screen_bits`·
-        # screen_type 자동 유도와 동일 규약 — 이 경로만 swap이 빠져 L_RRC/R_RRC 하드키가
-        # 반대 화면에 입력되던 버그를 막는다.)
         if monitor not in (CCRC_MONITOR_LEFT, CCRC_MONITOR_RIGHT) and "monitor" in key_info:
             monitor = key_info["monitor"]
-            if self._is_ccrc_legacy_monitor:
-                if monitor == CCRC_MONITOR_LEFT:
-                    monitor = CCRC_MONITOR_RIGHT
-                elif monitor == CCRC_MONITOR_RIGHT:
-                    monitor = CCRC_MONITOR_LEFT
 
         # monitor 미지정(0x00 NONE) + rear_left/rear_right 화면이면 자동으로 LEFT/RIGHT 유도.
         # CCRC·일반 하드키 공통 — 일반 키도 monitor 필드가 rear 모니터 라우팅에 사용됨.
-        # CCRC 디바이스는 ccIC_Agent legacy 매핑이라 LEFT↔RIGHT 스왑.
+        # rear_left→LEFT(0x01), rear_right→RIGHT(0x02). L_RRC/R_RRC(monitor 필드 직접
+        # 사용, swap 없음)와 동일 규약 — ccRC도 동일. (과거 ccRC swap을 걸었으나 실기에서
+        # RRC/CCRC 그룹 키가 반대 화면으로 입력되어 제거. L/R 그룹은 정상이므로 그에 일치.)
         if monitor not in (CCRC_MONITOR_LEFT, CCRC_MONITOR_RIGHT):
             if screen_type == "rear_left":
-                monitor = CCRC_MONITOR_RIGHT if self._is_ccrc_legacy_monitor else CCRC_MONITOR_LEFT
+                monitor = CCRC_MONITOR_LEFT
             elif screen_type == "rear_right":
-                monitor = CCRC_MONITOR_LEFT if self._is_ccrc_legacy_monitor else CCRC_MONITOR_RIGHT
+                monitor = CCRC_MONITOR_RIGHT
 
         # _capture_lock: 키 시퀀스 중 스크린샷 CMD_GETIMG 차단
         # _input_priority: 미러링이 lock 점유 중일 때 다음 캡처를 양보시켜 키 입력 응답 지연 완화
