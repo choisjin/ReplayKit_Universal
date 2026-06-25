@@ -993,11 +993,13 @@ class BMWAgentService:
             return False
         try:
             self._ensure_root()  # debugfs 읽기는 root 필요
-            # 활성 plane→crtc 바인딩 줄만 필터(전체 state 전송 회피, plain grep=호환성↑).
-            # `(null)` 줄은 제외되고 `crtc=crtc-N` 만 남는다. 일반 콘텐츠는 crtc-6~9 라
-            # crtc-4/5 가 잡히면 해당 화면 스크린세이버 ON 으로 확정.
+            # ⚠️ 전체 state 를 grep 하면 connector→crtc 같은 '정적' 바인딩(crtc-2..5 등)이
+            # 스크린세이버와 무관하게 항상 잡혀 오탐. 반드시 **plane 블록만** 봐야 한다.
+            # plane 헤더는 컬럼0의 `plane[...]` 로 시작하고 바로 다음 줄이 `crtc=crtc-N`/(null),
+            # 그 다음이 `fb=`. `-A2` 로 헤더+crtc+fb 만 받아 plane→crtc 바인딩만 추출한다.
+            # 스크린세이버 시 그 화면 전용 CRTC(좌=crtc-4/우=crtc-5)가 plane 에 바인딩됨.
             r = self._adb_shell(
-                f"grep 'crtc=crtc-' /sys/kernel/debug/dri/{self._drm_node}/state",
+                f"grep -A2 '^plane' /sys/kernel/debug/dri/{self._drm_node}/state",
                 timeout=8)
             bound = set(re.findall(r"crtc=(crtc-\d+)", r.stdout or ""))
             return crtc in bound
