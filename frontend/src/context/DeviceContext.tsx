@@ -51,6 +51,8 @@ interface DeviceContextType {
   sendControl: (msg: object) => void;
   // 실시간 FPS
   streamFps: number;
+  // 현재 보고 있는 화면이 스크린세이버(대기화면) 상태인지 — 라이브 뷰 배지용 (BMW 등).
+  screensaver: boolean;
   // 시나리오 재생 중 미러링 중단 여부 (디바이스 부하 감소 — 안내 오버레이용)
   screenPausedForPlayback: boolean;
   // 화면 스트리밍 일시정지/재개 (deprecated: 재생 중단은 screenPausedForPlayback이 담당)
@@ -82,6 +84,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const [streamGaveUp, setStreamGaveUp] = useState(false);
   const pollFailRef = useRef(0); // poll 경로 연속 실패 카운트
   const POLL_FAIL_LIMIT = 5; // 연속 실패 이 횟수 이상이면 진성 끊김 처리
+  const [screensaver, setScreensaver] = useState(false);
   const [h264Mode, setH264Mode] = useState(false);
   const [h264Size, setH264Size] = useState({ width: 1080, height: 1920 });
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -245,6 +248,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     h264ModeRef.current = false;
     setH264Mode(false);
     h264FeedCountRef.current = 0;
+    setScreensaver(false);  // 스트림 종료/전환 시 스크린세이버 라벨 초기화
     stopFpsCounter();
     if (wsRef.current) {
       // 이전 WebSocket의 이벤트 핸들러 제거 (close 완료 전 프레임 수신 방지)
@@ -342,6 +346,9 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
             }
             h264ModeRef.current = false;
             setH264Mode(false);
+          } else if (msg.type === 'screen_state') {
+            // BMW 스크린세이버(대기화면) 라벨 상태 — 변할 때만 송신됨.
+            setScreensaver(!!msg.screensaver);
           } else if (msg.type === 'frame' && msg.image) {
             const mime = msg.format === 'jpeg' ? 'image/jpeg' : 'image/png';
             if (screenshotDeviceIdRef.current === deviceId) {
@@ -663,6 +670,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       h264RendererRef,
       sendControl,
       streamFps,
+      screensaver,
       screenPausedForPlayback,
       pauseScreenStream,
       resumeScreenStream,

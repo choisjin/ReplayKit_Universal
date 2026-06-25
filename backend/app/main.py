@@ -797,8 +797,9 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     if bmw and bmw.is_connected:
                         # 스크린세이버(대기화면) 상태 — 내부 1s 캐시라 매 루프 호출해도 저렴.
                         # 변할 때만 라벨용 screen_state 메시지 송신(라이브/폴백 경로 공통).
+                        # 현재 보고 있는 화면(screen_type) 기준으로 판별.
                         try:
-                            ss_now = await bmw.async_screensaver_active()
+                            ss_now = await bmw.async_screensaver_active(screen_type)
                             if ss_now != bmw_last_ss:
                                 bmw_last_ss = ss_now
                                 await websocket.send_json(

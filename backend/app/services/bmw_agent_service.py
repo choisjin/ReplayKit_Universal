@@ -235,12 +235,20 @@ class BMWAgentService:
         # webosprojectionhmi(=WebOS 프로젝션) 인지 settingshmi 등 네이티브인지로 백엔드 결정.
         self._fg_cache: Optional[Tuple[float, dict]] = None
         self._fg_ttl = 1.0
-        # 스크린세이버(대기화면) 상태 — 정보용 라벨 전용. 대기화면은 DRM atomic state
-        # (/sys/kernel/debug/dri/N/state)의 활성 framebuffer 가 평소와 달라지는 것으로
-        # 구분한다(구체 판별 규칙은 디바이스 출력 확인 후 확정). TTL 캐시로 폴링 비용 억제.
-        self._ss_on = False
-        self._ss_ts = 0.0
+        # 스크린세이버(대기화면) 상태 — 정보용 라벨 전용. 대기화면은 화면 전체가 덮이며,
+        # 이때 DRM atomic state(/sys/kernel/debug/dri/N/state)에 화면별 '스크린세이버 전용
+        # CRTC'가 plane 에 바인딩된다(평소엔 (null)). 좌(screen0)=crtc-4, 우(screen1)=crtc-5
+        # 가 보이면 해당 화면 스크린세이버 ON. 일반 콘텐츠는 crtc-6~9 라 완전 분리됨.
+        # screen_id → (ts, on) TTL 캐시로 debugfs 폴링 비용 억제.
+        self._ss_cache: dict[int, Tuple[float, bool]] = {}
         self._ss_ttl = 1.0
+        self._drm_node = (os.environ.get("BMW_DRM_DRI_NODE") or "1").strip()
+        # screen_id → 스크린세이버 전용 CRTC 이름 (env 로 override 가능: "left,right")
+        _ss_crtcs = (os.environ.get("BMW_SCREENSAVER_CRTCS") or "crtc-4,crtc-5").split(",")
+        self._ss_crtc: dict[int, str] = {
+            0: _ss_crtcs[0].strip() if len(_ss_crtcs) > 0 else "crtc-4",
+            1: _ss_crtcs[1].strip() if len(_ss_crtcs) > 1 else "crtc-5",
+        }
         # 디바이스 Android 컨테이너 이름 (lxc-attach 대상). 환경변수로 override 가능.
         self._android_container = os.environ.get("BMW_ANDROID_CONTAINER", "android1")
         # 속도 최적화 캐시: screen_id → SurfaceFlinger display id, adb root 1회 플래그.
@@ -944,25 +952,44 @@ class BMWAgentService:
         with self._live_lock:
             return self._latest_live_jpeg, self._live_frame_id
 
-    def screensaver_active(self) -> bool:
-        """DRM atomic state 로 스크린세이버(대기화면) 여부 판별. 정보용 라벨 전용.
+    def screensaver_active(self, screen_type=None) -> bool:
+        """해당 화면이 스크린세이버(대기화면) 상태인지 DRM atomic state 로 판별.
 
-        대기화면은 화면 전체가 스크린세이버 이미지로 덮이며, 이때 DRM 파이프라인의
-        활성 framebuffer(/sys/kernel/debug/dri/N/state 의 `fb=`)가 평소와 달라진다.
-        TODO: 디바이스의 정상/스크린세이버 상태 state 출력을 확인해 구분 규칙 확정.
-        TTL 캐시로 폴링 비용 억제. 미구현 동안은 항상 False.
+        대기화면은 화면 전체를 덮으며, 그때만 화면별 전용 CRTC(좌=crtc-4, 우=crtc-5)가
+        plane 에 바인딩된다(`/sys/kernel/debug/dri/N/state` 에 `crtc=crtc-4`/`crtc-5` 출현).
+        평소엔 `(null)` 이고 일반 콘텐츠는 crtc-6~9 라 오탐 없이 분리된다. 정보용 라벨 전용.
+        screen_id 별 TTL(1s) 캐시. 읽기 실패/권한거부 시 False(라벨 미표시).
         """
+        sid = self._screen_id(screen_type)
         now = time.monotonic()
-        if (now - self._ss_ts) < self._ss_ttl:
-            return self._ss_on
-        self._ss_ts = now
-        # TODO(DRM): adb shell 'grep -B3 fb= /sys/kernel/debug/dri/N/state' 파싱으로 판별
-        self._ss_on = False
-        return self._ss_on
+        cached = self._ss_cache.get(sid)
+        if cached and (now - cached[0]) < self._ss_ttl:
+            return cached[1]
+        on = self._probe_screensaver(sid)
+        self._ss_cache[sid] = (now, on)
+        return on
 
-    async def async_screensaver_active(self) -> bool:
+    def _probe_screensaver(self, sid: int) -> bool:
+        crtc = self._ss_crtc.get(sid)
+        if not crtc:
+            return False
+        try:
+            self._ensure_root()  # debugfs 읽기는 root 필요
+            # 활성 plane→crtc 바인딩 줄만 필터(전체 state 전송 회피, plain grep=호환성↑).
+            # `(null)` 줄은 제외되고 `crtc=crtc-N` 만 남는다. 일반 콘텐츠는 crtc-6~9 라
+            # crtc-4/5 가 잡히면 해당 화면 스크린세이버 ON 으로 확정.
+            r = self._adb_shell(
+                f"grep 'crtc=crtc-' /sys/kernel/debug/dri/{self._drm_node}/state",
+                timeout=8)
+            bound = set(re.findall(r"crtc=(crtc-\d+)", r.stdout or ""))
+            return crtc in bound
+        except Exception as e:
+            logger.debug("BMW screensaver probe failed (sid=%s): %s", sid, e)
+            return False
+
+    async def async_screensaver_active(self, screen_type=None) -> bool:
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.screensaver_active)
+        return await loop.run_in_executor(None, self.screensaver_active, screen_type)
 
     def stop_live_stream(self) -> None:
         self._live_stop.set()

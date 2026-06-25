@@ -969,6 +969,9 @@ class PlaybackService:
                         step_result.sub_results = [SubResult(**sr) for sr in judgement.get("sub_results", [])]
 
                         if judgement["status"] == "error":
+                            # 비교 자체가 수행되지 못한 경우도 error 가 아니라 fail 로 분류하고
+                            # 원인을 메시지에 남긴다.
+                            step_result.status = "fail"
                             step_result.message = judgement.get("message", "Multi-crop comparison error")
                         else:
                             # Generate annotated image with all match boxes
@@ -1003,7 +1006,12 @@ class PlaybackService:
                                 except Exception as e:
                                     logger.warning("Failed to generate multi-crop expected annotated: %s", e)
 
-                            parts = [f"{sr.label or f'#{i+1}'}:{sr.status}({sr.score:.2f})" for i, sr in enumerate(step_result.sub_results)]
+                            parts = []
+                            for i, sr in enumerate(step_result.sub_results):
+                                seg = f"{sr.label or f'#{i+1}'}:{sr.status}({sr.score:.2f})"
+                                if sr.status != "pass" and sr.reason:
+                                    seg += f" [{sr.reason}]"
+                                parts.append(seg)
                             step_result.message = f"Multi-crop: {', '.join(parts)}"
 
                     elif mode == CompareMode.FULL_EXCLUDE:
@@ -1024,6 +1032,9 @@ class PlaybackService:
                         _diff_array = judgement.get("diff_array")  # 재사용용 SSIM diff
 
                         if judgement["status"] == "error":
+                            # 비교 자체가 수행되지 못한 경우도 error 가 아니라 fail 로 분류하고
+                            # 원인을 메시지에 남긴다.
+                            step_result.status = "fail"
                             step_result.message = judgement.get("message", "Exclude comparison error")
                         else:
                             def _build_exclude_actual_annotated():
@@ -1098,6 +1109,9 @@ class PlaybackService:
                         _diff_array = judgement.get("diff_array")
 
                         if judgement["status"] == "error":
+                            # 비교 자체가 수행되지 못한 경우도 error 가 아니라 fail 로 분류하고
+                            # 원인을 메시지에 남긴다.
+                            step_result.status = "fail"
                             step_result.message = judgement.get("message", "Match-crop comparison error")
                         else:
                             match_loc = judgement.get("match_location")
@@ -1180,6 +1194,9 @@ class PlaybackService:
                         _diff_array = judgement.get("diff_array")
 
                         if judgement["status"] == "error":
+                            # 비교 자체가 수행되지 못한 경우도 error 가 아니라 fail 로 분류하고
+                            # 원인을 메시지에 남긴다.
+                            step_result.status = "fail"
                             step_result.message = judgement.get("message", "Image comparison error")
                         else:
                             match_loc = judgement.get("match_location")
@@ -1251,9 +1268,20 @@ class PlaybackService:
                     step_result.message = f"Executed on {step.device_id or 'default'}"
 
         except Exception as e:
-            step_result.status = "error"
+            # image_tap·이미지 비교 계열은 비-pass 결과(미탐지·캡처실패·해상도불일치 등)를
+            # error 가 아니라 fail 로 분류하고 원인을 메시지에 남긴다. 그 외 스텝의 예외는
+            # 인프라성 문제로 보고 기존대로 error 로 유지한다.
+            is_image_step = (
+                step.type == StepType.IMAGE_TAP
+                or bool(step.expected_image)
+                or (step.compare_mode == CompareMode.MULTI_CROP and bool(step.expected_images))
+            )
+            step_result.status = "fail" if is_image_step else "error"
             step_result.message = str(e)
-            logger.error("Step %d execution error: %s", step.id, e)
+            logger.error(
+                "Step %d execution %s: %s",
+                step.id, step_result.status, e,
+            )
 
         t_end = time.time()
         step_result.execution_time_ms = int((t_end - start_time) * 1000)

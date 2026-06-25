@@ -142,6 +142,7 @@ class SubResult(BaseModel):
     expected_image: str = ""
     score: float = 0.0
     status: str = "pass"  # pass/warning/fail
+    reason: str = ""  # 비-pass 사유(미탐지·기대이미지 누락·ROI 누락 등)
     match_location: Optional[dict] = None
 
 

@@ -289,6 +289,7 @@ export default function RecordPage() {
     h264Mode, h264Size, videoRef, h264RendererRef, sendControl,
     screenType, setScreenType, refreshScreenshot,
     screenStatus, streamFps,
+    screensaver,
     screenPausedForPlayback,
     pauseScreenStream, resumeScreenStream,
   } = useDevice();
@@ -4757,6 +4758,11 @@ export default function RecordPage() {
                         : screenStatus === 'idle'
                           ? `${h264Mode ? 'H.264' : 'JPEG'} · ${t('record.screenStatic')}`
                           : t('record.deviceDisconnected')}
+                    </Tag>
+                  )}
+                  {screenDevice && isScreenBmw && screensaver && (
+                    <Tag color="purple" icon={<FundProjectionScreenOutlined />} style={{ marginLeft: 0 }}>
+                      {t('record.screensaver')}
                     </Tag>
                   )}
                   {screenStatus === 'disconnected' && isScreenAdb && (

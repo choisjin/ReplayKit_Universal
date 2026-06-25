@@ -348,11 +348,13 @@ class ImageCompareService:
         for item in crop_items:
             img_exp = safe_imread(item["image"])
             if img_exp is None:
+                # 비교 불가도 error 가 아니라 fail 로 분류하고 원인을 남긴다.
                 sub_results.append({
                     "label": item.get("label", ""),
                     "expected_image": item.get("rel_path", ""),
                     "score": 0.0,
-                    "status": "error",
+                    "status": "fail",
+                    "reason": "기대 이미지 로드 실패",
                     "match_location": None,
                 })
                 continue
@@ -364,7 +366,8 @@ class ImageCompareService:
                     "label": item.get("label", ""),
                     "expected_image": item.get("rel_path", ""),
                     "score": 0.0,
-                    "status": "error",
+                    "status": "fail",
+                    "reason": "ROI 정보 없음(구버전 데이터)",
                     "match_location": None,
                 })
                 continue
@@ -372,15 +375,18 @@ class ImageCompareService:
             result = self._compare_at_roi(img_exp, img_act, roi)
             score = result["score"]
             if "error" in result:
-                status = "error"
+                status = "fail"
+                reason = result["error"]
             else:
                 status = "pass" if score >= threshold_pass else "fail"
+                reason = "" if status == "pass" else f"유사도 {score:.4f} < {threshold_pass:.4f}"
 
             sub_results.append({
                 "label": item.get("label", ""),
                 "expected_image": item.get("rel_path", ""),
                 "score": score,
                 "status": status,
+                "reason": reason,
                 "match_location": result.get("match_location"),
             })
 
