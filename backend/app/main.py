@@ -811,14 +811,14 @@ async def websocket_screen_mirror(websocket: WebSocket):
                             pass
                         # device-side 스트리머(host python) 우선 — 프레임당 adb 스폰/왕복 제거.
                         # 스트림이 죽었거나 screen 이 바뀌었으면 (재)기동. 실패 시 단발 캡처 폴백.
-                        _sid = bmw._screen_id(screen_type)
-                        if not bmw.is_live_running() or bmw.live_screen() != _sid:
+                        # 후석 듀얼은 screen 별 독립 스트림 — 이 WS 의 screen 만 다룬다.
+                        if not bmw.is_live_running(screen_type):
                             started = await bmw.async_start_live_stream(screen_type)
                             if started:
                                 live_last_frame_id = -1
-                        if bmw.is_live_running():
+                        if bmw.is_live_running(screen_type):
                             try:
-                                jpeg_bytes, fid = bmw.get_live_frame()
+                                jpeg_bytes, fid = bmw.get_live_frame(screen_type)
                                 if jpeg_bytes is not None and fid != live_last_frame_id:
                                     live_last_frame_id = fid
                                     await websocket.send_bytes(jpeg_bytes)
@@ -1173,10 +1173,11 @@ async def websocket_screen_mirror(websocket: WebSocket):
         # BMW 라이브 스트림(host python 스트리머 + exec-out 파이프) 정리.
         if is_bmw:
             _bmw = device_manager.get_bmw_service(target_device_id)
-            if _bmw is not None and _bmw.is_live_running():
+            # 이 WS 가 담당하던 screen 의 스트림만 정리(듀얼의 다른 화면 WS 는 유지).
+            if _bmw is not None and _bmw.is_live_running(screen_type):
                 try:
                     await asyncio.get_event_loop().run_in_executor(
-                        None, _bmw.stop_live_stream
+                        None, _bmw.stop_live_stream, screen_type
                     )
                 except Exception as e:
                     logger.debug("BMW live stream stop on disconnect failed: %s", e)

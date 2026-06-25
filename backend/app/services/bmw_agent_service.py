@@ -197,6 +197,24 @@ def _encode_to(data: bytes, fmt: str) -> bytes:
         return data
 
 
+class _BMWLiveStream:
+    """BMW 화면(screen_id) 1개에 대한 독립 라이브 스트림 상태.
+
+    후석 듀얼(0=좌/1=우)을 동시에 미러링할 때 화면마다 별도 인스턴스를 둔다.
+    재시작 시 새 인스턴스로 교체되므로, 살아남은 옛 리더 스레드는 자기 인스턴스의
+    latest_jpeg 에만 쓰고(현 dict 에는 없음) 최신본을 오염시키지 않는다(epoch 불필요).
+    """
+    __slots__ = ("sid", "proc", "thread", "stop", "latest_jpeg", "frame_id")
+
+    def __init__(self, sid: int, proc, stop):
+        self.sid = sid
+        self.proc = proc
+        self.thread: Optional[threading.Thread] = None
+        self.stop = stop
+        self.latest_jpeg: Optional[bytes] = None
+        self.frame_id = 0
+
+
 class BMWAgentService:
     """ADB 기반 BMW 후석 듀얼 디스플레이 제어 서비스.
 
@@ -256,16 +274,14 @@ class BMWAgentService:
         self._display_id_map: dict[int, str] = {}
         self._rooted = False
         # ── device-side 라이브 스트림 상태 (host python 스트리머) ──
-        self._live_proc: Optional[subprocess.Popen] = None
-        self._live_thread: Optional[threading.Thread] = None
-        self._live_stop = threading.Event()
+        # 후석 듀얼(0=좌/1=우)은 두 화면을 동시에 미러링하므로 screen_id 별로 독립
+        # 스트림을 운영한다. (단일 _live_proc 공유 시 screen0/screen1 두 WS 가 서로의
+        # 스트림을 stop→start 하며 무한 thrash → 어느 스트림도 안정되지 못해 fps 0 →
+        # '정지화면' 라벨 고착. 재부팅 후 두 화면이 동시에 재연결되면 재현됨.)
         self._live_lock = threading.Lock()
-        self._latest_live_jpeg: Optional[bytes] = None
-        self._live_frame_id = 0
-        self._live_screen: Optional[int] = None  # 현재 스트리밍 중인 screen_id
-        # 스트림 세대(epoch): 화면 전환/정지로 새 스트림이 뜨면 증가. 옛 리더 스레드가
-        # join 타임아웃 후에도 살아 있어도 epoch 불일치면 최신 프레임에 못 쓰게 차단(겹침 방지).
-        self._live_epoch = 0
+        self._live_streams: dict[int, _BMWLiveStream] = {}
+        # 서비스 전역 단조 증가 frame id — 스트림 재시작에도 유일성 보장(소비자 dedup용).
+        self._live_frame_seq = 0
         try:
             self._live_jpeg_q = int(os.environ.get("BMW_LIVE_JPEG_Q") or 75)
         except Exception:
@@ -830,27 +846,29 @@ class BMWAgentService:
     # ------------------------------------------------------------------
     # Device-side live stream (host python streamer over `adb exec-out`)
     # ------------------------------------------------------------------
-    def is_live_running(self) -> bool:
-        t = self._live_thread
-        p = self._live_proc
+    def is_live_running(self, screen_type=None) -> bool:
+        sid = self._screen_id(screen_type)
+        with self._live_lock:
+            st = self._live_streams.get(sid)
+            t = st.thread if st else None
+            p = st.proc if st else None
         return bool(t and t.is_alive() and p and p.poll() is None)
 
-    def live_screen(self) -> Optional[int]:
-        return self._live_screen
-
     def start_live_stream(self, screen_type=None) -> bool:
-        """host python 스트리머를 push+실행하고 리더 스레드 기동. 이미 같은 screen이면 True.
+        """해당 screen 의 host python 스트리머를 push+실행하고 리더 스레드 기동.
 
-        screen 이 바뀌면 기존 스트림을 정리하고 재시작. 실패 시 False(호출자 단발 캡처 폴백).
+        이미 같은 screen 이 살아 있으면 True. 다른 screen 의 스트림은 건드리지 않으므로
+        후석 듀얼을 동시에 미러링해도 서로 stop→start 로 thrash 하지 않는다.
+        실패 시 False(호출자 단발 캡처 폴백).
         """
         sid = self._screen_id(screen_type)
         with self._live_lock:
-            if (self._live_thread and self._live_thread.is_alive()
-                    and self._live_proc and self._live_proc.poll() is None
-                    and self._live_screen == sid):
+            st = self._live_streams.get(sid)
+            if (st and st.thread and st.thread.is_alive()
+                    and st.proc and st.proc.poll() is None):
                 return True
-        # 다른 screen 이거나 죽었으면 정리 후 재시작
-        self.stop_live_stream()
+        # 같은 screen 의 죽은 스트림만 정리(다른 screen 은 유지)
+        self._stop_one(sid)
         try:
             self._ensure_root()
             display_id = self._display_id_for(sid) or ""
@@ -871,41 +889,36 @@ class BMWAgentService:
             if push.returncode != 0:
                 logger.warning("BMW live: streamer push failed: %s", push.stderr)
                 return False
-            self._live_stop.clear()
             proc = subprocess.Popen(
                 [resolve_adb_path(), "-s", self.serial, "exec-out",
                  "python3", "-u", remote],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 creationflags=_NO_WINDOW,
             )
+            st = _BMWLiveStream(sid, proc, threading.Event())
+            t = threading.Thread(target=self._live_reader, args=(st,), daemon=True)
+            st.thread = t
             with self._live_lock:
-                self._live_epoch += 1
-                epoch = self._live_epoch
-                self._live_proc = proc
-                self._live_screen = sid
-                self._latest_live_jpeg = None
-            t = threading.Thread(target=self._live_reader, args=(proc, epoch), daemon=True)
-            with self._live_lock:
-                self._live_thread = t
+                self._live_streams[sid] = st
             t.start()
             logger.info("BMW live stream started (screen=%d, display_id=%s)", sid, display_id or "-")
             return True
         except Exception as e:
             logger.warning("BMW live stream start failed: %r", e)
-            self.stop_live_stream()
+            self._stop_one(sid)
             return False
 
-    def _live_reader(self, proc: subprocess.Popen, epoch: int) -> None:
+    def _live_reader(self, st: "_BMWLiveStream") -> None:
         """exec-out stdout 에서 BMWF 프레임을 파싱 → (PNG면 JPEG 변환) 최신본 보관.
 
         프레임: b"BMWF" + struct('<BI', fmt, length) + data. fmt 0=JPEG / 1=PNG.
-        epoch 가 현재 세대와 다르면(전환으로 새 스트림이 떴음) 쓰기 중단(겹침 방지).
+        재시작으로 dict[sid] 가 다른 인스턴스로 교체되면(== 이 st 가 아니면) 쓰기 중단(겹침 방지).
         """
         from PIL import Image
         HDR = 9  # b"BMWF"(4) + '<BI'(5: fmt 1B + length 4B)
-        stdout = proc.stdout
+        stdout = st.proc.stdout
         buf = b""
-        while not self._live_stop.is_set():
+        while not st.stop.is_set():
             try:
                 chunk = stdout.read(262144) if stdout else b""
             except Exception:
@@ -940,17 +953,22 @@ class BMWAgentService:
                         im.convert("RGB").save(bio, format="JPEG", quality=self._live_jpeg_q)
                         jpg = bio.getvalue()
                     with self._live_lock:
-                        if epoch != self._live_epoch:
+                        if self._live_streams.get(st.sid) is not st:
                             return  # 옛 세대 리더 → 최신 프레임 오염 금지
-                        self._latest_live_jpeg = jpg
-                        self._live_frame_id += 1
+                        self._live_frame_seq += 1
+                        st.latest_jpeg = jpg
+                        st.frame_id = self._live_frame_seq
                 except Exception:
                     continue
-        logger.info("BMW live reader exited (screen=%s, epoch=%d)", self._live_screen, epoch)
+        logger.info("BMW live reader exited (screen=%s)", st.sid)
 
-    def get_live_frame(self) -> Tuple[Optional[bytes], int]:
+    def get_live_frame(self, screen_type=None) -> Tuple[Optional[bytes], int]:
+        sid = self._screen_id(screen_type)
         with self._live_lock:
-            return self._latest_live_jpeg, self._live_frame_id
+            st = self._live_streams.get(sid)
+            if st is None:
+                return None, 0
+            return st.latest_jpeg, st.frame_id
 
     def screensaver_active(self, screen_type=None) -> bool:
         """해당 화면이 스크린세이버(대기화면) 상태인지 DRM atomic state 로 판별.
@@ -991,15 +1009,14 @@ class BMWAgentService:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.screensaver_active, screen_type)
 
-    def stop_live_stream(self) -> None:
-        self._live_stop.set()
+    def _stop_one(self, sid: int) -> None:
+        """단일 screen 의 스트림만 종료(다른 screen 은 유지)."""
         with self._live_lock:
-            self._live_epoch += 1   # 살아남은 옛 리더의 프레임 쓰기 무효화
-            proc = self._live_proc
-            t = self._live_thread
-            self._live_proc = None
-            self._live_thread = None
-            self._live_screen = None
+            st = self._live_streams.pop(sid, None)
+        if st is None:
+            return
+        st.stop.set()  # 살아남은 옛 리더의 루프 종료 신호
+        proc, t = st.proc, st.thread
         if proc is not None:
             try:
                 proc.terminate()
@@ -1014,8 +1031,19 @@ class BMWAgentService:
                     pass
         if t and t.is_alive():
             t.join(timeout=1.5)
-        with self._live_lock:
-            self._latest_live_jpeg = None
+
+    def stop_live_stream(self, screen_type=None) -> None:
+        """screen_type 지정 시 해당 화면만, 미지정(None) 시 모든 화면 스트림 종료.
+
+        disconnect() 는 전체 종료, WS 단일 끊김은 그 WS 의 screen 만 종료하도록 호출한다.
+        """
+        if screen_type is None:
+            with self._live_lock:
+                sids = list(self._live_streams.keys())
+            for sid in sids:
+                self._stop_one(sid)
+        else:
+            self._stop_one(self._screen_id(screen_type))
 
     async def async_start_live_stream(self, screen_type=None) -> bool:
         loop = asyncio.get_event_loop()
