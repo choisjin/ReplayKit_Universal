@@ -886,18 +886,8 @@ export default function RecordPage() {
   const selectedDevice = moduleDevices.find(d => d.id === selectedDeviceId);
   const selectedModuleName = selectedDevice?.info?.module as string | undefined;
 
-  // Send_adb_command용 — 연결된 ADB 디바이스 목록 (콤보 옵션)
-  const connectedAdbDevices = primaryDevices.filter(d => d.type === 'adb' && isDeviceConnected(d));
-  // 화면에서 현재 선택중인 ADB 디바이스의 시리얼 (없으면 빈 문자열)
-  const currentScreenAdbSerial = (() => {
-    const dev = primaryDevices.find(d => d.id === screenshotDeviceId);
-    return dev?.type === 'adb' ? (dev.address || '') : '';
-  })();
-  // 모듈 스텝의 타겟 — 드롭다운에서 선택한 Android 모듈 디바이스의 시리얼.
-  // serial 자동 기입은 화면 디바이스가 아니라 이 선택 디바이스를 우선 사용한다.
-  const selectedModuleAdbSerial = selectedDevice?.type === 'adb' ? (selectedDevice.address || '') : '';
-  // serial 자동 기입에 쓸 기본 시리얼: 선택한 모듈 디바이스 우선, 없으면 화면 디바이스 폴백
-  const defaultAdbSerial = selectedModuleAdbSerial || currentScreenAdbSerial;
+  // Android 모듈은 serial 인자를 UI에 노출하지 않는다(아래 렌더링에서 숨김).
+  // 재생 시 백엔드가 step.device_id(=selectedDeviceId)에서 타겟 ADB 시리얼을 derive 해 라우팅한다.
 
   // 선택된 디바이스의 모듈 함수 목록 로드
   useEffect(() => {
@@ -915,15 +905,6 @@ export default function RecordPage() {
       setModuleFuncArgs({});
     }).catch(() => { setModuleFunctions([]); setModuleDescription(''); });
   }, [selectedModuleName]);
-
-  // Android.Send_adb_command 선택 상태에서 모듈 디바이스를 바꾸면 serial 인자를 새 디바이스 시리얼로 갱신.
-  // (Android↔Android 전환은 selectedModuleName이 그대로라 위 useEffect가 안 돌아 serial이 stale 됨)
-  useEffect(() => {
-    if (selectedModuleName === 'Android' && selectedModuleFunc === 'Send_adb_command' && defaultAdbSerial) {
-      setModuleFuncArgs(prev => ({ ...prev, serial: defaultAdbSerial }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDeviceId]);
 
   // Random stress 설정 저장 여부 추적 (디바이스 전환 중 초기 로드와 auto-save 충돌 방지)
   const randCfgLoadedRef = useRef(false);
@@ -5730,11 +5711,9 @@ export default function RecordPage() {
                         if (fn) {
                           const defaults: Record<string, string> = {};
                           fn.params.forEach(p => { if (p.default !== undefined) defaults[p.name] = p.default.replace(/^'(.*)'$/, '$1'); });
-                          // Android.Send_adb_command: serial 비어있으면 선택한 모듈 디바이스 시리얼로 자동 채움
-                          // (없으면 현재 화면 디바이스 시리얼 폴백)
-                          if (selectedModuleName === 'Android' && v === 'Send_adb_command' && !defaults.serial) {
-                            defaults.serial = defaultAdbSerial;
-                          }
+                          // Android.Send_adb_command: serial은 자동 기입하지 않는다(비워둠).
+                          // 비어 있으면 백엔드가 step.device_id에서 타겟 시리얼을 derive 해 라우팅하고,
+                          // 콤보로 명시 선택한 경우에만 그 시리얼로 override 한다.
                           setModuleFuncArgs(defaults);
                         } else {
                           setModuleFuncArgs({});
@@ -5771,10 +5750,10 @@ export default function RecordPage() {
                             </Button>
                           )}
                           {fn.params.length > 0 && fn.params.map(p => {
-                            const isAdbSerialCombo =
-                              selectedModuleName === 'Android' &&
-                              selectedModuleFunc === 'Send_adb_command' &&
-                              p.name === 'serial';
+                            // Android 모듈의 모든 함수에서 serial 인자는 노출하지 않는다.
+                            // 비워두면 백엔드가 step.device_id(=선택 디바이스)에서 타겟 시리얼을 derive 해 라우팅한다.
+                            const isAndroidSerialHidden =
+                              selectedModuleName === 'Android' && p.name === 'serial';
                             // OCR CheckText/ClickText/ExtractAllText: mode 파라미터 → 콤보박스
                             const isOcrMode =
                               selectedModuleName === 'OCR' &&
@@ -5810,6 +5789,7 @@ export default function RecordPage() {
                             const isWoohyunChannel = isWoohyun && selectedModuleFunc === 'SendCan' && p.name === 'channel';
                             const isWoohyunRepeat = isWoohyun && selectedModuleFunc === 'SendCan' && p.name === 'repeat';
                             if (isOcrRegionParam && moduleFuncArgs['mode'] !== 'Region') return null;
+                            if (isAndroidSerialHidden) return null;
                             return (
                             <div key={p.name} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                               <div style={{ display: 'flex', gap: 4, alignItems: 'center', width: '100%' }}>
@@ -5843,24 +5823,6 @@ export default function RecordPage() {
                                       { value: 'arabic',     label: 'Arabic (العربية)' },
                                       { value: 'devanagari', label: 'Devanagari (हिन्दी)' },
                                     ]}
-                                  />
-                                ) : isAdbSerialCombo ? (
-                                  <Select
-                                    size="small"
-                                    showSearch
-                                    allowClear
-                                    placeholder={defaultAdbSerial
-                                      ? `${t('common.default')}: ${defaultAdbSerial}`
-                                      : t('common.default')}
-                                    value={moduleFuncArgs[p.name] || undefined}
-                                    onChange={(v) => setModuleFuncArgs(prev => ({ ...prev, [p.name]: v ?? '' }))}
-                                    style={{ flex: 1, minWidth: 0 }}
-                                    options={connectedAdbDevices.map(d => ({
-                                      value: d.address,
-                                      label: d.address === defaultAdbSerial
-                                        ? `${d.address} (${d.name || d.id}) ★`
-                                        : `${d.address} (${d.name || d.id})`,
-                                    }))}
                                   />
                                 ) : isCmdMatchMode ? (
                                   <Select
@@ -6546,10 +6508,9 @@ export default function RecordPage() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                     {Object.entries(args).map(([k, v]) => {
                       const paramGuide = editFnGuide?.params.find(p => p.name === k);
-                      const isAdbSerialCombo =
-                        editStepParams.module === 'Android' &&
-                        editStepParams.function === 'Send_adb_command' &&
-                        k === 'serial';
+                      // Android 모듈의 모든 함수에서 serial 인자는 노출하지 않는다(device_id 기준 라우팅).
+                      const isAndroidSerialHidden =
+                        editStepParams.module === 'Android' && k === 'serial';
                       // WoohyunBench SendCan/SendStopCan: mcu/type/channel/repeat → 콤보박스
                       const isWoohyunEdit = editStepParams.module === 'WoohyunBench';
                       const isWoohyunMcuEdit = isWoohyunEdit &&
@@ -6564,29 +6525,12 @@ export default function RecordPage() {
                         : isWoohyunChannelEdit ? [{ value: 'A', label: 'A' }, { value: 'B', label: 'B' }, { value: 'C', label: 'C' }, { value: 'D', label: 'D' }]
                         : isWoohyunRepeatEdit ? [{ value: '0', label: '0 (단발 전송)' }, { value: '1', label: '1 (주기 전송)' }]
                         : null;
+                      if (isAndroidSerialHidden) return null;
                       return (
                         <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           <div style={{ display: 'flex', gap: 4, alignItems: 'center', width: '100%' }}>
                             <Tag style={{ minWidth: 70, textAlign: 'center', margin: 0, flexShrink: 0 }}>{k}</Tag>
-                            {isAdbSerialCombo ? (
-                              <Select
-                                size="small"
-                                showSearch
-                                allowClear
-                                placeholder={currentScreenAdbSerial
-                                  ? `${t('common.default')}: ${currentScreenAdbSerial}`
-                                  : t('common.default')}
-                                value={String(v ?? '') || undefined}
-                                onChange={(nv) => setEditStepParams({ ...editStepParams, args: { ...args, [k]: nv ?? '' } })}
-                                style={{ flex: 1, minWidth: 0 }}
-                                options={connectedAdbDevices.map(d => ({
-                                  value: d.address,
-                                  label: d.address === currentScreenAdbSerial
-                                    ? `${d.address} (${d.name || d.id}) ★`
-                                    : `${d.address} (${d.name || d.id})`,
-                                }))}
-                              />
-                            ) : woohyunOptions ? (
+                            {woohyunOptions ? (
                               <Select
                                 size="small"
                                 value={String(v ?? '')}
