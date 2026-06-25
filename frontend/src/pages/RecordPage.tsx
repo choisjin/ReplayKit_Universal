@@ -4481,13 +4481,18 @@ export default function RecordPage() {
             {/* 1행: 설명, 함수(인자), delay(우측정렬) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
               <Tag color={s.type === 'wait' ? 'cyan' : 'blue'} style={{ margin: 0, minWidth: 28, textAlign: 'center', flexShrink: 0 }}>{index + 1}</Tag>
-              <Input
-                size="small"
-                placeholder="Remark"
-                value={s.description}
-                onChange={(e) => updateStepDescription(index, e.target.value)}
-                style={{ flex: 1, minWidth: 60, maxWidth: 180 }}
-              />
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 60, maxWidth: 180 }}>
+                <Input
+                  size="small"
+                  placeholder="Remark"
+                  value={s.description}
+                  onChange={(e) => updateStepDescription(index, e.target.value)}
+                  style={{ width: '100%' }}
+                />
+                <span style={{ fontSize: 10, color: '#999', lineHeight: 1.2, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {t('record.stepDescGuide')}
+                </span>
+              </div>
               {s.type !== 'wait' && (
                 <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 3, flex: 1 }}>
                   {s.type === 'module_command'
