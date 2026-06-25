@@ -5801,6 +5801,14 @@ export default function RecordPage() {
                               (selectedModuleName === 'CMD' || selectedModuleName === 'SHELL') &&
                               selectedModuleFunc === 'Check_Logic' &&
                               p.name === 'logic';
+                            // WoohyunBench SendCan/SendStopCan: mcu/type/channel/repeat → 콤보박스
+                            const isWoohyun = selectedModuleName === 'WoohyunBench';
+                            const isWoohyunMcu = isWoohyun &&
+                              (selectedModuleFunc === 'SendCan' || selectedModuleFunc === 'SendStopCan') &&
+                              p.name === 'mcu';
+                            const isWoohyunType = isWoohyun && selectedModuleFunc === 'SendCan' && p.name === 'type';
+                            const isWoohyunChannel = isWoohyun && selectedModuleFunc === 'SendCan' && p.name === 'channel';
+                            const isWoohyunRepeat = isWoohyun && selectedModuleFunc === 'SendCan' && p.name === 'repeat';
                             if (isOcrRegionParam && moduleFuncArgs['mode'] !== 'Region') return null;
                             return (
                             <div key={p.name} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -5874,6 +5882,54 @@ export default function RecordPage() {
                                     options={[
                                       { value: 'and', label: 'and (모든 키워드 포함 시 pass)' },
                                       { value: 'or', label: 'or (하나 이상 포함 시 pass)' },
+                                    ]}
+                                  />
+                                ) : isWoohyunMcu ? (
+                                  <Select
+                                    size="small"
+                                    value={moduleFuncArgs[p.name] || 'mcu1'}
+                                    onChange={(v) => setModuleFuncArgs(prev => ({ ...prev, [p.name]: v }))}
+                                    style={{ flex: 1, minWidth: 0 }}
+                                    options={[
+                                      { value: 'mcu1', label: 'mcu1' },
+                                      { value: 'mcu2', label: 'mcu2' },
+                                      { value: 'mcu3', label: 'mcu3' },
+                                    ]}
+                                  />
+                                ) : isWoohyunType ? (
+                                  <Select
+                                    size="small"
+                                    value={moduleFuncArgs[p.name] || 'STA'}
+                                    onChange={(v) => setModuleFuncArgs(prev => ({ ...prev, [p.name]: v }))}
+                                    style={{ flex: 1, minWidth: 0 }}
+                                    options={[
+                                      { value: 'STA', label: 'STA (Standard)' },
+                                      { value: 'EXT', label: 'EXT (Extended)' },
+                                      { value: 'FD', label: 'FD (CAN FD)' },
+                                    ]}
+                                  />
+                                ) : isWoohyunChannel ? (
+                                  <Select
+                                    size="small"
+                                    value={moduleFuncArgs[p.name] || 'A'}
+                                    onChange={(v) => setModuleFuncArgs(prev => ({ ...prev, [p.name]: v }))}
+                                    style={{ flex: 1, minWidth: 0 }}
+                                    options={[
+                                      { value: 'A', label: 'A' },
+                                      { value: 'B', label: 'B' },
+                                      { value: 'C', label: 'C' },
+                                      { value: 'D', label: 'D' },
+                                    ]}
+                                  />
+                                ) : isWoohyunRepeat ? (
+                                  <Select
+                                    size="small"
+                                    value={moduleFuncArgs[p.name] || '0'}
+                                    onChange={(v) => setModuleFuncArgs(prev => ({ ...prev, [p.name]: v }))}
+                                    style={{ flex: 1, minWidth: 0 }}
+                                    options={[
+                                      { value: '0', label: '0 (단발 전송)' },
+                                      { value: '1', label: '1 (주기 전송)' },
                                     ]}
                                   />
                                 ) : (
@@ -6494,6 +6550,20 @@ export default function RecordPage() {
                         editStepParams.module === 'Android' &&
                         editStepParams.function === 'Send_adb_command' &&
                         k === 'serial';
+                      // WoohyunBench SendCan/SendStopCan: mcu/type/channel/repeat → 콤보박스
+                      const isWoohyunEdit = editStepParams.module === 'WoohyunBench';
+                      const isWoohyunMcuEdit = isWoohyunEdit &&
+                        (editStepParams.function === 'SendCan' || editStepParams.function === 'SendStopCan') &&
+                        k === 'mcu';
+                      const isWoohyunTypeEdit = isWoohyunEdit && editStepParams.function === 'SendCan' && k === 'type';
+                      const isWoohyunChannelEdit = isWoohyunEdit && editStepParams.function === 'SendCan' && k === 'channel';
+                      const isWoohyunRepeatEdit = isWoohyunEdit && editStepParams.function === 'SendCan' && k === 'repeat';
+                      const woohyunOptions =
+                        isWoohyunMcuEdit ? [{ value: 'mcu1', label: 'mcu1' }, { value: 'mcu2', label: 'mcu2' }, { value: 'mcu3', label: 'mcu3' }]
+                        : isWoohyunTypeEdit ? [{ value: 'STA', label: 'STA (Standard)' }, { value: 'EXT', label: 'EXT (Extended)' }, { value: 'FD', label: 'FD (CAN FD)' }]
+                        : isWoohyunChannelEdit ? [{ value: 'A', label: 'A' }, { value: 'B', label: 'B' }, { value: 'C', label: 'C' }, { value: 'D', label: 'D' }]
+                        : isWoohyunRepeatEdit ? [{ value: '0', label: '0 (단발 전송)' }, { value: '1', label: '1 (주기 전송)' }]
+                        : null;
                       return (
                         <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           <div style={{ display: 'flex', gap: 4, alignItems: 'center', width: '100%' }}>
@@ -6515,6 +6585,14 @@ export default function RecordPage() {
                                     ? `${d.address} (${d.name || d.id}) ★`
                                     : `${d.address} (${d.name || d.id})`,
                                 }))}
+                              />
+                            ) : woohyunOptions ? (
+                              <Select
+                                size="small"
+                                value={String(v ?? '')}
+                                onChange={(nv) => setEditStepParams({ ...editStepParams, args: { ...args, [k]: nv } })}
+                                style={{ flex: 1, minWidth: 0 }}
+                                options={woohyunOptions}
                               />
                             ) : (
                               <Input
