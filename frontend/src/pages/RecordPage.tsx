@@ -893,6 +893,11 @@ export default function RecordPage() {
     const dev = primaryDevices.find(d => d.id === screenshotDeviceId);
     return dev?.type === 'adb' ? (dev.address || '') : '';
   })();
+  // 모듈 스텝의 타겟 — 드롭다운에서 선택한 Android 모듈 디바이스의 시리얼.
+  // serial 자동 기입은 화면 디바이스가 아니라 이 선택 디바이스를 우선 사용한다.
+  const selectedModuleAdbSerial = selectedDevice?.type === 'adb' ? (selectedDevice.address || '') : '';
+  // serial 자동 기입에 쓸 기본 시리얼: 선택한 모듈 디바이스 우선, 없으면 화면 디바이스 폴백
+  const defaultAdbSerial = selectedModuleAdbSerial || currentScreenAdbSerial;
 
   // 선택된 디바이스의 모듈 함수 목록 로드
   useEffect(() => {
@@ -910,6 +915,15 @@ export default function RecordPage() {
       setModuleFuncArgs({});
     }).catch(() => { setModuleFunctions([]); setModuleDescription(''); });
   }, [selectedModuleName]);
+
+  // Android.Send_adb_command 선택 상태에서 모듈 디바이스를 바꾸면 serial 인자를 새 디바이스 시리얼로 갱신.
+  // (Android↔Android 전환은 selectedModuleName이 그대로라 위 useEffect가 안 돌아 serial이 stale 됨)
+  useEffect(() => {
+    if (selectedModuleName === 'Android' && selectedModuleFunc === 'Send_adb_command' && defaultAdbSerial) {
+      setModuleFuncArgs(prev => ({ ...prev, serial: defaultAdbSerial }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDeviceId]);
 
   // Random stress 설정 저장 여부 추적 (디바이스 전환 중 초기 로드와 auto-save 충돌 방지)
   const randCfgLoadedRef = useRef(false);
@@ -5716,9 +5730,10 @@ export default function RecordPage() {
                         if (fn) {
                           const defaults: Record<string, string> = {};
                           fn.params.forEach(p => { if (p.default !== undefined) defaults[p.name] = p.default.replace(/^'(.*)'$/, '$1'); });
-                          // Android.Send_adb_command: serial 비어있으면 현재 화면 디바이스 시리얼로 자동 채움
+                          // Android.Send_adb_command: serial 비어있으면 선택한 모듈 디바이스 시리얼로 자동 채움
+                          // (없으면 현재 화면 디바이스 시리얼 폴백)
                           if (selectedModuleName === 'Android' && v === 'Send_adb_command' && !defaults.serial) {
-                            defaults.serial = currentScreenAdbSerial;
+                            defaults.serial = defaultAdbSerial;
                           }
                           setModuleFuncArgs(defaults);
                         } else {
@@ -5826,15 +5841,15 @@ export default function RecordPage() {
                                     size="small"
                                     showSearch
                                     allowClear
-                                    placeholder={currentScreenAdbSerial
-                                      ? `${t('common.default')}: ${currentScreenAdbSerial}`
+                                    placeholder={defaultAdbSerial
+                                      ? `${t('common.default')}: ${defaultAdbSerial}`
                                       : t('common.default')}
                                     value={moduleFuncArgs[p.name] || undefined}
                                     onChange={(v) => setModuleFuncArgs(prev => ({ ...prev, [p.name]: v ?? '' }))}
                                     style={{ flex: 1, minWidth: 0 }}
                                     options={connectedAdbDevices.map(d => ({
                                       value: d.address,
-                                      label: d.address === currentScreenAdbSerial
+                                      label: d.address === defaultAdbSerial
                                         ? `${d.address} (${d.name || d.id}) ★`
                                         : `${d.address} (${d.name || d.id})`,
                                     }))}
