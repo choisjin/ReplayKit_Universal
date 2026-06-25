@@ -4943,6 +4943,14 @@ export default function RecordPage() {
                     </Tag>
                   </div>
                 )}
+                {isScreenBmw && screensaver && (
+                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, background: '#000', borderRadius: 4, pointerEvents: 'none', zIndex: 9 }}>
+                    <FundProjectionScreenOutlined style={{ fontSize: 40, color: '#9254de' }} />
+                    <span style={{ color: '#fff', fontSize: 18, fontWeight: 600, letterSpacing: 1 }}>
+                      {t('record.screensaver')}
+                    </span>
+                  </div>
+                )}
                 {smartSwipe && isScreenAdb && gestureRef.current.active && gesturePathRef.current.length > 1 && testingStepIndex == null && (() => {
                   // livePathTick은 강제 리렌더용 의존성. 사용은 ref에서 직접.
                   void livePathTick;
