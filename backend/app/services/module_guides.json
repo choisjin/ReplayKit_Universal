@@ -1316,16 +1316,8 @@
         "description": "현재 소비 전류를 측정합니다. 반환값: 전류(A), 실패 시 -1.0",
         "params": {}
       },
-      "SendCommand": {
-        "description": "벤치에 직접 UDP 명령을 전송합니다. 고급 사용자용이며, 일반적으로 위의 개별 함수 사용을 권장합니다.",
-        "params": {
-          "cmd1": "명령 코드 1 (정수, 예: 0x24 → 36)",
-          "cmd2": "명령 코드 2 (정수, 예: 0x21 → 33)",
-          "data_hex": "추가 데이터 (공백으로 구분된 16진수 문자열). 예: 'FF 01'. 기본값: 빈 문자열"
-        }
-      },
       "GetInfo": {
-        "description": "벤치의 현재 연결 정보(IP, 포트, signal_file, 로드된 신호 수, 연결 상태)를 반환합니다.",
+        "description": "벤치의 현재 연결 정보(연결된 MCU 목록, signal_file, 연결 상태)를 반환합니다.",
         "params": {}
       },
       "LoadSignals": {
@@ -1349,39 +1341,31 @@
         "description": "로드된 모든 CAN FD 신호를 중간값으로 순차 송신합니다. 부하/연결 확인용.",
         "params": {}
       },
-      "CheckSignals": {
-        "description": "로드된 CAN FD 신호 정의 목록을 로그로 덤프합니다.",
+      "SendTimeSync": {
+        "description": "모든 벤치 장비에 UDP 브로드캐스트로 시간 동기화 패킷을 전송합니다. Connect 시 자동 호출되므로 보통 수동 호출이 필요 없습니다.",
         "params": {}
       },
-      "SendCanFd": {
-        "description": "Raw CAN FD 프레임을 직접 송신합니다 (신호 정의 불필요, 저수준 디버깅용). 200ms × 5회 반복.",
+      "SendCan": {
+        "description": "Raw CAN 프레임 송신. 지정한 장비(mcu)와 채널(channel)로 표준/확장/FD 프레임을 단발 또는 주기 송신합니다.",
         "params": {
-          "can_id": "CAN ID (정수 또는 hex 문자열, 예: '0x448')",
-          "payload_hex": "페이로드 (공백/쉼표/대괄호 허용, 예: '01,02,03' 또는 '01 02 03')",
-          "can_type": "프레임 타입: 'STA'(표준, 기본값) / 'EXT'(확장 프레임, AVN) / 'FD'(CAN FD, Cluster)"
+          "mcu": "송신 대상 MCU (기본값: 'mcu1' / 예: 'mcu1', 'mcu2', 'mcu3')",
+          "msg_id": "CAN ID. 정수 또는 Hex 문자열 ('0x' 유무와 상관없이 16진수로 파싱. 예: '0x33E', '47A')",
+          "type": "프레임 타입 (기본값: 'STA' / 'STA'=표준, 'EXT'=확장, 'FD'=CAN FD)",
+          "payload_hex": "페이로드 Hex 바이트 (공백/쉼표 구분 허용, 대괄호 불가. 예: '00,00,00,00,00,C0,00,00' 또는 'FF 01 02')",
+          "channel": "송신 채널 (기본값: 'A' / 예: 'A', 'B', 'C', 'D')",
+          "repeat": "송신 모드 (기본값: 0 / 0=단발 송신, 1=주기 송신)",
+          "cycle_ms": "repeat=1 일 때 송신 주기 (ms, 기본값: 200)"
         }
       },
-      "SendAvnCan": {
-        "description": "AVN 채널(0x03 헤더) Raw CAN 프레임 송신. 목적지는 항상 AVN으로 고정하고 프레임 타입은 type 인자로 지정합니다(표준 0x33E·확장 1004001 모두 AVN 채널로 송신). 200ms × 5회 반복.",
+      "CanSaveStart": {
+        "description": "연결된 모든 MCU·채널의 Rx/Tx CAN 데이터를 하나의 CSV 파일로 실시간 통합 로깅 시작합니다.",
         "params": {
-          "msg_id": "CAN ID (정수 또는 hex 문자열, 예: '0x33E', '0x414', '1004001')",
-          "type": "프레임 타입: 'STA'(표준 프레임) / 'EXT'(확장 프레임) / 'FD'(CAN FD)",
-          "payload_hex": "페이로드 hex 바이트 (공백/쉼표/대괄호 허용, 예: '00,00,00,00,00,00,00,00')"
+          "save_dir": "CSV 저장 폴더 경로. 비우면 ./canlog 사용 (파일명은 CAN_LOG_타임스탬프.csv 자동 생성)"
         }
       },
-      "SendClusterCan": {
-        "description": "Cluster 채널 Raw CAN FD 프레임 송신. send_can.py TARGET=CLUSTER 과 동일 동작 (CANTYPE.FD, frame_byte=0x80|DLC). 200ms × 5회 반복.",
-        "params": {
-          "msg_id": "CAN ID (정수 또는 hex 문자열, 예: '0x65')",
-          "payload_hex": "페이로드 hex 바이트 (공백/쉼표/대괄호 허용, 예: '00,00,00,00,00,00,00,00')"
-        }
-      },
-      "ReinitCanFd": {
-        "description": "CAN FD 버스 재초기화 (baudrate/data bit time 변경 시). 기본 500k/2M.",
-        "params": {
-          "baudrate": "arbitration phase baudrate (2바이트 정수, 기본 0x1F4)",
-          "databit_time": "data phase bit time (2바이트 정수, 기본 0x7D0)"
-        }
+      "CanSaveStop": {
+        "description": "통합 CAN 로깅을 종료하고 CSV 파일을 닫습니다.",
+        "params": {}
       }
     }
   },
