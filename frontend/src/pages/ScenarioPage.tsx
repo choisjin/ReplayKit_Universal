@@ -175,7 +175,7 @@ const statusLabel = (s: string, t: (k: TranslationKey) => string) =>
 
 // Branch Mode(조건부이동 결과 미반영) UI 노출 여부 — 요청 시 true로 전환하면 다시 노출됨.
 // 백엔드 로직·결과 표시는 그대로 유지되며 설정 체크박스만 숨긴다.
-const BRANCH_MODE_ENABLED = false;
+const BRANCH_MODE_ENABLED = true;
 
 // 결과 미반영 스텝은 status(실제 pass/fail)와 무관하게 '분기'로 표시
 const effStatus = (r: { status: string; excluded_from_result?: boolean }) =>

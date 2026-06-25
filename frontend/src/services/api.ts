@@ -119,6 +119,8 @@ export const scenarioApi = {
   getCmdResult: (taskId: string) => api.get(`/scenario/cmd-result/${taskId}`),
   cancelCmdTask: (taskId: string) => api.delete(`/scenario/cmd-result/${taskId}`),
   cleanTestScreenshots: (scenarioName: string) => api.post(`/scenario/clean-test-screenshots?scenario_name=${encodeURIComponent(scenarioName)}`),
+  // LGSI 전용 임시: WoohyunBench SendAvnCan → SendCan 일괄 변환
+  migrateWoohyunCan: () => api.post('/scenario/migrate/woohyun-can'),
   recordImageTap: (
     scenarioName: string,
     deviceId: string,

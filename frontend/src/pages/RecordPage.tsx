@@ -42,7 +42,7 @@ const SortableStepItem = ({ id, index, isDark, children }: { id: string; index: 
 
 // Branch Mode(조건부이동 결과 미반영) UI 노출 여부 — 요청 시 true로 전환하면 다시 노출됨.
 // 백엔드 로직은 그대로 유지되며 UI 체크박스만 숨긴다.
-const BRANCH_MODE_ENABLED = false;
+const BRANCH_MODE_ENABLED = true;
 
 // Extracted outside to prevent re-creation on every render
 const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExclude, t }: {

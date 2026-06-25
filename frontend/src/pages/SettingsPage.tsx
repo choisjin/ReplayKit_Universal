@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button, Card, InputNumber, Select, Space, Switch, message, Typography } from 'antd';
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
+import { scenarioApi } from '../services/api';
 
 const { Text } = Typography;
 
@@ -83,6 +84,22 @@ export default function SettingsPage() {
       await updateSettings({ language: lang });
     } catch {
       message.error(t('common.saveFailed'));
+    }
+  };
+
+  // LGSI 전용 임시 버튼 — WoohyunBench SendAvnCan → SendCan 일괄 변환
+  const [migrating, setMigrating] = useState(false);
+  const handleMigrateCan = async () => {
+    setMigrating(true);
+    try {
+      const { data } = await scenarioApi.migrateWoohyunCan();
+      message.success(
+        `변환 완료: 시나리오 ${data.changed_scenarios}개, 스텝 ${data.changed_steps}개`,
+      );
+    } catch {
+      message.error('변환 실패');
+    } finally {
+      setMigrating(false);
     }
   };
 
@@ -168,6 +185,19 @@ export default function SettingsPage() {
           <div style={{ marginTop: 10 }}>
             <Button type="primary" size="small" onClick={handleThresholdApply}>{t('common.apply')}</Button>
           </div>
+        </Card>
+
+        {/* LGSI 전용 임시 마이그레이션 — 기존 시나리오의 SendAvnCan 스텝을 SendCan으로 일괄 변환 */}
+        <Card title="시나리오 마이그레이션 (임시)" size="small">
+          <Space direction="vertical" size="small">
+            <Button danger size="small" loading={migrating} onClick={handleMigrateCan}>
+              only_LGSI_Change_CAN_CMD
+            </Button>
+            <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+              기존 시나리오의 WoohyunBench <code>SendAvnCan</code> 스텝을 <code>SendCan</code>으로 변환합니다.
+              (msg_id/type/payload_hex 유지, mcu=mcu1·channel=B·repeat=0·cycle_ms=200 일괄 적용)
+            </Text>
+          </Space>
         </Card>
       </Space>
     </div>

@@ -1591,6 +1591,77 @@ async def list_scenarios():
 
 
 # ------------------------------------------------------------------
+# Migration (LGSI 전용 임시) — WoohyunBench SendAvnCan → SendCan
+# ------------------------------------------------------------------
+
+@router.post("/migrate/woohyun-can")
+async def migrate_woohyun_can():
+    """기존 시나리오의 WoohyunBench `SendAvnCan` 스텝을 `SendCan`으로 일괄 변환.
+
+    - function: SendAvnCan → SendCan
+    - args: msg_id / type / payload_hex 는 기존 값 그대로 유지
+    - args: mcu=mcu1, channel=B, repeat=0, cycle_ms=200 로 일괄 설정
+
+    디스크의 모든 시나리오 JSON을 순회하여 매칭 스텝을 변환·저장한다.
+    raw JSON으로 직접 처리하여 레거시 데이터에서도 pydantic 검증 오류 없이 동작.
+    """
+    from ..services.recording_service import SCENARIOS_DIR
+
+    reserved = {"groups.json", "folders.json", "group_folders.json"}
+    changed_scenarios: list[dict] = []
+    total_steps = 0
+
+    if not SCENARIOS_DIR.is_dir():
+        return {"status": "ok", "changed_scenarios": 0, "changed_steps": 0, "details": []}
+
+    for spath in SCENARIOS_DIR.glob("*.json"):
+        if spath.name in reserved:
+            continue
+        try:
+            data = json.loads(spath.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("migrate-woohyun-can: skip unreadable %s: %s", spath.name, e)
+            continue
+
+        file_changed = 0
+        for step in data.get("steps") or []:
+            if step.get("type") != "module_command":
+                continue
+            params = step.get("params") or {}
+            if params.get("module") != "WoohyunBench" or params.get("function") != "SendAvnCan":
+                continue
+            old_args = params.get("args") or {}
+            params["function"] = "SendCan"
+            params["args"] = {
+                "mcu": "mcu1",
+                "msg_id": old_args.get("msg_id", ""),
+                "type": old_args.get("type", "STA"),
+                "payload_hex": old_args.get("payload_hex", ""),
+                "channel": "B",
+                "repeat": 0,
+                "cycle_ms": 200,
+            }
+            step["params"] = params
+            file_changed += 1
+
+        if file_changed:
+            spath.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            changed_scenarios.append({"name": data.get("name", spath.stem), "steps": file_changed})
+            total_steps += file_changed
+
+    logger.info(
+        "migrate-woohyun-can: %d scenarios, %d steps converted",
+        len(changed_scenarios), total_steps,
+    )
+    return {
+        "status": "ok",
+        "changed_scenarios": len(changed_scenarios),
+        "changed_steps": total_steps,
+        "details": changed_scenarios,
+    }
+
+
+# ------------------------------------------------------------------
 # Export / Import
 # ------------------------------------------------------------------
 
