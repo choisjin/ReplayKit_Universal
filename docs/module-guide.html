@@ -165,14 +165,14 @@
     </div>
 
     <h2 id="overview">전체 모듈 목록</h2>
-    <p>총 <strong>13개</strong> 모듈, <strong>122개</strong> 함수가 등록되어 있습니다.</p>
+    <p>총 <strong>13개</strong> 모듈, <strong>231개</strong> 함수가 등록되어 있습니다.</p>
     <table>
       <thead><tr><th>모듈</th><th>설명</th><th>함수 수</th></tr></thead>
       <tbody>
         <tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>CANat 하드웨어를 통해 CAN 버스 메시지를 송수신하는 모듈</td><td style="text-align:center">7</td></tr>
 <tr><td><a href="#mod-CANoe_RBS"><strong>CANoe_RBS</strong></a></td><td>CANoe 애플리케이션을 COM으로 구동하여 cfg(RBS) 기반 측정 시작/정지, 시그널·시스템/환경 변수 제어, UDS 진단을 수행하는 모듈</td><td style="text-align:center">16</td></tr>
 <tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Vector CAN 하드웨어(python-can VectorBus)로 CAN/CAN FD 메시지 송수신, ASC 로그 저장, ISO-TP(UDS) 진단을 수행하는 모듈 (CANoe 앱 불필요)</td><td style="text-align:center">11</td></tr>
-<tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>시리얼 연결된 QE 테스트 벤치의 릴레이, 전원, 센서, 오디오, LCD, 버튼, USB 등을 종합 제어하는 모듈</td><td style="text-align:center">8</td></tr>
+<tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>시리얼 연결된 QE 테스트 벤치의 릴레이, 전원, 센서, 오디오, LCD, 버튼, USB 등을 종합 제어하는 모듈</td><td style="text-align:center">117</td></tr>
 <tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>SSH로 원격 장비에 접속하여 명령 실행, 파일 전송을 수행하는 모듈</td><td style="text-align:center">9</td></tr>
 <tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>DLT 데몬에 TCP 직접 연결하여 로그를 캡처·저장하고 키워드 PASS/FAIL 판정하는 모듈 (GUI 불필요)</td><td style="text-align:center">5</td></tr>
 <tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>시리얼 포트의 로그를 캡처·저장하고 키워드 검출하는 모듈.
@@ -206,9 +206,29 @@
 <thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
 <tbody>
 <tr>
+<td><code>Connect</code></td>
+<td>벤치에 시리얼 연결합니다. 장비 추가 시 자동 호출됩니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>Disconnect</code></td>
+<td>벤치 연결을 해제합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
 <td><code>ACCOnOff</code></td>
 <td>ACC(Accessory) 전원을 켜거나 끕니다.</td>
 <td style="font-size:12px"><code>state</code>: 0 = OFF (끄기), 1 = ON (켜기)<br><code>bench_info</code>: 벤치 종류. &#x27;OLD_BENCH&#x27;(기본) 또는 &#x27;NEW_BENCH&#x27;</td>
+</tr>
+<tr>
+<td><code>ACCSinglePulse</code></td>
+<td>ACC 전원에 단일 펄스를 생성합니다. 전압을 순간적으로 변동시키는 테스트에 사용합니다.</td>
+<td style="font-size:12px"><code>nVoltage</code>: 펄스 전압 (V)<br><code>nDelay</code>: 펄스 간 지연 시간 (ms)<br><code>nCnt</code>: 펄스 반복 횟수</td>
+</tr>
+<tr>
+<td><code>AccControl</code></td>
+<td>ACC 릴레이를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON<br><code>bench_info</code>: 벤치 종류</td>
 </tr>
 <tr>
 <td><code>AccVoltage</code></td>
@@ -221,9 +241,24 @@
 <td style="font-size:12px"><code>nState</code>: 0 = OFF (배터리 차단), 1 = ON (배터리 연결)<br><code>bench_info</code>: 벤치 종류. &#x27;OLD_BENCH&#x27;(기본) 또는 &#x27;NEW_BENCH&#x27;</td>
 </tr>
 <tr>
+<td><code>BatteryControl</code></td>
+<td>배터리 릴레이를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON<br><code>bench_info</code>: 벤치 종류</td>
+</tr>
+<tr>
+<td><code>BatteryMinusControl</code></td>
+<td>배터리 마이너스(-) 단자 릴레이를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (연결), 1 = ON (차단)</td>
+</tr>
+<tr>
 <td><code>BatteryVoltage</code></td>
 <td>배터리 전압 상태를 설정합니다.</td>
 <td style="font-size:12px"><code>nState</code>: 전압 상태 값</td>
+</tr>
+<tr>
+<td><code>BatterySinglePulse</code></td>
+<td>배터리에 단일 펄스를 생성합니다.</td>
+<td style="font-size:12px"><code>nVoltage</code>: 펄스 전압 (V)<br><code>nDelay</code>: 펄스 간 지연 시간 (ms)<br><code>nCnt</code>: 펄스 반복 횟수</td>
 </tr>
 <tr>
 <td><code>IGNControl</code></td>
@@ -236,6 +271,156 @@
 <td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
 </tr>
 <tr>
+<td><code>ALTControl</code></td>
+<td>알터네이터(발전기) 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>status</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>ILLControl</code></td>
+<td>일루미네이션(차량 조명 연동 신호)을 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>ILLControlMinus</code></td>
+<td>일루미네이션 마이너스 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>ReverseControl</code></td>
+<td>후진(Reverse) 기어 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (전진), 1 = ON (후진)</td>
+</tr>
+<tr>
+<td><code>ReverseActiveHigh</code></td>
+<td>후진 신호를 Active High로 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>ReverseActiveLow</code></td>
+<td>후진 신호를 Active Low로 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>ParkingControl</code></td>
+<td>주차(Parking) 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>PPositonControl</code></td>
+<td>P(주차) 기어 포지션 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>NPositionControl</code></td>
+<td>N(중립) 기어 포지션 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>SpeedControl</code></td>
+<td>차량 속도 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (정지), 1 = ON (주행)</td>
+</tr>
+<tr>
+<td><code>DoorControl</code></td>
+<td>도어 열림/닫힘 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (닫힘), 1 = ON (열림)</td>
+</tr>
+<tr>
+<td><code>DoorUnLockControl</code></td>
+<td>도어 잠금 해제 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (잠금), 1 = ON (해제)</td>
+</tr>
+<tr>
+<td><code>TransDetectControl</code></td>
+<td>변속기 감지 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>FUELControl</code></td>
+<td>연료 관련 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>KeylessBootingControl</code></td>
+<td>키리스(스마트키) 부팅 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>AutolightControl</code></td>
+<td>오토라이트(자동 조명) 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>AlarmDetectControl</code></td>
+<td>알람 감지 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>AirbagCrashDetection</code></td>
+<td>에어백 충돌 감지 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>model</code>: 차량 모델명<br><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>ShieldBoxControl</code></td>
+<td>실드 박스(전파 차폐 박스) 개폐를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (닫기), 1 = ON (열기)</td>
+</tr>
+<tr>
+<td><code>ANTControl</code></td>
+<td>안테나 릴레이를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>AmpControl</code></td>
+<td>앰프(외장 오디오 증폭기) 전원을 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>MICControl</code></td>
+<td>마이크 릴레이를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>AUXControl</code></td>
+<td>AUX 입력 릴레이를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>CDControl</code></td>
+<td>CD 드라이브 릴레이를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>IPODControl</code></td>
+<td>iPod 연결 릴레이를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>RcInControl</code></td>
+<td>RC 입력 릴레이를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>ComEnableControl</code></td>
+<td>통신(COM) 활성화를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (비활성), 1 = ON (활성)</td>
+</tr>
+<tr>
+<td><code>Detent</code></td>
+<td>디텐트(볼륨 노브 등 회전 감지) 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>AVNSDDetect</code></td>
+<td>AVN SD 카드 감지 신호를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (미삽입), 1 = ON (삽입)</td>
+</tr>
+<tr>
+<td><code>USB1Control</code></td>
+<td>USB 1 포트 릴레이를 제어합니다.</td>
+<td style="font-size:12px"><code>Status</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
 <td><code>USBFrontSwitchControl</code></td>
 <td>전면 USB 스위치 릴레이를 제어합니다.</td>
 <td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
@@ -244,6 +429,366 @@
 <td><code>USBRearSwitchControl</code></td>
 <td>후면 USB 스위치 릴레이를 제어합니다.</td>
 <td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>USBSelectorControl</code></td>
+<td>USB 셀렉터의 포트를 선택합니다.</td>
+<td style="font-size:12px"><code>nOnPortNum</code>: 활성화할 USB 포트 번호</td>
+</tr>
+<tr>
+<td><code>USBSelector10CHSwitch5CH</code></td>
+<td>USB 셀렉터의 10채널/5채널 스위치를 제어합니다.</td>
+<td style="font-size:12px"><code>nType</code>: 스위치 타입<br><code>nPortNum</code>: 포트 번호<br><code>nOnOffStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>Telltale</code></td>
+<td>텔테일(계기판 경고등) 릴레이를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>TelltaleLED</code></td>
+<td>텔테일 LED 점멸 주기를 설정합니다.</td>
+<td style="font-size:12px"><code>nPeriod</code>: 점멸 주기 (ms)</td>
+</tr>
+<tr>
+<td><code>CheckTelltale</code></td>
+<td>텔테일(경고등) 상태를 확인합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>LEDPulse</code></td>
+<td>LED 점멸 주기를 설정합니다.</td>
+<td style="font-size:12px"><code>nPeriod</code>: 점멸 주기 (ms)</td>
+</tr>
+<tr>
+<td><code>LedTCU4</code></td>
+<td>TCU4 LED 점멸 주기를 설정합니다.</td>
+<td style="font-size:12px"><code>nPeriod</code>: 점멸 주기 (ms)</td>
+</tr>
+<tr>
+<td><code>CheckLedTCU4</code></td>
+<td>TCU4 LED 상태를 확인합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>GetLEDPulse</code></td>
+<td>현재 LED 펄스 값을 읽어옵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>CheckLCD</code></td>
+<td>LCD 디스플레이 상태를 확인합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 확인할 상태 값</td>
+</tr>
+<tr>
+<td><code>CheckLCDDimming</code></td>
+<td>LCD 디밍(밝기 조절) 상태를 확인합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 확인할 상태 값</td>
+</tr>
+<tr>
+<td><code>SetLCDValue</code></td>
+<td>LCD 값을 설정합니다.</td>
+<td style="font-size:12px"><code>nLCDValue</code>: 설정할 LCD 값</td>
+</tr>
+<tr>
+<td><code>GetLCDValue</code></td>
+<td>현재 LCD 값을 읽어옵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>CheckVoltage</code></td>
+<td>전압이 지정 범위 내에 있는지 확인합니다.</td>
+<td style="font-size:12px"><code>nMin</code>: 최소 전압 (V)<br><code>nMax</code>: 최대 전압 (V)</td>
+</tr>
+<tr>
+<td><code>CheckCurrent</code></td>
+<td>전류가 지정 범위 내에 있는지 확인합니다.</td>
+<td style="font-size:12px"><code>nMin</code>: 최소 전류 (A)<br><code>nMax</code>: 최대 전류 (A)</td>
+</tr>
+<tr>
+<td><code>ExtCheckCurrent</code></td>
+<td>외부 전류가 지정 범위 내에 있는지 확인합니다.</td>
+<td style="font-size:12px"><code>fMin</code>: 최소 전류 (A)<br><code>fMax</code>: 최대 전류 (A)</td>
+</tr>
+<tr>
+<td><code>EXT_CURRENT</code></td>
+<td>외부 전류를 지연 후 범위 확인합니다.</td>
+<td style="font-size:12px"><code>min_current</code>: 최소 전류 (A)<br><code>max_current</code>: 최대 전류 (A)<br><code>check_delay</code>: 확인 전 지연 시간 (초)</td>
+</tr>
+<tr>
+<td><code>GetEXTCurrent</code></td>
+<td>현재 외부 전류 값을 읽어옵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>CheckEXTCurrentList</code></td>
+<td>수집된 외부 전류 목록이 범위 내인지 확인합니다.</td>
+<td style="font-size:12px"><code>nMin</code>: 최소 전류 (A)<br><code>nMax</code>: 최대 전류 (A)</td>
+</tr>
+<tr>
+<td><code>ClearEXTCurrentList</code></td>
+<td>수집된 외부 전류 목록을 초기화합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>CheckKeyOutVoltage</code></td>
+<td>키 출력 전압이 범위 내에 있는지 확인합니다.</td>
+<td style="font-size:12px"><code>nMin</code>: 최소 전압 (V)<br><code>nMax</code>: 최대 전압 (V)</td>
+</tr>
+<tr>
+<td><code>ClearKeyOutVoltageList</code></td>
+<td>키 출력 전압 목록을 초기화합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>CheckSound</code></td>
+<td>오디오 출력 상태를 확인합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 확인할 상태 값</td>
+</tr>
+<tr>
+<td><code>PlaySound</code></td>
+<td>벤치에서 사운드 파일을 재생합니다.</td>
+<td style="font-size:12px"><code>strFileName</code>: 재생할 파일 이름<br><code>nFileNameLen</code>: 파일 이름 길이</td>
+</tr>
+<tr>
+<td><code>InitSoundUpdate</code></td>
+<td>사운드 업데이트를 초기화합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>WaitSoundUpdate</code></td>
+<td>사운드 업데이트가 완료될 때까지 대기합니다.</td>
+<td style="font-size:12px"><code>timeout</code>: 최대 대기 시간 (초)</td>
+</tr>
+<tr>
+<td><code>RequestLightSensorControl</code></td>
+<td>조도 센서를 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON<br><code>pbData</code>: PB 데이터<br><code>twData</code>: TW 데이터</td>
+</tr>
+<tr>
+<td><code>GetLightSensorData</code></td>
+<td>조도 센서 데이터를 읽어옵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>CheckLightSensorResult</code></td>
+<td>조도 센서 결과를 확인합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>TenButton</code></td>
+<td>10버튼 패널에서 버튼을 누릅니다.</td>
+<td style="font-size:12px"><code>nButton</code>: 버튼 번호 (0~9)<br><code>nDelay</code>: 버튼 누름 지속 시간 (ms)</td>
+</tr>
+<tr>
+<td><code>ThreeButton</code></td>
+<td>3버튼 패널에서 버튼을 누릅니다.</td>
+<td style="font-size:12px"><code>nButton</code>: 버튼 번호 (0~2)<br><code>nDelay</code>: 버튼 누름 지속 시간 (ms)</td>
+</tr>
+<tr>
+<td><code>ThreeButton_Front</code></td>
+<td>전면 3버튼 패널에서 버튼을 누릅니다.</td>
+<td style="font-size:12px"><code>nButton</code>: 버튼 번호 (0~2)<br><code>nDelay</code>: 버튼 누름 지속 시간 (ms)</td>
+</tr>
+<tr>
+<td><code>ThreeButton_Rear</code></td>
+<td>후면 3버튼 패널에서 버튼을 누릅니다.</td>
+<td style="font-size:12px"><code>nButton</code>: 버튼 번호 (0~2)<br><code>nDelay</code>: 버튼 누름 지속 시간 (ms)</td>
+</tr>
+<tr>
+<td><code>TwoButton</code></td>
+<td>2버튼 패널에서 버튼을 누릅니다.</td>
+<td style="font-size:12px"><code>nButton</code>: 버튼 번호 (0~1)<br><code>nDelay</code>: 버튼 누름 지속 시간 (ms)</td>
+</tr>
+<tr>
+<td><code>rf_btn_press</code></td>
+<td>RF 버튼을 누릅니다.</td>
+<td style="font-size:12px"><code>btnNum</code>: 버튼 번호<br><code>delay</code>: 누름 지속 시간 (ms)</td>
+</tr>
+<tr>
+<td><code>FileToSD</code></td>
+<td>파일을 SD 카드로 복사합니다.</td>
+<td style="font-size:12px"><code>userFilePath</code>: PC의 원본 파일 경로<br><code>sdCardFileName</code>: SD 카드에 저장될 파일 이름</td>
+</tr>
+<tr>
+<td><code>Relay_10</code></td>
+<td>릴레이 10번을 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>Relay_11</code></td>
+<td>릴레이 11번을 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>Relay_12</code></td>
+<td>릴레이 12번을 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>Relay_13</code></td>
+<td>릴레이 13번을 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>Relay_14</code></td>
+<td>릴레이 14번을 제어합니다.</td>
+<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+</tr>
+<tr>
+<td><code>RelayInitialization</code></td>
+<td>모든 릴레이를 초기값으로 설정합니다.</td>
+<td style="font-size:12px"><code>init_value</code>: 초기화 값</td>
+</tr>
+<tr>
+<td><code>SetRelayConfig</code></td>
+<td>릴레이 구성을 설정합니다.</td>
+<td style="font-size:12px"><code>nRelayCfg</code>: 릴레이 구성 값</td>
+</tr>
+<tr>
+<td><code>CallRelayFunc</code></td>
+<td>릴레이 함수를 인덱스로 호출합니다.</td>
+<td style="font-size:12px"><code>func_index</code>: 함수 인덱스 번호<br><code>data</code>: 전달할 데이터</td>
+</tr>
+<tr>
+<td><code>RequestRelayInitialStatus</code></td>
+<td>릴레이 초기 상태를 요청합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>RequestRelaySet</code></td>
+<td>릴레이를 명령 목록으로 설정합니다.</td>
+<td style="font-size:12px"><code>nCmdList</code>: 릴레이 명령 목록</td>
+</tr>
+<tr>
+<td><code>SystemReset</code></td>
+<td>벤치 시스템을 리셋합니다.</td>
+<td style="font-size:12px"><code>nMs</code>: 리셋 후 대기 시간 (ms). 기본값: 1000</td>
+</tr>
+<tr>
+<td><code>SetSystemTime</code></td>
+<td>벤치 시스템 시간을 현재 PC 시간으로 설정합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>RequestSystemVersion</code></td>
+<td>벤치 시스템 버전 정보를 요청합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>CalcCRC16</code></td>
+<td>CRC-16 체크섬을 계산합니다. 통신 데이터 검증용.</td>
+<td style="font-size:12px"><code>listData</code>: 데이터 리스트<br><code>nLen</code>: 데이터 길이</td>
+</tr>
+<tr>
+<td><code>CalibrationStartOrStop</code></td>
+<td>캘리브레이션(보정)을 시작하거나 중지합니다.</td>
+<td style="font-size:12px"><code>sensitivity</code>: 감도 값<br><code>threshold</code>: 임계값</td>
+</tr>
+<tr>
+<td><code>AnnouncesAutoTestStartOrEnd</code></td>
+<td>자동 테스트 시작/종료를 알립니다.</td>
+<td style="font-size:12px"><code>bisStart</code>: True = 테스트 시작, False = 테스트 종료</td>
+</tr>
+<tr>
+<td><code>BATSwitchSETtoPC</code></td>
+<td>배터리 스위치를 SET→PC로 전환합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>BATSwitchUSBtoPC</code></td>
+<td>배터리 스위치를 USB→PC로 전환합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>RequestAudioFrequency</code></td>
+<td>오디오 주파수 측정을 요청합니다.</td>
+<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nMs</code>: 측정 간격 (ms)</td>
+</tr>
+<tr>
+<td><code>RequestAudioStatusAndADCValue</code></td>
+<td>오디오 상태와 ADC 값을 요청합니다.</td>
+<td style="font-size:12px"><code>nMs</code>: 응답 대기 시간 (ms)</td>
+</tr>
+<tr>
+<td><code>RequestAudioStatusAndADCValuePeriodicallyNoti</code></td>
+<td>오디오 상태와 ADC 값을 주기적으로 알림 받습니다.</td>
+<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
+</tr>
+<tr>
+<td><code>RequestAudioStatusPeriodicallyNoti</code></td>
+<td>오디오 상태를 주기적으로 알림 받습니다.</td>
+<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
+</tr>
+<tr>
+<td><code>RequestCurrentPeriodicallyNoti</code></td>
+<td>전류 값을 주기적으로 알림 받습니다.</td>
+<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
+</tr>
+<tr>
+<td><code>RequestExtCurrentPeriodicallyNoti</code></td>
+<td>외부 전류 값을 주기적으로 알림 받습니다.</td>
+<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
+</tr>
+<tr>
+<td><code>RequestVoltagePeriodicallyNoti</code></td>
+<td>전압 값을 주기적으로 알림 받습니다.</td>
+<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
+</tr>
+<tr>
+<td><code>RequestKeyOutVoltagePeriodicallyNoti</code></td>
+<td>키 출력 전압을 주기적으로 알림 받습니다.</td>
+<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
+</tr>
+<tr>
+<td><code>RequestLCDStatus</code></td>
+<td>LCD 상태를 요청합니다.</td>
+<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nMs</code>: 응답 대기 시간 (ms)</td>
+</tr>
+<tr>
+<td><code>RequestLCDIllumiSensorValue</code></td>
+<td>LCD 조도 센서 값을 요청합니다.</td>
+<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nMs</code>: 응답 대기 시간 (ms)</td>
+</tr>
+<tr>
+<td><code>RequestLCDStatusAndIllumiSensorValuePeriodicallyNoti</code></td>
+<td>LCD 상태와 조도 센서 값을 주기적으로 알림 받습니다.</td>
+<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
+</tr>
+<tr>
+<td><code>RequestSoundFileInfo</code></td>
+<td>사운드 파일 정보를 요청합니다.</td>
+<td style="font-size:12px"><code>nSoundType</code>: 사운드 타입</td>
+</tr>
+<tr>
+<td><code>RequestSoundFileList</code></td>
+<td>사운드 파일 목록을 요청합니다.</td>
+<td style="font-size:12px"><code>nSoundType</code>: 사운드 타입</td>
+</tr>
+<tr>
+<td><code>Read</code></td>
+<td>벤치에서 데이터를 읽어옵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>Send</code></td>
+<td>벤치에 직접 바이트 데이터를 전송합니다.</td>
+<td style="font-size:12px"><code>listData</code>: 전송할 데이터 리스트<br><code>nLen</code>: 데이터 길이</td>
+</tr>
+<tr>
+<td><code>WriteRawString</code></td>
+<td>벤치에 원시 문자열을 전송합니다.</td>
+<td style="font-size:12px"><code>string</code>: 전송할 문자열</td>
+</tr>
+<tr>
+<td><code>ReceiveStart</code></td>
+<td>벤치 데이터 수신을 시작/중지합니다.</td>
+<td style="font-size:12px"><code>bStart</code>: True = 수신 시작, False = 수신 중지<br><code>queue</code>: 수신 데이터를 넣을 큐 (선택)</td>
+</tr>
+<tr>
+<td><code>timer_compare</code></td>
+<td>타이머 값을 비교합니다.</td>
+<td style="font-size:12px"><code>Time_Init</code>: 시작 시간<br><code>Time_Check</code>: 비교할 시간</td>
 </tr>
 </tbody>
 </table>
