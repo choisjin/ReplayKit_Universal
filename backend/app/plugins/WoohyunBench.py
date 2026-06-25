@@ -373,6 +373,56 @@ class WoohyunBench:
                 except:
                     pass
 
+    def SendStopCan(self, msg_id: str, mcu: str = "mcu1") -> str:
+        """
+        지정된 장비(mcu)와 msg_id의 CAN 메시지 전송(주기 송신 등)을 중단합니다.
+        """
+        logger.info('SendStopCan')
+        if not hasattr(self, '_stop_events') or not self._stop_events:
+            return "OK: 현재 주기 송신 중인 메시지가 없습니다."
+
+        try:
+            # hex string이나 int 형태의 msg_id를 정수형(cid)으로 파싱
+            cid = int(str(msg_id).replace("0x", ""), 16) if isinstance(msg_id, str) else int(msg_id)
+
+            # 📌 Multi-MCU 아키텍처에 맞춘 Key 검색 (예: mcu1_1143)
+            stop_key = f"{mcu}_{cid}"
+
+            if stop_key in self._stop_events:
+                # 해당 메시지 송신 스레드에 정지(Event) 전달
+                self._stop_events[stop_key].set()
+                # 관리 딕셔너리에서 제거
+                del self._stop_events[stop_key]
+                return f"OK: SendStopCan - [장비: {mcu}] ID=0x{cid:X} 메시지 전송 중단 완료"
+            else:
+                return f"OK: SendStopCan - [장비: {mcu}] ID=0x{cid:X} 메시지는 현재 송신 중이 아닙니다."
+        except Exception as e:
+            logger.error(f"WoohyunBench SendStopCan failed: {e}")
+            return f"FAIL: SendStopCan Error - {e}"
+
+    def SendAllStopCan(self) -> str:
+        """
+        현재 전체 장비(MCU)에서 주기 송신 중인 모든 메시지 전송을 일괄 중단합니다.
+        """
+        logger.info('SendAllStopCan')
+        if not hasattr(self, '_stop_events') or not self._stop_events:
+            return "OK: 현재 주기 송신 중인 메시지가 없습니다."
+
+        try:
+            count = 0
+            # 등록된 모든 주기 송신 스레드의 stop_event를 작동시켜 일괄 종료
+            for stop_key, event in self._stop_events.items():
+                event.set()
+                count += 1
+
+            # 관리 딕셔너리 비우기
+            self._stop_events.clear()
+
+            return f"OK: SendAllStopCan - 전체 송신 메시지({count}개) 전송 일괄 중단 완료"
+        except Exception as e:
+            logger.error(f"WoohyunBench SendAllStopCan failed: {e}")
+            return f"FAIL: SendAllStopCan Error - {e}"
+
     def CanSaveStart(self, save_dir: str = "") -> str:
         logger.info('CanSaveStart')
         if not self._connected_mcus:

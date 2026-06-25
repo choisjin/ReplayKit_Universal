@@ -1357,6 +1357,17 @@
           "cycle_ms": "repeat=1 일 때 송신 주기 (ms, 기본값: 200)"
         }
       },
+      "SendStopCan": {
+        "description": "특정 CAN ID의 주기적인 Raw CAN 메시지 송신을 중단합니다.",
+        "params": {
+          "mcu": "제어 대상 장비 (기본값: 'mcu1' / 예: 'mcu1', 'mcu2', 'mcu3')",
+          "msg_id": "전송을 중단할 CAN ID (정수 또는 16진수 문자열. '0x' 접두사 유무와 무관하게 16진수로 자동 파싱. 예: '0x33E', '47A')"
+        }
+      },
+      "SendAllStopCan": {
+        "description": "현재 모든 장비에서 주기적으로 송신 중인 전체 Raw CAN 메시지 전송을 일괄 중단합니다.",
+        "params": {}
+      },
       "CanSaveStart": {
         "description": "연결된 모든 MCU·채널의 Rx/Tx CAN 데이터를 하나의 CSV 파일로 실시간 통합 로깅 시작합니다.",
         "params": {

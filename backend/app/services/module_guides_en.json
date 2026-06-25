@@ -1357,6 +1357,17 @@
           "cycle_ms": "Send interval in ms when repeat=1 (default: 200)"
         }
       },
+      "SendStopCan": {
+        "description": "Stops the periodic transmission of a specific Raw CAN message corresponding to the provided msg_id.",
+        "params": {
+          "mcu": "Target MCU to control (default: 'mcu1' / e.g. 'mcu1', 'mcu2', 'mcu3')",
+          "msg_id": "Target CAN ID to stop (integer or hex string. Parsed as hex regardless of the '0x' prefix. e.g. '0x33E', '47A')"
+        }
+      },
+      "SendAllStopCan": {
+        "description": "Stops all active periodic Raw CAN message transmissions across all connected MCUs simultaneously.",
+        "params": {}
+      },
       "CanSaveStart": {
         "description": "Starts unified real-time logging of Rx/Tx CAN data from every connected MCU/channel into a single CSV file.",
         "params": {
