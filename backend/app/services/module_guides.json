@@ -29,6 +29,17 @@
           "message_type": "'FD'(기본) 또는 'Classic'"
         }
       },
+      "CAN_PANEL": {
+        "description": "CAN 반응속도 측정용 시각화 패널. state=on·신호 없음이면 검은 패널을 띄워 대기, state=on·신호 있음(message_id+can_message)이면 패널을 노랑으로 점등하면서 동시에 send_can_message를 전송(지연 없음 — 카메라로 점등~화면반응 프레임을 세어 반응속도 측정), state=off면 신호 유무와 무관하게 패널을 종료합니다.",
+        "params": {
+          "state": "패널 상태. 'on'(점등 대기/전송) 또는 'off'(패널 종료)",
+          "message_id": "CAN 메시지 ID. state=on이고 이 값과 can_message가 모두 있으면 전송+점등 (둘 중 비면 검은 패널만)",
+          "cycle_time": "전송 주기 (ms). 0이면 1회 전송",
+          "can_message": "메시지 데이터 (16진수)",
+          "bus_channel": "CAN 채널",
+          "message_type": "'FD'(기본) 또는 'Classic'"
+        }
+      },
       "stop_can_message": {
         "description": "특정 CAN 메시지의 주기적 전송을 중지합니다.",
         "params": {

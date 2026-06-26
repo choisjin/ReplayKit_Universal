@@ -5928,6 +5928,11 @@ export default function RecordPage() {
                             const isWoohyunType = isWoohyun && selectedModuleFunc === 'SendCan' && p.name === 'type';
                             const isWoohyunChannel = isWoohyun && selectedModuleFunc === 'SendCan' && p.name === 'channel';
                             const isWoohyunRepeat = isWoohyun && selectedModuleFunc === 'SendCan' && p.name === 'repeat';
+                            // CANAT.CAN_PANEL: state → on/off 콤보박스
+                            const isCanPanelState =
+                              selectedModuleName === 'CANAT' &&
+                              selectedModuleFunc === 'CAN_PANEL' &&
+                              p.name === 'state';
                             if (isOcrRegionParam && moduleFuncArgs['mode'] !== 'Region') return null;
                             if (isAndroidSerialHidden) return null;
                             return (
@@ -6032,6 +6037,17 @@ export default function RecordPage() {
                                     options={[
                                       { value: '0', label: '0 (단발 전송)' },
                                       { value: '1', label: '1 (주기 전송)' },
+                                    ]}
+                                  />
+                                ) : isCanPanelState ? (
+                                  <Select
+                                    size="small"
+                                    value={moduleFuncArgs[p.name] || 'on'}
+                                    onChange={(v) => setModuleFuncArgs(prev => ({ ...prev, [p.name]: v }))}
+                                    style={{ flex: 1, minWidth: 0 }}
+                                    options={[
+                                      { value: 'on', label: 'on (패널 표시 / 점등+전송)' },
+                                      { value: 'off', label: 'off (패널 종료)' },
                                     ]}
                                   />
                                 ) : (

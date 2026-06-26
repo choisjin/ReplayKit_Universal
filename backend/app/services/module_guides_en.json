@@ -29,6 +29,17 @@
           "message_type": "'FD' (default) or 'Classic'"
         }
       },
+      "CAN_PANEL": {
+        "description": "Reaction-time visualization panel for CAN. With state=on and no signal it shows a black panel and waits; with state=on and a signal (message_id + can_message) it flashes the panel yellow while simultaneously sending send_can_message with no delay (film the panel with a camera and count frames from the yellow flash to the on-screen reaction to measure latency); with state=off it closes the panel regardless of signal.",
+        "params": {
+          "state": "Panel state. 'on' (show/flash+send) or 'off' (close panel)",
+          "message_id": "CAN message ID. When state=on and both this and can_message are set, it sends + flashes (black panel only if either is empty)",
+          "cycle_time": "Transmission interval (ms). 0 for one-shot",
+          "can_message": "Message data (hex)",
+          "bus_channel": "CAN channel",
+          "message_type": "'FD' (default) or 'Classic'"
+        }
+      },
       "stop_can_message": {
         "description": "Stops periodic transmission of a specific CAN message.",
         "params": {

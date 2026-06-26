@@ -947,6 +947,21 @@ def get_module_functions(module_name: str) -> list[dict]:
             "params": params,
         })
 
+    # CANAT.CAN_PANEL — CAN 반응속도 측정 시각화 패널 가상 함수 (실제 .pyd 에는 없음).
+    # 인자: state(on/off 콤보) + send_can_message 인자 그대로.
+    if module_name == "CANAT":
+        functions.append({
+            "name": "CAN_PANEL",
+            "params": [
+                {"name": "state", "required": False, "default": "'on'"},
+                {"name": "message_id", "required": False, "default": "''"},
+                {"name": "cycle_time", "required": False, "default": "0"},
+                {"name": "can_message", "required": False, "default": "''"},
+                {"name": "bus_channel", "required": False, "default": "0"},
+                {"name": "message_type", "required": False, "default": "'FD'"},
+            ],
+        })
+
     # SSHManager: 스트리밍 send_command 가상 함수 추가 (실제 클래스에는 없음)
     if module_name == "SSHManager":
         functions.append({
@@ -1446,6 +1461,75 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
         if function_name == "Monitor_pass_on_keyword":
             return svc.monitor_pass(target_serial, keyword, time_s, include_past)
         return svc.monitor_fail(target_serial, keyword, time_s, include_past)
+
+    # CANAT.CAN_PANEL — CAN 반응속도 측정용 시각화 패널 가상 함수.
+    #   state=on,  신호 없음 → 검은 패널만 띄움 (대기)
+    #   state=on,  신호 있음 → 패널을 노랑으로 점등 + send_can_message (지연 없이 동시)
+    #   state=off          → 패널 종료 (신호 유무 무관)
+    # '신호 있음' 판정 = message_id 와 can_message 가 모두 채워졌는가.
+    if module_name == "CANAT" and function_name == "CAN_PANEL":
+        from .can_panel import get_can_panel
+        panel = get_can_panel()
+        state = str(args.get("state", "on") or "on").strip().lower()
+
+        if state in ("off", "false", "0", "close", "stop"):
+            panel.close()
+            return "ok: CAN_PANEL closed (state=off)"
+
+        # state=on
+        message_id = str(args.get("message_id", "") or "").strip()
+        can_message = str(args.get("can_message", "") or "").strip()
+        has_signal = bool(message_id) and bool(can_message)
+
+        if not has_signal:
+            panel.show_black()
+            return "ok: CAN_PANEL black panel shown (state=on, no signal)"
+
+        # state=on + 신호 있음 → send_can_message 인스턴스 확보
+        instance = _get_instance(module_name, constructor_kwargs, shared_serial_conn, ssh_credentials)
+        send_fn = getattr(instance, "send_can_message", None)
+        if send_fn is None or not callable(send_fn):
+            raise ValueError("CANAT.send_can_message not available on instance")
+
+        # send_can_message 인자 타입을 시그니처에 맞춰 캐스팅 (일반 send_can_message 스텝과 동일 규약).
+        cycle_time = args.get("cycle_time", 0)
+        bus_channel = args.get("bus_channel", 0)
+        message_type = str(args.get("message_type", "FD") or "FD").strip() or "FD"
+        try:
+            sig = inspect.signature(send_fn)
+            type_map = {"int": int, "float": float, "bool": bool, "str": str}
+
+            def _cast_by_ann(pname: str, val: Any, default_type: type) -> Any:
+                p = sig.parameters.get(pname)
+                ann = p.annotation if p is not None else inspect.Parameter.empty
+                if isinstance(ann, str):
+                    ann = type_map.get(ann, ann)
+                target = ann if ann in (int, float, bool, str) else default_type
+                try:
+                    return _cast_arg(val, target)
+                except (ValueError, TypeError):
+                    return val
+            cycle_time = _cast_by_ann("cycle_time", cycle_time, int)
+            bus_channel = _cast_by_ann("bus_channel", bus_channel, int)
+        except (ValueError, TypeError):
+            # 컴파일 .pyd 가 시그니처를 노출하지 않으면 best-effort int 캐스팅
+            try:
+                cycle_time = _cast_arg(cycle_time, int)
+            except (ValueError, TypeError):
+                pass
+            try:
+                bus_channel = _cast_arg(bus_channel, int)
+            except (ValueError, TypeError):
+                pass
+
+        # 패널이 떠 있지 않으면 먼저 검정으로 띄워 창/소켓을 준비(사전 연결).
+        if not panel.is_running():
+            panel.show_black()
+        # ── 점등 + 전송: 지연 없이 동시 ──
+        # highlight() 는 사전 연결된 소켓에 1바이트만 쏘므로 마이크로초. 곧바로 CAN 전송.
+        panel.highlight()
+        result = send_fn(message_id, cycle_time, can_message, bus_channel, message_type)
+        return f"ok: CAN_PANEL highlighted + sent (id={message_id} ch={bus_channel} type={message_type}) → {result}"
 
     instance = _get_instance(module_name, constructor_kwargs, shared_serial_conn, ssh_credentials)
 
