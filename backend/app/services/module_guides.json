@@ -37,7 +37,11 @@
           "cycle_time": "전송 주기 (ms). 0이면 1회 전송",
           "can_message": "메시지 데이터 (16진수)",
           "bus_channel": "CAN 채널",
-          "message_type": "'FD'(기본) 또는 'Classic'"
+          "message_type": "'FD'(기본) 또는 'Classic'",
+          "x": "패널 좌상단 X 좌표(px). 비우면 좌하단 기본 배치. '모니터 크롭' 버튼으로 자동 입력",
+          "y": "패널 좌상단 Y 좌표(px). 비우면 좌하단 기본 배치",
+          "width": "패널 너비(px, 기본 300)",
+          "height": "패널 높이(px, 기본 300)"
         }
       },
       "stop_can_message": {

@@ -1071,6 +1071,7 @@ async def device_input(req: InputRequest):
                     await isap.async_send_key_by_name(
                         key_name, p.get("sub_cmd", 0x43), screen_type, p.get("direction"),
                         key_source=p.get("key_source"),
+                        hold_ms=int(p.get("hold_ms", 0) or 0),
                     )
                 else:
                     await isap.async_send_key(
@@ -1101,8 +1102,10 @@ async def device_input(req: InputRequest):
             elif req.action == "icas_key":
                 key_name = p.get("key_name")
                 if key_name:
+                    _hm = int(p.get("hold_ms", 0) or 0)
                     await icas.async_send_key_by_name(
-                        key_name, p.get("sub_cmd", 0x43), screen_type, p.get("direction")
+                        key_name, p.get("sub_cmd", 0x43), screen_type, p.get("direction"),
+                        hold_ms=_hm if _hm > 0 else None,
                     )
                 else:
                     await icas.async_send_key(
@@ -1137,8 +1140,10 @@ async def device_input(req: InputRequest):
             elif req.action in ("mib_key", "icas_key"):
                 key_name = p.get("key_name")
                 if key_name:
+                    _hm = int(p.get("hold_ms", 0) or 0)
                     await mib.async_send_key_by_name(
-                        key_name, p.get("sub_cmd", 0x43), screen_type, p.get("direction")
+                        key_name, p.get("sub_cmd", 0x43), screen_type, p.get("direction"),
+                        hold_ms=_hm if _hm > 0 else None,
                     )
                 else:
                     await mib.async_send_key(
@@ -1203,8 +1208,9 @@ async def device_input(req: InputRequest):
                             key_name, p.get("sub_cmd", 0x43), p.get("monitor", 0x00),
                             p.get("direction"), screen_type,
                             key_source=p.get("key_source"),
+                            hold_ms=int(p.get("hold_ms", 0) or 0),
                         )
-                        logger.info("[%s INPUT] key sent: %s (source=%s)", _label, key_name, p.get("key_source"))
+                        logger.info("[%s INPUT] key sent: %s (source=%s, hold=%s)", _label, key_name, p.get("key_source"), p.get("hold_ms", 0))
                     else:
                         await hkmc.async_send_key(
                             p["cmd"], p["sub_cmd"], p["key_data"], p.get("monitor", 0x00), p.get("direction")
@@ -2306,6 +2312,23 @@ async def get_screenshot(device_id: str, fmt: str = "jpeg", screen_type: str = "
         # Transient ADB/HKMC capture failure — return empty image so the
         # browser doesn't log a 500 error on every polling cycle.
         return {"image": "", "format": fmt}
+
+
+@router.get("/can-panel/grab")
+async def can_panel_grab():
+    """CANAT.CAN_PANEL 위치/크기 지정용 — 현재 PC 주 모니터를 PNG 로 캡처해 반환.
+
+    PySide6(패널과 동일 토킷/좌표계)로 별도 프로세스 캡처 → 크롭한 x/y/w/h 를 그대로
+    CAN_PANEL 의 위치/크기 인자로 쓸 수 있다.
+    """
+    from ..services.can_panel import grab_monitor
+    import asyncio
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, grab_monitor)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"monitor grab failed: {e}")
 
 
 # ── WinControl 전용 엔드포인트 ────────────────────────────────────

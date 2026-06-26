@@ -1630,7 +1630,8 @@ class HKMC6thService:
     def send_key_by_name(self, key_name: str, sub_cmd: int = SHORT_KEY,
                          monitor: int = 0x00, direction: Optional[int] = None,
                          screen_type: Optional[str] = None,
-                         key_source: Optional[int] = None) -> None:
+                         key_source: Optional[int] = None,
+                         hold_ms: int = 0) -> None:
         """Send a hardware key by its name (e.g. 'CCP_ENTER', 'MKBD_MAP').
 
         Args:
@@ -1638,6 +1639,9 @@ class HKMC6thService:
             sub_cmd: SHORT_KEY, LONG_KEY, PRESS_KEY, RELEASE_KEY, DIAL_ACTION
             monitor: Target monitor (LEFT=0x01, RIGHT=0x02)
             direction: Direction for dial events
+            hold_ms: >0이면 '키 누름 유지(press-and-hold)' — PRESS만 보내고 hold_ms 동안
+                누른 상태를 유지한 뒤 RELEASE를 보낸다. 영상/음악 재생 중 >>/Enter 등을
+                꾹 눌러 배속·연속 동작을 유발하는 용도. 0이면 기존 SHORT/LONG 단발 동작.
             screen_type: CCRC 전용 — monitor 미지정 시 'rear_left'/'rear_right'에서
                 CCRC monitor 값 자동 유도.
             key_source: rear-source 강제값 (CCRC_SRC_RRC=0x02 / CCRC_SRC_BRRC=0x07 /
@@ -1697,7 +1701,12 @@ class HKMC6thService:
                     source = key_info.get("source", CCRC_SRC_BRRC)
                 # monitor 0x00(NONE)이면 Right 모니터 기본값으로 보정 (레거시 CCRC_HK 기본).
                 mon = monitor if monitor in (CCRC_MONITOR_LEFT, CCRC_MONITOR_RIGHT) else CCRC_MONITOR_RIGHT
-                if sub_cmd == LONG_KEY:
+                if hold_ms and hold_ms > 0:
+                    # 누름 유지: PRESS 보내고 hold_ms 동안 눌린 상태 유지 후 RELEASE.
+                    self._send_ccrc_key(source, key_data, CCRC_PRESS, mon)
+                    time.sleep(hold_ms / 1000.0)
+                    self._send_ccrc_key(source, key_data, CCRC_RELEASE, mon)
+                elif sub_cmd == LONG_KEY:
                     self._send_ccrc_key(source, key_data, CCRC_PRESS, mon)
                     time.sleep(0.1)
                     self._send_ccrc_key(source, key_data, CCRC_LONG, mon)
@@ -1715,6 +1724,14 @@ class HKMC6thService:
             if key_info.get("dial"):
                 dir_val = direction if direction is not None else key_info.get("direction")
                 self.send_key(cmd, DIAL_ACTION, key_data, monitor, dir_val)
+            elif hold_ms and hold_ms > 0:
+                # 누름 유지(press-and-hold): PRESS → hold_ms 동안 눌린 상태 유지 → RELEASE.
+                # >>/Enter 등을 꾹 눌러 배속·연속 동작을 유발. LONG 중간 프레임 없이
+                # 누른 상태만 유지해야 IVI가 '키가 계속 눌려 있음'으로 처리한다.
+                self.send_key(cmd, PRESS_KEY, key_data, monitor, direction)
+                time.sleep(hold_ms / 1000.0)
+                self.send_key(cmd, RELEASE_KEY, key_data, monitor, direction)
+                logger.info("[KEY HOLD] %s hold=%dms", key_name, hold_ms)
             elif sub_cmd == SHORT_KEY:
                 # 일반 키: PRESS → SHORT → RELEASE 3단계 시퀀스
                 self.send_key(cmd, PRESS_KEY, key_data, monitor, direction)
@@ -1881,10 +1898,11 @@ class HKMC6thService:
     async def async_send_key_by_name(self, key_name: str, sub_cmd: int = SHORT_KEY,
                                      monitor: int = 0x00, direction: Optional[int] = None,
                                      screen_type: Optional[str] = None,
-                                     key_source: Optional[int] = None) -> None:
+                                     key_source: Optional[int] = None,
+                                     hold_ms: int = 0) -> None:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
-            None, self.send_key_by_name, key_name, sub_cmd, monitor, direction, screen_type, key_source
+            None, self.send_key_by_name, key_name, sub_cmd, monitor, direction, screen_type, key_source, hold_ms
         )
 
     # ------------------------------------------------------------------

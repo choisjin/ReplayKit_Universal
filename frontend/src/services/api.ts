@@ -9,6 +9,7 @@ export const deviceApi = {
   list: () => api.get('/device/list'),
   getInfo: (deviceId: string) => api.get(`/device/info/${deviceId}`),
   screenshot: (deviceId: string, screenType?: string, fmt: 'jpeg' | 'png' = 'jpeg') => api.get(`/device/screenshot/${deviceId}`, { params: { fmt, screen_type: screenType || 'front_center' } }),
+  canPanelGrab: () => api.get('/device/can-panel/grab'),
   scan: () => api.get('/device/scan'),
   getScanSettings: () => api.get('/device/scan-settings'),
   saveScanSettings: (settings: any) => api.post('/device/scan-settings', settings),

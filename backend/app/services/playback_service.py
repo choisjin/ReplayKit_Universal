@@ -1458,7 +1458,8 @@ class PlaybackService:
             return f"{kind} ({p.get('x1',0)},{p.get('y1',0)})→({p.get('x2',0)},{p.get('y2',0)}) [{st}]"
         elif step.type == StepType.HKMC_KEY:
             key = p.get("key_name", f"0x{p.get('key_data', 0):02X}")
-            return f"hkmc_key {key}"
+            hold = int(p.get("hold_ms", 0) or 0)
+            return f"hkmc_key {key}" + (f" (hold {hold}ms)" if hold > 0 else "")
         elif step.type == StepType.HKMC_LONG_PRESS:
             st = step.screen_type or p.get("screen_type", "")
             return f"hkmc_long_press ({p.get('x', 0)}, {p.get('y', 0)}) {p.get('duration_ms', 3000)}ms [{st}]"
@@ -1472,7 +1473,8 @@ class PlaybackService:
             return f"{kind} ({p.get('x1',0)},{p.get('y1',0)})→({p.get('x2',0)},{p.get('y2',0)}) [{st}]"
         elif step.type == StepType.ICAS_KEY:
             key = p.get("key_name", f"0x{p.get('key_data', 0):02X}")
-            return f"icas_key {key}"
+            hold = int(p.get("hold_ms", 0) or 0)
+            return f"icas_key {key}" + (f" (hold {hold}ms)" if hold > 0 else "")
         elif step.type == StepType.ICAS_LONG_PRESS:
             st = step.screen_type or p.get("screen_type", "")
             return f"icas_long_press ({p.get('x', 0)}, {p.get('y', 0)}) {p.get('duration_ms', 3000)}ms [{st}]"
@@ -2689,11 +2691,12 @@ class PlaybackService:
                         direction = params.get("direction")
                         # CCRC source override (UI 토글로 저장됨) — 정수 또는 None
                         key_source = params.get("key_source")
+                        hold_ms = int(params.get("hold_ms", 0) or 0)
                         if key_name:
                             sub_cmd = params.get("sub_cmd", 0x43)
                             if is_isap:
                                 await svc.async_send_key_by_name(key_name, sub_cmd, screen_type, direction,
-                                                                  key_source=key_source)
+                                                                  key_source=key_source, hold_ms=hold_ms)
                             else:
                                 # screen_type 반드시 전달 — send_key_by_name 의 자동 monitor
                                 # 보정(rear_left→CCRC_MONITOR_LEFT) 이 동작해야 리어 모니터로
@@ -2702,7 +2705,7 @@ class PlaybackService:
                                 # rear 외 비활성화로 별도 차단.
                                 monitor = params.get("monitor", 0x00)
                                 await svc.async_send_key_by_name(key_name, sub_cmd, monitor, direction, screen_type,
-                                                                  key_source=key_source)
+                                                                  key_source=key_source, hold_ms=hold_ms)
                         else:
                             if is_isap:
                                 await svc.async_send_key(

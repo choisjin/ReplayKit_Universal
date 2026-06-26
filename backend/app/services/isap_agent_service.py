@@ -784,7 +784,8 @@ class ISAPAgentService:
     def send_key_by_name(self, key_name: str, sub_cmd: int = SHORT_KEY,
                          screen_type: str = "front_center",
                          direction: Optional[int] = None,
-                         key_source: Optional[int] = None) -> None:
+                         key_source: Optional[int] = None,
+                         hold_ms: int = 0) -> None:
         # key_source는 HKMC CCRC 전용 — iSAP에선 무시 (시그니처 통일)
         _ = key_source
         info = self.resolve_key(key_name)
@@ -798,6 +799,13 @@ class ISAPAgentService:
             if info.get("dial"):
                 dir_val = direction if direction is not None else DIR_CLOCKWISE
                 self.send_key(cmd, KNOB_KEY, key_data, screen_type, dir_val)
+            elif hold_ms and hold_ms > 0:
+                # 누름 유지(press-and-hold): PRESS → hold_ms 유지 → RELEASE.
+                # >>/Enter 등을 꾹 눌러 배속·연속 동작을 유발.
+                self.send_key(cmd, PRESS_KEY, key_data, screen_type, direction)
+                time.sleep(hold_ms / 1000.0)
+                self.send_key(cmd, RELEASE_KEY, key_data, screen_type, direction)
+                logger.info("[iSAP KEY HOLD] %s hold=%dms", key_name, hold_ms)
             elif sub_cmd == SHORT_KEY:
                 # 프로토콜 사양: PRESS → SHORT → RELEASE 순서로 송신
                 self.send_key(cmd, PRESS_KEY, key_data, screen_type, direction)
@@ -868,9 +876,10 @@ class ISAPAgentService:
     async def async_send_key_by_name(self, key_name: str, sub_cmd: int = SHORT_KEY,
                                      screen_type: str = "front_center",
                                      direction: Optional[int] = None,
-                                     key_source: Optional[int] = None) -> None:
+                                     key_source: Optional[int] = None,
+                                     hold_ms: int = 0) -> None:
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.send_key_by_name, key_name, sub_cmd, screen_type, direction, key_source)
+        await loop.run_in_executor(None, self.send_key_by_name, key_name, sub_cmd, screen_type, direction, key_source, hold_ms)
 
     # ------------------------------------------------------------------
 

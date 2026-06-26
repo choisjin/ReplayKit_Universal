@@ -1203,7 +1203,8 @@ class HKMC5thWideService:
     def send_key_by_name(self, key_name: str, sub_cmd: int = SHORT_KEY,
                          monitor: int = 0x00, direction: Optional[int] = None,
                          screen_type: Optional[str] = None,
-                         key_source: Optional[int] = None) -> None:
+                         key_source: Optional[int] = None,
+                         hold_ms: int = 0) -> None:
         """Send a hardware key by its name (e.g. 'RADIO', 'HKEY_FMAM', 'SWC_PTT').
 
         Args:
@@ -1213,6 +1214,8 @@ class HKMC5thWideService:
             direction: 다이얼 방향 (None=키 정의 기본값 사용)
             screen_type: 미사용 (5th gen 단일 스크린, 시그니처 호환용)
             key_source: 미사용 (5th gen, 시그니처 호환용)
+            hold_ms: >0이면 누름 유지(press-and-hold) — PRESS → hold_ms 유지 → RELEASE
+                (>>/Enter 꾹 눌러 배속 동작). dial/msg 키엔 적용 안 함.
         """
         key_info = self.resolve_key(key_name)
         if not key_info:
@@ -1223,7 +1226,15 @@ class HKMC5thWideService:
         is_dial = bool(key_info.get("dial"))
 
         with self._capture_lock:
-            if is_msg:
+            if hold_ms and hold_ms > 0 and not is_msg and not is_dial:
+                # 누름 유지: PRESS → hold_ms 유지 → RELEASE.
+                key_data = key_info["key"]
+                self.send_key(cmd, PRESS_KEY, key_data, monitor, direction)
+                time.sleep(hold_ms / 1000.0)
+                self.send_key(cmd, RELEASE_KEY, key_data, monitor, direction)
+                logger.info("[HKMC5thWide KEY HOLD] %s hold=%dms", key_name, hold_ms)
+
+            elif is_msg:
                 # 메시지 키: 데이터 없이 cmd+subCmd만 전송
                 self.send_key_message(cmd, sub_cmd)
 
@@ -1302,11 +1313,12 @@ class HKMC5thWideService:
     async def async_send_key_by_name(self, key_name: str, sub_cmd: int = SHORT_KEY,
                                       monitor: int = 0x00, direction: Optional[int] = None,
                                       screen_type: Optional[str] = None,
-                                      key_source: Optional[int] = None) -> None:
+                                      key_source: Optional[int] = None,
+                                      hold_ms: int = 0) -> None:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             None, self.send_key_by_name, key_name, sub_cmd, monitor, direction,
-            screen_type, key_source,
+            screen_type, key_source, hold_ms,
         )
 
     # ------------------------------------------------------------------

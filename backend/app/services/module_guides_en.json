@@ -37,7 +37,11 @@
           "cycle_time": "Transmission interval (ms). 0 for one-shot",
           "can_message": "Message data (hex)",
           "bus_channel": "CAN channel",
-          "message_type": "'FD' (default) or 'Classic'"
+          "message_type": "'FD' (default) or 'Classic'",
+          "x": "Panel top-left X (px). Empty = bottom-left default. Auto-filled by the 'Crop monitor' button",
+          "y": "Panel top-left Y (px). Empty = bottom-left default",
+          "width": "Panel width (px, default 300)",
+          "height": "Panel height (px, default 300)"
         }
       },
       "stop_can_message": {

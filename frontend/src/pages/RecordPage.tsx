@@ -290,7 +290,10 @@ function trimTinyTail(points: { x: number; y: number }[], minLen: number): { x: 
 // HKMC key sub commands
 const HKMC_SHORT_KEY = 0x43;
 const HKMC_LONG_KEY = 0x44;
-const HKMC_LONG_PRESS_MS = 3000;
+// 하드키 꾹누르기 게이지가 가득 차는 시간(ms). 이 시간 이상 누르면 '누름 유지(hold)'로
+// 전환되어 PRESS→유지→RELEASE 로 디바이스가 배속/연속 동작을 하게 한다. 가득 찬 뒤로는
+// 이 주기마다 카운트가 1씩 올라가며, 실제 전달되는 hold 시간 = 실제 누른 시간이다.
+const HKMC_LONG_PRESS_MS = 2000;
 
 export default function RecordPage() {
   const { t } = useTranslation();
@@ -540,7 +543,10 @@ export default function RecordPage() {
   // ALL RAND 실행 중에는 개별 HK/SK/DRAG 액션이 별도 스텝으로 기록되지 않도록 억제
   const suppressStepAddRef = useRef<boolean>(false);
   // 하드키 롱프레스 타이머 — 리렌더에도 유지 (키이름 → {downTs, timer})
-  const hkTimerRef = useRef<Map<string, { downTs: number; timer: number }>>(new Map());
+  // 하드키 꾹누르기: 버튼별 누름 시작시각 + 카운트 증가 인터벌 id.
+  const hkTimerRef = useRef<Map<string, { downTs: number; interval: number }>>(new Map());
+  // 하드키별 hold 카운트(2초 게이지가 N번 찬 횟수) — 버튼 위에 배지로 표시.
+  const [hkLongCount, setHkLongCount] = useState<Record<string, number>>({});
   // Region 모달용 canvas/drag ref
   const randRegionCanvasRef = useRef<HTMLCanvasElement>(null);
   const randRegionScreenshotRef = useRef<string>('');
@@ -646,6 +652,15 @@ export default function RecordPage() {
   const ocrCropCanvasRef = useRef<HTMLCanvasElement>(null);
   const ocrCropScreenshotRef = useRef<string>('');
   const ocrCropDragRef = useRef<{ startX: number; startY: number; curX: number; curY: number; active: boolean }>({
+    startX: 0, startY: 0, curX: 0, curY: 0, active: false,
+  });
+
+  // CANAT.CAN_PANEL 모니터 크롭 모달 (PC 모니터 캡처 → 패널 위치/크기 지정)
+  const [canPanelCropModalOpen, setCanPanelCropModalOpen] = useState(false);
+  const canPanelCropCanvasRef = useRef<HTMLCanvasElement>(null);
+  const canPanelCropScreenshotRef = useRef<string>('');
+  const canPanelCropOriginRef = useRef<{ ox: number; oy: number }>({ ox: 0, oy: 0 });
+  const canPanelCropDragRef = useRef<{ startX: number; startY: number; curX: number; curY: number; active: boolean }>({
     startX: 0, startY: 0, curX: 0, curY: 0, active: false,
   });
 
@@ -2490,6 +2505,107 @@ export default function RecordPage() {
   }, [ocrCropModalOpen, drawOcrCropCanvas]);
 
   // ── /OCR ExtractRegion 크롭 모달 ────────────────────────────────────────
+
+  // ── CANAT.CAN_PANEL 모니터 크롭 모달 ────────────────────────────────────
+
+  const drawCanPanelCropCanvas = useCallback((dragRect?: { x: number; y: number; w: number; h: number }) => {
+    const canvas = canPanelCropCanvasRef.current;
+    const src = canPanelCropScreenshotRef.current;
+    if (!canvas || !src) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const img = new window.Image();
+    img.onload = () => {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      ctx.drawImage(img, 0, 0);
+      if (dragRect && dragRect.w > 2 && dragRect.h > 2) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(dragRect.x, dragRect.y, dragRect.w, dragRect.h);
+        ctx.drawImage(img, dragRect.x, dragRect.y, dragRect.w, dragRect.h,
+                      dragRect.x, dragRect.y, dragRect.w, dragRect.h);
+        ctx.strokeStyle = '#FFD400';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(dragRect.x, dragRect.y, dragRect.w, dragRect.h);
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#FFD400';
+        ctx.font = '24px sans-serif';
+        ctx.fillText(`${dragRect.x},${dragRect.y}  ${dragRect.w}×${dragRect.h}`, dragRect.x + 4, dragRect.y - 8);
+      }
+    };
+    img.src = src;
+  }, []);
+
+  const openCanPanelCropModal = useCallback(async () => {
+    try {
+      const res = await deviceApi.canPanelGrab();
+      const d = res.data || {};
+      if (!d.image) { message.error(t('record.screenshotFailed')); return; }
+      canPanelCropScreenshotRef.current = `data:image/png;base64,${d.image}`;
+      canPanelCropOriginRef.current = { ox: d.x || 0, oy: d.y || 0 };
+      setCanPanelCropModalOpen(true);
+    } catch (e: any) {
+      message.error(`${t('record.screenshotFailed')}: ${e?.response?.data?.detail || e?.message || e}`);
+    }
+  }, [t]);
+
+  const canPanelCropMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canPanelCropCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+    canPanelCropDragRef.current = { startX: x, startY: y, curX: x, curY: y, active: true };
+  }, []);
+
+  const canPanelCropMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canPanelCropDragRef.current.active) return;
+    const canvas = canPanelCropCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+    canPanelCropDragRef.current.curX = x;
+    canPanelCropDragRef.current.curY = y;
+    const { startX, startY } = canPanelCropDragRef.current;
+    drawCanPanelCropCanvas({
+      x: Math.min(startX, x), y: Math.min(startY, y),
+      w: Math.abs(x - startX), h: Math.abs(y - startY),
+    });
+  }, [drawCanPanelCropCanvas]);
+
+  const canPanelCropMouseUp = useCallback(() => {
+    if (!canPanelCropDragRef.current.active) return;
+    canPanelCropDragRef.current.active = false;
+    const { startX, startY, curX, curY } = canPanelCropDragRef.current;
+    const rx = Math.min(startX, curX);
+    const ry = Math.min(startY, curY);
+    const rw = Math.abs(curX - startX);
+    const rh = Math.abs(curY - startY);
+    if (rw < 2 || rh < 2) return;
+    // 캡처 이미지 좌표 → 전역 모니터 좌표 (주 모니터 origin 가산)
+    const { ox, oy } = canPanelCropOriginRef.current;
+    const gx = rx + ox;
+    const gy = ry + oy;
+    setModuleFuncArgs(prev => ({
+      ...prev,
+      x: String(gx), y: String(gy), width: String(rw), height: String(rh),
+    }));
+    setCanPanelCropModalOpen(false);
+    message.success(`${t('record.ocr.cropDone')}: (${gx}, ${gy}) ${rw}×${rh}`);
+  }, [t]);
+
+  useEffect(() => {
+    if (canPanelCropModalOpen) setTimeout(() => drawCanPanelCropCanvas(), 50);
+  }, [canPanelCropModalOpen, drawCanPanelCropCanvas]);
+
+  // ── /CANAT.CAN_PANEL 모니터 크롭 모달 ───────────────────────────────────
 
   const testStep = useCallback(async (stepIdx: number) => {
     if (!scenarioName) {
@@ -5340,54 +5456,83 @@ export default function RecordPage() {
                                     if (e.button !== 0) return;
                                     // 포인터 캡처: 버튼 바깥으로 커서가 벗어나도 pointerup 이 계속 이 버튼에서 발생
                                     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-                                    // 이전 잔여 타이머가 있으면 먼저 정리 (빠른 재클릭 방어)
+                                    // 이전 잔여 인터벌이 있으면 먼저 정리 (빠른 재클릭 방어)
                                     const prev = hkTimerRef.current.get(k.name);
-                                    if (prev) clearTimeout(prev.timer);
+                                    if (prev) clearInterval(prev.interval);
                                     const btn = e.currentTarget;
                                     btn.classList.remove('long-done');
-                                    btn.classList.add('pressing');
-                                    const timer = window.setTimeout(() => { btn.classList.add('long-done'); }, HKMC_LONG_PRESS_MS);
-                                    hkTimerRef.current.set(k.name, { downTs: Date.now(), timer });
+                                    btn.classList.add('pressing');  // 게이지 0→full(2초) 애니메이션 시작
+                                    setHkLongCount(c => ({ ...c, [k.name]: 0 }));
+                                    // 2초마다 카운트 +1 + 게이지 재충전(다음 주기 시각 피드백).
+                                    let ticks = 0;
+                                    const interval = window.setInterval(() => {
+                                      ticks += 1;
+                                      setHkLongCount(c => ({ ...c, [k.name]: ticks }));
+                                      // 게이지 재시작: pressing 제거→reflow→재추가 로 애니메이션 다시 채움.
+                                      btn.classList.remove('pressing');
+                                      void btn.offsetWidth;
+                                      btn.classList.add('pressing');
+                                    }, HKMC_LONG_PRESS_MS);
+                                    hkTimerRef.current.set(k.name, { downTs: Date.now(), interval });
                                   }}
                                   onPointerUp={(e) => {
                                     if (e.button !== 0) return;
                                     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
                                     const entry = hkTimerRef.current.get(k.name);
                                     if (entry) {
-                                      clearTimeout(entry.timer);
+                                      clearInterval(entry.interval);
                                       const held = Date.now() - entry.downTs;
-                                      const isLong = held >= HKMC_LONG_PRESS_MS;
-                                      const sub = isLong ? HKMC_LONG_KEY : HKMC_SHORT_KEY;
-                                      const label = k.name + (isLong ? ' (Long)' : '');
+                                      // 2초 이상 누름 → '누름 유지(hold)' 키. PRESS→유지(hold_ms)→RELEASE 로
+                                      // 디바이스가 누른 시간만큼 배속/연속 동작. 2초 미만 → 일반 short 키.
+                                      const isHold = held >= HKMC_LONG_PRESS_MS;
+                                      const params: Record<string, any> = { key_name: k.name, screen_type: screenType };
+                                      if (isHold) {
+                                        params.sub_cmd = HKMC_LONG_KEY;
+                                        params.hold_ms = held;  // 누른 만큼 유지
+                                      } else {
+                                        params.sub_cmd = HKMC_SHORT_KEY;
+                                      }
                                       // rear-only 그룹(RRC/CCRC)에서만 source 토글값 첨부 (Auto=null이면 미첨부)
-                                      const params: Record<string, any> = { key_name: k.name, sub_cmd: sub, screen_type: screenType };
                                       if (isRearOnly && rearKeySource !== null) params.key_source = rearKeySource;
+                                      const label = k.name + (isHold ? ` (Hold ${(held / 1000).toFixed(1)}s)` : '');
                                       executeAction('hkmc_key', params, label);
                                     }
                                     hkTimerRef.current.delete(k.name);
+                                    setHkLongCount(c => { const n = { ...c }; delete n[k.name]; return n; });
                                     e.currentTarget.classList.remove('pressing', 'long-done');
                                   }}
                                   onPointerCancel={(e) => {
-                                    // OS 가 포인터를 취소하는 경우 (예: 시스템 제스처) — 타이머만 정리
+                                    // OS 가 포인터를 취소하는 경우 (예: 시스템 제스처) — 인터벌만 정리
                                     const entry = hkTimerRef.current.get(k.name);
-                                    if (entry) clearTimeout(entry.timer);
+                                    if (entry) clearInterval(entry.interval);
                                     hkTimerRef.current.delete(k.name);
+                                    setHkLongCount(c => { const n = { ...c }; delete n[k.name]; return n; });
                                     e.currentTarget.classList.remove('pressing', 'long-done');
                                   }}
                                   onContextMenu={(e) => {
-                                    // 우클릭 시 타이머 정리 (우클릭 메뉴 열리면 pointerup 안 옴)
+                                    // 우클릭 시 인터벌 정리 (우클릭 메뉴 열리면 pointerup 안 옴)
                                     e.preventDefault();
                                     const entry = hkTimerRef.current.get(k.name);
-                                    if (entry) clearTimeout(entry.timer);
+                                    if (entry) clearInterval(entry.interval);
                                     hkTimerRef.current.delete(k.name);
+                                    setHkLongCount(c => { const n = { ...c }; delete n[k.name]; return n; });
                                     e.currentTarget.classList.remove('pressing', 'long-done');
                                   }}
                                 >{(() => {
                                   const baseName = k.name.replace(`${group}_`, '');
                                   // MKBD_CUSTOM: 비어있는 별, SWRC_CUSTOM: 채워있는 별
-                                  if (k.name === 'MKBD_CUSTOM') return `☆ ${baseName}`;
-                                  if (k.name === 'SWRC_CUSTOM') return `★ ${baseName}`;
-                                  return baseName;
+                                  const display = k.name === 'MKBD_CUSTOM' ? `☆ ${baseName}`
+                                    : k.name === 'SWRC_CUSTOM' ? `★ ${baseName}` : baseName;
+                                  const cnt = hkLongCount[k.name] || 0;
+                                  // 2초 게이지가 가득 찬 횟수(카운트) 배지 — 누른 시간(배속 강도) 시각 표시.
+                                  return (
+                                    <span style={{ position: 'relative' }}>
+                                      {display}
+                                      {cnt >= 1 && (
+                                        <sup style={{ color: '#ff4d4f', fontWeight: 700, marginLeft: 2 }}>×{cnt}</sup>
+                                      )}
+                                    </span>
+                                  );
                                 })()}</Button>
                               ))}
                             </div>
@@ -5889,6 +6034,18 @@ export default function RecordPage() {
                               {t('record.ocr.cropButton')}
                             </Button>
                           )}
+                          {/* CANAT.CAN_PANEL: 모니터 크롭으로 패널 위치/크기 지정 (state=on 일 때만) */}
+                          {selectedModuleName === 'CANAT' && selectedModuleFunc === 'CAN_PANEL' &&
+                           (moduleFuncArgs['state'] || 'on') !== 'off' && (
+                            <Button
+                              size="small"
+                              icon={<span>✂</span>}
+                              onClick={openCanPanelCropModal}
+                              style={{ alignSelf: 'flex-start' }}
+                            >
+                              모니터 크롭 (위치/크기)
+                            </Button>
+                          )}
                           {fn.params.length > 0 && fn.params.map(p => {
                             // Android 모듈의 모든 함수에서 serial 인자는 노출하지 않는다.
                             // 비워두면 백엔드가 step.device_id(=선택 디바이스)에서 타겟 시리얼을 derive 해 라우팅한다.
@@ -6354,6 +6511,31 @@ export default function RecordPage() {
         </div>
         <div style={{ marginTop: 6, color: subTextColor, fontSize: 11, textAlign: 'center' }}>
           {t('record.ocr.cropModalHint')}
+        </div>
+      </Modal>
+
+      {/* CANAT.CAN_PANEL 모니터 크롭 모달 */}
+      <Modal
+        title="모니터 크롭 — 드래그한 영역이 패널 위치/크기가 됩니다"
+        open={canPanelCropModalOpen}
+        onCancel={() => setCanPanelCropModalOpen(false)}
+        width="90vw"
+        style={{ top: 20 }}
+        footer={
+          <Button onClick={() => setCanPanelCropModalOpen(false)}>{t('common.cancel')}</Button>
+        }
+      >
+        <div style={{ overflow: 'auto', maxHeight: '75vh', textAlign: 'center' }}>
+          <canvas
+            ref={canPanelCropCanvasRef}
+            onMouseDown={canPanelCropMouseDown}
+            onMouseMove={canPanelCropMouseMove}
+            onMouseUp={canPanelCropMouseUp}
+            style={{ cursor: 'crosshair', maxWidth: '100%' }}
+          />
+        </div>
+        <div style={{ marginTop: 6, color: subTextColor, fontSize: 11, textAlign: 'center' }}>
+          현재 PC 모니터를 캡처한 화면입니다. 패널을 띄울 영역을 드래그하면 x/y/width/height 가 자동 입력됩니다.
         </div>
       </Modal>
 

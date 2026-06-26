@@ -1139,17 +1139,20 @@ class RecordingService:
                                       hold_ms=int(params.get("hold_ms", 0) or 0))
             elif step_type == StepType.HKMC_KEY:
                 key_name = params.get("key_name")
+                hold_ms = int(params.get("hold_ms", 0) or 0)
                 if key_name:
                     sub_cmd = params.get("sub_cmd", 0x43)  # SHORT_KEY
                     direction = params.get("direction")
                     if is_isap:
-                        await svc.async_send_key_by_name(key_name, sub_cmd, screen_type, direction)
+                        await svc.async_send_key_by_name(key_name, sub_cmd, screen_type, direction,
+                                                         hold_ms=hold_ms)
                     else:
                         # screen_type 반드시 전달 — 미전달 시 rear_left/rear_right 키의
                         # CCRC_MONITOR_LEFT/RIGHT 자동 라우팅이 동작하지 않아 리어 모니터로
                         # 이벤트가 전달되지 않음 (HKMC 스텝 테스트가 안 먹는 증상).
                         monitor = params.get("monitor", 0x00)
-                        await svc.async_send_key_by_name(key_name, sub_cmd, monitor, direction, screen_type)
+                        await svc.async_send_key_by_name(key_name, sub_cmd, monitor, direction, screen_type,
+                                                         hold_ms=hold_ms)
                 else:
                     if is_isap:
                         await svc.async_send_key(
@@ -1188,7 +1191,9 @@ class RecordingService:
                 if key_name:
                     sub_cmd = params.get("sub_cmd", 0x43)
                     direction = params.get("direction")
-                    await svc.async_send_key_by_name(key_name, sub_cmd, screen_type, direction)
+                    hold_ms = int(params.get("hold_ms", 0) or 0)
+                    await svc.async_send_key_by_name(key_name, sub_cmd, screen_type, direction,
+                                                     hold_ms=hold_ms if hold_ms > 0 else None)
                 else:
                     await svc.async_send_key(
                         params["cmd"], params["sub_cmd"], params["key_data"],

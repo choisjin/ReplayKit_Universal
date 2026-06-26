@@ -959,6 +959,10 @@ def get_module_functions(module_name: str) -> list[dict]:
                 {"name": "can_message", "required": False, "default": "''"},
                 {"name": "bus_channel", "required": False, "default": "0"},
                 {"name": "message_type", "required": False, "default": "'FD'"},
+                {"name": "x", "required": False, "default": "''"},
+                {"name": "y", "required": False, "default": "''"},
+                {"name": "width", "required": False, "default": "300"},
+                {"name": "height", "required": False, "default": "300"},
             ],
         })
 
@@ -1476,14 +1480,28 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
             panel.close()
             return "ok: CAN_PANEL closed (state=off)"
 
+        # 위치/크기 — 비거나 잘못되면 기본값(좌하단/300x300)
+        def _int_arg(name: str, default: int) -> int:
+            try:
+                v = args.get(name, "")
+                if v is None or str(v).strip() == "":
+                    return default
+                return int(_cast_arg(v, int))
+            except (ValueError, TypeError):
+                return default
+        px = _int_arg("x", -1)
+        py = _int_arg("y", -1)
+        pw = _int_arg("width", 300)
+        ph = _int_arg("height", 300)
+
         # state=on
         message_id = str(args.get("message_id", "") or "").strip()
         can_message = str(args.get("can_message", "") or "").strip()
         has_signal = bool(message_id) and bool(can_message)
 
         if not has_signal:
-            panel.show_black()
-            return "ok: CAN_PANEL black panel shown (state=on, no signal)"
+            panel.show_black(px, py, pw, ph)
+            return f"ok: CAN_PANEL black panel shown (state=on, no signal, geom={pw}x{ph}@{px},{py})"
 
         # state=on + 신호 있음 → send_can_message 인스턴스 확보
         instance = _get_instance(module_name, constructor_kwargs, shared_serial_conn, ssh_credentials)
@@ -1522,9 +1540,9 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
             except (ValueError, TypeError):
                 pass
 
-        # 패널이 떠 있지 않으면 먼저 검정으로 띄워 창/소켓을 준비(사전 연결).
+        # 패널이 떠 있지 않으면 먼저 검정(지정 위치/크기)으로 띄워 창/소켓을 준비(사전 연결).
         if not panel.is_running():
-            panel.show_black()
+            panel.show_black(px, py, pw, ph)
         # ── 점등 + 전송: 지연 없이 동시 ──
         # highlight() 는 사전 연결된 소켓에 1바이트만 쏘므로 마이크로초. 곧바로 CAN 전송.
         panel.highlight()
