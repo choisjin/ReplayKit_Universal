@@ -6097,9 +6097,9 @@ export default function RecordPage() {
                               {t('record.ocr.cropButton')}
                             </Button>
                           )}
-                          {/* CANAT.CAN_PANEL: 모니터 크롭으로 패널 위치/크기 지정 (Close 가 아닐 때) */}
+                          {/* CANAT.CAN_PANEL: 모니터 크롭으로 패널 위치/크기 지정 (On 일 때만 — OFF/Close 는 위치 무관) */}
                           {selectedModuleName === 'CANAT' && selectedModuleFunc === 'CAN_PANEL' &&
-                           (moduleFuncArgs['state'] || 'on') !== 'close' && (
+                           (moduleFuncArgs['state'] || 'on') === 'on' && (
                             <Button
                               size="small"
                               icon={<span>✂</span>}
@@ -6902,9 +6902,9 @@ export default function RecordPage() {
                     {editFnGuide.description}
                   </div>
                 )}
-                {/* CANAT.CAN_PANEL: 위치/크기는 모니터 크롭 버튼으로만 설정 (Close 가 아닐 때) */}
+                {/* CANAT.CAN_PANEL: 위치/크기는 모니터 크롭 버튼으로만 설정 (On 일 때만 — OFF/Close 는 위치 무관) */}
                 {editStepParams.module === 'CANAT' && editStepParams.function === 'CAN_PANEL' &&
-                 (args.state || 'on') !== 'close' && (
+                 (args.state || 'on') === 'on' && (
                   <Button
                     size="small"
                     icon={<span>✂</span>}

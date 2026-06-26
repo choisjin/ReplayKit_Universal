@@ -104,7 +104,7 @@ def _run_host(port: int, x: int, y: int, width: int, height: int) -> int:
     """PySide6 패널 호스트. localhost:port 로 listen, 1바이트 opcode 수신."""
     _force_no_hidpi()
     from datetime import datetime
-    from PySide6.QtCore import Qt, QSocketNotifier, QTimer  # type: ignore
+    from PySide6.QtCore import Qt, QTimer  # type: ignore
     from PySide6.QtGui import QFont, QGuiApplication  # type: ignore
     from PySide6.QtWidgets import QApplication, QLabel, QWidget  # type: ignore
 
@@ -187,15 +187,10 @@ def _run_host(port: int, x: int, y: int, width: int, height: int) -> int:
             self._reset()
 
     panel = PanelWindow()
-    state = {"conn": None, "notifier": None}
+    state = {"conn": None}
 
     def _close_conn() -> None:
-        n = state.get("notifier")
         c = state.get("conn")
-        if n is not None:
-            n.setEnabled(False)
-            n.deleteLater()
-            state["notifier"] = None
         if c is not None:
             try:
                 c.close()
@@ -203,50 +198,53 @@ def _run_host(port: int, x: int, y: int, width: int, height: int) -> int:
                 pass
             state["conn"] = None
 
-    def _on_conn_readable(_fd: int) -> None:
-        c = state.get("conn")
-        if c is None:
-            return
-        try:
-            data = c.recv(64)
-        except (BlockingIOError, InterruptedError):
-            return
-        except OSError:
-            _close_conn()
-            return
-        if not data:
-            _close_conn()
-            return
-        for b in data:
-            if b == OP_HIGHLIGHT:
-                panel.highlight()
-            elif b == OP_RESET:
-                panel.reset()
-            elif b == OP_SHUTDOWN:
+    # ── 소켓을 QTimer 로 폴링한다 (QSocketNotifier 대신).
+    # Windows 에서 QSocketNotifier 는 '알림자 등록 전에 이미 도착해 버린' 데이터에 대해
+    # 새 데이터가 안 오면 이벤트가 안 떠서, spawn 직후 곧바로 보낸 OP_HIGHLIGHT 가
+    # 영영 안 읽혀 패널이 검정인 채로 멈추는 사례가 있다(점등 안 됨). 폴링은 이미 버퍼에
+    # 쌓인 데이터를 항상 집어내므로 그 레이스를 근본 차단한다. 1ms 간격이라 점등 지연 무시 가능.
+    def _poll() -> None:
+        # 1) 연결 수락 (한 번에 한 client)
+        if state["conn"] is None:
+            try:
+                conn, _ = server.accept()
+                conn.setblocking(False)
+                state["conn"] = conn
+            except (BlockingIOError, InterruptedError):
+                pass
+            except OSError:
+                pass
+        # 2) 수신 데이터 처리 (버퍼에 이미 쌓인 것 포함)
+        c = state["conn"]
+        if c is not None:
+            try:
+                data = c.recv(64)   # None=no-data, b""=peer-closed, bytes=처리
+            except (BlockingIOError, InterruptedError):
+                data = None         # 지금 읽을 데이터 없음 — 연결 유지
+            except OSError:
                 _close_conn()
-                app.quit()
                 return
+            if data == b"":         # 상대가 연결을 닫음
+                _close_conn()
+            elif data:
+                for b in data:
+                    if b == OP_HIGHLIGHT:
+                        panel.highlight()
+                    elif b == OP_RESET:
+                        panel.reset()
+                    elif b == OP_SHUTDOWN:
+                        _close_conn()
+                        app.quit()
+                        return
 
-    def _on_server_readable(_fd: int) -> None:
-        try:
-            conn, _ = server.accept()
-        except (BlockingIOError, InterruptedError):
-            return
-        except OSError:
-            return
-        _close_conn()  # 한 번에 한 client
-        conn.setblocking(False)
-        state["conn"] = conn
-        n = QSocketNotifier(conn.fileno(), QSocketNotifier.Read)
-        n.activated.connect(_on_conn_readable)
-        state["notifier"] = n
-
-    server_notifier = QSocketNotifier(server.fileno(), QSocketNotifier.Read)
-    server_notifier.activated.connect(_on_server_readable)
+    poll_timer = QTimer()
+    poll_timer.timeout.connect(_poll)
+    poll_timer.start(1)  # 1ms
 
     try:
         rc = app.exec()
     finally:
+        poll_timer.stop()
         _close_conn()
         try:
             server.close()
@@ -309,6 +307,18 @@ class CanPanelController:
             self._geom = new_geom
             self._ensure_connected_locked()
             self._send_locked(OP_RESET)
+
+    def reset_black(self) -> bool:
+        """이미 떠 있을 때만 검정으로 리셋한다 (창을 새로 띄우지 않음, 위치/크기 유지).
+
+        반환: 실제로 리셋했으면 True, 패널이 안 떠 있어 아무것도 안 했으면 False.
+        """
+        with self._lock:
+            if not self.is_running():
+                return False
+            self._ensure_connected_locked()  # 이미 running 이므로 spawn 없이 연결만
+            self._send_locked(OP_RESET)
+            return True
 
     def highlight(self) -> None:
         """패널을 노랑으로 점등. send_can 직전 호출 — 사전 연결돼 있어 즉시."""
