@@ -223,6 +223,10 @@ const SWIPE_DISTANCE_THRESHOLD = 20;
 const DRAG_DROP_HOLD_MS = 3000;
 // hold 판정용 정지 반경(디바이스 px) — 이 반경을 처음 벗어난 시점을 '이동 시작'으로 본다.
 const DRAG_DROP_HOLD_RADIUS = SWIPE_DISTANCE_THRESHOLD;
+// 픽업 게이지 표시 지연(ms) — 빠른 탭/스와이프에는 링이 안 뜨도록, 이만큼 누르고
+// 있어야 게이지가 나타난다. 링 채우기 애니메이션은 음수 delay로 이 지연을 보정해
+// 가득 차는 시점이 정확히 누름 시작 + DRAG_DROP_HOLD_MS 가 되도록 맞춘다.
+const HOLD_GAUGE_SHOW_DELAY_MS = 300;
 
 // scrcpy 방식: 마우스 down→move→up 동안 캡처한 좌표를 그대로 디바이스에 전송.
 // 점이 너무 많으면 sendevent 스크립트가 비대해지므로 균등 다운샘플 (≤80점).
@@ -715,6 +719,23 @@ export default function RecordPage() {
     // "오래 누른 뒤 끌기"로 본다.
     firstMoveTime: number | null;
   }>({ startX: 0, startY: 0, startTime: 0, active: false, firstMoveTime: null });
+
+  // 드래그앤드롭 픽업 게이지 — 화면을 누르고 있는 동안 커서 옆에 채워지는 링.
+  // full=true 가 되면 DRAG_DROP_HOLD_MS 만큼 정지 상태로 눌러 "집어 올리기"가 완료된 상태.
+  const [holdGauge, setHoldGauge] = useState<{ clientX: number; clientY: number; full: boolean } | null>(null);
+  const holdGaugeShowTimerRef = useRef<number | null>(null);  // 게이지 표시 지연 타이머
+  const holdGaugeFullTimerRef = useRef<number | null>(null);   // 가득 참(full) 판정 타이머
+  const clearHoldGauge = useCallback(() => {
+    if (holdGaugeShowTimerRef.current != null) {
+      clearTimeout(holdGaugeShowTimerRef.current);
+      holdGaugeShowTimerRef.current = null;
+    }
+    if (holdGaugeFullTimerRef.current != null) {
+      clearTimeout(holdGaugeFullTimerRef.current);
+      holdGaugeFullTimerRef.current = null;
+    }
+    setHoldGauge(null);
+  }, []);
 
   // blob URL → data URL 변환 (HKMC WebSocket blob URL은 다음 프레임에 revoke 됨)
   // 모달용 스냅샷은 PNG 무손실로 받아야 함 — 이 이미지가 expected_image로 그대로 저장되는 경우(saveExpectedImage)
@@ -3056,7 +3077,26 @@ export default function RecordPage() {
     // 스마트 모드: 드래그 궤적 캡처 시작
     gesturePathRef.current = [{ x, y }];
     setLivePathTick(t => t + 1);
-  }, [screenshotDeviceId, deviceRes, hkmcDisplayMode, isScreenHkmc, viewCropEnabled, viewCropX, viewCropY]);
+    // 드래그앤드롭 픽업 게이지 — 빠른 탭에는 안 뜨도록 HOLD_GAUGE_SHOW_DELAY_MS 후 표시,
+    // DRAG_DROP_HOLD_MS 후 가득 참(full)으로 전환.
+    const px = e.clientX, py = e.clientY;
+    if (holdGaugeShowTimerRef.current != null) clearTimeout(holdGaugeShowTimerRef.current);
+    if (holdGaugeFullTimerRef.current != null) clearTimeout(holdGaugeFullTimerRef.current);
+    holdGaugeShowTimerRef.current = window.setTimeout(() => {
+      const g = gestureRef.current;
+      if (g.active && g.firstMoveTime == null) {
+        setHoldGauge({ clientX: px, clientY: py, full: false });
+      }
+    }, HOLD_GAUGE_SHOW_DELAY_MS);
+    holdGaugeFullTimerRef.current = window.setTimeout(() => {
+      // 3초 동안 (거의) 안 움직였으면 롱프레스 픽업 완료 → 하단 라벨 '롱프레스'
+      const g = gestureRef.current;
+      if (g.active && g.firstMoveTime == null) {
+        setHoldGauge({ clientX: px, clientY: py, full: true });
+        setLastGesture(t('record.gestureLongPress'));
+      }
+    }, DRAG_DROP_HOLD_MS);
+  }, [screenshotDeviceId, deviceRes, hkmcDisplayMode, isScreenHkmc, viewCropEnabled, viewCropX, viewCropY, t]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!screenshotDeviceId) return;
@@ -3078,6 +3118,9 @@ export default function RecordPage() {
       if (g.active && g.firstMoveTime == null) {
         if (Math.hypot(x - g.startX, y - g.startY) > DRAG_DROP_HOLD_RADIUS) {
           g.firstMoveTime = Date.now();
+          // 이동이 시작되면 픽업 게이지는 더 띄울 필요 없음. (게이지 full 전이면 일반
+          // 스와이프 → 게이지/링 채우기 애니메이션 취소, full 후면 드래그 시작.)
+          clearHoldGauge();
         }
       }
       // 스마트 모드: 드래그 중일 때 좌표 누적 (ADB 전용)
@@ -3091,7 +3134,7 @@ export default function RecordPage() {
         }
       }
     });
-  }, [screenshotDeviceId, deviceRes, hkmcDisplayMode, isScreenHkmc, viewCropEnabled, viewCropX, viewCropY, smartSwipe, isScreenAdb]);
+  }, [screenshotDeviceId, deviceRes, hkmcDisplayMode, isScreenHkmc, viewCropEnabled, viewCropX, viewCropY, smartSwipe, isScreenAdb, clearHoldGauge]);
 
   const handleMouseLeave = useCallback(() => {
     if (hoverRafRef.current != null) {
@@ -3099,11 +3142,15 @@ export default function RecordPage() {
       hoverRafRef.current = null;
     }
     setHoverCoords(null);
-  }, []);
+    // 누른 채 캔버스를 벗어나면 픽업 게이지 정리 (제스처도 사실상 취소됨)
+    clearHoldGauge();
+  }, [clearHoldGauge]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!screenshotDeviceId || !gestureRef.current.active) return;
     gestureRef.current.active = false;
+    // 손을 떼면 픽업 게이지/타이머 정리 (라벨은 아래 분기에서 갱신).
+    clearHoldGauge();
     const el = canvasRef.current;
     if (!el) return;
 
@@ -3255,7 +3302,7 @@ export default function RecordPage() {
       executeAction('tap', params, `tap (${startX},${startY})`);
       setLastGesture(`${t('record.gestureTap')} (${startX},${startY})`);
     }
-  }, [screenshotDeviceId, executeAction, deviceRes, hkmcDisplayMode, isScreenHkmc, viewCropEnabled, viewCropX, viewCropY, fingerCount, fingerSpread, gestureMode, repeatTapMode, smartSwipe, isScreenAdb, t]);
+  }, [screenshotDeviceId, executeAction, deviceRes, hkmcDisplayMode, isScreenHkmc, viewCropEnabled, viewCropX, viewCropY, fingerCount, fingerSpread, gestureMode, repeatTapMode, smartSwipe, isScreenAdb, t, clearHoldGauge]);
 
   const executeRepeatTap = useCallback(() => {
     const { x, y } = repeatTapCoordsRef.current;
@@ -4708,6 +4755,8 @@ export default function RecordPage() {
     <div className="record-page" style={{ height: 'calc(100vh - 80px)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       <style>{`
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        @keyframes holdGaugeRing { from { stroke-dashoffset: 88; } to { stroke-dashoffset: 0; } }
+        .hold-gauge-ring { animation: holdGaugeRing ${DRAG_DROP_HOLD_MS}ms linear -${HOLD_GAUGE_SHOW_DELAY_MS}ms forwards; }
         @keyframes hkGauge {
           0% { background-size: 0% 100%; }
           100% { background-size: 100% 100%; }
@@ -5036,6 +5085,42 @@ export default function RecordPage() {
                       }}
                     >
                       {hoverCoords.x},{hoverCoords.y}
+                    </div>
+                  );
+                })()}
+                {holdGauge && testingStepIndex == null && (() => {
+                  // 드래그앤드롭 픽업 게이지 — 커서 옆에서 DRAG_DROP_HOLD_MS 동안 링이 차오르고,
+                  // 가득 차면(full) 초록색으로 고정되며 하단 라벨이 '롱프레스'로 바뀐다.
+                  const cv = canvasRef.current;
+                  if (!cv) return null;
+                  const rect = cv.getBoundingClientRect();
+                  const offX = holdGauge.clientX - rect.left;
+                  const offY = holdGauge.clientY - rect.top;
+                  const size = 34;
+                  const cxy = size / 2;
+                  const r = 14;
+                  const color = holdGauge.full ? '#52c41a' : '#1890ff';
+                  return (
+                    <div style={{ position: 'absolute', left: offX + 16, top: offY - cxy, pointerEvents: 'none', zIndex: 11, textAlign: 'center' }}>
+                      <svg width={size} height={size} style={{ display: 'block', filter: 'drop-shadow(0 0 2px rgba(0,0,0,0.6))' }}>
+                        <circle cx={cxy} cy={cxy} r={r} fill="rgba(0,0,0,0.45)" stroke="rgba(255,255,255,0.35)" strokeWidth={3} />
+                        <circle
+                          className={holdGauge.full ? undefined : 'hold-gauge-ring'}
+                          cx={cxy} cy={cxy} r={r} fill="none"
+                          stroke={color} strokeWidth={3} strokeLinecap="round"
+                          strokeDasharray={88}
+                          strokeDashoffset={holdGauge.full ? 0 : 88}
+                          transform={`rotate(-90 ${cxy} ${cxy})`}
+                        />
+                      </svg>
+                      {holdGauge.full && (
+                        <div style={{
+                          marginTop: 2, background: '#52c41a', color: '#fff', fontSize: 10,
+                          padding: '1px 5px', borderRadius: 3, whiteSpace: 'nowrap', fontWeight: 600,
+                        }}>
+                          {t('record.gestureLongPress')}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
