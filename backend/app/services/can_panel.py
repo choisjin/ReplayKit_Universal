@@ -49,23 +49,12 @@ OP_HIGHLIGHT = 0x01
 OP_RESET = 0x02
 OP_SHUTDOWN = 0x03
 
-_HOST_MODULE = "backend.app.services.can_panel"
-
-# `python -m backend.app.services.can_panel` 서브프로세스는 부모의 cwd를 물려받는데,
-# 배포 환경(예: C:\ReplayKit)에서는 cwd가 프로젝트 루트가 아니라 `backend` 패키지를
-# 찾지 못해 "ModuleNotFoundError: No module named 'backend'" 로 monitor grab/host 가
-# 실패한다. 이 파일(<root>/backend/app/services/can_panel.py)의 위치에서 루트를 구해
-# 서브프로세스의 cwd·PYTHONPATH 에 주입한다.
-_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
-
-
-def _subproc_kwargs() -> dict:
-    """`-m backend...` 서브프로세스가 어느 cwd에서든 backend 를 import 하도록
-    cwd=프로젝트 루트 + PYTHONPATH 에 루트 prepend 한 kwargs 반환."""
-    env = dict(os.environ)
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = os.pathsep.join([_PROJECT_ROOT, existing] if existing else [_PROJECT_ROOT])
-    return {"cwd": _PROJECT_ROOT, "env": env}
+# 서브프로세스는 `python -m backend.app.services.can_panel` 이 아니라 **이 파일을 스크립트로
+# 직접 실행**한다. 배포 환경(예: C:\ReplayKit)에서는 cwd/PYTHONPATH 가 `backend` 패키지를
+# 못 찾아 "ModuleNotFoundError: No module named 'backend'" 로 실패하기 때문이다. 이 파일은
+# backend.* 를 import 하지 않고 stdlib + PySide6 만 쓰므로, 패키지 경로와 무관하게
+# `python <이 파일> --grab/--host` 로 항상 동작한다.
+_SELF_PATH = str(Path(__file__).resolve())
 
 # 호스트 startup(bind+listen) 대기용 connect 재시도
 _CONNECT_RETRY_TIMES = 50          # ~5초
@@ -97,7 +86,7 @@ def _run_host(port: int, x: int, y: int, width: int, height: int) -> int:
     """PySide6 패널 호스트. localhost:port 로 listen, 1바이트 opcode 수신."""
     _force_no_hidpi()
     from datetime import datetime
-    from PySide6.QtCore import Qt, QSocketNotifier  # type: ignore
+    from PySide6.QtCore import Qt, QSocketNotifier, QTimer  # type: ignore
     from PySide6.QtGui import QFont, QGuiApplication  # type: ignore
     from PySide6.QtWidgets import QApplication, QLabel, QWidget  # type: ignore
 
@@ -112,8 +101,12 @@ def _run_host(port: int, x: int, y: int, width: int, height: int) -> int:
     class PanelWindow(QWidget):
         def __init__(self) -> None:
             super().__init__()
+            # 항상 최상위 — Qt.Tool 은 다른 앱이 활성화되면 자동으로 숨는 부작용이 있어 제외.
+            # WindowDoesNotAcceptFocus + WA_ShowWithoutActivating 으로 포커스는 안 뺏는다.
             self.setWindowFlags(
-                Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool
+                Qt.FramelessWindowHint
+                | Qt.WindowStaysOnTopHint
+                | Qt.WindowDoesNotAcceptFocus
             )
             self.setAttribute(Qt.WA_ShowWithoutActivating)
             w = width if width > 0 else DEFAULT_W
@@ -135,10 +128,34 @@ def _run_host(port: int, x: int, y: int, width: int, height: int) -> int:
             self._label.setGeometry(0, 4, w, 20)
             self._reset()
             self.show()
+            self._force_topmost()
+            # 다른 TOPMOST 창이 위로 올라와 가리지 않도록 주기적으로 최상위 재적용.
+            # (소켓 점등은 별도 이벤트라 이 타이머가 점등 지연에 영향 없음)
+            self._top_timer = QTimer(self)
+            self._top_timer.timeout.connect(self._force_topmost)
+            self._top_timer.start(700)
+
+        def _force_topmost(self) -> None:
+            self.raise_()
+            if sys.platform == "win32":
+                # Win32 SetWindowPos(HWND_TOPMOST) — 포커스/위치/크기는 건드리지 않음.
+                try:
+                    import ctypes
+                    HWND_TOPMOST = -1
+                    SWP_NOMOVE = 0x0002
+                    SWP_NOSIZE = 0x0001
+                    SWP_NOACTIVATE = 0x0010
+                    ctypes.windll.user32.SetWindowPos(
+                        int(self.winId()), HWND_TOPMOST, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    )
+                except Exception:
+                    pass
 
         def highlight(self) -> None:
             self.setStyleSheet("background-color: #FFFF00;")
             self._label.setStyleSheet("color: black; background: transparent;")
+            self._force_topmost()  # 점등 시 확실히 맨 위로
             self.repaint()  # 즉시 화면 갱신 (점등 지연 최소화)
             self._label.setText(datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3])
 
@@ -361,7 +378,7 @@ class CanPanelController:
 
         x, y, w, h = self._geom
         argv = [
-            sys.executable, "-m", _HOST_MODULE,
+            sys.executable, _SELF_PATH,
             "--host",
             "--port", str(self._port),
             "--x", str(x), "--y", str(y),
@@ -372,7 +389,6 @@ class CanPanelController:
                 argv,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                **_subproc_kwargs(),
             )
             return True
         except OSError:
@@ -407,11 +423,9 @@ def grab_monitor() -> dict:
 
     별도 프로세스로 PySide6 캡처 — 백엔드 인터پری터에 Qt app 을 띄우지 않는다.
     """
-    argv = [sys.executable, "-m", _HOST_MODULE, "--grab"]
-    # `-m backend...` 가 배포 환경(예: C:\ReplayKit)의 cwd 에서도 backend 를 import 하도록
-    # cwd=프로젝트 루트 + PYTHONPATH 주입 (호스트 spawn 과 동일). 없으면 grab 이
-    # "No module named 'backend'" 로 실패한다.
-    proc = subprocess.run(argv, capture_output=True, timeout=30, **_subproc_kwargs())
+    # 이 파일을 스크립트로 직접 실행 (패키지 import 불필요 → 배포 환경에서도 동작).
+    argv = [sys.executable, _SELF_PATH, "--grab"]
+    proc = subprocess.run(argv, capture_output=True, timeout=30)
     if proc.returncode != 0:
         raise RuntimeError(
             "monitor grab failed: " + (proc.stderr.decode("utf-8", "replace").strip() or "(no stderr)")

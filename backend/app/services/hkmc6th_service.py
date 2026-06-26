@@ -1702,9 +1702,15 @@ class HKMC6thService:
                 # monitor 0x00(NONE)이면 Right 모니터 기본값으로 보정 (레거시 CCRC_HK 기본).
                 mon = monitor if monitor in (CCRC_MONITOR_LEFT, CCRC_MONITOR_RIGHT) else CCRC_MONITOR_RIGHT
                 if hold_ms and hold_ms > 0:
-                    # 누름 유지: PRESS 보내고 hold_ms 동안 눌린 상태 유지 후 RELEASE.
+                    # 누름 유지(연속/배속): key-down(CCRC_PRESS)을 hold_ms 동안 일정 간격으로
+                    # 반복 송신(auto-repeat)하다가 마지막에 RELEASE. 단일 PRESS 유지만으론
+                    # IVI 가 연속 동작을 하지 않으므로 반복 전송으로 구동.
+                    repeat_interval = 0.12
+                    end = time.monotonic() + hold_ms / 1000.0
                     self._send_ccrc_key(source, key_data, CCRC_PRESS, mon)
-                    time.sleep(hold_ms / 1000.0)
+                    while time.monotonic() < end:
+                        time.sleep(repeat_interval)
+                        self._send_ccrc_key(source, key_data, CCRC_PRESS, mon)
                     self._send_ccrc_key(source, key_data, CCRC_RELEASE, mon)
                 elif sub_cmd == LONG_KEY:
                     self._send_ccrc_key(source, key_data, CCRC_PRESS, mon)
@@ -1725,13 +1731,23 @@ class HKMC6thService:
                 dir_val = direction if direction is not None else key_info.get("direction")
                 self.send_key(cmd, DIAL_ACTION, key_data, monitor, dir_val)
             elif hold_ms and hold_ms > 0:
-                # 누름 유지(press-and-hold): PRESS → hold_ms 동안 눌린 상태 유지 → RELEASE.
-                # >>/Enter 등을 꾹 눌러 배속·연속 동작을 유발. LONG 중간 프레임 없이
-                # 누른 상태만 유지해야 IVI가 '키가 계속 눌려 있음'으로 처리한다.
+                # 누름 유지(연속/배속): 단일 PRESS 를 유지하고만 있으면 IVI 가 포커스만
+                # 잡고 실제 동작(>>/Enter 배속 등)을 하지 않는다(실기 확인). 물리 리모컨이
+                # 키를 누르고 있는 동안 key-down 을 주기적으로 재전송하는 auto-repeat 처럼,
+                # 키-다운(PRESS)을 hold_ms 동안 일정 간격으로 반복 송신하다가 마지막에
+                # RELEASE 한다. 중간에 RELEASE 를 끼우지 않아 '키가 계속 눌려 있음(연속)'으로
+                # 인식되게 한다.
+                repeat_interval = 0.12  # 키-다운 재전송 간격(초) — 배속 속도
+                end = time.monotonic() + hold_ms / 1000.0
+                n = 0
                 self.send_key(cmd, PRESS_KEY, key_data, monitor, direction)
-                time.sleep(hold_ms / 1000.0)
+                n += 1
+                while time.monotonic() < end:
+                    time.sleep(repeat_interval)
+                    self.send_key(cmd, PRESS_KEY, key_data, monitor, direction)
+                    n += 1
                 self.send_key(cmd, RELEASE_KEY, key_data, monitor, direction)
-                logger.info("[KEY HOLD] %s hold=%dms", key_name, hold_ms)
+                logger.info("[KEY HOLD] %s hold=%dms repeats=%d", key_name, hold_ms, n)
             elif sub_cmd == SHORT_KEY:
                 # 일반 키: PRESS → SHORT → RELEASE 3단계 시퀀스
                 self.send_key(cmd, PRESS_KEY, key_data, monitor, direction)
