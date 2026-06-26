@@ -1244,6 +1244,25 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
   When setting conditional jumps, be careful not to create circular references that jump back to earlier steps.
 </div>
 
+<h4>Branch Mode (Exclude from Result)</h4>
+<p>
+  The <strong>Pass &#x2192;</strong> / <strong>Fail &#x2192;</strong> rows of the conditional-jump editor each have a <strong>Branch Mode</strong> checkbox.
+  When enabled, the outcome routed in that direction (Pass or Fail) is <strong>excluded from the final tally and the scenario pass/fail decision</strong>,
+  and its Status is shown as <strong>'Branch'</strong> in the result table.
+</p>
+<table>
+  <tr><th>Aspect</th><th>Behavior</th></tr>
+  <tr><td>Jump routing</td><td>The <strong>real Pass/Fail result</strong> is always used to decide the next step, regardless of Branch Mode.</td></tr>
+  <tr><td>Result tally</td><td>The outcome of the direction with Branch Mode on is not counted in the pass/fail totals.</td></tr>
+  <tr><td>Scenario decision</td><td>That step's result does not affect the overall scenario pass/fail decision.</td></tr>
+  <tr><td>Status display</td><td>Shown as <strong>'Branch'</strong> instead of Pass/Fail on the result screen.</td></tr>
+</table>
+<div class="callout callout-info">
+  <strong>&#x1F4A1; When to use</strong>
+  Use this when you only want to branch the flow based on a screen state (e.g. whether a popup appears, or login status)
+  without counting that decision as a pass or fail. For example, "if a popup is shown, close it and continue; otherwise continue directly"&#x2014;ideal when the verification used purely for routing should not count toward the test score.
+</div>
+
 <h3 id="record-imagetap">Image Tap <span class="badge badge-blue">New</span></h3>
 <p>
   On screens where a button or icon appears at a <strong>different position</strong> each time, use

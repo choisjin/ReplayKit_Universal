@@ -1244,6 +1244,25 @@ npm run dev</code></pre>
   조건부 이동을 설정할 때, 이전 스텝으로 돌아가는 순환 참조가 발생하지 않도록 주의하세요.
 </div>
 
+<h4>Branch Mode (결과 미반영)</h4>
+<p>
+  조건부 이동 편집기의 <strong>Pass →</strong> / <strong>Fail →</strong> 줄에는 각각 <strong>Branch Mode</strong> 체크박스가 있습니다.
+  이 체크박스를 켜면 해당 방향(Pass 또는 Fail)으로 분기된 결과를 <strong>최종 집계와 시나리오 통과/실패 판정에서 제외</strong>하고,
+  결과 테이블의 Status를 <strong>'분기'</strong>로 표시합니다.
+</p>
+<table>
+  <tr><th>항목</th><th>동작</th></tr>
+  <tr><td>점프 라우팅</td><td>Branch Mode 여부와 무관하게 <strong>실제 Pass/Fail 결과</strong>를 그대로 사용해 다음 스텝을 결정합니다.</td></tr>
+  <tr><td>결과 집계</td><td>Branch Mode가 켜진 방향의 결과는 통과/실패 카운트에 포함되지 않습니다.</td></tr>
+  <tr><td>시나리오 판정</td><td>해당 스텝의 결과가 시나리오 전체 통과/실패 판정에 영향을 주지 않습니다.</td></tr>
+  <tr><td>Status 표시</td><td>결과 화면에서 Pass/Fail 대신 <strong>'분기'</strong>로 표시됩니다.</td></tr>
+</table>
+<div class="callout callout-info">
+  <strong>💡 언제 쓰나요?</strong>
+  화면 상태(예: 팝업 유무, 로그인 여부)에 따라 흐름만 나누고 싶고, 그 갈림 자체는 합격/불합격으로 세고 싶지 않을 때 사용합니다.
+  예를 들어 "팝업이 보이면 닫고 진행, 안 보이면 바로 진행"처럼, 분기 판단용 검증을 테스트 성적에 포함하지 않으려는 경우에 적합합니다.
+</div>
+
 <h3 id="record-imagetap">이미지 탭 (Image Tap) <span class="badge badge-blue">신규</span></h3>
 <p>
   버튼이나 아이콘이 매번 <strong>다른 위치</strong>에 나타나는 화면에서는 고정 좌표 탭 대신
