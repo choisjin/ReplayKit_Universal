@@ -15,6 +15,7 @@ import { useDevice } from '../context/DeviceContext';
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
 import type { TranslationKey } from '../i18n';
+import { findInvalidNameChars, INVALID_NAME_CHARS_DISPLAY } from '../utils/entityName';
 import { useWebcamContext } from '../context/WebcamContext';
 import { VideoCameraOutlined } from '@ant-design/icons';
 import { Resizable } from 'react-resizable';
@@ -240,6 +241,16 @@ const GroupIcon = ({ color }: { color?: string }) => (
 
 export default function ScenarioPage() {
   const { t, lang } = useTranslation();
+  // 시나리오/그룹/폴더 이름에 경로·URL 을 깨뜨리는 문자가 있으면 안내 후 false 반환.
+  // (빈 문자열 검사는 호출측에서 처리. 여기서는 금지 문자만 검사한다)
+  const validateName = (name: string): boolean => {
+    const bad = findInvalidNameChars((name || '').trim());
+    if (bad.length) {
+      message.error(t('common.invalidNameChars', { chars: INVALID_NAME_CHARS_DISPLAY }));
+      return false;
+    }
+    return true;
+  };
   const { settings, saveExportZipToDir } = useSettings();
   const isDark = settings.theme === 'dark';
   const dltSessionHook = useDLTSessions();
@@ -675,6 +686,7 @@ export default function ScenarioPage() {
       setRenameModalVisible(false);
       return;
     }
+    if (!validateName(renameNewName)) return;
     try {
       const oldName = selectedName;
       const newName = renameNewName.trim();
@@ -701,6 +713,7 @@ export default function ScenarioPage() {
 
   const doCopy = async () => {
     if (!selectedName || !copyName.trim()) return;
+    if (!validateName(copyName)) return;
     try {
       await scenarioApi.copy(selectedName, copyName.trim());
       message.success(t('scenario.copySuccess'));
@@ -804,6 +817,7 @@ export default function ScenarioPage() {
   // --- Group actions ---
   const createGroup = async () => {
     if (!newGroupName.trim()) return;
+    if (!validateName(newGroupName)) return;
     try {
       const res = await scenarioApi.createGroup(newGroupName.trim());
       setGroups(res.data.groups);
@@ -1703,7 +1717,7 @@ export default function ScenarioPage() {
               groupCtxMenu.type === 'gfolder' ? [
                 { key: 'rename', label: t('common.rename'), onClick: () => {
                   const newName = prompt(t('scenario.folderName') || '폴더 이름', groupCtxMenu.name);
-                  if (newName && newName !== groupCtxMenu.name) {
+                  if (newName && newName !== groupCtxMenu.name && validateName(newName)) {
                     scenarioApi.renameGroupFolder(groupCtxMenu.name, newName)
                       .then(res => setGroupFolders(res.data.folders || {}))
                       .catch((e: any) => message.error(e?.response?.data?.detail || 'Failed'));
@@ -1719,7 +1733,7 @@ export default function ScenarioPage() {
               ] : [
                 { key: 'rename', label: t('common.rename'), onClick: () => {
                   const newName = prompt(t('common.rename') || '이름 변경', groupCtxMenu.name);
-                  if (newName && newName !== groupCtxMenu.name) {
+                  if (newName && newName !== groupCtxMenu.name && validateName(newName)) {
                     scenarioApi.renameGroup(groupCtxMenu.name, newName).then(() => {
                       fetchGroups();
                       fetchGroupFolders();
@@ -1861,7 +1875,7 @@ export default function ScenarioPage() {
                     icon={<FolderAddOutlined />}
                     onClick={() => {
                       const name = prompt(t('scenario.folderName') || '폴더 이름');
-                      if (name) {
+                      if (name && validateName(name)) {
                         scenarioApi.createGroupFolder(name)
                           .then(res => setGroupFolders(res.data.folders || {}))
                           .catch((e: any) => message.error(e?.response?.data?.detail || 'Failed'));
@@ -2142,7 +2156,7 @@ export default function ScenarioPage() {
               contextMenu.type === 'folder' ? [
                 { key: 'rename', label: t('common.rename'), onClick: () => {
                   const newName = prompt(t('scenario.folderName'), contextMenu.name);
-                  if (newName && newName !== contextMenu.name) {
+                  if (newName && newName !== contextMenu.name && validateName(newName)) {
                     scenarioApi.renameFolder(contextMenu.name, newName)
                       .then(res => setFolders(res.data.folders))
                       .catch((e: any) => message.error(e?.response?.data?.detail || t('scenario.renameFailed')));
@@ -2156,7 +2170,7 @@ export default function ScenarioPage() {
               ] : [
                 { key: 'copy', label: t('common.copy'), onClick: () => {
                   const newName = prompt(t('common.rename'), `${contextMenu.name}_copy`);
-                  if (newName) {
+                  if (newName && validateName(newName)) {
                     scenarioApi.copy(contextMenu.name, newName)
                       .then(() => { fetchScenarios(); fetchFolders(); })
                       .catch((e: any) => message.error(e?.response?.data?.detail || t('scenario.copyFailed')));
@@ -2165,7 +2179,7 @@ export default function ScenarioPage() {
                 }},
                 { key: 'rename', label: t('common.rename'), onClick: () => {
                   const newName = prompt(t('common.rename'), contextMenu.name);
-                  if (newName && newName !== contextMenu.name) {
+                  if (newName && newName !== contextMenu.name && validateName(newName)) {
                     const oldName = contextMenu.name;
                     scenarioApi.rename(oldName, newName)
                       .then(() => { fetchScenarios(); fetchFolders(); fetchGroups(); })
@@ -2216,7 +2230,7 @@ export default function ScenarioPage() {
                   </Select>
                   <Button size="small" icon={<FolderAddOutlined />} onClick={() => {
                     const name = prompt(t('scenario.folderName'));
-                    if (name) scenarioApi.createFolder(name)
+                    if (name && validateName(name)) scenarioApi.createFolder(name)
                       .then(res => setFolders(res.data.folders))
                       .catch((e: any) => message.error(e?.response?.data?.detail || 'Failed'));
                   }}>{t('scenario.newFolder')}</Button>
@@ -2660,9 +2674,11 @@ export default function ScenarioPage() {
             value={newGroupName}
             onChange={(e) => setNewGroupName(e.target.value)}
             onPressEnter={createGroup}
+            status={findInvalidNameChars(newGroupName).length ? 'error' : undefined}
             style={{ width: 200 }}
           />
           <Button icon={<FolderAddOutlined />} type="primary" onClick={createGroup}>{t('scenario.create')}</Button>
+          <span style={{ color: '#888', fontSize: 11 }}>{t('common.invalidNameHint', { chars: INVALID_NAME_CHARS_DISPLAY })}</span>
           <span style={{ color: '#888', fontSize: 11 }}>{t('scenario.dragHint')}</span>
         </Space>
         <Splitter style={{ flex: 1, minHeight: 0 }}>
@@ -2802,7 +2818,7 @@ export default function ScenarioPage() {
                 groupCtxMenu.type === 'gfolder' ? [
                   { key: 'rename', label: t('common.rename'), onClick: () => {
                     const newName = prompt(t('scenario.folderName') || '폴더 이름', groupCtxMenu.name);
-                    if (newName && newName !== groupCtxMenu.name) {
+                    if (newName && newName !== groupCtxMenu.name && validateName(newName)) {
                       scenarioApi.renameGroupFolder(groupCtxMenu.name, newName)
                         .then(res => setGroupFolders(res.data.folders || {}))
                         .catch((e: any) => message.error(e?.response?.data?.detail || 'Failed'));
@@ -2818,7 +2834,7 @@ export default function ScenarioPage() {
                 ] : [
                   { key: 'rename', label: t('common.rename'), onClick: () => {
                     const newName = prompt(t('common.rename') || '이름 변경', groupCtxMenu.name);
-                    if (newName && newName !== groupCtxMenu.name) {
+                    if (newName && newName !== groupCtxMenu.name && validateName(newName)) {
                       scenarioApi.renameGroup(groupCtxMenu.name, newName).then(() => {
                         fetchGroups();
                         fetchGroupFolders();
@@ -2866,7 +2882,7 @@ export default function ScenarioPage() {
                       icon={<FolderAddOutlined />}
                       onClick={() => {
                         const name = prompt(t('scenario.folderName') || '폴더 이름');
-                        if (name) {
+                        if (name && validateName(name)) {
                           scenarioApi.createGroupFolder(name)
                             .then(res => setGroupFolders(res.data.folders || {}))
                             .catch((e: any) => message.error(e?.response?.data?.detail || 'Failed'));
@@ -3379,11 +3395,13 @@ export default function ScenarioPage() {
 
       {/* ===== 복사 모달 ===== */}
       <Modal title={t('scenario.renameTitle', { name: selectedName || '' })} open={renameModalVisible} onCancel={() => setRenameModalVisible(false)} onOk={doRename} okText={t('common.change')}>
-        <Input value={renameNewName} onChange={(e) => setRenameNewName(e.target.value)} placeholder={t('scenario.newScenarioName')} />
+        <Input value={renameNewName} onChange={(e) => setRenameNewName(e.target.value)} onPressEnter={doRename} placeholder={t('scenario.newScenarioName')} status={findInvalidNameChars(renameNewName).length ? 'error' : undefined} />
+        <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>{t('common.invalidNameHint', { chars: INVALID_NAME_CHARS_DISPLAY })}</div>
       </Modal>
 
       <Modal title={t('scenario.copyTitle', { name: selectedName || '' })} open={copyModalVisible} onCancel={() => setCopyModalVisible(false)} onOk={doCopy} okText={t('common.copy')}>
-        <Input value={copyName} onChange={(e) => setCopyName(e.target.value)} placeholder={t('scenario.newScenarioName')} />
+        <Input value={copyName} onChange={(e) => setCopyName(e.target.value)} onPressEnter={doCopy} placeholder={t('scenario.newScenarioName')} status={findInvalidNameChars(copyName).length ? 'error' : undefined} />
+        <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>{t('common.invalidNameHint', { chars: INVALID_NAME_CHARS_DISPLAY })}</div>
       </Modal>
 
       {/* ===== 시나리오 상세 모달 ===== */}

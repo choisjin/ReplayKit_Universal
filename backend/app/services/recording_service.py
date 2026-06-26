@@ -25,8 +25,9 @@ SCREENSHOTS_DIR = Path(__file__).resolve().parent.parent.parent / "screenshots"
 # 시나리오/그룹/폴더 이름에 쓸 수 없는 문자.
 # - '/' '\\' 는 파일·디렉터리 경로와 URL 라우팅을 깨뜨림(예: 그룹명 "테마/화면구성")
 # - ': * ? " < > |' 는 Windows 파일명 금지 문자
-INVALID_NAME_CHARS = set('/\\:*?"<>|')
-INVALID_NAME_CHARS_DISPLAY = '/ \\ : * ? " < > |'
+# - '#' 는 URL fragment 로 해석되어 경로 파라미터가 잘림(예: GET /scenario/a#b → /scenario/a)
+INVALID_NAME_CHARS = set('/\\:*?"<>|#')
+INVALID_NAME_CHARS_DISPLAY = '/ \\ : * ? " < > | #'
 
 
 def validate_entity_name(name: str, kind: str = "이름") -> str:
@@ -990,6 +991,10 @@ class RecordingService:
                 if action == "rename":
                     final_name = res.get("new_name", orig_name)
 
+                # 경로/URL 을 깨뜨리는 문자가 든 이름은 가져오기 거부 — 사용자가
+                # 충돌 해결(rename)로 정상 이름을 지정하도록 유도한다.
+                final_name = validate_entity_name(final_name, "시나리오 이름")
+
                 name_map[orig_name] = final_name
 
                 # Read scenario JSON
@@ -1049,6 +1054,8 @@ class RecordingService:
                     final_gname = gname
                     if action == "rename":
                         final_gname = res.get("new_name", gname)
+
+                    final_gname = validate_entity_name(final_gname, "그룹 이름")
 
                     # Remap member scenario names
                     remapped = []

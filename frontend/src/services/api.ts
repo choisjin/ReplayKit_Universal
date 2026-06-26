@@ -76,10 +76,10 @@ export const deviceApi = {
 // Scenario APIs
 export const scenarioApi = {
   list: () => api.get('/scenario/list'),
-  get: (name: string) => api.get(`/scenario/${name}`),
-  delete: (name: string) => api.delete(`/scenario/${name}`),
-  update: (name: string, data: any) => api.put(`/scenario/${name}`, data),
-  rename: (name: string, newName: string) => api.post(`/scenario/${name}/rename`, { new_name: newName }),
+  get: (name: string) => api.get(`/scenario/${encodeURIComponent(name)}`),
+  delete: (name: string) => api.delete(`/scenario/${encodeURIComponent(name)}`),
+  update: (name: string, data: any) => api.put(`/scenario/${encodeURIComponent(name)}`, data),
+  rename: (name: string, newName: string) => api.post(`/scenario/${encodeURIComponent(name)}/rename`, { new_name: newName }),
   startRecording: (name: string, description?: string) =>
     api.post('/scenario/record/start', { name, description }),
   resumeRecording: (name: string) =>
@@ -91,7 +91,7 @@ export const scenarioApi = {
   stopRecording: () => api.post('/scenario/record/stop'),
   recordingStatus: () => api.get('/scenario/record/status'),
   play: (name: string, verify = true) =>
-    api.post(`/scenario/${name}/play`, { verify }),
+    api.post(`/scenario/${encodeURIComponent(name)}/play`, { verify }),
   stopPlayback: () => api.post('/scenario/playback/stop'),
   playbackStatus: () => api.get('/scenario/playback/status'),
   saveExpectedImage: (scenarioName: string, stepIndex: number, imageBase64: string, crop?: { x: number; y: number; width: number; height: number }, compareMode?: string, cropLabel?: string, preserveCrops?: boolean, screenType?: string) =>
@@ -197,7 +197,7 @@ export const scenarioApi = {
     api.post('/scenario/groups/play-count', { group_name: groupName, index, play_count: playCount }),
   // Copy
   copy: (name: string, targetName: string) =>
-    api.post(`/scenario/copy/${name}`, { target_name: targetName }),
+    api.post(`/scenario/copy/${encodeURIComponent(name)}`, { target_name: targetName }),
   // Export / Import
   exportZip: (scenarios: string[], groups: string[], includeAll: boolean = false) =>
     api.post('/scenario/export', { scenarios, groups, include_all: includeAll }, { responseType: 'blob' }),

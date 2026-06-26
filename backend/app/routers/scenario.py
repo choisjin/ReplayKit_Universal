@@ -1717,6 +1717,8 @@ async def import_apply(file: UploadFile = File(...), resolutions: str = Form("{}
     try:
         result = await recording_svc.import_apply(zip_data, res_dict)
         return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -9,6 +9,7 @@ import { useDevice } from '../context/DeviceContext';
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
 import type { TranslationKey } from '../i18n/translations';
+import { findInvalidNameChars, INVALID_NAME_CHARS_DISPLAY } from '../utils/entityName';
 import DLTViewer from '../components/DLTViewer';
 import SerialViewer from '../components/SerialViewer';
 import { useDLTSessions } from '../hooks/useDLTSessions';
@@ -293,6 +294,14 @@ const HKMC_LONG_PRESS_MS = 3000;
 
 export default function RecordPage() {
   const { t } = useTranslation();
+  // 시나리오 이름에 경로·URL 을 깨뜨리는 문자가 있으면 안내 후 false 반환.
+  const validateName = (name: string): boolean => {
+    if (findInvalidNameChars((name || '').trim()).length) {
+      message.error(t('common.invalidNameChars', { chars: INVALID_NAME_CHARS_DISPLAY }));
+      return false;
+    }
+    return true;
+  };
   const {
     primaryDevices, auxiliaryDevices, fetchDevices,
     screenshotDeviceId, setScreenshotDeviceId, screenshot,
@@ -3319,6 +3328,7 @@ export default function RecordPage() {
       message.warning(t('record.enterScenarioName'));
       return;
     }
+    if (!validateName(scenarioName)) return;
     try {
       if (editingExisting) {
         // Resume recording on loaded scenario
@@ -3464,6 +3474,7 @@ export default function RecordPage() {
       message.warning(t('record.enterScenarioName'));
       return;
     }
+    if (!validateName(scenarioName)) return;
     try {
       const newName = scenarioName.trim();
       // If name changed, rename first
@@ -4272,12 +4283,18 @@ export default function RecordPage() {
     let inputValue = defaultValue;
     Modal.confirm({
       title,
-      content: <Input defaultValue={defaultValue} onChange={(e) => { inputValue = e.target.value; }} />,
+      content: (
+        <>
+          <Input defaultValue={defaultValue} onChange={(e) => { inputValue = e.target.value; }} />
+          <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>{t('common.invalidNameHint', { chars: INVALID_NAME_CHARS_DISPLAY })}</div>
+        </>
+      ),
       okText: t('common.confirm'),
       cancelText: t('common.cancel'),
       onOk: async () => {
         const name = inputValue.trim();
         if (!name) { message.warning(t('record.enterScenarioName')); throw new Error('empty'); }
+        if (!validateName(name)) { throw new Error('invalid'); }
         // 중복 체크
         if (savedScenarios.includes(name) && name !== scenarioName) {
           return new Promise<void>((resolve, reject) => {
