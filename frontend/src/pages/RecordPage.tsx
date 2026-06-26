@@ -49,8 +49,9 @@ const BRANCH_MODE_ENABLED = true;
 //   state/cycle_time/bus_channel/message_type → 드롭다운
 //   x/y/width/height → 숨김 (모니터 크롭 버튼으로만 설정)
 const CAN_PANEL_STATE_OPTS = [
-  { value: 'on', label: 'on (패널 표시 / 점등+전송)' },
-  { value: 'off', label: 'off (패널 종료)' },
+  { value: 'on', label: 'On (패널 표시 / 점등+전송)' },
+  { value: 'off', label: 'OFF (패널 검정으로)' },
+  { value: 'close', label: 'Close (패널 닫기)' },
 ];
 const CAN_PANEL_CYCLE_OPTS = [
   { value: '0', label: '0 (1회 전송)' },
@@ -6096,9 +6097,9 @@ export default function RecordPage() {
                               {t('record.ocr.cropButton')}
                             </Button>
                           )}
-                          {/* CANAT.CAN_PANEL: 모니터 크롭으로 패널 위치/크기 지정 (state=on 일 때만) */}
+                          {/* CANAT.CAN_PANEL: 모니터 크롭으로 패널 위치/크기 지정 (Close 가 아닐 때) */}
                           {selectedModuleName === 'CANAT' && selectedModuleFunc === 'CAN_PANEL' &&
-                           (moduleFuncArgs['state'] || 'on') !== 'off' && (
+                           (moduleFuncArgs['state'] || 'on') !== 'close' && (
                             <Button
                               size="small"
                               icon={<span>✂</span>}
@@ -6901,9 +6902,9 @@ export default function RecordPage() {
                     {editFnGuide.description}
                   </div>
                 )}
-                {/* CANAT.CAN_PANEL: 위치/크기는 모니터 크롭 버튼으로만 설정 (state=on 일 때만) */}
+                {/* CANAT.CAN_PANEL: 위치/크기는 모니터 크롭 버튼으로만 설정 (Close 가 아닐 때) */}
                 {editStepParams.module === 'CANAT' && editStepParams.function === 'CAN_PANEL' &&
-                 (args.state || 'on') !== 'off' && (
+                 (args.state || 'on') !== 'close' && (
                   <Button
                     size="small"
                     icon={<span>✂</span>}

@@ -1469,16 +1469,17 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
     # CANAT.CAN_PANEL — CAN 반응속도 측정용 시각화 패널 가상 함수.
     #   state=on,  신호 없음 → 검은 패널만 띄움 (대기)
     #   state=on,  신호 있음 → 패널을 노랑으로 점등 + send_can_message (지연 없이 동시)
-    #   state=off          → 패널 종료 (신호 유무 무관)
+    #   state=off          → 패널을 다시 검정으로 (창은 유지, 신호 유무 무관)
+    #   state=close        → 패널 닫기 (신호 유무 무관)
     # '신호 있음' 판정 = message_id 와 can_message 가 모두 채워졌는가.
     if module_name == "CANAT" and function_name == "CAN_PANEL":
         from .can_panel import get_can_panel
         panel = get_can_panel()
         state = str(args.get("state", "on") or "on").strip().lower()
 
-        if state in ("off", "false", "0", "close", "stop"):
+        if state in ("close", "stop"):
             panel.close()
-            return "ok: CAN_PANEL closed (state=off)"
+            return "ok: CAN_PANEL closed (state=close)"
 
         # 위치/크기 — 비거나 잘못되면 기본값(좌하단/300x300)
         def _int_arg(name: str, default: int) -> int:
@@ -1493,6 +1494,11 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
         py = _int_arg("y", -1)
         pw = _int_arg("width", 300)
         ph = _int_arg("height", 300)
+
+        if state in ("off", "false", "0"):
+            # 패널을 다시 검정으로 (창은 유지). 위치/크기가 바뀌었으면 그 자리로 재배치.
+            panel.show_black(px, py, pw, ph)
+            return f"ok: CAN_PANEL reset to black (state=off, geom={pw}x{ph}@{px},{py})"
 
         # state=on
         message_id = str(args.get("message_id", "") or "").strip()
