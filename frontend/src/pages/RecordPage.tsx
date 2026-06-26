@@ -290,10 +290,14 @@ function trimTinyTail(points: { x: number; y: number }[], minLen: number): { x: 
 // HKMC key sub commands
 const HKMC_SHORT_KEY = 0x43;
 const HKMC_LONG_KEY = 0x44;
-// 하드키 꾹누르기 게이지가 가득 차는 시간(ms). 이 시간 이상 누르면 '누름 유지(hold)'로
-// 전환되어 PRESS→유지→RELEASE 로 디바이스가 배속/연속 동작을 하게 한다. 가득 찬 뒤로는
-// 이 주기마다 카운트가 1씩 올라가며, 실제 전달되는 hold 시간 = 실제 누른 시간이다.
+// 하드키 꾹누르기 게이지가 가득 차는 시간(ms).
+//  - held < 2초: 일반 SHORT 키
+//  - 2초 ≤ held < 4초(게이지 가득 후 2초 이내 해제): 기존 LONG 키(단발)
+//  - held ≥ 4초(게이지 가득 후 2초 더 눌러 카운트 시작): PRESS를 누른 시간만큼 유지→RELEASE
 const HKMC_LONG_PRESS_MS = 2000;
+// 게이지가 가득 찬 뒤 '누름 유지(hold)'로 전환되기까지의 그레이스(ms). 이 시간 안에 떼면
+// 단발 LONG, 넘기면 카운트가 시작되고 hold_ms = 실제 누른 시간으로 PRESS 유지된다.
+const HKMC_HOLD_GRACE_MS = 2000;
 
 export default function RecordPage() {
   const { t } = useTranslation();
@@ -542,10 +546,12 @@ export default function RecordPage() {
   const randStopRef = useRef<boolean>(false);
   // ALL RAND 실행 중에는 개별 HK/SK/DRAG 액션이 별도 스텝으로 기록되지 않도록 억제
   const suppressStepAddRef = useRef<boolean>(false);
-  // 하드키 롱프레스 타이머 — 리렌더에도 유지 (키이름 → {downTs, timer})
-  // 하드키 꾹누르기: 버튼별 누름 시작시각 + 카운트 증가 인터벌 id.
-  const hkTimerRef = useRef<Map<string, { downTs: number; interval: number }>>(new Map());
-  // 하드키별 hold 카운트(2초 게이지가 N번 찬 횟수) — 버튼 위에 배지로 표시.
+  // 하드키 꾹누르기 타이머 — 리렌더에도 유지. 버튼별:
+  //  downTs    : 누름 시작 시각
+  //  countTimer: 게이지 가득(2초) + 그레이스(2초) = 총 4초 후 카운트를 시작하는 setTimeout
+  //  interval  : 카운트 시작 후 1초마다 초 수를 갱신하는 setInterval (시작 전엔 null)
+  const hkTimerRef = useRef<Map<string, { downTs: number; countTimer: number; interval: number | null }>>(new Map());
+  // 하드키별 누름 초 카운트 — 카운트 시작(총 4초) 시점부터 4,5,6...로 1초마다 증가. 배지로 표시.
   const [hkLongCount, setHkLongCount] = useState<Record<string, number>>({});
   // Region 모달용 canvas/drag ref
   const randRegionCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -5456,45 +5462,52 @@ export default function RecordPage() {
                                     if (e.button !== 0) return;
                                     // 포인터 캡처: 버튼 바깥으로 커서가 벗어나도 pointerup 이 계속 이 버튼에서 발생
                                     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-                                    // 이전 잔여 인터벌이 있으면 먼저 정리 (빠른 재클릭 방어)
+                                    // 이전 잔여 타이머가 있으면 먼저 정리 (빠른 재클릭 방어)
                                     const prev = hkTimerRef.current.get(k.name);
-                                    if (prev) clearInterval(prev.interval);
+                                    if (prev) { clearTimeout(prev.countTimer); if (prev.interval) clearInterval(prev.interval); }
                                     const btn = e.currentTarget;
                                     btn.classList.remove('long-done');
-                                    btn.classList.add('pressing');  // 게이지 0→full(2초) 애니메이션 시작
-                                    setHkLongCount(c => ({ ...c, [k.name]: 0 }));
-                                    // 2초마다 카운트 +1 + 게이지 재충전(다음 주기 시각 피드백).
-                                    let ticks = 0;
-                                    const interval = window.setInterval(() => {
-                                      ticks += 1;
-                                      setHkLongCount(c => ({ ...c, [k.name]: ticks }));
-                                      // 게이지 재시작: pressing 제거→reflow→재추가 로 애니메이션 다시 채움.
-                                      btn.classList.remove('pressing');
-                                      void btn.offsetWidth;
-                                      btn.classList.add('pressing');
-                                    }, HKMC_LONG_PRESS_MS);
-                                    hkTimerRef.current.set(k.name, { downTs: Date.now(), interval });
+                                    btn.classList.add('pressing');  // 게이지 0→full(2초) 1회 채움 후 유지(재충전 없음)
+                                    setHkLongCount(c => { const n = { ...c }; delete n[k.name]; return n; });
+                                    const downTs = Date.now();
+                                    const rec: { downTs: number; countTimer: number; interval: number | null } =
+                                      { downTs, countTimer: 0, interval: null };
+                                    // 게이지 가득(2초) + 그레이스(2초) = 4초 후 카운트 시작. 이후 1초마다 초 수 갱신.
+                                    rec.countTimer = window.setTimeout(() => {
+                                      const tick = () => {
+                                        const sec = Math.floor((Date.now() - downTs) / 1000);
+                                        setHkLongCount(c => ({ ...c, [k.name]: sec }));
+                                      };
+                                      tick();  // 4초 시점 → '4sec'
+                                      rec.interval = window.setInterval(tick, 1000);
+                                    }, HKMC_LONG_PRESS_MS + HKMC_HOLD_GRACE_MS);
+                                    hkTimerRef.current.set(k.name, rec);
                                   }}
                                   onPointerUp={(e) => {
                                     if (e.button !== 0) return;
                                     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
                                     const entry = hkTimerRef.current.get(k.name);
                                     if (entry) {
-                                      clearInterval(entry.interval);
+                                      clearTimeout(entry.countTimer);
+                                      if (entry.interval) clearInterval(entry.interval);
                                       const held = Date.now() - entry.downTs;
-                                      // 2초 이상 누름 → '누름 유지(hold)' 키. PRESS→유지(hold_ms)→RELEASE 로
-                                      // 디바이스가 누른 시간만큼 배속/연속 동작. 2초 미만 → 일반 short 키.
-                                      const isHold = held >= HKMC_LONG_PRESS_MS;
                                       const params: Record<string, any> = { key_name: k.name, screen_type: screenType };
-                                      if (isHold) {
+                                      let label = k.name;
+                                      if (held >= HKMC_LONG_PRESS_MS + HKMC_HOLD_GRACE_MS) {
+                                        // 카운트 시작(총 4초) 이후 해제 → 누름 유지: PRESS를 누른 시간만큼 유지→RELEASE
                                         params.sub_cmd = HKMC_LONG_KEY;
-                                        params.hold_ms = held;  // 누른 만큼 유지
+                                        params.hold_ms = held;
+                                        label = `${k.name} (Hold ${(held / 1000).toFixed(1)}s)`;
+                                      } else if (held >= HKMC_LONG_PRESS_MS) {
+                                        // 게이지 가득(2초) 후 그레이스(2초) 이내 해제 → 기존 LONG 키(단발)
+                                        params.sub_cmd = HKMC_LONG_KEY;
+                                        label = `${k.name} (Long)`;
                                       } else {
+                                        // 2초 미만 → 일반 SHORT 키
                                         params.sub_cmd = HKMC_SHORT_KEY;
                                       }
                                       // rear-only 그룹(RRC/CCRC)에서만 source 토글값 첨부 (Auto=null이면 미첨부)
                                       if (isRearOnly && rearKeySource !== null) params.key_source = rearKeySource;
-                                      const label = k.name + (isHold ? ` (Hold ${(held / 1000).toFixed(1)}s)` : '');
                                       executeAction('hkmc_key', params, label);
                                     }
                                     hkTimerRef.current.delete(k.name);
@@ -5502,18 +5515,18 @@ export default function RecordPage() {
                                     e.currentTarget.classList.remove('pressing', 'long-done');
                                   }}
                                   onPointerCancel={(e) => {
-                                    // OS 가 포인터를 취소하는 경우 (예: 시스템 제스처) — 인터벌만 정리
+                                    // OS 가 포인터를 취소하는 경우 (예: 시스템 제스처) — 타이머 정리 + 게이지 리셋
                                     const entry = hkTimerRef.current.get(k.name);
-                                    if (entry) clearInterval(entry.interval);
+                                    if (entry) { clearTimeout(entry.countTimer); if (entry.interval) clearInterval(entry.interval); }
                                     hkTimerRef.current.delete(k.name);
                                     setHkLongCount(c => { const n = { ...c }; delete n[k.name]; return n; });
                                     e.currentTarget.classList.remove('pressing', 'long-done');
                                   }}
                                   onContextMenu={(e) => {
-                                    // 우클릭 시 인터벌 정리 (우클릭 메뉴 열리면 pointerup 안 옴)
+                                    // 우클릭 시 타이머 정리 (우클릭 메뉴 열리면 pointerup 안 옴)
                                     e.preventDefault();
                                     const entry = hkTimerRef.current.get(k.name);
-                                    if (entry) clearInterval(entry.interval);
+                                    if (entry) { clearTimeout(entry.countTimer); if (entry.interval) clearInterval(entry.interval); }
                                     hkTimerRef.current.delete(k.name);
                                     setHkLongCount(c => { const n = { ...c }; delete n[k.name]; return n; });
                                     e.currentTarget.classList.remove('pressing', 'long-done');
@@ -5524,12 +5537,12 @@ export default function RecordPage() {
                                   const display = k.name === 'MKBD_CUSTOM' ? `☆ ${baseName}`
                                     : k.name === 'SWRC_CUSTOM' ? `★ ${baseName}` : baseName;
                                   const cnt = hkLongCount[k.name] || 0;
-                                  // 2초 게이지가 가득 찬 횟수(카운트) 배지 — 누른 시간(배속 강도) 시각 표시.
+                                  // 누름 초 카운트 배지 — 카운트 시작(총 4초) 이후 '4sec, 5sec...'로 누른 시간 표시.
                                   return (
                                     <span style={{ position: 'relative' }}>
                                       {display}
                                       {cnt >= 1 && (
-                                        <sup style={{ color: '#ff4d4f', fontWeight: 700, marginLeft: 2 }}>×{cnt}</sup>
+                                        <sup style={{ color: '#ff4d4f', fontWeight: 700, marginLeft: 2 }}>{cnt}sec</sup>
                                       )}
                                     </span>
                                   );
