@@ -1051,9 +1051,36 @@ class HKMC5thWideService:
             time.sleep(0.05)
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int,
-              screen_type: str = "front_center", duration_ms: int = 0) -> None:
-        """Swipe (drag) from (x1, y1) to (x2, y2)."""
+              screen_type: str = "front_center", duration_ms: int = 0,
+              hold_ms: int = 0) -> None:
+        """Swipe (drag) from (x1, y1) to (x2, y2).
+
+        hold_ms>0이면 드래그앤드롭(앱카드 이동) 베스트-에포트: long_press와 동일한
+        PRESS_KEY로 시작점을 눌러 유지한 뒤, 중간 좌표를 PRESS_KEY로 보내 "누른 채
+        이동"을 시도하고 RELEASE_KEY로 뗀다(실기 검증 필요). hold_ms=0이면 fling.
+        """
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        if hold_ms and hold_ms > 0:
+            def _touch_data(x: int, y: int) -> list[int]:
+                return [(x >> 8) & 0xFF, x & 0xFF, (y >> 8) & 0xFF, y & 0xFF]
+            steps = max(3, min(12, max(1, int(max(duration_ms, 200)) // 30)))
+            dx = (x2 - x1) / steps
+            dy = (y2 - y1) / steps
+            with self._capture_lock:
+                time.sleep(0.3)
+                with self._send_lock:
+                    self._make_send_packet(CMD_LCDTOUCH, PRESS_KEY, 0, _touch_data(x1, y1))
+                    logger.info("[HKMC5thWide DRAG_DROP] PRESS (%d,%d)", x1, y1)
+                    time.sleep(hold_ms / 1000.0)
+                    for i in range(1, steps):
+                        ix = int(round(x1 + dx * i))
+                        iy = int(round(y1 + dy * i))
+                        self._make_send_packet(CMD_LCDTOUCH, PRESS_KEY, 0, _touch_data(ix, iy))
+                        time.sleep(0.03)
+                    self._make_send_packet(CMD_LCDTOUCH, RELEASE_KEY, 0, _touch_data(x2, y2))
+                    logger.info("[HKMC5thWide DRAG_DROP] RELEASE (%d,%d) hold=%dms", x2, y2, hold_ms)
+                time.sleep(0.05)
+            return
         with self._capture_lock:
             time.sleep(0.3)
             with self._send_lock:
@@ -1262,9 +1289,10 @@ class HKMC5thWideService:
         await loop.run_in_executor(None, self.long_press, x, y, duration_ms, screen_type)
 
     async def async_swipe(self, x1: int, y1: int, x2: int, y2: int,
-                          screen_type: str = "front_center", duration_ms: int = 300) -> None:
+                          screen_type: str = "front_center", duration_ms: int = 300,
+                          hold_ms: int = 0) -> None:
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.swipe, x1, y1, x2, y2, screen_type, duration_ms)
+        await loop.run_in_executor(None, self.swipe, x1, y1, x2, y2, screen_type, duration_ms, hold_ms)
 
     async def async_send_key(self, cmd: int, sub_cmd: int, key_data: int,
                               monitor: int = 0x00, direction: Optional[int] = None) -> None:

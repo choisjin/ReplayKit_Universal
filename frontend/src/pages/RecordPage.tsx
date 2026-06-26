@@ -218,6 +218,11 @@ const AnnotatedThumbnail = React.memo(({ src, regions, color, height = 48 }: {
 // Gesture detection thresholds
 const LONG_PRESS_THRESHOLD_MS = 500;
 const SWIPE_DISTANCE_THRESHOLD = 20;
+// 드래그앤드롭(앱카드 이동) 자동 감지 — 시작점을 이만큼(ms) 누른 채 유지한 뒤
+// 이동을 시작하면 "집어 올려 끌기"로 인식한다. 이동이 작으면 일반 long_press.
+const DRAG_DROP_HOLD_MS = 3000;
+// hold 판정용 정지 반경(디바이스 px) — 이 반경을 처음 벗어난 시점을 '이동 시작'으로 본다.
+const DRAG_DROP_HOLD_RADIUS = SWIPE_DISTANCE_THRESHOLD;
 
 // scrcpy 방식: 마우스 down→move→up 동안 캡처한 좌표를 그대로 디바이스에 전송.
 // 점이 너무 많으면 sendevent 스크립트가 비대해지므로 균등 다운샘플 (≤80점).
@@ -705,7 +710,11 @@ export default function RecordPage() {
   const gestureRef = useRef<{
     startX: number; startY: number;
     startTime: number; active: boolean;
-  }>({ startX: 0, startY: 0, startTime: 0, active: false });
+    // 시작점 정지 반경을 처음 벗어난 시각(ms). null이면 아직 (거의) 이동 안 함.
+    // 드래그앤드롭 자동 감지: (firstMoveTime - startTime) >= DRAG_DROP_HOLD_MS 이면
+    // "오래 누른 뒤 끌기"로 본다.
+    firstMoveTime: number | null;
+  }>({ startX: 0, startY: 0, startTime: 0, active: false, firstMoveTime: null });
 
   // blob URL → data URL 변환 (HKMC WebSocket blob URL은 다음 프레임에 revoke 됨)
   // 모달용 스냅샷은 PNG 무손실로 받아야 함 — 이 이미지가 expected_image로 그대로 저장되는 경우(saveExpectedImage)
@@ -3043,7 +3052,7 @@ export default function RecordPage() {
     const el = canvasRef.current;
     if (!el) return;
     const { x, y } = toDeviceCoords(el, e.clientX, e.clientY);
-    gestureRef.current = { startX: x, startY: y, startTime: Date.now(), active: true };
+    gestureRef.current = { startX: x, startY: y, startTime: Date.now(), active: true, firstMoveTime: null };
     // 스마트 모드: 드래그 궤적 캡처 시작
     gesturePathRef.current = [{ x, y }];
     setLivePathTick(t => t + 1);
@@ -3063,6 +3072,14 @@ export default function RecordPage() {
       if (!cur) return;
       const { x, y } = toDeviceCoords(cur, clientX, clientY);
       setHoverCoords({ x, y, clientX, clientY });
+      // 드래그앤드롭 자동 감지: 시작점 정지 반경을 처음 벗어난 시각 기록 (모든 디바이스 공통).
+      // smartSwipe 여부와 무관하게 항상 추적해야 hold→drag 판정이 가능.
+      const g = gestureRef.current;
+      if (g.active && g.firstMoveTime == null) {
+        if (Math.hypot(x - g.startX, y - g.startY) > DRAG_DROP_HOLD_RADIUS) {
+          g.firstMoveTime = Date.now();
+        }
+      }
       // 스마트 모드: 드래그 중일 때 좌표 누적 (ADB 전용)
       // 5px 이상 이동했을 때만 점 추가 — 픽셀 단위 떨림만 거르고 곡선 디테일은 보존.
       if (gestureRef.current.active && smartSwipe && isScreenAdb) {
@@ -3090,15 +3107,18 @@ export default function RecordPage() {
     const el = canvasRef.current;
     if (!el) return;
 
-    const { startX, startY, startTime } = gestureRef.current;
+    const { startX, startY, startTime, firstMoveTime } = gestureRef.current;
     const { x: rawEndX, y: rawEndY } = toDeviceCoords(el, e.clientX, e.clientY);
     const rawDist = Math.sqrt((rawEndX - startX) ** 2 + (rawEndY - startY) ** 2);
     const elapsed = Date.now() - startTime;
+    // 드래그앤드롭(앱카드 이동) 판정용 — 이동 시작 전까지 시작점을 누른 채 유지한 시간.
+    // firstMoveTime이 없으면(정지 반경을 끝까지 안 벗어남) 전체 elapsed를 hold로 본다.
+    const holdBeforeMove = firstMoveTime != null ? (firstMoveTime - startTime) : elapsed;
 
     // scrcpy 방식: 캡처한 raw 궤적 전송 (ADB·1핑거·normal 모드 전용).
     // 약간의 보정: RDP(eps=3px)로 직선 위 잡점 제거 + 끝부분 짧은 잔여 segment 제거.
     // 각도 스냅은 하지 않음 — 사용자가 그린 곡선/L자 형태는 보존.
-    if (smartSwipe && isScreenAdb && gestureMode === 'normal' && fingerCount === 1 && rawDist > SWIPE_DISTANCE_THRESHOLD) {
+    if (smartSwipe && isScreenAdb && gestureMode === 'normal' && fingerCount === 1 && rawDist > SWIPE_DISTANCE_THRESHOLD && holdBeforeMove < DRAG_DROP_HOLD_MS) {
       const path = gesturePathRef.current.slice();
       const tail = path[path.length - 1];
       if (!tail || Math.hypot(rawEndX - tail.x, rawEndY - tail.y) > 1) {
@@ -3208,6 +3228,15 @@ export default function RecordPage() {
       }
       // 멀티핑거(2/3) 모드는 1회 동작 후 1핑거로 자동 복귀
       setFingerCount(1);
+    } else if (dist > SWIPE_DISTANCE_THRESHOLD && holdBeforeMove >= DRAG_DROP_HOLD_MS) {
+      // 드래그앤드롭(앱카드 이동): 시작점을 3초 이상 누른 채 유지한 뒤 끌어서 이동.
+      // press→hold(hold_ms)→drag→release 로 동작하도록 hold_ms를 함께 기록한다.
+      const moveMs = Math.max(200, Math.min(elapsed - holdBeforeMove, 2000));
+      const holdMs = Math.round(holdBeforeMove);
+      const params = { x1: startX, y1: startY, x2: endX, y2: endY, duration_ms: moveMs, hold_ms: holdMs };
+      executeAction('swipe', params,
+        `drag_drop (${startX},${startY})→(${endX},${endY}) hold ${holdMs}ms`);
+      setLastGesture(`${t('record.gestureDragDrop')} (${startX},${startY})→(${endX},${endY}) hold ${holdMs}ms`);
     } else if (dist > SWIPE_DISTANCE_THRESHOLD) {
       const durationMs = Math.max(200, Math.min(elapsed, 3000));
       const params = { x1: startX, y1: startY, x2: endX, y2: endY, duration_ms: durationMs };
@@ -4148,7 +4177,10 @@ export default function RecordPage() {
     if (step.type === 'swipe' || step.type === 'hkmc_swipe' || step.type === 'icas_swipe') {
       const durationMs = Math.max(200, Math.min(elapsed, 3000));
       const base = (step.type === 'hkmc_swipe' || step.type === 'icas_swipe') ? { screen_type: step.params.screen_type } : {};
-      const newParams = { ...base, x1: startX, y1: startY, x2: endX, y2: endY, duration_ms: durationMs };
+      // 드래그앤드롭 스텝(hold_ms>0)은 좌표만 수정해도 hold_ms를 유지한다.
+      const prevHold = Number(step.params?.hold_ms) || 0;
+      const holdPart = prevHold > 0 ? { hold_ms: prevHold } : {};
+      const newParams = { ...base, x1: startX, y1: startY, x2: endX, y2: endY, duration_ms: durationMs, ...holdPart };
       setEditStepParams(newParams);
       setSteps((prev) => prev.map((s, i) => i === editStepIndex ? { ...s, params: newParams } : s));
       setEditStepIndex(null);

@@ -56,6 +56,9 @@ class SwipeParams(BaseModel):
     # 패턴(연속 스와이프) — 2개 이상의 waypoint가 주어지면 L자 등 다구간 연속 터치.
     # 비어 있거나 길이 < 2면 (x1,y1)→(x2,y2) 일반 스와이프로 동작.
     points: list[dict[str, int]] = Field(default_factory=list)
+    # 드래그앤드롭(앱카드 이동) — 0보다 크면 이동 전에 시작점을 hold_ms 동안 눌러
+    # "집어 올린" 뒤 드래그하고 떼는 press→hold→drag→release 동작. 0이면 일반 스와이프.
+    hold_ms: int = 0
 
 
 class InputTextParams(BaseModel):

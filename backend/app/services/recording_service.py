@@ -1128,7 +1128,8 @@ class RecordingService:
                                            int(params.get("duration_ms", 3000)), screen_type)
             elif step_type == StepType.HKMC_SWIPE:
                 await svc.async_swipe(params["x1"], params["y1"], params["x2"], params["y2"],
-                                      screen_type, int(params.get("duration_ms", 0)))
+                                      screen_type, int(params.get("duration_ms", 0)),
+                                      hold_ms=int(params.get("hold_ms", 0) or 0))
             elif step_type == StepType.HKMC_KEY:
                 key_name = params.get("key_name")
                 if key_name:
@@ -1173,7 +1174,8 @@ class RecordingService:
                                            int(params.get("duration_ms", 3000)), screen_type)
             elif step_type == StepType.ICAS_SWIPE:
                 await svc.async_swipe(params["x1"], params["y1"], params["x2"], params["y2"],
-                                      screen_type, int(params.get("duration_ms", 0)))
+                                      screen_type, int(params.get("duration_ms", 0)),
+                                      hold_ms=int(params.get("hold_ms", 0) or 0))
             elif step_type == StepType.ICAS_KEY:
                 key_name = params.get("key_name")
                 if key_name:
@@ -1280,6 +1282,7 @@ class RecordingService:
                     params["x2"], params["y2"],
                     params.get("duration_ms", 300),
                     serial=serial,
+                    hold_ms=int(params.get("hold_ms", 0) or 0),
                 )
             elif step_type == StepType.INPUT_TEXT:
                 await self.adb.input_text(params["text"], serial=serial)

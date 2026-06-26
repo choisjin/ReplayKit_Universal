@@ -705,8 +705,32 @@ class ISAPAgentService:
             time.sleep(0.05)
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int,
-              screen_type: str = "front_center", duration_ms: int = 0) -> None:
+              screen_type: str = "front_center", duration_ms: int = 0,
+              hold_ms: int = 0) -> None:
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        if hold_ms and hold_ms > 0:
+            # 드래그앤드롭(앱카드 이동): TOUCH_PRESS → hold → TOUCH_MOVE(보간) → TOUCH_RELEASE.
+            # _lcd_drag(고정 fling)는 시작 hold를 표현 못해 ext 터치 시퀀스로 직접 구성.
+            move_dur = max(int(duration_ms or 0), 200)
+            steps = max(3, min(20, max(1, move_dur // 20)))
+            dx = (x2 - x1) / steps
+            dy = (y2 - y1) / steps
+            interval_s = max(0.01, (move_dur / 1000.0) / steps)
+            with self._capture_lock:
+                time.sleep(0.1)
+                with self._send_lock:
+                    self._lcd_touch_ext(x1, y1, TOUCH_PRESS, screen_type)
+                    time.sleep(hold_ms / 1000.0)
+                    for i in range(1, steps):
+                        ix = int(round(x1 + dx * i))
+                        iy = int(round(y1 + dy * i))
+                        self._lcd_touch_ext(ix, iy, TOUCH_MOVE, screen_type)
+                        time.sleep(interval_s)
+                    self._lcd_touch_ext(x2, y2, TOUCH_RELEASE, screen_type)
+                    logger.info("[iSAP DRAG_DROP] (%d,%d)->(%d,%d) hold=%dms screen=%s",
+                                x1, y1, x2, y2, hold_ms, screen_type)
+                time.sleep(0.05)
+            return
         with self._capture_lock:
             time.sleep(0.1)
             with self._send_lock:
@@ -830,9 +854,10 @@ class ISAPAgentService:
         await loop.run_in_executor(None, self.long_press, x, y, duration_ms, screen_type)
 
     async def async_swipe(self, x1: int, y1: int, x2: int, y2: int,
-                          screen_type: str = "front_center", duration_ms: int = 0) -> None:
+                          screen_type: str = "front_center", duration_ms: int = 0,
+                          hold_ms: int = 0) -> None:
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.swipe, x1, y1, x2, y2, screen_type, duration_ms)
+        await loop.run_in_executor(None, self.swipe, x1, y1, x2, y2, screen_type, duration_ms, hold_ms)
 
     async def async_send_key(self, cmd: int, sub_cmd: int, key_data: int,
                              screen_type: str = "front_center",

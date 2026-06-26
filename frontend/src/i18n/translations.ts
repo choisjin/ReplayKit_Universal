@@ -446,6 +446,7 @@ const translations = {
     'record.gestureSwipe': '스와이프',
     'record.gestureLongPress': '길게 누르기',
     'record.gestureTap': '탭',
+    'record.gestureDragDrop': '드래그앤드롭',
     'record.stepSwipeUpdated': '스텝 #{index} swipe 좌표 수정됨',
 
     // === Webcam ===
@@ -1350,6 +1351,7 @@ const translations = {
     'record.gestureSwipe': 'Swipe',
     'record.gestureLongPress': 'Long Press',
     'record.gestureTap': 'Tap',
+    'record.gestureDragDrop': 'Drag & Drop',
     'record.stepSwipeUpdated': 'Step #{index} swipe coordinates updated',
 
     // === Webcam ===

@@ -1063,7 +1063,8 @@ async def device_input(req: InputRequest):
                                             int(p.get("duration_ms", 3000)), screen_type)
             elif req.action == "hkmc_swipe":
                 await isap.async_swipe(p["x1"], p["y1"], p["x2"], p["y2"], screen_type,
-                                       int(p.get("duration_ms", 0)))
+                                       int(p.get("duration_ms", 0)),
+                                       hold_ms=int(p.get("hold_ms", 0) or 0))
             elif req.action == "hkmc_key":
                 key_name = p.get("key_name")
                 if key_name:
@@ -1095,7 +1096,8 @@ async def device_input(req: InputRequest):
                                             int(p.get("duration_ms", 3000)), screen_type)
             elif req.action == "icas_swipe":
                 await icas.async_swipe(p["x1"], p["y1"], p["x2"], p["y2"], screen_type,
-                                       int(p.get("duration_ms", 0)))
+                                       int(p.get("duration_ms", 0)),
+                                       hold_ms=int(p.get("hold_ms", 0) or 0))
             elif req.action == "icas_key":
                 key_name = p.get("key_name")
                 if key_name:
@@ -1130,7 +1132,8 @@ async def device_input(req: InputRequest):
                                            int(p.get("duration_ms", 3000)), screen_type)
             elif req.action in ("mib_swipe", "icas_swipe"):
                 await mib.async_swipe(p["x1"], p["y1"], p["x2"], p["y2"], screen_type,
-                                      int(p.get("duration_ms", 0)))
+                                      int(p.get("duration_ms", 0)),
+                                      hold_ms=int(p.get("hold_ms", 0) or 0))
             elif req.action in ("mib_key", "icas_key"):
                 key_name = p.get("key_name")
                 if key_name:
@@ -1190,8 +1193,9 @@ async def device_input(req: InputRequest):
                                 _label, p["x"], p["y"], p.get("duration_ms", 3000), screen_type)
                 elif req.action == "hkmc_swipe":
                     await hkmc.async_swipe(p["x1"], p["y1"], p["x2"], p["y2"], screen_type,
-                                           int(p.get("duration_ms", 0)))
-                    logger.info("[%s INPUT] swipe sent: duration_ms=%s", _label, p.get("duration_ms", 0))
+                                           int(p.get("duration_ms", 0)),
+                                           hold_ms=int(p.get("hold_ms", 0) or 0))
+                    logger.info("[%s INPUT] swipe sent: duration_ms=%s hold_ms=%s", _label, p.get("duration_ms", 0), p.get("hold_ms", 0))
                 elif req.action == "hkmc_key":
                     key_name = p.get("key_name")
                     if key_name:
@@ -1378,7 +1382,8 @@ async def device_input(req: InputRequest):
                                            int(p.get("duration_ms", 1000)), screen_type)
             elif req.action == "swipe":
                 await bmw.async_swipe(p["x1"], p["y1"], p["x2"], p["y2"], screen_type,
-                                      int(p.get("duration_ms", 0)))
+                                      int(p.get("duration_ms", 0)),
+                                      hold_ms=int(p.get("hold_ms", 0) or 0))
             return {"result": "ok"}
 
         # ADB actions — allow even if device is not in managed list (race with refresh)
@@ -1406,7 +1411,8 @@ async def device_input(req: InputRequest):
             if isinstance(pts, list) and len(pts) >= 2:
                 await adb.pattern_swipe(pts, p.get("duration_ms", 600), serial=adb_serial, display_id=display_id)
             else:
-                await adb.swipe(p["x1"], p["y1"], p["x2"], p["y2"], p.get("duration_ms", 300), serial=adb_serial, display_id=display_id)
+                await adb.swipe(p["x1"], p["y1"], p["x2"], p["y2"], p.get("duration_ms", 300), serial=adb_serial, display_id=display_id,
+                                hold_ms=int(p.get("hold_ms", 0) or 0))
         elif req.action == "input_text":
             await adb.input_text(p["text"], serial=adb_serial, display_id=display_id)
         elif req.action == "key_event":

@@ -1414,6 +1414,9 @@ class PlaybackService:
             if isinstance(pts, list) and len(pts) >= 2:
                 path = "→".join(f"({pt.get('x',0)},{pt.get('y',0)})" for pt in pts)
                 return f"pattern_swipe {path} {p.get('duration_ms', 600)}ms"
+            hold = int(p.get("hold_ms", 0) or 0)
+            if hold > 0:
+                return f"drag_drop ({p.get('x1',0)},{p.get('y1',0)})→({p.get('x2',0)},{p.get('y2',0)}) hold {hold}ms"
             return f"swipe ({p.get('x1',0)},{p.get('y1',0)})→({p.get('x2',0)},{p.get('y2',0)})"
         elif step.type == StepType.INPUT_TEXT:
             return f"input_text \"{p.get('text', '')}\""
@@ -1450,7 +1453,9 @@ class PlaybackService:
             return f"hkmc_touch ({p.get('x', 0)}, {p.get('y', 0)}) [{st}]"
         elif step.type == StepType.HKMC_SWIPE:
             st = step.screen_type or p.get("screen_type", "")
-            return f"hkmc_swipe ({p.get('x1',0)},{p.get('y1',0)})→({p.get('x2',0)},{p.get('y2',0)}) [{st}]"
+            hold = int(p.get("hold_ms", 0) or 0)
+            kind = f"hkmc_drag_drop hold {hold}ms" if hold > 0 else "hkmc_swipe"
+            return f"{kind} ({p.get('x1',0)},{p.get('y1',0)})→({p.get('x2',0)},{p.get('y2',0)}) [{st}]"
         elif step.type == StepType.HKMC_KEY:
             key = p.get("key_name", f"0x{p.get('key_data', 0):02X}")
             return f"hkmc_key {key}"
@@ -1462,7 +1467,9 @@ class PlaybackService:
             return f"icas_touch ({p.get('x', 0)}, {p.get('y', 0)}) [{st}]"
         elif step.type == StepType.ICAS_SWIPE:
             st = step.screen_type or p.get("screen_type", "")
-            return f"icas_swipe ({p.get('x1',0)},{p.get('y1',0)})→({p.get('x2',0)},{p.get('y2',0)}) [{st}]"
+            hold = int(p.get("hold_ms", 0) or 0)
+            kind = f"icas_drag_drop hold {hold}ms" if hold > 0 else "icas_swipe"
+            return f"{kind} ({p.get('x1',0)},{p.get('y1',0)})→({p.get('x2',0)},{p.get('y2',0)}) [{st}]"
         elif step.type == StepType.ICAS_KEY:
             key = p.get("key_name", f"0x{p.get('key_data', 0):02X}")
             return f"icas_key {key}"
@@ -2668,12 +2675,15 @@ class PlaybackService:
                         await svc.async_long_press(params["x"], params["y"],
                                                    int(params.get("duration_ms", 3000)), screen_type)
                     elif step.type == StepType.HKMC_SWIPE:
+                        hold_ms = int(params.get("hold_ms", 0) or 0)
                         if is_isap:
                             await svc.async_swipe(params["x1"], params["y1"], params["x2"], params["y2"],
-                                                  screen_type, int(params.get("duration_ms", 300)))
+                                                  screen_type, int(params.get("duration_ms", 300)),
+                                                  hold_ms=hold_ms)
                         else:
                             await svc.async_swipe(params["x1"], params["y1"], params["x2"], params["y2"],
-                                                  screen_type, int(params.get("duration_ms", 0)))
+                                                  screen_type, int(params.get("duration_ms", 0)),
+                                                  hold_ms=hold_ms)
                     elif step.type == StepType.HKMC_KEY:
                         key_name = params.get("key_name")
                         direction = params.get("direction")
@@ -2748,7 +2758,8 @@ class PlaybackService:
                                                    int(params.get("duration_ms", 3000)), screen_type)
                     elif step.type == StepType.ICAS_SWIPE:
                         await svc.async_swipe(params["x1"], params["y1"], params["x2"], params["y2"],
-                                              screen_type, int(params.get("duration_ms", 300)))
+                                              screen_type, int(params.get("duration_ms", 300)),
+                                              hold_ms=int(params.get("hold_ms", 0) or 0))
                     elif step.type == StepType.ICAS_KEY:
                         key_name = params.get("key_name")
                         direction = params.get("direction")
@@ -3088,7 +3099,8 @@ class PlaybackService:
                                            int(params.get("duration_ms", 1000)), screen_type)
             elif step.type == StepType.SWIPE:
                 await svc.async_swipe(params["x1"], params["y1"], params["x2"], params["y2"],
-                                      screen_type, int(params.get("duration_ms", 0)))
+                                      screen_type, int(params.get("duration_ms", 0)),
+                                      hold_ms=int(params.get("hold_ms", 0) or 0))
 
         else:
             # ADB actions — real_id를 ADB 시리얼(dev.address)로 변환
@@ -3136,6 +3148,7 @@ class PlaybackService:
                         params["x2"], params["y2"],
                         params.get("duration_ms", 300),
                         serial=adb_serial, display_id=adb_display_id,
+                        hold_ms=int(params.get("hold_ms", 0) or 0),
                     )
             elif step.type == StepType.INPUT_TEXT:
                 await self.adb.input_text(params["text"], serial=adb_serial, display_id=adb_display_id)

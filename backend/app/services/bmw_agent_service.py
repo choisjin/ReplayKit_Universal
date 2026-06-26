@@ -1067,7 +1067,10 @@ class BMWAgentService:
         await loop.run_in_executor(None, self._touch, x, y, sid)
 
     async def async_swipe(self, x1: int, y1: int, x2: int, y2: int,
-                          screen_type=None, duration_ms: int = 0) -> None:
+                          screen_type=None, duration_ms: int = 0,
+                          hold_ms: int = 0) -> None:
+        # hold_ms(드래그앤드롭)는 시그니처 호환을 위해 수용하나, BMW touch simulator
+        # 스크립트가 press-hold 분리를 지원하지 않아 일반 swipe로 근사한다(best-effort).
         loop = asyncio.get_event_loop()
         sid = self._screen_id(screen_type)
         await loop.run_in_executor(None, self._swipe, x1, y1, x2, y2, sid)

@@ -1522,23 +1522,37 @@ class MIBAgentService:
         self._touch_release(x, y)
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int,
-              screen_type: str = "HU", duration_ms: int = 300) -> None:
-        """press(x1,y1) → drag(보간) → release(x2,y2)."""
+              screen_type: str = "HU", duration_ms: int = 300,
+              hold_ms: int = 0) -> None:
+        """press(x1,y1) → [hold_ms 누름 유지] → drag(보간) → release(x2,y2).
+
+        hold_ms>0이면 드래그앤드롭(앱카드 이동) — 시작점을 hold_ms 동안 눌러 항목을
+        "집어 올린" 뒤 드래그한다.
+        """
         # 보간 스텝 수: duration 기반 (각 스텝 ~20ms 목표, 최소 3 최대 20)
         target_interval_ms = 20
         steps = max(3, min(20, max(1, duration_ms // target_interval_ms)))
         dx = (x2 - x1) / steps
         dy = (y2 - y1) / steps
 
-        # 동일 SSH 세션으로 일괄 송신 — 오버헤드 최소화
-        frames: list[str] = []
-        frames.append(self._touch_frame(x1, y1, 0xFD))  # press
+        # press 프레임 — hold_ms가 있으면 먼저 눌러서 유지한 뒤 drag 프레임을 보낸다.
+        press = self._touch_frame(x1, y1, 0xFD)
+        drag_frames: list[str] = []
         for i in range(1, steps):
             ix = int(round(x1 + dx * i))
             iy = int(round(y1 + dy * i))
-            frames.append(self._touch_frame(ix, iy, 0xFE))  # drag
-        frames.append(self._touch_frame(x2, y2, 0xFF))  # release
+            drag_frames.append(self._touch_frame(ix, iy, 0xFE))  # drag
+        drag_frames.append(self._touch_frame(x2, y2, 0xFF))  # release
 
+        if hold_ms and hold_ms > 0:
+            self._ksend_many([press], interval_s=0)
+            time.sleep(hold_ms / 1000.0)
+            interval_s = max(0.01, (duration_ms / 1000.0) / max(1, len(drag_frames)))
+            self._ksend_many(drag_frames, interval_s=interval_s)
+            return
+
+        # 동일 SSH 세션으로 일괄 송신 — 오버헤드 최소화
+        frames = [press, *drag_frames]
         # 간격은 duration_ms에 맞춰 분배
         interval_s = max(0.01, (duration_ms / 1000.0) / max(1, len(frames) - 1))
         self._ksend_many(frames, interval_s=interval_s)
@@ -2458,10 +2472,11 @@ class MIBAgentService:
         await loop.run_in_executor(None, self.long_press, x, y, duration_ms, screen_type)
 
     async def async_swipe(self, x1: int, y1: int, x2: int, y2: int,
-                          screen_type: str = "HU", duration_ms: int = 300) -> None:
+                          screen_type: str = "HU", duration_ms: int = 300,
+                          hold_ms: int = 0) -> None:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
-            None, self.swipe, x1, y1, x2, y2, screen_type, duration_ms
+            None, self.swipe, x1, y1, x2, y2, screen_type, duration_ms, hold_ms
         )
 
     async def async_repeat_tap(self, x: int, y: int, count: int = 5,

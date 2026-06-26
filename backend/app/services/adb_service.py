@@ -356,11 +356,28 @@ class ADBService:
     async def swipe(
         self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300,
         serial: Optional[str] = None, display_id: Optional[int] = None,
+        hold_ms: int = 0,
     ) -> str:
         s = serial or self._active_serial
         if not s:
             raise ValueError("No device selected")
         dflag = self._display_flag(display_id)
+        if hold_ms and hold_ms > 0:
+            # 드래그앤드롭(앱카드 이동): 시작점을 길게 눌러 "집어 올린" 뒤 이동.
+            # Android의 `input draganddrop`는 시작 시 long-press pickup을 자동 수행한다.
+            # total = hold + 이동시간 으로 잡아 런처가 드래그로 인식하도록 충분히 느리게.
+            total = max(int(hold_ms) + int(duration_ms or 0), 1000)
+            out = await self._run_device(
+                s, f"shell input {dflag}draganddrop {x1} {y1} {x2} {y2} {total}"
+            )
+            low = (out or "").lower()
+            # 구버전 빌드는 draganddrop 미지원 → 느린 swipe로 폴백(긴 duration이
+            # 런처에서 드래그 pickup을 유발).
+            if "unknown command" in low or "error" in low or "not found" in low:
+                return await self._run_device(
+                    s, f"shell input {dflag}swipe {x1} {y1} {x2} {y2} {total}"
+                )
+            return out
         return await self._run_device(s, f"shell input {dflag}swipe {x1} {y1} {x2} {y2} {duration_ms}")
 
     async def _probe_sendevent_mode(self, serial: str) -> str:

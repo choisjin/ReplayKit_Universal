@@ -1467,14 +1467,48 @@ class HKMC6thService:
             time.sleep(0.05)
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int,
-              screen_type: str = "front_center", duration_ms: int = 0) -> None:
+              screen_type: str = "front_center", duration_ms: int = 0,
+              hold_ms: int = 0) -> None:
         """Swipe (drag) from (x1, y1) to (x2, y2) using lcdDrag.
 
         duration_ms 인자는 시그니처 호환을 위해 유지하나 현재 펌웨어가
         DraggingTime 페이로드를 거부하므로 무시한다 (빠른 fling으로 동작).
+
+        hold_ms>0이면 드래그앤드롭(앱카드 이동) 베스트-에포트: long_press와 동일한
+        PRESS_KEY로 시작점을 눌러 유지한 뒤, 중간 좌표를 PRESS_KEY sub_cmd로 보내
+        "누른 채 이동"을 시도하고 RELEASE_KEY로 뗀다. 펌웨어가 press-only 좌표 갱신을
+        이동으로 해석하는지는 미검증(실기 확인 필요) — 안 되면 _lcd_drag fling으로 폴백.
         """
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
         st = self._touch_screen_bits(screen_type)
+        if hold_ms and hold_ms > 0:
+            def _touch_data(x: int, y: int) -> list[int]:
+                d = [(x >> 8) & 0xFF, x & 0xFF, (y >> 8) & 0xFF, y & 0xFF]
+                if st is not None:
+                    d.append((st >> 8) & 0xFF)
+                    d.append(st & 0xFF)
+                return d
+            steps = max(3, min(12, max(1, int(max(duration_ms, 200)) // 30)))
+            dx = (x2 - x1) / steps
+            dy = (y2 - y1) / steps
+            with self._input_priority(), self._capture_lock:
+                time.sleep(0.3)
+                with self._send_lock:
+                    # 1) PRESS (집어 올리기)
+                    self._make_send_packet(CMD_LCDTOUCH, PRESS_KEY, 0, _touch_data(x1, y1))
+                    logger.info("[DRAG_DROP] PRESS (%d,%d) screen=%s", x1, y1, screen_type)
+                    time.sleep(hold_ms / 1000.0)
+                    # 2) MOVE — press-only 좌표 갱신으로 누른 채 이동 시도
+                    for i in range(1, steps):
+                        ix = int(round(x1 + dx * i))
+                        iy = int(round(y1 + dy * i))
+                        self._make_send_packet(CMD_LCDTOUCH, PRESS_KEY, 0, _touch_data(ix, iy))
+                        time.sleep(0.03)
+                    # 3) RELEASE (놓기)
+                    self._make_send_packet(CMD_LCDTOUCH, RELEASE_KEY, 0, _touch_data(x2, y2))
+                    logger.info("[DRAG_DROP] RELEASE (%d,%d) hold=%dms", x2, y2, hold_ms)
+                time.sleep(0.05)
+            return
         with self._input_priority(), self._capture_lock:
             time.sleep(0.3)
             with self._send_lock:
@@ -1835,9 +1869,9 @@ class HKMC6thService:
 
     async def async_swipe(self, x1: int, y1: int, x2: int, y2: int,
                           screen_type: str = "front_center",
-                          duration_ms: int = 300) -> None:
+                          duration_ms: int = 300, hold_ms: int = 0) -> None:
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.swipe, x1, y1, x2, y2, screen_type, duration_ms)
+        await loop.run_in_executor(None, self.swipe, x1, y1, x2, y2, screen_type, duration_ms, hold_ms)
 
     async def async_send_key(self, cmd: int, sub_cmd: int, key_data: int,
                              monitor: int = 0x00, direction: Optional[int] = None) -> None:
