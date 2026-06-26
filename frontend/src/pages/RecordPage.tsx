@@ -220,7 +220,8 @@ const LONG_PRESS_THRESHOLD_MS = 500;
 const SWIPE_DISTANCE_THRESHOLD = 20;
 // 드래그앤드롭(앱카드 이동) 자동 감지 — 시작점을 이만큼(ms) 누른 채 유지한 뒤
 // 이동을 시작하면 "집어 올려 끌기"로 인식한다. 이동이 작으면 일반 long_press.
-const DRAG_DROP_HOLD_MS = 3000;
+// 이 값이 픽업 게이지 채우기 시간·롱프레스 판정·드래그앤드롭 트리거 임계값을 모두 결정.
+const DRAG_DROP_HOLD_MS = 2000;
 // hold 판정용 정지 반경(디바이스 px) — 이 반경을 처음 벗어난 시점을 '이동 시작'으로 본다.
 const DRAG_DROP_HOLD_RADIUS = SWIPE_DISTANCE_THRESHOLD;
 // 픽업 게이지 표시 지연(ms) — 빠른 탭/스와이프에는 링이 안 뜨도록, 이만큼 누르고

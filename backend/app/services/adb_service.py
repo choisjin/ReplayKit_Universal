@@ -364,16 +364,20 @@ class ADBService:
         dflag = self._display_flag(display_id)
         if hold_ms and hold_ms > 0:
             # 드래그앤드롭(앱카드 이동): 시작점을 길게 눌러 "집어 올린" 뒤 이동.
-            # Android의 `input draganddrop`는 시작 시 long-press pickup을 자동 수행한다.
-            # total = hold + 이동시간 으로 잡아 런처가 드래그로 인식하도록 충분히 느리게.
-            total = max(int(hold_ms) + int(duration_ms or 0), 1000)
+            # `input draganddrop`의 duration 인자는 **이동(드래그) 시간**이며, pickup용
+            # long-press 대기는 명령이 시작 시 자체적으로 수행한다. 따라서 hold_ms를
+            # 이동 duration에 더하면 안 된다(더하면 드래그가 그만큼 느려짐 — 회귀 원인).
+            # 사용자가 빠르게 끈 이동 속도를 보존하려면 duration_ms(=이동시간)만 사용.
+            move_ms = max(int(duration_ms or 0), 150)
             out = await self._run_device(
-                s, f"shell input {dflag}draganddrop {x1} {y1} {x2} {y2} {total}"
+                s, f"shell input {dflag}draganddrop {x1} {y1} {x2} {y2} {move_ms}"
             )
             low = (out or "").lower()
-            # 구버전 빌드는 draganddrop 미지원 → 느린 swipe로 폴백(긴 duration이
-            # 런처에서 드래그 pickup을 유발).
+            # 구버전 빌드는 draganddrop 미지원 → swipe로 폴백. swipe는 자체 pickup이 없어
+            # duration이 짧으면 런처가 드래그로 인식 못 하므로, 폴백에서만 hold+이동으로
+            # 충분히 길게 잡아 pickup을 유발한다(이동이 느려지지만 폴백 한정).
             if "unknown command" in low or "error" in low or "not found" in low:
+                total = max(int(hold_ms) + move_ms, 1000)
                 return await self._run_device(
                     s, f"shell input {dflag}swipe {x1} {y1} {x2} {y2} {total}"
                 )
