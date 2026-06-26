@@ -49,12 +49,30 @@ OP_HIGHLIGHT = 0x01
 OP_RESET = 0x02
 OP_SHUTDOWN = 0x03
 
-# 서브프로세스는 `python -m backend.app.services.can_panel` 이 아니라 **이 파일을 스크립트로
-# 직접 실행**한다. 배포 환경(예: C:\ReplayKit)에서는 cwd/PYTHONPATH 가 `backend` 패키지를
-# 못 찾아 "ModuleNotFoundError: No module named 'backend'" 로 실패하기 때문이다. 이 파일은
-# backend.* 를 import 하지 않고 stdlib + PySide6 만 쓰므로, 패키지 경로와 무관하게
-# `python <이 파일> --grab/--host` 로 항상 동작한다.
+# 이 파일의 절대 경로. 배포 시에는 컴파일된 확장 모듈(.pyd)일 수 있다
+# (예: can_panel.cp310-win_amd64.pyd).
 _SELF_PATH = str(Path(__file__).resolve())
+
+
+def _child_cmd(extra_args: list[str]) -> list[str]:
+    """패널 호스트/캡처 서브프로세스 실행 커맨드.
+
+    세 가지 함정을 모두 피한다:
+      - `python -m backend.app.services.can_panel`: 배포(임베드 Python + python._pth)에서는
+        PYTHONPATH/cwd 가 무시돼 `backend` 패키지를 못 찾음 → ModuleNotFoundError.
+      - `python <파일>`: 배포본은 이 파일이 .pyd(바이너리)라 스크립트로 못 돌림
+        → "Non-UTF-8 code starting with '\\x90'" SyntaxError.
+    해결: importlib 로 이 파일(.py 든 .pyd 든)을 경로로 직접 로드해 _main() 실행.
+    backend 패키지 import 도, sys.path 조작도 필요 없다. 확장 모듈의 init 함수명과
+    맞도록 모듈명은 'can_panel' 로 고정(.pyd = PyInit_can_panel)."""
+    boot = (
+        "import importlib.util,sys\n"
+        "s=importlib.util.spec_from_file_location('can_panel'," + repr(_SELF_PATH) + ")\n"
+        "m=importlib.util.module_from_spec(s)\n"
+        "s.loader.exec_module(m)\n"
+        "raise SystemExit(m._main())\n"
+    )
+    return [sys.executable, "-c", boot, *extra_args]
 
 # 호스트 startup(bind+listen) 대기용 connect 재시도
 _CONNECT_RETRY_TIMES = 50          # ~5초
@@ -377,13 +395,12 @@ class CanPanelController:
             return False
 
         x, y, w, h = self._geom
-        argv = [
-            sys.executable, _SELF_PATH,
+        argv = _child_cmd([
             "--host",
             "--port", str(self._port),
             "--x", str(x), "--y", str(y),
             "--width", str(w), "--height", str(h),
-        ]
+        ])
         try:
             self._proc = subprocess.Popen(
                 argv,
@@ -423,8 +440,8 @@ def grab_monitor() -> dict:
 
     별도 프로세스로 PySide6 캡처 — 백엔드 인터پری터에 Qt app 을 띄우지 않는다.
     """
-    # 이 파일을 스크립트로 직접 실행 (패키지 import 불필요 → 배포 환경에서도 동작).
-    argv = [sys.executable, _SELF_PATH, "--grab"]
+    # importlib 로 이 파일(.py/.pyd)을 직접 로드해 실행 (패키지 import·sys.path 불필요).
+    argv = _child_cmd(["--grab"])
     proc = subprocess.run(argv, capture_output=True, timeout=30)
     if proc.returncode != 0:
         raise RuntimeError(

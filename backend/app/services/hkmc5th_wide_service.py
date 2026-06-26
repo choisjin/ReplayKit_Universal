@@ -1227,21 +1227,20 @@ class HKMC5thWideService:
 
         with self._capture_lock:
             if hold_ms and hold_ms > 0 and not is_msg and not is_dial:
-                # 누름 유지(연속/배속): key-down(PRESS)을 hold_ms 동안 일정 간격으로 반복
-                # 송신(auto-repeat)하다 마지막에 RELEASE. 단일 PRESS 유지만으론 IVI 가
-                # 연속 동작을 안 하므로(포커스만) 반복 전송으로 구동.
+                # 누름 유지(연속/배속): key-down(PRESS) 후 '계속 누르고 있음' 이벤트인
+                # PRESS_LONG(0x46)을 hold_ms 동안 반복 송신하다 마지막에 RELEASE. 단일
+                # PRESS 유지만으론 IVI 가 연속 동작을 안 해(포커스만) 반복 전송으로 구동.
                 key_data = key_info["key"]
                 repeat_interval = 0.12
                 end = time.monotonic() + hold_ms / 1000.0
                 n = 0
                 self.send_key(cmd, PRESS_KEY, key_data, monitor, direction)
-                n += 1
                 while time.monotonic() < end:
                     time.sleep(repeat_interval)
-                    self.send_key(cmd, PRESS_KEY, key_data, monitor, direction)
+                    self.send_key(cmd, PRESS_LONG, key_data, monitor, direction)
                     n += 1
                 self.send_key(cmd, RELEASE_KEY, key_data, monitor, direction)
-                logger.info("[HKMC5thWide KEY HOLD] %s hold=%dms repeats=%d", key_name, hold_ms, n)
+                logger.info("[HKMC5thWide KEY HOLD] %s hold=%dms press_long_repeats=%d", key_name, hold_ms, n)
 
             elif is_msg:
                 # 메시지 키: 데이터 없이 cmd+subCmd만 전송

@@ -57,6 +57,7 @@ PRESS_KEY = 0x42
 SHORT_KEY = 0x43
 LONG_KEY = 0x44
 MOVE_KEY = 0x45
+PRESS_LONG = 0x46   # 키를 계속 누르고 있는 상태(연속/배속용) — hold 중 반복 송신
 DIAL_ACTION = 0x80
 
 # CCRC key action codes (CMD_CCRC=0x93 전용, 일반 KEY와 별도 값 사용)
@@ -1732,22 +1733,20 @@ class HKMC6thService:
                 self.send_key(cmd, DIAL_ACTION, key_data, monitor, dir_val)
             elif hold_ms and hold_ms > 0:
                 # 누름 유지(연속/배속): 단일 PRESS 를 유지하고만 있으면 IVI 가 포커스만
-                # 잡고 실제 동작(>>/Enter 배속 등)을 하지 않는다(실기 확인). 물리 리모컨이
-                # 키를 누르고 있는 동안 key-down 을 주기적으로 재전송하는 auto-repeat 처럼,
-                # 키-다운(PRESS)을 hold_ms 동안 일정 간격으로 반복 송신하다가 마지막에
-                # RELEASE 한다. 중간에 RELEASE 를 끼우지 않아 '키가 계속 눌려 있음(연속)'으로
-                # 인식되게 한다.
-                repeat_interval = 0.12  # 키-다운 재전송 간격(초) — 배속 속도
+                # 잡고 실제 동작(>>/Enter 배속 등)을 하지 않는다(실기 확인). 키-다운(PRESS)으로
+                # 키를 누른 뒤, '계속 누르고 있음' 이벤트인 PRESS_LONG(0x46)을 hold_ms 동안
+                # 일정 간격으로 반복 송신하다가 마지막에 RELEASE 한다. 중간에 RELEASE 를
+                # 끼우지 않아 '키가 계속 눌려 있음(연속)'으로 인식되게 한다.
+                repeat_interval = 0.12  # PRESS_LONG 재전송 간격(초) — 배속 속도
                 end = time.monotonic() + hold_ms / 1000.0
                 n = 0
                 self.send_key(cmd, PRESS_KEY, key_data, monitor, direction)
-                n += 1
                 while time.monotonic() < end:
                     time.sleep(repeat_interval)
-                    self.send_key(cmd, PRESS_KEY, key_data, monitor, direction)
+                    self.send_key(cmd, PRESS_LONG, key_data, monitor, direction)
                     n += 1
                 self.send_key(cmd, RELEASE_KEY, key_data, monitor, direction)
-                logger.info("[KEY HOLD] %s hold=%dms repeats=%d", key_name, hold_ms, n)
+                logger.info("[KEY HOLD] %s hold=%dms press_long_repeats=%d", key_name, hold_ms, n)
             elif sub_cmd == SHORT_KEY:
                 # 일반 키: PRESS → SHORT → RELEASE 3단계 시퀀스
                 self.send_key(cmd, PRESS_KEY, key_data, monitor, direction)
