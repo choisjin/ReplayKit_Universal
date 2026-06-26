@@ -41,6 +41,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 
@@ -49,6 +50,22 @@ OP_RESET = 0x02
 OP_SHUTDOWN = 0x03
 
 _HOST_MODULE = "backend.app.services.can_panel"
+
+# `python -m backend.app.services.can_panel` 서브프로세스는 부모의 cwd를 물려받는데,
+# 배포 환경(예: C:\ReplayKit)에서는 cwd가 프로젝트 루트가 아니라 `backend` 패키지를
+# 찾지 못해 "ModuleNotFoundError: No module named 'backend'" 로 monitor grab/host 가
+# 실패한다. 이 파일(<root>/backend/app/services/can_panel.py)의 위치에서 루트를 구해
+# 서브프로세스의 cwd·PYTHONPATH 에 주입한다.
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
+
+
+def _subproc_kwargs() -> dict:
+    """`-m backend...` 서브프로세스가 어느 cwd에서든 backend 를 import 하도록
+    cwd=프로젝트 루트 + PYTHONPATH 에 루트 prepend 한 kwargs 반환."""
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join([_PROJECT_ROOT, existing] if existing else [_PROJECT_ROOT])
+    return {"cwd": _PROJECT_ROOT, "env": env}
 
 # 호스트 startup(bind+listen) 대기용 connect 재시도
 _CONNECT_RETRY_TIMES = 50          # ~5초
@@ -355,6 +372,7 @@ class CanPanelController:
                 argv,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                **_subproc_kwargs(),
             )
             return True
         except OSError:
@@ -390,7 +408,10 @@ def grab_monitor() -> dict:
     별도 프로세스로 PySide6 캡처 — 백엔드 인터پری터에 Qt app 을 띄우지 않는다.
     """
     argv = [sys.executable, "-m", _HOST_MODULE, "--grab"]
-    proc = subprocess.run(argv, capture_output=True, timeout=30)
+    # `-m backend...` 가 배포 환경(예: C:\ReplayKit)의 cwd 에서도 backend 를 import 하도록
+    # cwd=프로젝트 루트 + PYTHONPATH 주입 (호스트 spawn 과 동일). 없으면 grab 이
+    # "No module named 'backend'" 로 실패한다.
+    proc = subprocess.run(argv, capture_output=True, timeout=30, **_subproc_kwargs())
     if proc.returncode != 0:
         raise RuntimeError(
             "monitor grab failed: " + (proc.stderr.decode("utf-8", "replace").strip() or "(no stderr)")

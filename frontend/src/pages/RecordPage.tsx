@@ -45,6 +45,45 @@ const SortableStepItem = ({ id, index, isDark, children }: { id: string; index: 
 // 백엔드 로직은 그대로 유지되며 UI 체크박스만 숨긴다.
 const BRANCH_MODE_ENABLED = true;
 
+// CANAT.CAN_PANEL 파라미터 UI 정의 (스텝 생성 폼 + 커맨드 수정 모달 공용).
+//   state/cycle_time/bus_channel/message_type → 드롭다운
+//   x/y/width/height → 숨김 (모니터 크롭 버튼으로만 설정)
+const CAN_PANEL_STATE_OPTS = [
+  { value: 'on', label: 'on (패널 표시 / 점등+전송)' },
+  { value: 'off', label: 'off (패널 종료)' },
+];
+const CAN_PANEL_CYCLE_OPTS = [
+  { value: '0', label: '0 (1회 전송)' },
+  { value: '10', label: '10 ms' },
+  { value: '20', label: '20 ms' },
+  { value: '50', label: '50 ms' },
+  { value: '100', label: '100 ms' },
+  { value: '200', label: '200 ms' },
+  { value: '500', label: '500 ms' },
+  { value: '1000', label: '1000 ms' },
+];
+const CAN_PANEL_CHANNEL_OPTS = [
+  { value: '1', label: '1 (CH1)' },
+  { value: '2', label: '2 (CH2)' },
+];
+const CAN_PANEL_MSGTYPE_OPTS = [
+  { value: 'FD', label: 'FD (CAN FD)' },
+  { value: 'Classic', label: 'Classic' },
+];
+const CAN_PANEL_HIDDEN_PARAMS = ['x', 'y', 'width', 'height'];
+// CAN_PANEL 의 특정 파라미터에 대한 드롭다운 옵션(있으면 Select, 없으면 일반 입력).
+function canPanelSelectOptions(funcName: string | undefined, paramName: string):
+  { value: string; label: string }[] | null {
+  if (funcName !== 'CAN_PANEL') return null;
+  switch (paramName) {
+    case 'state': return CAN_PANEL_STATE_OPTS;
+    case 'cycle_time': return CAN_PANEL_CYCLE_OPTS;
+    case 'bus_channel': return CAN_PANEL_CHANNEL_OPTS;
+    case 'message_type': return CAN_PANEL_MSGTYPE_OPTS;
+    default: return null;
+  }
+}
+
 // Extracted outside to prevent re-creation on every render
 const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExclude, t }: {
   step: Step;
@@ -666,6 +705,8 @@ export default function RecordPage() {
   const canPanelCropCanvasRef = useRef<HTMLCanvasElement>(null);
   const canPanelCropScreenshotRef = useRef<string>('');
   const canPanelCropOriginRef = useRef<{ ox: number; oy: number }>({ ox: 0, oy: 0 });
+  // 크롭 결과를 어디에 반영할지: 'create'=스텝 생성 폼(moduleFuncArgs), 'edit'=커맨드 수정 모달(editStepParams)
+  const canPanelCropTargetRef = useRef<'create' | 'edit'>('create');
   const canPanelCropDragRef = useRef<{ startX: number; startY: number; curX: number; curY: number; active: boolean }>({
     startX: 0, startY: 0, curX: 0, curY: 0, active: false,
   });
@@ -2544,7 +2585,8 @@ export default function RecordPage() {
     img.src = src;
   }, []);
 
-  const openCanPanelCropModal = useCallback(async () => {
+  const openCanPanelCropModal = useCallback(async (target: 'create' | 'edit' = 'create') => {
+    canPanelCropTargetRef.current = target;
     try {
       const res = await deviceApi.canPanelGrab();
       const d = res.data || {};
@@ -2599,10 +2641,17 @@ export default function RecordPage() {
     const { ox, oy } = canPanelCropOriginRef.current;
     const gx = rx + ox;
     const gy = ry + oy;
-    setModuleFuncArgs(prev => ({
-      ...prev,
-      x: String(gx), y: String(gy), width: String(rw), height: String(rh),
-    }));
+    if (canPanelCropTargetRef.current === 'edit') {
+      setEditStepParams(prev => ({
+        ...prev,
+        args: { ...(prev.args || {}), x: String(gx), y: String(gy), width: String(rw), height: String(rh) },
+      }));
+    } else {
+      setModuleFuncArgs(prev => ({
+        ...prev,
+        x: String(gx), y: String(gy), width: String(rw), height: String(rh),
+      }));
+    }
     setCanPanelCropModalOpen(false);
     message.success(`${t('record.ocr.cropDone')}: (${gx}, ${gy}) ${rw}×${rh}`);
   }, [t]);
@@ -6053,7 +6102,7 @@ export default function RecordPage() {
                             <Button
                               size="small"
                               icon={<span>✂</span>}
-                              onClick={openCanPanelCropModal}
+                              onClick={() => openCanPanelCropModal('create')}
                               style={{ alignSelf: 'flex-start' }}
                             >
                               모니터 크롭 (위치/크기)
@@ -6098,11 +6147,11 @@ export default function RecordPage() {
                             const isWoohyunType = isWoohyun && selectedModuleFunc === 'SendCan' && p.name === 'type';
                             const isWoohyunChannel = isWoohyun && selectedModuleFunc === 'SendCan' && p.name === 'channel';
                             const isWoohyunRepeat = isWoohyun && selectedModuleFunc === 'SendCan' && p.name === 'repeat';
-                            // CANAT.CAN_PANEL: state → on/off 콤보박스
-                            const isCanPanelState =
-                              selectedModuleName === 'CANAT' &&
-                              selectedModuleFunc === 'CAN_PANEL' &&
-                              p.name === 'state';
+                            // CANAT.CAN_PANEL: state/cycle_time/bus_channel/message_type → 드롭다운,
+                            // x/y/width/height → 숨김(모니터 크롭 버튼으로만 설정).
+                            const isCanPanel = selectedModuleName === 'CANAT' && selectedModuleFunc === 'CAN_PANEL';
+                            const canPanelOpts = isCanPanel ? canPanelSelectOptions(selectedModuleFunc, p.name) : null;
+                            if (isCanPanel && CAN_PANEL_HIDDEN_PARAMS.includes(p.name)) return null;
                             if (isOcrRegionParam && moduleFuncArgs['mode'] !== 'Region') return null;
                             if (isAndroidSerialHidden) return null;
                             return (
@@ -6209,16 +6258,13 @@ export default function RecordPage() {
                                       { value: '1', label: '1 (주기 전송)' },
                                     ]}
                                   />
-                                ) : isCanPanelState ? (
+                                ) : canPanelOpts ? (
                                   <Select
                                     size="small"
-                                    value={moduleFuncArgs[p.name] || 'on'}
+                                    value={moduleFuncArgs[p.name] ?? canPanelOpts[0].value}
                                     onChange={(v) => setModuleFuncArgs(prev => ({ ...prev, [p.name]: v }))}
                                     style={{ flex: 1, minWidth: 0 }}
-                                    options={[
-                                      { value: 'on', label: 'on (패널 표시 / 점등+전송)' },
-                                      { value: 'off', label: 'off (패널 종료)' },
-                                    ]}
+                                    options={canPanelOpts}
                                   />
                                 ) : (
                                   <Input
@@ -6855,6 +6901,19 @@ export default function RecordPage() {
                     {editFnGuide.description}
                   </div>
                 )}
+                {/* CANAT.CAN_PANEL: 위치/크기는 모니터 크롭 버튼으로만 설정 (state=on 일 때만) */}
+                {editStepParams.module === 'CANAT' && editStepParams.function === 'CAN_PANEL' &&
+                 (args.state || 'on') !== 'off' && (
+                  <Button
+                    size="small"
+                    icon={<span>✂</span>}
+                    onClick={() => openCanPanelCropModal('edit')}
+                    style={{ alignSelf: 'flex-start', marginBottom: 6 }}
+                  >
+                    모니터 크롭 (위치/크기)
+                    {(args.x !== undefined && args.x !== '') ? ` — ${args.x},${args.y} ${args.width}×${args.height}` : ''}
+                  </Button>
+                )}
                 {Object.keys(args).length > 0 ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                     {Object.entries(args).map(([k, v]) => {
@@ -6876,18 +6935,24 @@ export default function RecordPage() {
                         : isWoohyunChannelEdit ? [{ value: 'A', label: 'A' }, { value: 'B', label: 'B' }, { value: 'C', label: 'C' }, { value: 'D', label: 'D' }]
                         : isWoohyunRepeatEdit ? [{ value: '0', label: '0 (단발 전송)' }, { value: '1', label: '1 (주기 전송)' }]
                         : null;
+                      // CANAT.CAN_PANEL: state/cycle_time/bus_channel/message_type → 드롭다운,
+                      // x/y/width/height → 숨김(위의 모니터 크롭 버튼으로만 설정).
+                      const isCanPanelEdit = editStepParams.module === 'CANAT' && editStepParams.function === 'CAN_PANEL';
+                      const canPanelOptionsEdit = isCanPanelEdit ? canPanelSelectOptions(editStepParams.function, k) : null;
+                      if (isCanPanelEdit && CAN_PANEL_HIDDEN_PARAMS.includes(k)) return null;
                       if (isAndroidSerialHidden) return null;
+                      const selectOptions = woohyunOptions || canPanelOptionsEdit;
                       return (
                         <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           <div style={{ display: 'flex', gap: 4, alignItems: 'center', width: '100%' }}>
                             <Tag style={{ minWidth: 70, textAlign: 'center', margin: 0, flexShrink: 0 }}>{k}</Tag>
-                            {woohyunOptions ? (
+                            {selectOptions ? (
                               <Select
                                 size="small"
                                 value={String(v ?? '')}
                                 onChange={(nv) => setEditStepParams({ ...editStepParams, args: { ...args, [k]: nv } })}
                                 style={{ flex: 1, minWidth: 0 }}
-                                options={woohyunOptions}
+                                options={selectOptions}
                               />
                             ) : (
                               <Input

@@ -957,7 +957,7 @@ def get_module_functions(module_name: str) -> list[dict]:
                 {"name": "message_id", "required": False, "default": "''"},
                 {"name": "cycle_time", "required": False, "default": "0"},
                 {"name": "can_message", "required": False, "default": "''"},
-                {"name": "bus_channel", "required": False, "default": "0"},
+                {"name": "bus_channel", "required": False, "default": "1"},
                 {"name": "message_type", "required": False, "default": "'FD'"},
                 {"name": "x", "required": False, "default": "''"},
                 {"name": "y", "required": False, "default": "''"},
