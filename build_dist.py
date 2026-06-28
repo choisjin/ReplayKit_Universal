@@ -890,7 +890,8 @@ _OFFLINE_REQUIRED = [
     ("backend/app/services/ocr_models/english/rec_infer.onnx", "OCR 영어 모델", True),
     ("backend/app/services/ocr_models/japan/rec_infer.onnx",   "OCR 일본어 모델", False),
     ("backend/app/services/ocr_models/chinese/rec_infer.onnx", "OCR 중국어 모델", False),
-    ("tools/scrcpy-server.jar", "scrcpy 서버 (Android H.264 미러링)", True),
+    ("tools/scrcpy-server.jar", "scrcpy 서버 v1.25 (자동차 IVI/구 Android H.264 미러링)", True),
+    ("tools/scrcpy-server-v3.3.4.jar", "scrcpy 서버 v3.3.4 (Android 14+ 일반 폰 H.264 미러링)", True),
     ("tools/ffmpeg.exe", "ffmpeg (웹캠 녹화 처리)", False),
 ]
 
@@ -933,7 +934,7 @@ def _validate_offline_prereqs() -> bool:
         print("    - OCR 모델: 빌드 PC에서 한 번")
         print("        pip install paddle2onnx paddlepaddle")
         print("        python scripts/download_ocr_models.py")
-        print("    - scrcpy-server.jar: tools/ 폴더에 미리 복사")
+        print("    - scrcpy-server*.jar: tools/ 폴더에 미리 복사 (v1.25 + v3.3.4 둘 다)")
         return False
     if missing_optional:
         print("\n  [오프라인 검증] 선택 자원 누락(기능 일부만 비활성화):")
@@ -1349,6 +1350,7 @@ DltViewerSDK_21.1.3_ver/
 # "tools/" 가 아닌 "tools/*" 로 디렉토리 내용만 ignore 해야 negative 패턴이 적용된다는 git 동작에 주의.
 tools/*
 !tools/scrcpy-server.jar
+!tools/scrcpy-server-v3.3.4.jar
 !tools/ffmpeg.exe
 !tools/ffmpeg
 # 동봉 adb (platform-tools) — 전 PC 동일 버전 보장. 미포함 시 배포 PC가 PATH adb 로

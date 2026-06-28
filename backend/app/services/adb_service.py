@@ -16,7 +16,7 @@ from typing import Optional
 # `from .capture import ...` 형태는 ImportError를 일으킨다. 반드시 서브모듈을
 # 직접 명시해서 import해야 .pyd 컴파일 배포본에서도 정상 동작한다.
 from .capture.scrcpy_server import (
-    ScrcpyServerBackend, detect_scrcpy_server,
+    ScrcpyServerBackend, detect_scrcpy_server, SCRCPY_V1, SCRCPY_V3,
 )
 from .adb_path import resolve_adb_path
 
@@ -159,6 +159,11 @@ class ADBService:
         # 단위로 두어, 프론트 재연결로 WS 세션이 새로 떠도 쿨다운이 리셋되지 않게 한다
         # (리셋되면 재연결마다 즉시 try_start → app_process 반복 spawn → OOM).
         self._scrcpy_retry_after: dict[str, float] = {}
+        # 디바이스 Android SDK 캐시 (scrcpy 버전 선택용). SDK 는 변하지 않으므로 1회 조회.
+        self._sdk_cache: dict[str, Optional[int]] = {}
+        # serial 별로 직전에 성공한 scrcpy 버전 — 다음 콜드스타트에서 우선 시도해
+        # 교차 폴백(실패 버전 먼저 시도)으로 인한 지연을 줄인다.
+        self._scrcpy_version_pref: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Device management
@@ -1084,6 +1089,43 @@ class ADBService:
     # ADB 서버 reset, 디바이스 일시 busy 등으로 1~2회 실패가 종종 발생).
     SCRCPY_FAILURE_THRESHOLD = 3
 
+    async def _get_android_sdk(self, serial: str) -> Optional[int]:
+        """디바이스 Android API 레벨(ro.build.version.sdk) 조회 + 캐시. 실패 시 None."""
+        if serial in self._sdk_cache:
+            return self._sdk_cache[serial]
+        sdk: Optional[int] = None
+        try:
+            out = await self._run_device(
+                serial, "shell getprop ro.build.version.sdk", timeout=5,
+            )
+            sdk = int(out.strip())
+        except (ValueError, AttributeError, Exception):
+            sdk = None
+        self._sdk_cache[serial] = sdk
+        return sdk
+
+    async def _scrcpy_versions_for(self, serial: str) -> list[str]:
+        """이 디바이스에서 시도할 scrcpy 버전 순서(우선순위순).
+
+        SurfaceControl.createDisplay(String, boolean) 가 Android 14(API 34)부터
+        제거돼 v1.25 는 SDK>=34 일반 폰에서 즉사한다. 반대로 v3 의 SurfaceControl
+        direct API 는 일부 자동차 IVI 컨테이너에서 막힌다. 그래서:
+          * SDK>=34 → v3 우선, 실패 시 v1 폴백
+          * 그 외(또는 SDK 불명) → v1 우선, 실패 시 v3 폴백
+        직전에 성공했던 버전이 있으면 맨 앞으로 끌어와 폴백 지연을 줄인다.
+        jar 이 없는 버전은 후보에서 제외한다.
+        """
+        sdk = await self._get_android_sdk(serial)
+        if sdk is not None and sdk >= 34:
+            order = [SCRCPY_V3, SCRCPY_V1]
+        else:
+            order = [SCRCPY_V1, SCRCPY_V3]
+        pref = self._scrcpy_version_pref.get(serial)
+        if pref in order:
+            order.remove(pref)
+            order.insert(0, pref)
+        return [v for v in order if detect_scrcpy_server(v)]
+
     async def ensure_scrcpy_backend(
         self,
         serial: str,
@@ -1130,24 +1172,31 @@ class ADBService:
                     logger.debug("scrcpy existing close error: %s", e)
                 self._scrcpy_backends.pop(serial, None)
 
-            # 일시적 push/forward 실패가 있을 수 있어 1회 자동 retry.
-            for attempt in range(2):
-                backend = ScrcpyServerBackend(
-                    serial, logical_id, bitrate=bitrate,
-                    **({"max_fps": max_fps} if max_fps is not None else {}),
-                )
-                ok = await backend.try_start()
-                if ok:
-                    self._scrcpy_backends[serial] = backend
-                    # 성공 시 실패 카운터 reset — 한 번 정상 동작했다면 일시 장애 카운트 의미 없음.
-                    self._scrcpy_failure_count.pop(serial, None)
-                    return backend
-                try:
-                    await backend.close()
-                except Exception:
-                    pass
-                if attempt == 0:
-                    await asyncio.sleep(0.5)
+            # 버전 우선순위(SDK 기반) + 교차 폴백. 선호 버전(첫 번째)만 일시적
+            # push/forward 장애에 대비해 1회 자동 retry 하고, 폴백 버전은 1회만 시도해
+            # 전체 실패 시 지연을 제한한다(잘못된 버전은 accept timeout ~5s 로 빠르게 실패).
+            versions = await self._scrcpy_versions_for(serial)
+            for vi, version in enumerate(versions):
+                attempts = 2 if vi == 0 else 1
+                for attempt in range(attempts):
+                    backend = ScrcpyServerBackend(
+                        serial, logical_id, version=version, bitrate=bitrate,
+                        **({"max_fps": max_fps} if max_fps is not None else {}),
+                    )
+                    ok = await backend.try_start()
+                    if ok:
+                        self._scrcpy_backends[serial] = backend
+                        # 성공한 버전을 기억 → 다음 콜드스타트에서 맨 먼저 시도.
+                        self._scrcpy_version_pref[serial] = version
+                        # 성공 시 실패 카운터 reset — 한 번 정상 동작했다면 일시 장애 카운트 의미 없음.
+                        self._scrcpy_failure_count.pop(serial, None)
+                        return backend
+                    try:
+                        await backend.close()
+                    except Exception:
+                        pass
+                    if attempt + 1 < attempts:
+                        await asyncio.sleep(0.5)
 
             # 누적 실패 카운터 증가 → 임계치 도달 시 영구 disable.
             count = self._scrcpy_failure_count.get(serial, 0) + 1

@@ -72,12 +72,41 @@ from ..adb_path import resolve_adb_path
 ADB_PATH = resolve_adb_path()
 
 # scrcpy 버전 — 옵션 형식과 동작이 버전마다 다르므로 server.jar와 정확히 일치해야 한다.
-# scrcpy 1.x server는 client_version과 BuildConfig.VERSION_NAME을 strict 비교하므로
-# 불일치 시 즉시 IllegalArgumentException으로 종료. 배포된 jar(v1.25)와 일치시킨다.
-SCRCPY_VERSION = "1.25"
+# scrcpy server 는 client_version 을 첫 인자로 받고 BuildConfig.VERSION 과 비교하므로
+# 불일치 시 즉시 종료. 따라서 버전 문자열 ↔ jar 파일을 1:1로 묶는다.
+#
+# 듀얼 버전 운용 이유 (Android 16 호환):
+#   * v1.25 는 미러링 시 SurfaceControl.createDisplay(String, boolean) 로 가상 디스플레이를
+#     만든다. 이 메서드는 Android 14(API 34)부터 사라져 Android 14+ 일반 폰에서
+#     NoSuchMethodException 으로 서버가 즉사한다 (갤럭시 S23 Android 16 등).
+#   * v3.x 는 신형 디스플레이 생성 API 를 쓰지만, 그 SurfaceControl direct API 가
+#     자동차 IVI 컨테이너(HMG 등)에서 차단되는 경우가 있어 거기선 v1.25 가 필요하다.
+#   → 둘 다 번들하고, 호출자(adb_service)가 디바이스 Android SDK 로 우선순위를 정한 뒤
+#     실패 시 다른 버전으로 교차 폴백한다. (SDK>=34 → v3 우선, 그 외 → v1 우선)
+SCRCPY_V1 = "1.25"
+SCRCPY_V3 = "3.3.4"
+SCRCPY_VERSION = SCRCPY_V1  # 하위호환 별칭 (기존 로그/외부 참조용 기본값)
 
-# 디바이스 측 jar 경로.
-DEVICE_JAR_PATH = "/data/local/tmp/scrcpy-server.jar"
+# 버전 → 후보 jar 파일명(우선순위순). v1.25 는 레거시 무버전 파일명도 허용한다
+# (이미 배포된 설치본이 tools/scrcpy-server.jar 로 v1.25 를 갖고 있으므로).
+_JAR_FILENAMES: dict[str, tuple[str, ...]] = {
+    SCRCPY_V1: ("scrcpy-server-v1.25.jar", "scrcpy-server.jar"),
+    SCRCPY_V3: ("scrcpy-server-v3.3.4.jar",),
+}
+
+# 디바이스 측 jar 경로 — 버전별로 분리한다. 단일 경로를 공유하면 버전 전환 시 push 해시
+# 캐시는 "이미 push 됨"으로 보지만 디바이스 파일은 다른 버전이라, 잘못된 jar 로 서버를
+# 띄워 버전 불일치로 죽는다. 버전별 파일명으로 그 혼선을 원천 차단한다.
+def _device_jar_path(version: str) -> str:
+    return f"/data/local/tmp/scrcpy-server-{version}.jar"
+
+
+def _is_v2plus(version: str) -> bool:
+    """v2.0 이상이면 True — 옵션 키 이름과 scid 소켓 명명이 v1.x 와 다르다."""
+    try:
+        return int(version.split(".", 1)[0]) >= 2
+    except (ValueError, IndexError):
+        return False
 
 # 첫 NAL 수신 timeout (초). IVI 등 정적 화면에서 첫 IDR이 늦게 오는 케이스에
 # 대응해 12초로 넉넉히 잡음. codec_options.i-frame-interval=1 로도 보완되지만 디바이스
@@ -143,34 +172,43 @@ def _install_root_candidates() -> list[Path]:
     return [Path("/opt/ReplayKit"), Path.home() / ".local" / "share" / "ReplayKit"]
 
 
-@functools.lru_cache(maxsize=1)
-def detect_scrcpy_server() -> Optional[str]:
-    """scrcpy-server.jar 경로 반환. 미발견 시 None.
-
-    탐색 우선순위:
-      1. SCRCPY_SERVER_PATH 환경변수
-      2. <repo>/tools/scrcpy-server.jar (개발)
-      3. ./tools/scrcpy-server.jar (CWD)
-      4. C:\\ReplayKit\\tools\\scrcpy-server.jar (배포)
-    """
-    env_path = os.environ.get("SCRCPY_SERVER_PATH")
-    if env_path and os.path.isfile(env_path):
-        return env_path
-
-    name = "scrcpy-server.jar"
-    candidates: list[Path] = [
-        _project_root() / "tools" / name,
-        Path.cwd() / "tools" / name,
-    ]
+def _tools_dirs() -> list[Path]:
+    """scrcpy-server jar 탐색 디렉토리(우선순위순): repo/tools, CWD/tools, 배포 설치 경로."""
+    dirs = [_project_root() / "tools", Path.cwd() / "tools"]
     for root in _install_root_candidates():
-        candidates.append(root / "tools" / name)
+        dirs.append(root / "tools")
+    return dirs
 
-    for cand in candidates:
-        try:
-            if cand.is_file():
-                return str(cand)
-        except OSError:
-            continue
+
+@functools.lru_cache(maxsize=8)
+def detect_scrcpy_server(version: Optional[str] = None) -> Optional[str]:
+    """scrcpy-server jar 경로 반환. 미발견 시 None.
+
+    version 지정 시 그 버전의 jar 만 탐색한다. None 이면 가용한 아무 버전이나
+    (v1 우선) 반환한다 — "scrcpy 자체가 가능한가" 게이트 용도.
+
+    탐색 우선순위(각 후보 파일명에 대해):
+      1. SCRCPY_SERVER_PATH 환경변수 (v1/기본에만 적용 — 레거시 호환)
+      2. <repo>/tools/<name> (개발)
+      3. ./tools/<name> (CWD)
+      4. <설치경로>/tools/<name> (배포)
+    """
+    # 레거시 env override 는 v1(또는 버전 미지정) 경로에만 적용.
+    if version is None or version == SCRCPY_V1:
+        env_path = os.environ.get("SCRCPY_SERVER_PATH")
+        if env_path and os.path.isfile(env_path):
+            return env_path
+
+    versions = [version] if version else list(_JAR_FILENAMES.keys())
+    for ver in versions:
+        for fname in _JAR_FILENAMES.get(ver, ()):
+            for d in _tools_dirs():
+                cand = d / fname
+                try:
+                    if cand.is_file():
+                        return str(cand)
+                except OSError:
+                    continue
     return None
 
 
@@ -179,19 +217,24 @@ def log_scrcpy_status() -> None:
 
     raw H.264 relay 는 PyAV/cv2 가 필요 없으므로 jar 존재만으로 활성화된다.
     """
-    jar = detect_scrcpy_server()
-    if jar:
-        try:
-            size = os.path.getsize(jar)
-        except OSError:
-            size = 0
+    available = []
+    for ver in _JAR_FILENAMES:
+        jar = detect_scrcpy_server(ver)
+        if jar:
+            try:
+                size = os.path.getsize(jar)
+            except OSError:
+                size = 0
+            available.append(f"v{ver}({size}B)")
+    if available:
         logger.info(
-            "scrcpy backend ready: path=%s size=%d (raw H.264 relay)",
-            jar, size,
+            "scrcpy backend ready: versions=%s (raw H.264 relay; "
+            "SDK>=34→v%s 우선, 그 외→v%s 우선, 실패 시 교차 폴백)",
+            ", ".join(available), SCRCPY_V3, SCRCPY_V1,
         )
     else:
         logger.info(
-            "scrcpy backend disabled (scrcpy-server.jar not found) — "
+            "scrcpy backend disabled (no scrcpy-server jar found) — "
             "screencap PNG fallback will be used.",
         )
 
@@ -226,18 +269,29 @@ class ScrcpyServerBackend:
         serial: str,
         logical_id: Optional[int] = None,
         *,
+        version: str = SCRCPY_V1,
         bitrate: int = 4_000_000,
         max_fps: int = _DEFAULT_MAX_FPS,
     ):
         self.serial = serial
         self.logical_id = logical_id or 0
+        self.version = version
         self.bitrate = bitrate
         self.max_fps = max_fps
+        # 디바이스 측 jar 경로(버전별 분리).
+        self._device_jar_path = _device_jar_path(version)
+        # 소켓 이름 — v1.x 는 "scrcpy" 고정(single-instance). v2+ 는 scid 를 받아
+        # "scrcpy_<8hex>" 로 분리되므로 세션마다 고유 scid 를 생성한다.
+        if _is_v2plus(version):
+            self._scid = f"{int.from_bytes(os.urandom(4), 'big') & 0x7FFFFFFF:08x}"
+            self._socket_name = f"scrcpy_{self._scid}"
+        else:
+            self._scid = None
+            self._socket_name = "scrcpy"
         # 디바이스 해상도 (JMuxer/<video> 레이아웃 힌트). try_start 에서 best-effort 로
         # wm size 조회. 실패 시 None → 프론트가 기본값(1080x1920) 사용.
         self.video_width: Optional[int] = None
         self.video_height: Optional[int] = None
-        # scrcpy v1.x는 single-instance 설계 — socket name "scrcpy" 고정, scid 옵션 없음.
         self.local_port = 0
         self._server_proc: Optional[subprocess.Popen] = None
         # 디바이스측 app_process PID — spawn 시 `echo $$`로 캡처. close 시 정확히 이
@@ -273,7 +327,7 @@ class ScrcpyServerBackend:
 
         raw H.264 relay 는 PyAV/cv2 가 필요 없으므로 jar 존재만으로 시도한다.
         """
-        jar = detect_scrcpy_server()
+        jar = detect_scrcpy_server(self.version)
         if not jar:
             return False
 
@@ -329,7 +383,7 @@ class ScrcpyServerBackend:
             "scrcpy backend started: serial=%s display=%s port=%d bitrate=%d "
             "max_fps=%d size=%sx%s (v%s, H.264 relay)",
             self.serial, self.logical_id, self.local_port, self.bitrate,
-            self.max_fps, self.video_width, self.video_height, SCRCPY_VERSION,
+            self.max_fps, self.video_width, self.video_height, self.version,
         )
         return True
 
@@ -375,7 +429,7 @@ class ScrcpyServerBackend:
                 return True
 
         loop = asyncio.get_event_loop()
-        cmd = [ADB_PATH, "-s", self.serial, "push", local_jar, DEVICE_JAR_PATH]
+        cmd = [ADB_PATH, "-s", self.serial, "push", local_jar, self._device_jar_path]
         try:
             result = await loop.run_in_executor(
                 None,
@@ -398,7 +452,7 @@ class ScrcpyServerBackend:
 
     async def _device_jar_exists(self) -> bool:
         loop = asyncio.get_event_loop()
-        cmd = [ADB_PATH, "-s", self.serial, "shell", "ls", DEVICE_JAR_PATH]
+        cmd = [ADB_PATH, "-s", self.serial, "shell", "ls", self._device_jar_path]
         try:
             result = await loop.run_in_executor(
                 None,
@@ -443,11 +497,14 @@ class ScrcpyServerBackend:
             return False
 
     async def _setup_reverse(self) -> bool:
-        """adb reverse 등록. 디바이스의 localabstract:scrcpy → PC tcp:<local_port>."""
+        """adb reverse 등록. 디바이스의 localabstract:<socket> → PC tcp:<local_port>.
+
+        socket 이름은 v1.x="scrcpy", v2+="scrcpy_<scid>" (버전별 self._socket_name).
+        """
         loop = asyncio.get_event_loop()
         cmd = [
             ADB_PATH, "-s", self.serial, "reverse",
-            "localabstract:scrcpy",
+            f"localabstract:{self._socket_name}",
             f"tcp:{self.local_port}",
         ]
         try:
@@ -473,7 +530,7 @@ class ScrcpyServerBackend:
         loop = asyncio.get_event_loop()
         cmd = [
             ADB_PATH, "-s", self.serial, "reverse", "--remove",
-            "localabstract:scrcpy",
+            f"localabstract:{self._socket_name}",
         ]
         try:
             await loop.run_in_executor(
@@ -487,54 +544,77 @@ class ScrcpyServerBackend:
             pass
 
     def _build_server_cmd(self) -> list[str]:
-        """app_process 명령 구성 — scrcpy v1.25 CLI 호환 옵션 셋.
+        """app_process 명령 구성 — 버전(v1.x / v2+)에 맞는 옵션 셋을 선택.
 
-        주요 옵션:
-          * tunnel_forward=false: adb reverse 사용 (PC listen, device connect)
+        공통 설계:
+          * tunnel_forward=false: adb reverse 사용 (PC listen, device connect).
             HMG IVI 같은 컨테이너 환경에서 forward 방향 socket binding이 막혀있어
-            반대 방향인 reverse가 통하는 경우가 많다 (CLI 검증됨).
+            반대 방향인 reverse가 통하는 경우가 많다.
           * control=false: 입력 채널 비활성. 입력은 ADBService.shell input 경로로
             scrcpy 동작 여부 무관하게 단일화되어 있다.
-          * power_off_on_close=false: 우리 close 시 디바이스 화면 꺼지지 않게
-          * raw_video_stream=true: prefix bytes(dummy 1 + device_meta 64) +
-            frame_meta(12/frame) 모두 비활성화. PyAV가 raw H.264 NAL stream을 바로
-            디코딩 가능.
-          * codec_options:
-              - i-frame-interval=1: 1초마다 IDR 키프레임 강제 (재동기/first-frame 대기 단축).
-              - repeat-previous-frame-after=100000(µs): 정적 화면에서 새 입력 프레임이 없을
-                때 직전 프레임을 100ms 마다 재송출. MediaCodec surface 인코더는 입력이 없으면
-                출력을 멈추므로, 이 옵션이 없으면 정지 화면에서 NAL 이 끊겨 stall watchdog 이
-                오탐한다 (CW 3840x1440 무한 재시작 thrash 의 근본 원인). long 타입(:long) 필수.
+          * audio 비활성(v2+): 오디오 소켓을 열고 기다리지 않게 한다.
+          * raw stream: prefix/메타 바이트 없이 순수 H.264 NAL 만 흘려보낸다.
+          * power_off_on_close=false: 우리 close 시 디바이스 화면이 꺼지지 않게.
+          * codec_options(i-frame-interval=1 + repeat-previous-frame-after:long=100000):
+              1초마다 IDR 강제 + 정적 화면에서 직전 프레임 재송출(100ms). MediaCodec
+              surface 인코더는 입력이 없으면 출력을 멈춰 NAL 이 끊기는데, 재송출 옵션이
+              그 stall 을 막는다(정적 화면 무한 재시작 thrash 의 근본 해결책). :long 필수.
+
+        버전별 옵션 키 차이 (v3.3.4 dex 에서 확인):
+          v1.25            → v3.3.4
+          bit_rate         → video_bit_rate
+          codec_options    → video_codec_options
+          raw_video_stream → raw_stream
+          lock_video_orientation(-1) → (없음; v3 는 capture_orientation, 미러링엔 생략)
+          (scid 없음, 소켓 "scrcpy") → scid=<8hex>, 소켓 "scrcpy_<scid>"
         """
-        opts = [
-            "log_level=info",
-            f"bit_rate={self.bitrate}",
-            "max_size=0",
-            f"max_fps={self.max_fps}",
-            "lock_video_orientation=-1",
-            "tunnel_forward=false",
-            "control=false",
-            f"display_id={self.logical_id}",
-            "show_touches=false",
-            "stay_awake=false",
-            "power_off_on_close=false",
-            "raw_video_stream=true",
-            # i-frame-interval=1: 1초마다 IDR 강제.
-            # repeat-previous-frame-after: 정적 화면에서 새 입력 프레임이 없을 때 직전
-            #   프레임을 재송출(100ms)해 NAL stream 이 끊기지 않게 한다. MediaCodec
-            #   surface 인코더는 입력이 없으면 출력을 멈추고 i-frame-interval 은 "생성된
-            #   프레임들 사이" 간격일 뿐 없는 프레임을 만들지 못한다 → 이 옵션이 정적
-            #   화면 stall 의 근본 해결책. 재송출 프레임은 변화 없는 skip P-frame 이라
-            #   거의 0바이트. KEY_REPEAT_PREVIOUS_FRAME_AFTER 는 long → :long 필수.
-            "codec_options=i-frame-interval=1,repeat-previous-frame-after:long=100000",
-        ]
+        codec_opts = "i-frame-interval=1,repeat-previous-frame-after:long=100000"
+        if _is_v2plus(self.version):
+            opts = [
+                f"scid={self._scid}",
+                "log_level=info",
+                "audio=false",
+                "video=true",
+                "control=false",
+                f"video_bit_rate={self.bitrate}",
+                "max_size=0",
+                f"max_fps={self.max_fps}",
+                "video_codec=h264",
+                "tunnel_forward=false",
+                f"display_id={self.logical_id}",
+                "show_touches=false",
+                "stay_awake=false",
+                "power_off_on_close=false",
+                "cleanup=true",
+                # raw_stream=true → send_device_meta/frame_meta/codec_meta/dummy_byte
+                # 모두 off 로 강제. 디바이스가 connect 즉시 순수 H.264 를 흘려보내므로
+                # 기존 relay/키프레임 정렬 로직을 그대로 재사용한다.
+                "raw_stream=true",
+                f"video_codec_options={codec_opts}",
+            ]
+        else:
+            opts = [
+                "log_level=info",
+                f"bit_rate={self.bitrate}",
+                "max_size=0",
+                f"max_fps={self.max_fps}",
+                "lock_video_orientation=-1",
+                "tunnel_forward=false",
+                "control=false",
+                f"display_id={self.logical_id}",
+                "show_touches=false",
+                "stay_awake=false",
+                "power_off_on_close=false",
+                "raw_video_stream=true",
+                f"codec_options={codec_opts}",
+            ]
         # `echo SCRCPYPID:$$` 후 `exec`로 app_process를 띄우면 셸 PID($$)가 그대로
         # app_process PID가 된다 → close 시 이 PID를 정확히 kill -9 가능.
         # echo 출력은 stdout으로 나가 _drain_stdout에서 파싱한다 (scrcpy 로그는 stderr).
         inner = (
             f"echo SCRCPYPID:$$; "
-            f"CLASSPATH={DEVICE_JAR_PATH} "
-            f"exec app_process / com.genymobile.scrcpy.Server {SCRCPY_VERSION} "
+            f"CLASSPATH={self._device_jar_path} "
+            f"exec app_process / com.genymobile.scrcpy.Server {self.version} "
             + " ".join(opts)
         )
         return [ADB_PATH, "-s", self.serial, "shell", inner]
