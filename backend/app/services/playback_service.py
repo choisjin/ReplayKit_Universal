@@ -406,6 +406,12 @@ class PlaybackService:
         self._device_map = self._resolve_device_map(scenario, device_map_override)
         self._running = True
         _set_sleep_block(True)
+        # 재생 중 scrcpy 인코더가 screencap 검증과 디바이스에서 경합하지 않도록 미러
+        # 백엔드를 회수한다(ensure 는 재생 게이트로 막혀 재기동 안 됨, 종료 후 자동 복귀).
+        try:
+            await self.adb.close_scrcpy_backends_for_playback()
+        except Exception:
+            pass
         self._should_stop = False
         self._result_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._setup_run_output_dir(scenario.name)
@@ -509,6 +515,11 @@ class PlaybackService:
         self._group_scenario_index = group_scenario_index
         self._running = True
         _set_sleep_block(True)
+        # 재생 중 scrcpy 인코더가 screencap 검증과 경합하지 않도록 미러 백엔드 회수.
+        try:
+            await self.adb.close_scrcpy_backends_for_playback()
+        except Exception:
+            pass
         # 그룹 재생에서 호출 시 _should_stop을 리셋하면 안 됨 (이미 설정된 경우)
         if not self._result_timestamp:
             self._should_stop = False

@@ -1284,6 +1284,28 @@ class ADBService:
             except Exception as e:
                 logger.debug("scrcpy close error (%s): %s", serial, e)
 
+    async def close_scrcpy_backends_for_playback(self) -> None:
+        """시나리오 재생 시작 시 호출 — 모든 scrcpy 백엔드를 닫는다.
+
+        재생 중에는 각 스텝이 screencap 으로 캡처/검증하는데, scrcpy 인코더가 같은
+        디바이스에서 계속 돌면 USB/인코더 경합(특히 IVI OOM)을 유발한다. 그래서 재생
+        진입 시 미러 백엔드를 명시적으로 회수한다. ensure_scrcpy_backend 는 재생 중
+        게이트(not playback_service.is_running)로 막혀 재기동되지 않으며, 재생 종료 후
+        미러가 다시 붙으면 자동 복귀한다. reaper 는 끄지 않는다(평상시 동작 유지)."""
+        async with self._scrcpy_lock:
+            backends = list(self._scrcpy_backends.values())
+            self._scrcpy_backends.clear()
+        for b in backends:
+            try:
+                await b.close()
+            except Exception:
+                pass
+        if backends:
+            logger.info(
+                "scrcpy backends closed for playback (%d) — screencap 검증과 경합 방지",
+                len(backends),
+            )
+
     async def close_all_scrcpy_backends(self) -> None:
         # idle reaper 정지 (shutdown).
         if self._scrcpy_reaper_task is not None and not self._scrcpy_reaper_task.done():
