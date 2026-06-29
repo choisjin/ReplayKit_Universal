@@ -1060,39 +1060,55 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                 "height": scrcpy_backend.video_height or 1920,
                             })
                             current_ws_mode = "h264"
+                        # async for 가 정상 종료하면 stream_h264 가 EOF sentinel 로 끝난
+                        # 것 = scrcpy 소켓 EOF(서버 실제 종료) → 백엔드 정리 후 재시작 경로.
+                        # send_bytes 가 WS/클라이언트 종료 예외를 던지면 그건 "장치 전환 등
+                        # 으로 이 WS 만 닫힌 것"이라 백엔드를 죽이지 않고 그대로 유지한다
+                        # (정식 scrcpy 처럼 연결 유지 → 복귀 시 살아있는 스트림 즉시 재사용).
+                        scrcpy_dead = False
                         try:
                             async for nal in scrcpy_backend.stream_h264():
                                 await websocket.send_bytes(nal)
+                            scrcpy_dead = True  # 정상 종료 = scrcpy 소켓 EOF
                         except WebSocketDisconnect:
                             raise
                         except Exception as e:
-                            # str(e)가 빈 예외(소켓/ws 일부)가 많아 타입+repr까지 남긴다.
-                            # 시나리오 스텝마다 scrcpy가 죽는 원인 특정에 필수.
+                            cls_name = type(e).__name__
+                            if cls_name in (
+                                "ClientDisconnected", "ConnectionClosed",
+                                "ConnectionClosedOK", "ConnectionClosedError",
+                                "WebSocketDisconnect", "RuntimeError",
+                            ):
+                                # WS(클라이언트) 종료 — 주로 장치 전환. 백엔드는 살려두고
+                                # WS 핸들러를 정상 종료시킨다(finally 가 backend 를 닫지 않음).
+                                raise
+                            # 진짜 scrcpy 스트림 오류 — 백엔드 정리 후 재시작.
                             logger.warning(
                                 "scrcpy stream error (%s): type=%s repr=%r "
                                 "chunks=%d bytes_in=%d",
-                                adb_serial, type(e).__name__, e,
+                                adb_serial, cls_name, e,
                                 getattr(scrcpy_backend, "_total_frames_decoded", -1),
                                 getattr(scrcpy_backend, "_total_bytes_in", -1),
                             )
-                        # 재생 중 stream error는 스텝 screencap 등 contention 때문이지
-                        # scrcpy 자체 고장이 아니다. 쿨다운을 박으면 재생 종료 후 재연결
-                        # 시 stale 쿨다운으로 복귀가 느려지므로, 재생 중이 아닐 때만 박는다.
-                        # scrcpy 가능 기기는 짧은 쿨다운으로 즉시 scrcpy 재시작(장기 폴링 금지).
-                        if not playback_service.is_running:
-                            _cd = (
-                                BACKEND_RETRY_COOLDOWN_CAPABLE
-                                if adb_service.is_scrcpy_capable(adb_serial)
-                                else BACKEND_RETRY_COOLDOWN
+                            scrcpy_dead = True
+                        if scrcpy_dead:
+                            # scrcpy 가능 기기는 짧은 쿨다운으로 즉시 재시작(장기 폴링 금지).
+                            if not playback_service.is_running:
+                                _cd = (
+                                    BACKEND_RETRY_COOLDOWN_CAPABLE
+                                    if adb_service.is_scrcpy_capable(adb_serial)
+                                    else BACKEND_RETRY_COOLDOWN
+                                )
+                                scrcpy_retry_after = (
+                                    asyncio.get_event_loop().time() + _cd
+                                )
+                                adb_service.set_scrcpy_retry_after(
+                                    adb_serial, scrcpy_retry_after,
+                                )
+                            await adb_service.close_scrcpy_backend(
+                                adb_serial, expected=scrcpy_backend,
                             )
-                            scrcpy_retry_after = (
-                                asyncio.get_event_loop().time() + _cd
-                            )
-                            adb_service.set_scrcpy_retry_after(adb_serial, scrcpy_retry_after)
-                        await adb_service.close_scrcpy_backend(
-                            adb_serial, expected=scrcpy_backend,
-                        )
-                        scrcpy_backend = None
+                            scrcpy_backend = None
                         continue
 
                     # 폴백/대기: screencap PNG streamer + fps throttle.
@@ -1142,31 +1158,19 @@ async def websocket_screen_mirror(websocket: WebSocket):
     finally:
         if recv_task and not recv_task.done():
             recv_task.cancel()
-        # 백그라운드 scrcpy try_start task 정리 — 진행 중이면 취소, 이미 backend를
-        # 반환한 채 끝났으면 그 backend도 종료(미종료 시 디바이스 app_process 잔존).
-        if scrcpy_task is not None:
-            if not scrcpy_task.done():
-                scrcpy_task.cancel()
+        # scrcpy 백엔드는 WS 종료(주로 장치 전환)만으로는 닫지 않는다 — 정식 scrcpy 처럼
+        # 연결을 유지해, 전환 후 돌아오면 살아있는 스트림을 그대로 재사용(재시작 갭 0).
+        # 실제 정리 책임은 두 곳으로 이관했다:
+        #   (1) 장치 분리/명시적 disconnect → device_manager 가 close_scrcpy_backend
+        #   (2) 일정 시간 아무 WS 도 소비하지 않는 백엔드 → adb_service idle reaper
+        # 단, "아직 첫 프레임 전인 진행 중 try_start" 만 orphan 방지로 취소한다. 이미
+        # 성공해 캐시된 백엔드(_scrcpy_backends)는 살려둔다(reaper/장치분리가 관리).
+        if scrcpy_task is not None and not scrcpy_task.done():
+            scrcpy_task.cancel()
             try:
-                _task_backend = await scrcpy_task
+                await scrcpy_task
             except (asyncio.CancelledError, Exception):
-                _task_backend = None
-            if _task_backend is not None and scrcpy_serial is not None:
-                try:
-                    await adb_service.close_scrcpy_backend(
-                        scrcpy_serial, expected=_task_backend,
-                    )
-                except Exception as e:
-                    logger.debug("scrcpy task-backend close on disconnect failed: %s", e)
-        # 이 WS 세션이 점유 중이던 scrcpy backend를 명시적으로 종료. 미종료 시 디바이스
-        # app_process가 살아남아 인코더 전송버퍼를 계속 점유 → 반복 누적 시 OOM.
-        if scrcpy_backend is not None and scrcpy_serial is not None:
-            try:
-                await adb_service.close_scrcpy_backend(
-                    scrcpy_serial, expected=scrcpy_backend,
-                )
-            except Exception as e:
-                logger.debug("scrcpy backend close on disconnect failed: %s", e)
+                pass
         # MIB 라이브 스트림(전용 SSH 채널 + 리더 스레드) 정리 — 미종료 시 device
         # python 스트리머가 살아남아 surface dump를 계속 돈다.
         if is_mib:

@@ -121,21 +121,13 @@ _DEFAULT_MAX_FPS = 15
 # socket → relay chunk 크기. 너무 크면 첫 프레임 latency 증가, 너무 작으면 syscall 폭주.
 _READ_CHUNK = 64 * 1024
 
-# 스트림 stall 감지 timeout (초). 정적 화면에서 MediaCodec surface 인코더는 새 입력
-# 프레임이 없으면 출력을 멈춘다 (i-frame-interval 은 없는 프레임을 만들지 못함). 그래서
-# codec_options 에 repeat-previous-frame-after 를 추가해 정적 화면에서도 직전 프레임을
-# 재송출하게 했고, 정상 스트림은 화면이 멈춰도 데이터가 계속 흐른다. 따라서 이 timeout 은
-# 그 옵션이 통하지 않는(벤더 MediaCodec) 디바이스에서 "소켓은 살아있는데 인코더가 진짜로
-# hang" 한 경우만 회수하는 안전망이다. 실제 disconnect 는 socket EOF 로 자연 종료되므로
-# 이 timeout 과 무관하다.
-# ※ 과거 6s 는 CW 3840x1440 정적 화면(프레임 없음)을 freeze 로 오인 → 매번 첫 IDR 1장
-#   (화면별 고정 바이트, 예: 정지 홈화면 ~125KB)만 받고 6s 뒤 죽임 → 26s 쿨다운 후 재시작
-#   = 무한 thrash + 화면 깜빡임/프레임드랍. 정적 화면 오탐을 피하도록 넉넉히 잡는다.
-_STALL_TIMEOUT = 30.0
-
-# 프레임 흐름 갭 진단 프로브 간격(초). stream_h264 가 이 간격으로 큐를 폴링해, 프레임이
-# 끊기면 _STALL_TIMEOUT(30s) 을 기다리지 않고 첫 갭을 즉시 1회 로깅한다(정적 화면에서
-# 어느 기기가 프레임을 멈추는지 빠르게 진단). 워치독 의미(_STALL_TIMEOUT 누적)는 불변.
+# 프레임 흐름 갭 진단 프로브 간격(초). stream_h264 가 이 간격으로 큐를 폴링한다. 프레임이
+# 끊기면(정적 화면) 첫 갭만 1회 진단 로깅하고 연결은 그대로 유지한다 — 정식 scrcpy 처럼
+# "프레임이 안 온다"는 이유로 스트림을 죽이지 않는다(과거의 stall watchdog 제거).
+# 실제 종료는 socket EOF(relay 가 sentinel 주입)로만 일어난다.
+# ※ 과거 stall watchdog(6s→30s)은 정적 화면(프레임 없음)을 freeze 로 오인해 멀쩡한 연결을
+#   죽이고 재시작 thrash 를 유발했다. v3.x 에서 repeat-previous-frame-after 가 안 먹혀 정적
+#   화면 프레임이 아예 끊기는 케이스까지 겹쳐, watchdog 자체를 폐기하고 연결 유지로 전환했다.
 _FLOW_GAP_PROBE = 5.0
 
 # relay 큐 최대 chunk 수 (~64KB/chunk). 소비자(WS)가 느릴 때 여기까지만 backlog 를
@@ -320,6 +312,9 @@ class ScrcpyServerBackend:
         # relay 통계 (진단용)
         self._total_bytes_in: int = 0
         self._total_frames_decoded: int = 0  # 큐에 넣은 chunk 수 (relay 단위)
+        # 마지막으로 stream_h264 가 NAL 을 소비(yield)한 event-loop 시각. idle reaper 가
+        # "아무 WS 도 안 보는 백엔드"를 판별하는 데 쓴다. try_start 성공 시 now 로 초기화.
+        self._last_consumed: float = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -370,6 +365,8 @@ class ScrcpyServerBackend:
                 raise RuntimeError("first_frame event set but queue empty")
             # 8) 해상도 힌트 best-effort 조회 (실패해도 미러는 정상 — 프론트 기본값 사용)
             await self._fetch_resolution()
+            # 소비 시각 초기화 — 막 시작한 백엔드가 WS 소비 전에 idle reaper 에 걷히지 않게.
+            self._last_consumed = asyncio.get_event_loop().time()
         except (asyncio.TimeoutError, Exception) as e:
             sr_err = self._stderr_tail_str()
             sr_out = self._stdout_tail_str()
@@ -836,17 +833,20 @@ class ScrcpyServerBackend:
         """raw H.264 NAL chunk yield.
 
         relay task가 _frame_queue에 넣는 chunk를 그대로 소비해 WS로 relay 한다.
-        H.264 는 <video>/MSE 가 마지막 프레임을 유지하므로 idle 재전송이 불필요하고,
-        i-frame-interval=1 로 정적 화면에서도 ~1fps 로 IDR 이 흘러 stale 감지에 충분.
-        relay 종료(EOF/에러) 시 sentinel 받아 자연 종료.
+        H.264 는 <video>/MSE 가 마지막 프레임을 유지하므로 정적 화면에서 프레임이 없어도
+        마지막 프레임이 그대로 보인다(정식 scrcpy 와 동일). 따라서 "프레임이 안 온다"는
+        이유로 스트림을 죽이지 않는다 — 진짜 종료(소켓 EOF/에러)는 relay 가 sentinel 을
+        넣어 자연 종료시키고, 그 외에는 연결을 계속 유지한다.
+
+        ※ 과거엔 30s "stall watchdog" 으로 no-NAL 시 RuntimeError 를 던져 main.py 가
+          백엔드를 재시작하게 했는데, 정적 화면(특히 v3.x 에서 repeat-previous-frame-after
+          미존중)을 freeze 로 오인해 멀쩡한 연결을 죽이고 5~10초 재시작 갭을 만들었다.
+          정식 scrcpy 는 이런 워치독이 없고 연결을 유지하므로, 우리도 제거한다. 갭은
+          진단용으로만 1회 로깅한다(비치명적).
         """
-        # 프레임 흐름 갭 진단 — 30s stall watchdog 이 발동하기 전에, 프레임이 끊긴
-        # 순간을 _FLOW_GAP_PROBE 단위로 즉시 한 번 로깅한다. 정적 화면에서 인코더가
-        # repeat-previous-frame-after 를 존중하면 이 갭이 안 생기고, 무시하면 갭이
-        # 바로 찍혀 "어느 기기/디스플레이가 정적 화면에서 프레임을 멈추는지" 가
-        # 30초 기다림 없이 진단된다. 갭이 _STALL_TIMEOUT 누적되면 기존처럼 RuntimeError.
+        loop = asyncio.get_event_loop()
+        self._last_consumed = loop.time()
         gap_logged = False
-        waited = 0.0
         try:
             while not self._closed:
                 try:
@@ -854,35 +854,26 @@ class ScrcpyServerBackend:
                         self._frame_queue.get(), timeout=_FLOW_GAP_PROBE,
                     )
                 except asyncio.TimeoutError:
-                    waited += _FLOW_GAP_PROBE
+                    # no-NAL — 정적 화면일 뿐 죽이지 않는다. 갭만 1회 진단 로깅.
                     if not gap_logged:
                         logger.info(
                             "scrcpy frame flow gap: no NAL for ~%.0fs "
-                            "(serial=%s display=%s v%s bytes_in=%d) — 정적 화면에서 "
-                            "인코더가 프레임을 멈춘 듯(repeat-previous-frame-after 미존중 가능). "
-                            "%.0fs 까지 안 오면 stall 재시작.",
-                            waited, self.serial, self.logical_id, self.version,
-                            self._total_bytes_in, _STALL_TIMEOUT,
+                            "(serial=%s display=%s v%s bytes_in=%d) — 정적 화면(마지막 "
+                            "프레임 유지). 연결은 그대로 유지.",
+                            _FLOW_GAP_PROBE, self.serial, self.logical_id,
+                            self.version, self._total_bytes_in,
                         )
                         gap_logged = True
-                    if waited >= _STALL_TIMEOUT:
-                        raise RuntimeError(
-                            f"scrcpy stream stalled: no NAL for {_STALL_TIMEOUT:.0f}s "
-                            f"(i-frame-interval=1 should emit ~1fps) — "
-                            f"device encoder/socket frozen "
-                            f"(serial={self.serial} display={self.logical_id} "
-                            f"v{self.version} bytes_in={self._total_bytes_in})"
-                        )
                     continue
                 if item is _EOF_SENTINEL:
                     break
                 if gap_logged:
                     logger.info(
-                        "scrcpy frame flow resumed after ~%.0fs gap "
-                        "(serial=%s display=%s)", waited, self.serial, self.logical_id,
+                        "scrcpy frame flow resumed (serial=%s display=%s)",
+                        self.serial, self.logical_id,
                     )
-                gap_logged = False
-                waited = 0.0
+                    gap_logged = False
+                self._last_consumed = loop.time()
                 yield item
         except (asyncio.CancelledError, GeneratorExit):
             raise
@@ -1018,6 +1009,14 @@ class ScrcpyServerBackend:
             and self._server_proc is not None
             and self._server_proc.poll() is None
         )
+
+    def idle_seconds(self, now: float) -> float:
+        """마지막 NAL 소비 이후 경과 초. now 는 호출자의 event-loop time.
+
+        WS 가 stream_h264 를 소비 중이면 0 에 가깝고, 아무 WS 도 안 보면 계속 증가한다.
+        idle reaper 가 이 값으로 "버려진 백엔드"를 판별해 닫는다.
+        """
+        return max(0.0, now - self._last_consumed)
 
 
 # ----------------------------------------------------------------------

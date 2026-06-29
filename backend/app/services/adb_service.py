@@ -165,6 +165,10 @@ class ADBService:
         # 스트림 끊김/재시작이 있어도 영구 disable 하지 않고 짧은 쿨다운으로 즉시 scrcpy
         # 로 복귀한다 (장기 screencap 폴링으로 눌러앉지 않게 — 사용자 요구).
         self._scrcpy_capable: set[str] = set()
+        # idle reaper — WS 종료(장치 전환)만으로는 백엔드를 닫지 않고(정식 scrcpy 처럼
+        # 연결 유지) 살려두되, 일정 시간 아무 WS 도 소비하지 않는 백엔드만 닫아 누수/불필요
+        # 인코더 점유를 막는다. 장치 분리 정리는 device_manager 가 별도로 담당.
+        self._scrcpy_reaper_task: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------
     # Device management
@@ -1090,6 +1094,46 @@ class ADBService:
     # ADB 서버 reset, 디바이스 일시 busy 등으로 1~2회 실패가 종종 발생).
     SCRCPY_FAILURE_THRESHOLD = 3
 
+    # idle reaper — 아무 WS 도 stream 을 소비하지 않는(보지 않는) 백엔드를 이 시간 후
+    # 닫는다. 장치 전환 시 잠깐(이 시간 이내) 다른 기기를 보다 돌아오면 살아있는 스트림을
+    # 즉시 재사용(재시작 갭 0). 그보다 오래 안 보면 인코더 점유를 풀어준다.
+    SCRCPY_IDLE_REAP_SECONDS = 90.0
+    SCRCPY_REAPER_INTERVAL = 15.0
+
+    def _ensure_scrcpy_reaper(self) -> None:
+        """idle reaper 백그라운드 태스크를 1회 기동(이벤트 루프 필요 — ensure 시점 호출)."""
+        if self._scrcpy_reaper_task is None or self._scrcpy_reaper_task.done():
+            self._scrcpy_reaper_task = asyncio.create_task(self._scrcpy_reaper_loop())
+
+    async def _scrcpy_reaper_loop(self) -> None:
+        """주기적으로 죽었거나 오래 소비되지 않은 scrcpy 백엔드를 닫는다."""
+        while True:
+            try:
+                await asyncio.sleep(self.SCRCPY_REAPER_INTERVAL)
+                now = asyncio.get_event_loop().time()
+                async with self._scrcpy_lock:
+                    victims = []
+                    for serial, backend in list(self._scrcpy_backends.items()):
+                        if not backend.is_alive():
+                            victims.append((serial, backend, "dead"))
+                        elif backend.idle_seconds(now) > self.SCRCPY_IDLE_REAP_SECONDS:
+                            victims.append((serial, backend, "idle"))
+                    for serial, _, _ in victims:
+                        self._scrcpy_backends.pop(serial, None)
+                for serial, backend, why in victims:
+                    logger.info(
+                        "scrcpy backend reaped (%s): serial=%s idle=%.0fs",
+                        why, serial, backend.idle_seconds(now),
+                    )
+                    try:
+                        await backend.close()
+                    except Exception as e:
+                        logger.debug("scrcpy reap close error (%s): %s", serial, e)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.debug("scrcpy reaper loop error: %s", e)
+
     async def _get_android_sdk(self, serial: str) -> Optional[int]:
         """디바이스 Android API 레벨(ro.build.version.sdk) 조회 + 캐시. 실패 시 None."""
         if serial in self._sdk_cache:
@@ -1145,6 +1189,8 @@ class ADBService:
             return None
         if serial in self._scrcpy_disabled:
             return None
+        # idle reaper 기동(이벤트 루프가 있는 이 시점에 1회).
+        self._ensure_scrcpy_reaper()
 
         async with self._scrcpy_lock:
             existing = self._scrcpy_backends.get(serial)
@@ -1239,6 +1285,14 @@ class ADBService:
                 logger.debug("scrcpy close error (%s): %s", serial, e)
 
     async def close_all_scrcpy_backends(self) -> None:
+        # idle reaper 정지 (shutdown).
+        if self._scrcpy_reaper_task is not None and not self._scrcpy_reaper_task.done():
+            self._scrcpy_reaper_task.cancel()
+            try:
+                await self._scrcpy_reaper_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._scrcpy_reaper_task = None
         async with self._scrcpy_lock:
             backends = list(self._scrcpy_backends.values())
             self._scrcpy_backends.clear()
