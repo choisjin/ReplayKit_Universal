@@ -1078,9 +1078,10 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                 "ClientDisconnected", "ConnectionClosed",
                                 "ConnectionClosedOK", "ConnectionClosedError",
                                 "WebSocketDisconnect", "RuntimeError",
+                                "ScrcpySuperseded",
                             ):
-                                # WS(클라이언트) 종료 — 주로 장치 전환. 백엔드는 살려두고
-                                # WS 핸들러를 정상 종료시킨다(finally 가 backend 를 닫지 않음).
+                                # WS(클라이언트) 종료 또는 더 새로운 소비자에게 양보(전환).
+                                # 어느 쪽이든 공유 백엔드는 살려두고 이 WS 핸들러만 종료한다.
                                 raise
                             # 진짜 scrcpy 스트림 오류 — 백엔드 정리 후 재시작.
                             logger.warning(

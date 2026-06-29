@@ -306,6 +306,12 @@ class ScrcpyServerBackend:
         self._frame_queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAX_CHUNKS)
         self._first_frame_event: asyncio.Event = asyncio.Event()
         self._closed = False
+        # 활성 소비자 seq — stream_h264 가 시작할 때마다 증가. 한 백엔드의 단일 큐를
+        # 둘 이상이 동시에 빨면 H.264 NAL 이 쪼개져 디코딩이 깨지므로, "최신 소비자만
+        # 활성"으로 강제한다(이전 소비자는 seq 불일치를 보고 스스로 퇴출). 장치 전환으로
+        # 같은 백엔드를 다시 볼 때 이전 WS 의 잔존(좀비) 소비자가 새 소비자와 큐를
+        # 나눠 빠는 것을 막는다.
+        self._consumer_seq = 0
         # 진단용 stdout/stderr tail
         self._stderr_tail: bytearray = bytearray()
         self._stdout_tail: bytearray = bytearray()
@@ -846,9 +852,16 @@ class ScrcpyServerBackend:
         """
         loop = asyncio.get_event_loop()
         self._last_consumed = loop.time()
+        # 이 소비자의 세대 번호 — 더 새로운 stream_h264 가 시작하면 seq 가 증가해
+        # 이 루프가 다음 점검에서 ScrcpySuperseded 로 빠진다(한 큐=한 소비자 보장).
+        self._consumer_seq += 1
+        my_seq = self._consumer_seq
         gap_logged = False
         try:
             while not self._closed:
+                if self._consumer_seq != my_seq:
+                    # 더 새로운 소비자(주로 장치 전환 후 재시청)가 들어옴 → 양보·종료.
+                    raise ScrcpySuperseded()
                 try:
                     item = await asyncio.wait_for(
                         self._frame_queue.get(), timeout=_FLOW_GAP_PROBE,
@@ -867,6 +880,9 @@ class ScrcpyServerBackend:
                     continue
                 if item is _EOF_SENTINEL:
                     break
+                if self._consumer_seq != my_seq:
+                    # 방금 꺼낸 프레임은 버리고 양보 — 새 소비자가 다음 키프레임부터 재동기.
+                    raise ScrcpySuperseded()
                 if gap_logged:
                     logger.info(
                         "scrcpy frame flow resumed (serial=%s display=%s)",
@@ -1025,6 +1041,14 @@ class ScrcpyServerBackend:
 
 # stream_h264의 정상 종료 sentinel.
 _EOF_SENTINEL: object = object()
+
+
+class ScrcpySuperseded(Exception):
+    """더 새로운 stream_h264 소비자가 들어와 이 소비자가 퇴출됐음을 알리는 신호.
+
+    main.py 는 이 예외를 (WS 종료와 동일하게) 백엔드를 닫지 않고 해당 WS 핸들러만
+    종료시키는 신호로 취급한다 — 클래스명 "ScrcpySuperseded" 로 매칭.
+    """
 
 # 키프레임으로 취급할 NAL unit type: 5=IDR slice, 7=SPS.
 # scrcpy v1.25 raw_video_stream 은 IDR 앞에 SPS/PPS(7/8) config 를 보내므로,
