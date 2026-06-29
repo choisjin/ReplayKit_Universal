@@ -59,7 +59,6 @@ RELEASE_KEY = 0x41
 PRESS_KEY = 0x42
 SHORT_KEY = 0x43
 LONG_KEY = 0x44
-PRESS_LONG = 0x46   # 키를 계속 누르고 있는 상태(연속/배속용) — hold 중 반복 송신
 KNOB_KEY = 0x80
 
 # Touch actions (표 134)
@@ -801,19 +800,16 @@ class ISAPAgentService:
                 dir_val = direction if direction is not None else DIR_CLOCKWISE
                 self.send_key(cmd, KNOB_KEY, key_data, screen_type, dir_val)
             elif hold_ms and hold_ms > 0:
-                # 누름 유지(연속/배속): key-down(PRESS) 후 '계속 누르고 있음' 이벤트인
-                # PRESS_LONG(0x46)을 hold_ms 동안 반복 송신하다 마지막에 RELEASE. 단일
-                # PRESS 유지만으론 IVI 가 연속 동작을 안 해(포커스만) 반복 전송으로 구동.
-                repeat_interval = 0.12
-                end = time.monotonic() + hold_ms / 1000.0
-                n = 0
+                # 누름 유지(연속/배속): 키-다운(PRESS, 0x42)으로 키를 누른 뒤 hold_ms 동안
+                # 그대로 유지하다가 RELEASE 한다. 중간에 별도 이벤트를 끼우지 않아 '키가
+                # 계속 눌려 있음'으로 인식되게 한다. (PRESS → 유지 → RELEASE)
+                # try/finally 로 송신 중 예외가 나도 RELEASE 를 보장 — 키가 눌린 채 멈추지 않게.
                 self.send_key(cmd, PRESS_KEY, key_data, screen_type, direction)
-                while time.monotonic() < end:
-                    time.sleep(repeat_interval)
-                    self.send_key(cmd, PRESS_LONG, key_data, screen_type, direction)
-                    n += 1
-                self.send_key(cmd, RELEASE_KEY, key_data, screen_type, direction)
-                logger.info("[iSAP KEY HOLD] %s hold=%dms press_long_repeats=%d", key_name, hold_ms, n)
+                try:
+                    time.sleep(hold_ms / 1000.0)
+                finally:
+                    self.send_key(cmd, RELEASE_KEY, key_data, screen_type, direction)
+                logger.info("[iSAP KEY HOLD] %s hold=%dms (press-hold-release)", key_name, hold_ms)
             elif sub_cmd == SHORT_KEY:
                 # 프로토콜 사양: PRESS → SHORT → RELEASE 순서로 송신
                 self.send_key(cmd, PRESS_KEY, key_data, screen_type, direction)
