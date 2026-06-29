@@ -130,6 +130,12 @@ _READ_CHUNK = 64 * 1024
 #   화면 프레임이 아예 끊기는 케이스까지 겹쳐, watchdog 자체를 폐기하고 연결 유지로 전환했다.
 _FLOW_GAP_PROBE = 5.0
 
+# 현재 GOP(직전 keyframe~현재) 캐시 상한(바이트). 새 소비자 합류 시 이 버퍼를 먼저
+# 먹여 키프레임부터 디코딩을 시작하게 한다. i-frame-interval=1 이면 GOP 가 ~1초라
+# 4Mbps 기준 ~500KB. 2MB 면 keyframe 이 한동안 안 와도(정적 화면 등) 넉넉. 초과 시
+# 앞을 버려 메모리만 보호한다(그 경우 다음 keyframe 까지 일시적으로 불완전).
+_GOP_BUF_CAP = 2 * 1024 * 1024
+
 # relay 큐 최대 chunk 수 (~64KB/chunk). 소비자(WS)가 느릴 때 여기까지만 backlog 를
 # 허용하고, 초과 시 backlog 를 버린 뒤 다음 키프레임부터 재동기한다. 4MB(=64) 정도면
 # 일시적 네트워크 지터를 흡수하면서도 PC 메모리 증가를 제한한다.
@@ -306,6 +312,13 @@ class ScrcpyServerBackend:
         self._frame_queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAX_CHUNKS)
         self._first_frame_event: asyncio.Event = asyncio.Event()
         self._closed = False
+        # 현재 GOP(직전 keyframe~현재) 캐시 — 새 소비자 합류 시 키프레임부터 디코딩하도록
+        # 먼저 먹인다. relay 가 갱신, stream_h264 가 시작 시 스냅샷해 prime 으로 사용.
+        self._gop_buf: bytearray = bytearray()
+        # 코덱 config([SPS][PPS]) — scrcpy/MediaCodec 은 보통 스트림 시작에 1회만 보낸다.
+        # GOP 을 IDR 부터 잘라 주면 config 가 없어 디코딩이 안 되므로, config 를 별도로
+        # 보관해 새 소비자 primer 앞에 붙인다(GOP 이 SPS 로 시작하면 중복이라 생략).
+        self._codec_config: bytes = b""
         # 활성 소비자 seq — stream_h264 가 시작할 때마다 증가. 한 백엔드의 단일 큐를
         # 둘 이상이 동시에 빨면 H.264 NAL 이 쪼개져 디코딩이 깨지므로, "최신 소비자만
         # 활성"으로 강제한다(이전 소비자는 seq 불일치를 보고 스스로 퇴출). 장치 전환으로
@@ -806,6 +819,22 @@ class ScrcpyServerBackend:
                     # 직전 full 체크와 put 사이 경합 — 다음 키프레임부터 재동기.
                     need_keyframe = True
                     continue
+                # 코덱 config([SPS][PPS]) 캡처 — 보통 스트림 시작 1회(반복 전송 인코더면 매번
+                # 갱신). 새 소비자 primer 앞에 붙여 디코딩 가능하게 한다.
+                cfg = _extract_codec_config(chunk)
+                if cfg:
+                    self._codec_config = cfg
+                # 현재 GOP 버퍼 유지 — "직전 keyframe ~ 현재" 바이트열. 새 소비자(새로고침/
+                # 전환으로 스트림 중간 합류)가 키프레임 없이 P-프레임만 받아 디코딩 못 하는
+                # (정적 화면이면 영원히 빈 화면) 문제를 막으려고, 합류 시 이 버퍼를 먼저 먹인다.
+                # 청크에 keyframe 이 있으면 거기서부터 재시작, 없으면 누적(상한 초과 시 앞 폐기).
+                kf = _find_last_keyframe_offset(chunk)
+                if kf >= 0:
+                    self._gop_buf = bytearray(chunk[kf:])
+                else:
+                    self._gop_buf.extend(chunk)
+                    if len(self._gop_buf) > _GOP_BUF_CAP:
+                        del self._gop_buf[:len(self._gop_buf) - _GOP_BUF_CAP]
                 if not self._first_frame_event.is_set():
                     self._first_frame_event.set()
         except (asyncio.CancelledError, GeneratorExit):
@@ -856,8 +885,21 @@ class ScrcpyServerBackend:
         # 이 루프가 다음 점검에서 ScrcpySuperseded 로 빠진다(한 큐=한 소비자 보장).
         self._consumer_seq += 1
         my_seq = self._consumer_seq
+        # prime: 현재 GOP(직전 keyframe~현재) 스냅샷 + 큐 드레인을 await 없이(원자적으로)
+        # 수행한다. relay 는 이벤트루프 단일 스레드라 이 사이에 끼어들지 못하므로, 스냅샷
+        # 은 "드레인 시점까지", 이후 큐 put 은 "그 다음"이 되어 prime↔라이브가 연속된다.
+        # 새 소비자(새로고침/전환 합류)는 prime(config+GOP)으로 키프레임부터 디코딩을 시작.
+        gop = bytes(self._gop_buf)
+        if gop and self._codec_config and not _starts_with_sps(gop):
+            # GOP 이 IDR 부터면 config 가 없으므로 [SPS][PPS] 를 앞에 붙인다.
+            primer = self._codec_config + gop
+        else:
+            primer = gop
+        self._drain_queue()
         gap_logged = False
         try:
+            if primer:
+                yield primer
             while not self._closed:
                 if self._consumer_seq != my_seq:
                     # 더 새로운 소비자(주로 장치 전환 후 재시청)가 들어옴 → 양보·종료.
@@ -1075,3 +1117,60 @@ def _find_keyframe_offset(buf: bytes) -> int:
                 return j - 1  # 4바이트 start code 포함
             return j
         i = j + 3
+
+
+def _find_last_keyframe_offset(buf: bytes) -> int:
+    """buf 안의 **마지막** 키프레임(SPS/IDR) start code 위치 반환. 미발견 시 -1.
+
+    GOP 버퍼 갱신용 — 한 청크에 keyframe 이 있으면 그 keyframe 부터 새 GOP 을 시작해야
+    하므로, (가장 최근의) 마지막 keyframe 경계를 찾는다. _find_keyframe_offset 과 동일한
+    4바이트 start code 보정을 적용한다.
+    """
+    n = len(buf)
+    last = -1
+    i = 0
+    while True:
+        j = buf.find(b"\x00\x00\x01", i)
+        if j < 0 or j + 3 >= n:
+            break
+        nal_type = buf[j + 3] & 0x1F
+        if nal_type in _KEYFRAME_NAL_TYPES:
+            last = j - 1 if (j > 0 and buf[j - 1] == 0) else j
+        i = j + 3
+    return last
+
+
+# VCL(픽처 슬라이스) NAL type: 1=non-IDR, 5=IDR. config([SPS][PPS]) 경계 판정용.
+_VCL_NAL_TYPES = frozenset({1, 2, 3, 4, 5})
+
+
+def _extract_codec_config(buf: bytes) -> bytes:
+    """buf 에서 코덱 config([SPS][PPS]) 바이트열 추출 — 첫 SPS(7) 부터 첫 픽처 슬라이스
+    (VCL) 직전까지. SPS 가 없거나 슬라이스 경계를 못 찾으면 b'' (이번 청크엔 config 없음).
+
+    scrcpy/MediaCodec 은 보통 스트림 시작에 [SPS][PPS][IDR] 형태로 한 번 보내므로,
+    여기서 [SPS][PPS] 만 떼어 보관했다가 새 소비자 primer 앞에 붙인다.
+    """
+    n = len(buf)
+    i = 0
+    sps = -1
+    while True:
+        j = buf.find(b"\x00\x00\x01", i)
+        if j < 0 or j + 3 >= n:
+            break
+        t = buf[j + 3] & 0x1F
+        start = j - 1 if (j > 0 and buf[j - 1] == 0) else j
+        if t == 7 and sps < 0:
+            sps = start
+        elif t in _VCL_NAL_TYPES and sps >= 0:
+            return buf[sps:start]  # [SPS]..[PPS] (첫 슬라이스 직전까지)
+        i = j + 3
+    return b""
+
+
+def _starts_with_sps(buf: bytes) -> bool:
+    """buf 의 첫 NAL 이 SPS(7) 인지 — primer 에 config 를 중복 prepend 하지 않으려는 판정."""
+    j = buf.find(b"\x00\x00\x01")
+    if j < 0 or j + 3 >= len(buf):
+        return False
+    return (buf[j + 3] & 0x1F) == 7
