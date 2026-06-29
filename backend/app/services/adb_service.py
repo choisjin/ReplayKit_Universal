@@ -161,9 +161,10 @@ class ADBService:
         self._scrcpy_retry_after: dict[str, float] = {}
         # 디바이스 Android SDK 캐시 (scrcpy 버전 선택용). SDK 는 변하지 않으므로 1회 조회.
         self._sdk_cache: dict[str, Optional[int]] = {}
-        # serial 별로 직전에 성공한 scrcpy 버전 — 다음 콜드스타트에서 우선 시도해
-        # 교차 폴백(실패 버전 먼저 시도)으로 인한 지연을 줄인다.
-        self._scrcpy_version_pref: dict[str, str] = {}
+        # scrcpy 가 한 번이라도 성공한 serial — "scrcpy 가능 기기". 이 기기는 일시적
+        # 스트림 끊김/재시작이 있어도 영구 disable 하지 않고 짧은 쿨다운으로 즉시 scrcpy
+        # 로 복귀한다 (장기 screencap 폴링으로 눌러앉지 않게 — 사용자 요구).
+        self._scrcpy_capable: set[str] = set()
 
     # ------------------------------------------------------------------
     # Device management
@@ -1104,27 +1105,25 @@ class ADBService:
         self._sdk_cache[serial] = sdk
         return sdk
 
-    async def _scrcpy_versions_for(self, serial: str) -> list[str]:
-        """이 디바이스에서 시도할 scrcpy 버전 순서(우선순위순).
+    async def _scrcpy_version_for(self, serial: str) -> str:
+        """이 디바이스에서 쓸 scrcpy 버전 — Android 버전으로 **결정적** 선택.
 
-        SurfaceControl.createDisplay(String, boolean) 가 Android 14(API 34)부터
-        제거돼 v1.25 는 SDK>=34 일반 폰에서 즉사한다. 반대로 v3 의 SurfaceControl
-        direct API 는 일부 자동차 IVI 컨테이너에서 막힌다. 그래서:
-          * SDK>=34 → v3 우선, 실패 시 v1 폴백
-          * 그 외(또는 SDK 불명) → v1 우선, 실패 시 v3 폴백
-        직전에 성공했던 버전이 있으면 맨 앞으로 끌어와 폴백 지연을 줄인다.
-        jar 이 없는 버전은 후보에서 제외한다.
+        SurfaceControl.createDisplay(String, boolean) 가 Android 16(API 36)에서
+        제거돼 v1.25 는 Android 16+ 에서 즉사한다. 그래서 버전을 1:1로 못박는다:
+          * Android 16+ (SDK>=36) → v3.3.4
+          * Android 15 이하 (SDK<=35, 또는 SDK 불명) → v1.25
+        선택한 버전의 jar 이 없으면 가용한 다른 버전으로만 보정(미러링 유지 목적).
         """
         sdk = await self._get_android_sdk(serial)
-        if sdk is not None and sdk >= 34:
-            order = [SCRCPY_V3, SCRCPY_V1]
-        else:
-            order = [SCRCPY_V1, SCRCPY_V3]
-        pref = self._scrcpy_version_pref.get(serial)
-        if pref in order:
-            order.remove(pref)
-            order.insert(0, pref)
-        return [v for v in order if detect_scrcpy_server(v)]
+        primary = SCRCPY_V3 if (sdk is not None and sdk >= 36) else SCRCPY_V1
+        if detect_scrcpy_server(primary):
+            return primary
+        other = SCRCPY_V1 if primary == SCRCPY_V3 else SCRCPY_V3
+        return other if detect_scrcpy_server(other) else primary
+
+    def is_scrcpy_capable(self, serial: str) -> bool:
+        """scrcpy 가 한 번이라도 성공한 기기인가 (→ 폴링으로 눌러앉지 말고 scrcpy 유지)."""
+        return serial in self._scrcpy_capable
 
     async def ensure_scrcpy_backend(
         self,
@@ -1172,39 +1171,46 @@ class ADBService:
                     logger.debug("scrcpy existing close error: %s", e)
                 self._scrcpy_backends.pop(serial, None)
 
-            # 버전 우선순위(SDK 기반) + 교차 폴백. 선호 버전(첫 번째)만 일시적
-            # push/forward 장애에 대비해 1회 자동 retry 하고, 폴백 버전은 1회만 시도해
-            # 전체 실패 시 지연을 제한한다(잘못된 버전은 accept timeout ~5s 로 빠르게 실패).
-            versions = await self._scrcpy_versions_for(serial)
-            for vi, version in enumerate(versions):
-                attempts = 2 if vi == 0 else 1
-                for attempt in range(attempts):
-                    backend = ScrcpyServerBackend(
-                        serial, logical_id, version=version, bitrate=bitrate,
-                        **({"max_fps": max_fps} if max_fps is not None else {}),
-                    )
-                    ok = await backend.try_start()
-                    if ok:
-                        self._scrcpy_backends[serial] = backend
-                        # 성공한 버전을 기억 → 다음 콜드스타트에서 맨 먼저 시도.
-                        self._scrcpy_version_pref[serial] = version
-                        # 성공 시 실패 카운터 reset — 한 번 정상 동작했다면 일시 장애 카운트 의미 없음.
-                        self._scrcpy_failure_count.pop(serial, None)
-                        return backend
-                    try:
-                        await backend.close()
-                    except Exception:
-                        pass
-                    if attempt + 1 < attempts:
-                        await asyncio.sleep(0.5)
+            # 버전은 Android 버전으로 결정적 선택(≤15→v1.25, ≥16→v3.3.4). 일시적
+            # push/forward 장애에 대비해 같은 버전으로 1회 자동 retry.
+            version = await self._scrcpy_version_for(serial)
+            for attempt in range(2):
+                backend = ScrcpyServerBackend(
+                    serial, logical_id, version=version, bitrate=bitrate,
+                    **({"max_fps": max_fps} if max_fps is not None else {}),
+                )
+                ok = await backend.try_start()
+                if ok:
+                    self._scrcpy_backends[serial] = backend
+                    # 한 번이라도 성공 → "scrcpy 가능 기기"로 영구 기록 (이후 폴링으로
+                    # 눌러앉지 않고 항상 scrcpy 로 복귀).
+                    self._scrcpy_capable.add(serial)
+                    # 성공 시 실패 카운터 reset — 한 번 정상 동작했다면 일시 장애 카운트 의미 없음.
+                    self._scrcpy_failure_count.pop(serial, None)
+                    return backend
+                try:
+                    await backend.close()
+                except Exception:
+                    pass
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
 
-            # 누적 실패 카운터 증가 → 임계치 도달 시 영구 disable.
+            # scrcpy 가능 기기(이전 성공)는 영구 disable 하지 않는다 — 일시 장애로 보고
+            # 다음 요청에서 다시 scrcpy 시도 (사용자 요구: scrcpy 되는 기기는 무조건 scrcpy).
+            if serial in self._scrcpy_capable:
+                logger.info(
+                    "scrcpy try_start failed for %s (v%s) — capable device, "
+                    "transient; will retry scrcpy (no disable)",
+                    serial, version,
+                )
+                return None
+
+            # 한 번도 성공한 적 없는 기기만 누적 실패 카운터 → 임계치 도달 시 영구 disable.
             count = self._scrcpy_failure_count.get(serial, 0) + 1
             self._scrcpy_failure_count[serial] = count
             logger.info(
-                "scrcpy try_start failed for %s (attempt %d/%d) — "
-                "%s",
-                serial, count, self.SCRCPY_FAILURE_THRESHOLD,
+                "scrcpy try_start failed for %s (v%s, attempt %d/%d) — %s",
+                serial, version, count, self.SCRCPY_FAILURE_THRESHOLD,
                 "permanently disabled" if count >= self.SCRCPY_FAILURE_THRESHOLD
                 else "will retry on next request",
             )
@@ -1258,6 +1264,10 @@ class ADBService:
 
     def mark_scrcpy_disabled(self, serial: str) -> None:
         """디바이스가 scrcpy를 지원 못 함을 캐시. 다음 시도부터 즉시 screencap PNG 폴링."""
+        # scrcpy 가 한 번이라도 됐던 기기는 절대 영구 disable 하지 않는다 — 일시 장애일
+        # 뿐, 다음에 다시 scrcpy 로 복귀해야 한다 (사용자 요구).
+        if serial in self._scrcpy_capable:
+            return
         if serial not in self._scrcpy_disabled:
             self._scrcpy_disabled.add(serial)
             logger.info(

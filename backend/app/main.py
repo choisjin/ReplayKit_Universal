@@ -597,6 +597,10 @@ async def websocket_screen_mirror(websocket: WebSocket):
     #   - 준비 완료: 다음 iteration에서 scrcpy stream으로 자연스러운 전환
     #   - 영구 실패: screencap PNG 폴링 유지
     BACKEND_RETRY_COOLDOWN = 30.0
+    # scrcpy 가 한 번이라도 됐던 기기(capable)는 스트림 끊김/일시 실패 시 30초나 폴링하지
+    # 않고 거의 즉시 scrcpy 로 복귀시킨다. 짧은 쿨다운은 app_process 재spawn thrash(→OOM)
+    # 만 막는 최소 간격이며, 그 사이엔 screencap 이 다리 역할만 한다 (눌러앉지 않음).
+    BACKEND_RETRY_COOLDOWN_CAPABLE = 2.0
     scrcpy_retry_after = 0.0
     # WS 세션별 백그라운드 scrcpy try_start task와 그 결과 backend
     scrcpy_task: Optional[asyncio.Task] = None
@@ -1015,9 +1019,10 @@ async def websocket_screen_mirror(websocket: WebSocket):
                         scrcpy_task = None
                         if scrcpy_backend is None:
                             # 영구 disable은 ADBService 내부 카운터가 임계치 도달 시 자동 처리.
-                            # 여기선 cooldown만 갱신 — 다음 cooldown 후 자동 재시도.
-                            # (ADBService.SCRCPY_FAILURE_THRESHOLD 회 연속 실패 시 영구화)
+                            # 단, scrcpy 가 한 번이라도 됐던 기기(capable)는 영구 disable 되지
+                            # 않고(서비스가 보장), 짧은 쿨다운으로 즉시 scrcpy 재시도한다.
                             _scrcpy_disabled = adb_service.is_scrcpy_disabled(adb_serial)
+                            _capable = adb_service.is_scrcpy_capable(adb_serial)
                             if _scrcpy_disabled:
                                 scrcpy_retry_after = float("inf")
                                 logger.info(
@@ -1026,16 +1031,22 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                     adb_serial, adb_display_id,
                                 )
                             else:
+                                _cd = (
+                                    BACKEND_RETRY_COOLDOWN_CAPABLE if _capable
+                                    else BACKEND_RETRY_COOLDOWN
+                                )
                                 scrcpy_retry_after = (
-                                    asyncio.get_event_loop().time() + BACKEND_RETRY_COOLDOWN
+                                    asyncio.get_event_loop().time() + _cd
                                 )
                                 adb_service.set_scrcpy_retry_after(
                                     adb_serial, scrcpy_retry_after,
                                 )
                                 logger.info(
                                     "scrcpy try_start failed for %s — "
-                                    "will retry in %.0fs (screencap PNG polling meanwhile)",
-                                    adb_serial, BACKEND_RETRY_COOLDOWN,
+                                    "will retry in %.0fs (%s)",
+                                    adb_serial, _cd,
+                                    "scrcpy-capable, brief screencap bridge" if _capable
+                                    else "screencap PNG polling meanwhile",
                                 )
 
                     # scrcpy 준비됨 → H.264 relay stream 진입 (실패/종료 시 다시 폴링으로 복귀)
@@ -1067,9 +1078,15 @@ async def websocket_screen_mirror(websocket: WebSocket):
                         # 재생 중 stream error는 스텝 screencap 등 contention 때문이지
                         # scrcpy 자체 고장이 아니다. 쿨다운을 박으면 재생 종료 후 재연결
                         # 시 stale 쿨다운으로 복귀가 느려지므로, 재생 중이 아닐 때만 박는다.
+                        # scrcpy 가능 기기는 짧은 쿨다운으로 즉시 scrcpy 재시작(장기 폴링 금지).
                         if not playback_service.is_running:
+                            _cd = (
+                                BACKEND_RETRY_COOLDOWN_CAPABLE
+                                if adb_service.is_scrcpy_capable(adb_serial)
+                                else BACKEND_RETRY_COOLDOWN
+                            )
                             scrcpy_retry_after = (
-                                asyncio.get_event_loop().time() + BACKEND_RETRY_COOLDOWN
+                                asyncio.get_event_loop().time() + _cd
                             )
                             adb_service.set_scrcpy_retry_after(adb_serial, scrcpy_retry_after)
                         await adb_service.close_scrcpy_backend(
