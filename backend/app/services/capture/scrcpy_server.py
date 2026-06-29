@@ -1165,6 +1165,12 @@ def _extract_codec_config(buf: bytes) -> bytes:
         elif t in _VCL_NAL_TYPES and sps >= 0:
             return buf[sps:start]  # [SPS]..[PPS] (첫 슬라이스 직전까지)
         i = j + 3
+    # SPS 는 찾았지만 같은 청크에 슬라이스(VCL)가 없다 — scrcpy 는 config(SPS/PPS)를 IDR
+    # 과 별도 패킷으로 보낼 때가 있어 한 청크가 [SPS][PPS] 만일 수 있다. 이 경우에도
+    # [SPS..끝] 을 config 로 캡처해야 한다(그러지 않으면 config 를 영영 못 잡아 primer 에
+    # SPS 가 빠지고 → 디코더 미구성 → 영구 blank). 다음 청크의 IDR 은 gop 으로 들어온다.
+    if sps >= 0:
+        return buf[sps:]
     return b""
 
 
