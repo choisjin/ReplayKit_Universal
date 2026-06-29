@@ -133,6 +133,11 @@ _READ_CHUNK = 64 * 1024
 #   = 무한 thrash + 화면 깜빡임/프레임드랍. 정적 화면 오탐을 피하도록 넉넉히 잡는다.
 _STALL_TIMEOUT = 30.0
 
+# 프레임 흐름 갭 진단 프로브 간격(초). stream_h264 가 이 간격으로 큐를 폴링해, 프레임이
+# 끊기면 _STALL_TIMEOUT(30s) 을 기다리지 않고 첫 갭을 즉시 1회 로깅한다(정적 화면에서
+# 어느 기기가 프레임을 멈추는지 빠르게 진단). 워치독 의미(_STALL_TIMEOUT 누적)는 불변.
+_FLOW_GAP_PROBE = 5.0
+
 # relay 큐 최대 chunk 수 (~64KB/chunk). 소비자(WS)가 느릴 때 여기까지만 backlog 를
 # 허용하고, 초과 시 backlog 를 버린 뒤 다음 키프레임부터 재동기한다. 4MB(=64) 정도면
 # 일시적 네트워크 지터를 흡수하면서도 PC 메모리 증가를 제한한다.
@@ -835,25 +840,49 @@ class ScrcpyServerBackend:
         i-frame-interval=1 로 정적 화면에서도 ~1fps 로 IDR 이 흘러 stale 감지에 충분.
         relay 종료(EOF/에러) 시 sentinel 받아 자연 종료.
         """
+        # 프레임 흐름 갭 진단 — 30s stall watchdog 이 발동하기 전에, 프레임이 끊긴
+        # 순간을 _FLOW_GAP_PROBE 단위로 즉시 한 번 로깅한다. 정적 화면에서 인코더가
+        # repeat-previous-frame-after 를 존중하면 이 갭이 안 생기고, 무시하면 갭이
+        # 바로 찍혀 "어느 기기/디스플레이가 정적 화면에서 프레임을 멈추는지" 가
+        # 30초 기다림 없이 진단된다. 갭이 _STALL_TIMEOUT 누적되면 기존처럼 RuntimeError.
+        gap_logged = False
+        waited = 0.0
         try:
             while not self._closed:
-                # stall watchdog — i-frame-interval=1 이라 정상이면 ~1fps 로 데이터가
-                # 흐른다. _STALL_TIMEOUT 동안 한 chunk 도 없으면 디바이스 인코더/소켓이
-                # 멈춘 것 → 예외를 던져 main.py 가 백엔드를 재시작하도록 한다.
                 try:
                     item = await asyncio.wait_for(
-                        self._frame_queue.get(), timeout=_STALL_TIMEOUT,
+                        self._frame_queue.get(), timeout=_FLOW_GAP_PROBE,
                     )
                 except asyncio.TimeoutError:
-                    raise RuntimeError(
-                        f"scrcpy stream stalled: no NAL for {_STALL_TIMEOUT:.0f}s "
-                        f"(i-frame-interval=1 should emit ~1fps) — "
-                        f"device encoder/socket frozen "
-                        f"(serial={self.serial} display={self.logical_id} "
-                        f"bytes_in={self._total_bytes_in})"
-                    )
+                    waited += _FLOW_GAP_PROBE
+                    if not gap_logged:
+                        logger.info(
+                            "scrcpy frame flow gap: no NAL for ~%.0fs "
+                            "(serial=%s display=%s v%s bytes_in=%d) — 정적 화면에서 "
+                            "인코더가 프레임을 멈춘 듯(repeat-previous-frame-after 미존중 가능). "
+                            "%.0fs 까지 안 오면 stall 재시작.",
+                            waited, self.serial, self.logical_id, self.version,
+                            self._total_bytes_in, _STALL_TIMEOUT,
+                        )
+                        gap_logged = True
+                    if waited >= _STALL_TIMEOUT:
+                        raise RuntimeError(
+                            f"scrcpy stream stalled: no NAL for {_STALL_TIMEOUT:.0f}s "
+                            f"(i-frame-interval=1 should emit ~1fps) — "
+                            f"device encoder/socket frozen "
+                            f"(serial={self.serial} display={self.logical_id} "
+                            f"v{self.version} bytes_in={self._total_bytes_in})"
+                        )
+                    continue
                 if item is _EOF_SENTINEL:
                     break
+                if gap_logged:
+                    logger.info(
+                        "scrcpy frame flow resumed after ~%.0fs gap "
+                        "(serial=%s display=%s)", waited, self.serial, self.logical_id,
+                    )
+                gap_logged = False
+                waited = 0.0
                 yield item
         except (asyncio.CancelledError, GeneratorExit):
             raise
