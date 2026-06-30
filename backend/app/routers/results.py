@@ -504,7 +504,7 @@ _HTML_SCRIPT = r"""
 """
 
 
-def _build_html_report(data: dict, output_path: Path) -> str:
+def _build_html_report(data: dict, output_path: Path, steps_iter=None) -> str:
     """Tabulator 기반 경량 HTML 리포트.
 
     데이터는 gzip+base64로 압축해 window.__RD__에 임베드되고, 브라우저에서
@@ -512,6 +512,11 @@ def _build_html_report(data: dict, output_path: Path) -> str:
     Tabulator가 열별 필터/정렬/검색/이미지 썸네일을 모두 렌더링한다.
     라이브러리 파일은 /static/tabulator/ 에서 서빙 (별도 복사 불필요).
     export-bundle ZIP에만 assets/로 포함된다.
+
+    steps_iter: 스텝 dict의 이터러블(예: NDJSON 라인 제너레이터). 주어지면
+    data["step_results"] 대신 이걸 흘려 읽는다. 행 전량을 메모리에 올리지 않고
+    gzip 스트림에 직접 압축하므로, 수만 행(장시간 aging test)에서도 피크 메모리가
+    압축 바이트 크기로 고정된다.
     """
     html_dir = output_path.parent
 
@@ -537,9 +542,8 @@ def _build_html_report(data: dict, output_path: Path) -> str:
         except Exception:
             return iso or ""
 
-    # Tabulator에 넘길 행 데이터 구성
-    rows_json: list[dict] = []
-    for sr in data.get("step_results", []):
+    # Tabulator에 넘길 행 dict 1개 구성 (스텝 dict → 표시용 행)
+    def _row_for(sr: dict) -> dict:
         duration_ms = sr.get("execution_time_ms", 0) or 0
         delay_ms = sr.get("delay_ms", 0) or 0
         dur_str = f"{duration_ms}ms" if duration_ms < 1000 else f"{duration_ms / 1000:.1f}s"
@@ -548,7 +552,7 @@ def _build_html_report(data: dict, output_path: Path) -> str:
         act_src = _html_image_src(
             sr.get("actual_annotated_image") or sr.get("actual_image"), html_dir
         )
-        rows_json.append({
+        return {
             "timestamp": _fmt_ts(sr.get("timestamp", started_at)),
             "cycle": sr.get("repeat_index", 1),
             "step_id": sr.get("step_id", ""),
@@ -562,19 +566,31 @@ def _build_html_report(data: dict, output_path: Path) -> str:
             "duration": dur_str,
             "expected_src": exp_src or "",
             "actual_src": act_src or "",
-        })
+        }
 
-    report_payload = {
-        "scenario_name": scenario_name,
-        "status": status,
-        "total_repeat": total_repeat,
-        "rows": rows_json,
-    }
     # 데이터는 gzip→base64로 압축 임베드 → 대용량 리포트의 파일 크기를 10~20배 줄인다.
     # (JSON은 반복이 많아 압축률이 높음.) base64 알파벳엔 < " \ 가 없어
     # <script> 안 JS 문자열에 그대로 안전(별도 이스케이프 불필요).
-    _raw = json.dumps(report_payload, ensure_ascii=False).encode("utf-8")
-    payload_b64 = base64.b64encode(gzip.compress(_raw, compresslevel=9)).decode("ascii")
+    # 행을 리스트로 모으거나 비압축 JSON 문자열을 통째로 만들지 않고 gzip 스트림에
+    # 직접 흘려 쓴다 → 수만 행에서도 피크 메모리가 압축 바이트 크기로 고정.
+    steps_source = steps_iter if steps_iter is not None else data.get("step_results", [])
+    _buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=_buf, mode="wb", compresslevel=9, mtime=0) as _gz:
+        _gz.write(b'{"scenario_name":')
+        _gz.write(json.dumps(scenario_name, ensure_ascii=False).encode("utf-8"))
+        _gz.write(b',"status":')
+        _gz.write(json.dumps(status, ensure_ascii=False).encode("utf-8"))
+        _gz.write(b',"total_repeat":')
+        _gz.write(json.dumps(total_repeat).encode("utf-8"))
+        _gz.write(b',"rows":[')
+        _first = True
+        for sr in steps_source:
+            if not _first:
+                _gz.write(b",")
+            _gz.write(json.dumps(_row_for(sr), ensure_ascii=False).encode("utf-8"))
+            _first = False
+        _gz.write(b"]}")
+    payload_b64 = base64.b64encode(_buf.getvalue()).decode("ascii")
 
     parts: list[str] = []
     parts.append("<!DOCTYPE html>")

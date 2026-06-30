@@ -27,6 +27,7 @@ import asyncio
 import base64
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -1610,9 +1611,27 @@ async def _run_play_job(data: dict):
         else:
             effective_repeat = repeat
             _is_multi_cycle = repeat > 1
+        # 스텝 결과 NDJSON 스트리밍 싱크 — 멀티사이클/aging 런에서 step_results를
+        # 인메모리에 무한 누적하지 않고 디스크에 한 줄씩 흘려 저장한다. result.json/HTML은
+        # _save_result에서 이 NDJSON을 정본으로 스트리밍 조립하므로 피크 메모리가 고정된다.
+        _steps_ndjson: Optional[Path] = None
         if _is_multi_cycle:
             playback_service._result_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             playback_service._setup_run_output_dir(scenario_name)
+            if playback_service._run_output_dir:
+                _steps_ndjson = playback_service._run_output_dir / playback_service.STEPS_NDJSON_NAME
+                try:
+                    _steps_ndjson.write_text("", encoding="utf-8")  # 새 런 시작 — 빈 파일로 초기화
+                except Exception as e:
+                    logger.warning("steps NDJSON init failed: %s", e)
+                    _steps_ndjson = None
+
+        # 인메모리 step_results 상한 — 출력(result.json/HTML)은 NDJSON에서 조립하므로
+        # 인메모리 리스트는 안전망용 최근 tail만 유지해 장시간 런에서도 메모리를 고정한다.
+        _STEP_MEM_CAP = 1000
+        # interim 저장 쓰로틀 — 매 사이클 전량 재직렬화(O(N²)) 대신 시간 간격으로 제한.
+        _INTERIM_MIN_INTERVAL_S = 60.0
+        _last_interim_mono = 0.0
 
         global_step_seq = 0
         last_completed_iteration = 0
@@ -1674,7 +1693,13 @@ async def _run_play_job(data: dict):
                         else:
                             step_result.step_id = _pending_seq
                             step_result.description = f"[Cycle {iteration}] {step_result.description}" if step_result.description else f"[Cycle {iteration}]"
+                    # NDJSON에 먼저 durable 기록 (remap된 step_id/description 반영분)
+                    if _steps_ndjson is not None:
+                        playback_service.append_step_ndjson(_steps_ndjson, step_result)
                     result.step_results.append(step_result)
+                    # 인메모리 리스트는 최근 tail만 유지 (출력은 NDJSON 정본에서 조립)
+                    if _steps_ndjson is not None and len(result.step_results) > _STEP_MEM_CAP:
+                        del result.step_results[:-_STEP_MEM_CAP]
                     if step_result.excluded_from_result:
                         pass  # 조건부이동 결과 미반영('분기') — 집계/시나리오 판정에서 제외
                     elif step_result.status == "pass":
@@ -1709,28 +1734,39 @@ async def _run_play_job(data: dict):
                 })
                 break
 
+            # interim 저장은 시간 간격으로 쓰로틀 — 매 사이클 전량 재직렬화(O(N²)) 폭주를 막는다.
+            # step_results는 NDJSON에서 스트리밍 조립하므로 인메모리 리스트를 복사하지 않는다
+            # (NDJSON 미사용 폴백 시에만 현재 리스트를 넘긴다).
             if _is_multi_cycle:
-                _interim = ScenarioResult(
-                    scenario_name=scenario_name,
-                    device_serial="multi-device",
-                    status="fail" if result.failed_steps > 0 or result.error_steps > 0 else "pass",
-                    total_steps=global_step_seq if _is_multi_cycle else len(scen.steps),
-                    total_repeat=last_completed_iteration,
-                    started_at=result.started_at,
-                    finished_at=datetime.now(timezone.utc).isoformat(),
-                    step_results=list(result.step_results),
-                    passed_steps=result.passed_steps,
-                    failed_steps=result.failed_steps,
-                    error_steps=result.error_steps,
-                )
-                await playback_service._save_result(_interim, interim=True)
+                _now_mono = time.monotonic()
+                if _now_mono - _last_interim_mono >= _INTERIM_MIN_INTERVAL_S:
+                    _last_interim_mono = _now_mono
+                    _interim = ScenarioResult(
+                        scenario_name=scenario_name,
+                        device_serial="multi-device",
+                        status="fail" if result.failed_steps > 0 or result.error_steps > 0 else "pass",
+                        total_steps=global_step_seq,
+                        total_repeat=last_completed_iteration,
+                        started_at=result.started_at,
+                        finished_at=datetime.now(timezone.utc).isoformat(),
+                        step_results=[] if _steps_ndjson is not None else list(result.step_results),
+                        passed_steps=result.passed_steps,
+                        failed_steps=result.failed_steps,
+                        error_steps=result.error_steps,
+                    )
+                    await playback_service._save_result(_interim, interim=True)
 
         # 시나리오 동안 모듈이 보고한 legacy runtime fail (parent_step_id 없는 항목, 예: assert_keyword 미일치)을
         # tail에 흡수. sync 모드 fail은 이미 인라인으로 step_results에 들어가 있어 buffer에 남아있지 않음.
         runtime_fails = consume_runtime_fails()
         if runtime_fails:
+            if _steps_ndjson is not None:
+                for _rf in runtime_fails:
+                    playback_service.append_step_ndjson(_steps_ndjson, _rf)
             result.step_results.extend(runtime_fails)
             result.failed_steps += len(runtime_fails)
+            if _steps_ndjson is not None and len(result.step_results) > _STEP_MEM_CAP:
+                del result.step_results[:-_STEP_MEM_CAP]
 
         # 중단 처리 — 진행 중이던 회차의 부분 step도 보존하고 영상도 함께 남김.
         if playback_service._should_stop:
@@ -1738,10 +1774,13 @@ async def _run_play_job(data: dict):
             in_progress_iter = iteration if iteration > last_completed_iteration else None
             if _is_multi_cycle:
                 result.total_steps = global_step_seq
-            # step_results는 슬라이싱하지 않고 진행분 전체 보존 (인라인 fail 포함)
-            result.passed_steps = sum(1 for sr in result.step_results if sr.status == "pass")
-            result.failed_steps = sum(1 for sr in result.step_results if sr.status == "fail")
-            result.error_steps = sum(1 for sr in result.step_results if sr.status not in ("pass", "fail"))
+            # 카운트 재계산은 전체 step_results가 인메모리에 있을 때만 (NDJSON 미사용 폴백).
+            # 스트리밍 런은 인메모리 리스트가 최근 tail로 캡되어 있어 합산이 틀어지므로,
+            # 진행 중 증분 누적된 result.passed/failed/error_steps를 정본으로 신뢰한다.
+            if _steps_ndjson is None:
+                result.passed_steps = sum(1 for sr in result.step_results if sr.status == "pass")
+                result.failed_steps = sum(1 for sr in result.step_results if sr.status == "fail")
+                result.error_steps = sum(1 for sr in result.step_results if sr.status not in ("pass", "fail"))
             # total_repeat = 진행 시도한 마지막 회차 번호 (완료/중단 무관)
             result.total_repeat = max(iteration, 1)
             result.stopped_at_iteration = in_progress_iter
@@ -1851,6 +1890,20 @@ async def _run_play_group_job(data: dict):
 
         playback_service._result_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         playback_service._setup_run_output_dir(group_name)
+
+        # 스텝 결과 NDJSON 스트리밍 싱크 (_run_play_job과 동일 설계) — 장시간 그룹 aging
+        # 런에서 step_results 인메모리 무한 누적/매 사이클 전량 재직렬화로 인한 OOM 방지.
+        _steps_ndjson: Optional[Path] = None
+        if playback_service._run_output_dir:
+            _steps_ndjson = playback_service._run_output_dir / playback_service.STEPS_NDJSON_NAME
+            try:
+                _steps_ndjson.write_text("", encoding="utf-8")
+            except Exception as e:
+                logger.warning("steps NDJSON init failed: %s", e)
+                _steps_ndjson = None
+        _STEP_MEM_CAP = 1000
+        _INTERIM_MIN_INTERVAL_S = 60.0
+        _last_interim_mono = 0.0
 
         unified_result = ScenarioResult(
             scenario_name=group_name,
@@ -1962,7 +2015,11 @@ async def _run_play_group_job(data: dict):
                             elif real_status in ("fail", "error") and _sj.get("exclude_fail_from_result"):
                                 step_result.excluded_from_result = True
 
+                        if _steps_ndjson is not None:
+                            playback_service.append_step_ndjson(_steps_ndjson, step_result)
                         unified_result.step_results.append(step_result)
+                        if _steps_ndjson is not None and len(unified_result.step_results) > _STEP_MEM_CAP:
+                            del unified_result.step_results[:-_STEP_MEM_CAP]
                         if step_result.excluded_from_result:
                             pass  # 결과 미반영('분기') — 집계/시나리오 판정에서 제외
                         elif step_result.status == "pass":
@@ -2046,20 +2103,23 @@ async def _run_play_group_job(data: dict):
                     "until_time": until_time.isoformat(),
                 })
             if _multi and not playback_service._should_stop:
-                _interim = ScenarioResult(
-                    scenario_name=group_name,
-                    device_serial="multi-device",
-                    status="fail" if unified_result.failed_steps > 0 or unified_result.error_steps > 0 else "pass",
-                    total_steps=global_step_seq,
-                    total_repeat=iteration,
-                    started_at=unified_result.started_at,
-                    finished_at=datetime.now(timezone.utc).isoformat(),
-                    step_results=list(unified_result.step_results),
-                    passed_steps=unified_result.passed_steps,
-                    failed_steps=unified_result.failed_steps,
-                    error_steps=unified_result.error_steps,
-                )
-                await playback_service._save_result(_interim, interim=True)
+                _now_mono = time.monotonic()
+                if _now_mono - _last_interim_mono >= _INTERIM_MIN_INTERVAL_S:
+                    _last_interim_mono = _now_mono
+                    _interim = ScenarioResult(
+                        scenario_name=group_name,
+                        device_serial="multi-device",
+                        status="fail" if unified_result.failed_steps > 0 or unified_result.error_steps > 0 else "pass",
+                        total_steps=global_step_seq,
+                        total_repeat=iteration,
+                        started_at=unified_result.started_at,
+                        finished_at=datetime.now(timezone.utc).isoformat(),
+                        step_results=[] if _steps_ndjson is not None else list(unified_result.step_results),
+                        passed_steps=unified_result.passed_steps,
+                        failed_steps=unified_result.failed_steps,
+                        error_steps=unified_result.error_steps,
+                    )
+                    await playback_service._save_result(_interim, interim=True)
 
             if _until_reached:
                 break
@@ -2067,8 +2127,13 @@ async def _run_play_group_job(data: dict):
         # runtime fail (assert_keyword) 흡수
         runtime_fails = consume_runtime_fails()
         if runtime_fails:
+            if _steps_ndjson is not None:
+                for _rf in runtime_fails:
+                    playback_service.append_step_ndjson(_steps_ndjson, _rf)
             unified_result.step_results.extend(runtime_fails)
             unified_result.failed_steps += len(runtime_fails)
+            if _steps_ndjson is not None and len(unified_result.step_results) > _STEP_MEM_CAP:
+                del unified_result.step_results[:-_STEP_MEM_CAP]
 
         unified_result.finished_at = datetime.now(timezone.utc).isoformat()
         unified_result.total_steps = global_step_seq

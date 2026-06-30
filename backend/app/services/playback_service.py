@@ -179,10 +179,80 @@ RESULTS_DIR = Path(__file__).resolve().parent.parent.parent / "results"
 # 현재 재생 런의 출력 디렉토리 (모듈에서 참조용)
 _current_run_output_dir: Optional[Path] = None
 
+# 스텝 결과 NDJSON 파일명 — 런 폴더 안에 한 줄=한 스텝(model_dump 압축 JSON)으로 append.
+# 장시간 aging test에서 step_results를 인메모리에 무한 누적하지 않기 위한 durable 싱크.
+STEPS_NDJSON_NAME = "result.steps.ndjson"
+
 
 def get_run_output_dir() -> Optional[Path]:
     """현재 재생 런의 출력 디렉토리 반환. 재생 중이 아니면 None."""
     return _current_run_output_dir
+
+
+def append_step_ndjson(ndjson_path: Path, step_result) -> None:
+    """스텝 결과 1건을 NDJSON에 append (compact JSON 한 줄). best-effort.
+
+    장시간 aging test에서 step_results를 인메모리에 무한 누적하는 대신 디스크에
+    스트리밍 저장하기 위한 싱크. 스텝은 보통 수 초 간격이라 매 호출 open/close 비용은
+    무시할 수 있고, 매 줄 flush되어 _save_result(스트리밍 reader)가 즉시 최신을 읽는다.
+    """
+    import json as _json
+    try:
+        with open(ndjson_path, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(step_result.model_dump(), ensure_ascii=False))
+            f.write("\n")
+    except Exception as e:
+        logger.warning("step NDJSON append failed: %s", e)
+
+
+def _iter_ndjson_steps(path: Path):
+    """NDJSON 파일을 한 줄씩 dict로 yield (스트리밍, 피크 메모리 = 1행).
+    깨진 줄은 건너뛴다."""
+    import json as _json
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield _json.loads(line)
+            except Exception:
+                continue
+
+
+def _write_result_json_streaming(filepath: Path, summary: dict, ndjson_path: Path) -> None:
+    """result.json을 스트리밍으로 기록한다.
+
+    summary는 step_results를 제외한 결과 메타(model_dump). step_results 배열은
+    NDJSON에서 한 줄씩 흘려 넣어 전량을 메모리에 materialize 하지 않는다.
+    결과 파일 포맷(단일 JSON 객체 + step_results 배열)은 기존과 100% 동일해
+    모든 reader(results 라우터/Excel export 등)가 그대로 동작한다.
+
+    임시 파일에 쓴 뒤 원자적 교체 — 장시간 런 도중 reader가 부분 기록된
+    result.json을 읽는 것을 방지한다.
+    """
+    import json as _json
+    head = dict(summary)
+    head.pop("step_results", None)
+    head_json = _json.dumps(head, ensure_ascii=False)  # "{...}"
+    prefix = head_json[:-1]  # 닫는 '}' 제거
+    sep = "" if prefix == "{" else ","
+    tmp = filepath.with_name(filepath.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(prefix)
+        f.write(f'{sep}"step_results":[')
+        first = True
+        with open(ndjson_path, "r", encoding="utf-8") as src:
+            for line in src:
+                line = line.strip()
+                if not line:
+                    continue
+                if not first:
+                    f.write(",")
+                f.write(line)
+                first = False
+        f.write("]}")
+    tmp.replace(filepath)
 
 
 # ==========================================================================
@@ -3439,20 +3509,31 @@ class PlaybackService:
 
         if self._run_output_dir and self._run_output_dir.exists():
             filepath = self._run_output_dir / "result.json"
+            ndjson_path = self._run_output_dir / STEPS_NDJSON_NAME
         else:
             RESULTS_DIR.mkdir(parents=True, exist_ok=True)
             filepath = RESULTS_DIR / f"{result.scenario_name}_{timestamp}.json"
+            ndjson_path = None
+
+        # 스텝이 NDJSON으로 스트리밍 저장된 런(멀티사이클/aging)이면 그쪽을 정본으로 사용.
+        # 인메모리 step_results는 최근 일부만 캡되어 있을 수 있으므로 전체 이력은 NDJSON에서 읽는다.
+        use_stream = ndjson_path is not None and ndjson_path.exists()
 
         # model_dump 한 번만 수행하고 JSON/HTML 양쪽에 재사용 (JSON round-trip 제거)
         data = result.model_dump()
 
         def _write_json_and_html():
             import json as _json
-            filepath.write_text(_json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            if use_stream:
+                # result.json: step_results는 NDJSON에서 흘려 넣음 (피크 메모리 고정)
+                _write_result_json_streaming(filepath, data, ndjson_path)
+            else:
+                filepath.write_text(_json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
             try:
                 from ..routers.results import _build_html_report
                 html_path = filepath.with_suffix(".html")
-                html_str = _build_html_report(data, html_path)
+                steps_iter = _iter_ndjson_steps(ndjson_path) if use_stream else None
+                html_str = _build_html_report(data, html_path, steps_iter=steps_iter)
                 html_path.write_text(html_str, encoding="utf-8")
             except Exception as e:
                 logger.warning("HTML report generation failed: %s", e)
