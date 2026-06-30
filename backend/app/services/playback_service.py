@@ -3020,9 +3020,20 @@ class PlaybackService:
             if wait_mode == "cycle":
                 start_ms = params.get("wait_start", 3000)
                 interval_ms = params.get("wait_interval", 3000)
+                # 끝(Max) — 미입력이면 기존대로 무한 선형 증가. 입력되면 start+interval×idx 가
+                # Max를 초과하는 순간 다시 start로 복귀(톱니파). Max 이하 최대값까지는 그대로 사용.
+                max_ms = params.get("wait_max")
                 cycle_idx = getattr(self, '_current_iteration', 0)
-                actual_ms = start_ms + interval_ms * cycle_idx
-                logger.info("Wait cycle: iteration=%d, wait=%dms (start=%d + interval=%d × %d)", cycle_idx, actual_ms, start_ms, interval_ms, cycle_idx)
+                eff_idx = cycle_idx
+                if max_ms and interval_ms > 0 and max_ms >= start_ms:
+                    # start, start+interval, … 중 Max 이하인 값의 개수만큼 한 주기로 반복
+                    steps_in_cycle = int((max_ms - start_ms) // interval_ms) + 1
+                    if steps_in_cycle >= 1:
+                        eff_idx = cycle_idx % steps_in_cycle
+                actual_ms = start_ms + interval_ms * eff_idx
+                logger.info("Wait cycle: iteration=%d, wait=%dms (start=%d + interval=%d × %d, max=%s)",
+                            cycle_idx, actual_ms, start_ms, interval_ms, eff_idx,
+                            max_ms if max_ms else "none")
             elif wait_mode == "random":
                 import random
                 wait_min = params.get("wait_min", 0)

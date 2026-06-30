@@ -4004,7 +4004,11 @@ export default function RecordPage() {
     let desc: string;
     if (mode === 'cycle') {
       params = { duration_ms: opts.start_ms || 3000, wait_mode: 'cycle', wait_start: opts.start_ms || 3000, wait_interval: opts.interval_ms || 3000 };
-      desc = `wait cycle ${opts.start_ms}+${opts.interval_ms}ms`;
+      // 끝(Max) — 0/미입력이면 무한 증가(기존 동작), 입력 시 초과하면 시작값으로 복귀
+      if (opts.max_ms && opts.max_ms > 0) params.wait_max = opts.max_ms;
+      desc = (opts.max_ms && opts.max_ms > 0)
+        ? `wait cycle ${opts.start_ms}+${opts.interval_ms}ms (max ${opts.max_ms})`
+        : `wait cycle ${opts.start_ms}+${opts.interval_ms}ms`;
     } else if (mode === 'random') {
       params = { duration_ms: opts.min_ms || 0, wait_mode: 'random', wait_min: opts.min_ms || 0, wait_max: opts.max_ms || 10000 };
       desc = `wait random ${opts.min_ms}~${opts.max_ms}ms`;
@@ -4085,6 +4089,7 @@ export default function RecordPage() {
   const [wDuration, setWDuration] = useState(1000);
   const [wStart, setWStart] = useState(3000);
   const [wInterval, setWInterval] = useState(3000);
+  const [wCycleMax, setWCycleMax] = useState(0);  // cycle 끝(Max), 0=없음(무한 증가)
   const [wMin, setWMin] = useState(0);
   const [wMax, setWMax] = useState(10000);
 
@@ -4104,6 +4109,7 @@ export default function RecordPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
           <Space><span style={{ fontSize: 11, minWidth: 30 }}>{t('record.waitStart')}:</span><InputNumber size="small" min={0} step={100} value={wStart} onChange={(v) => setWStart(v || 0)} suffix="ms" style={{ width: 120 }} /></Space>
           <Space><span style={{ fontSize: 11, minWidth: 30 }}>{t('record.waitInterval')}:</span><InputNumber size="small" min={0} step={100} value={wInterval} onChange={(v) => setWInterval(v || 0)} suffix="ms" style={{ width: 120 }} /></Space>
+          <Space><span style={{ fontSize: 11, minWidth: 30 }}>Max:</span><InputNumber size="small" min={0} step={100} value={wCycleMax} onChange={(v) => setWCycleMax(v || 0)} suffix="ms" style={{ width: 120 }} placeholder="0=없음" /></Space>
         </div>
       )}
       {wMode === 'random' && (
@@ -4114,7 +4120,7 @@ export default function RecordPage() {
       )}
       <Button size="small" type="primary" block onClick={() => {
         if (wMode === 'basic') addWaitStepWithMode('basic', { duration_ms: wDuration }, afterIndex);
-        else if (wMode === 'cycle') addWaitStepWithMode('cycle', { start_ms: wStart, interval_ms: wInterval }, afterIndex);
+        else if (wMode === 'cycle') addWaitStepWithMode('cycle', { start_ms: wStart, interval_ms: wInterval, max_ms: wCycleMax }, afterIndex);
         else addWaitStepWithMode('random', { min_ms: wMin, max_ms: wMax }, afterIndex);
       }}>{t('record.addWait')}</Button>
     </div>
