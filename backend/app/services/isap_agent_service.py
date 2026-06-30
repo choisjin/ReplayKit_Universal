@@ -53,6 +53,23 @@ CMD_GETSCREENWIDTHHEIGHT = 0xA3
 CMD_LCDTOUCHEXT = 0xB0
 CMD_LCDTOUCH_DRAG = 0xD6
 CMD_LCDTOUCH_FAST = 0xD7
+CMD_GETUICINFO = 0xE5  # UI Component Status/Property 추출 (표 164~171)
+
+# CMD_GETUICINFO Sub Command — 추출 대상 시스템 (표 165)
+UIC_SYS_TOTAL = 0x00  # Total Infotainment System
+UIC_SYS_AVNT = 0x01
+UIC_SYS_CLU = 0x02
+UIC_SYS_HUD = 0x03
+
+# CMD_GETUICINFO Data[0] — Extraction 범위 (표 167)
+UIC_EXTRACT_ALL = 0x00         # 전체 UI Component
+UIC_EXTRACT_FOREGROUND = 0x01  # Foreground 전체
+UIC_EXTRACT_SELECTION = 0x02   # 선택 Layer/App
+
+# CMD_GETUICINFO Data[7] — Data Type (표 169)
+UIC_TYPE_XML = 0x00
+UIC_TYPE_JSON = 0x01
+UIC_TYPE_CSV = 0x02
 
 # Sub Commands (표 72)
 RELEASE_KEY = 0x41
@@ -287,6 +304,11 @@ class ISAPAgentService:
         self._img_filename = ""
         self._img_made = False
         self._img_buffer: bytes = b""
+
+        # UI Component 추출 (CMD_GETUICINFO) 응답 동기화
+        self._uic_event = threading.Event()
+        self._uic_response = 0
+        self._uic_payload: bytes = b""
 
         self._screen_size_event = threading.Event()
         self.screen_width_front = 0
@@ -542,6 +564,17 @@ class ISAPAgentService:
                 self._img_event.set()
                 logger.debug("iSAP image received: %d bytes", len(raw_bytes))
 
+            elif cmd == CMD_GETUICINFO:
+                # 응답: Response(msg[8]) = 0x21 성공 / 0x20 실패.
+                # data_str = 요청 8byte echo(Data[0:8]) + JSON Data Payload(Data[8:]).
+                self._uic_response = ord(msg[8]) if len(msg) > 8 else RESPONSE_FAIL
+                raw_bytes = data_str.encode("iso-8859-1")
+                # 앞 8byte는 요청 echo 헤더 — payload만 추출
+                self._uic_payload = raw_bytes[8:] if len(raw_bytes) > 8 else b""
+                self._uic_event.set()
+                logger.debug("iSAP UIC received: resp=0x%02X payload=%d bytes",
+                             self._uic_response, len(self._uic_payload))
+
     # ------------------------------------------------------------------
     # Info requests
     # ------------------------------------------------------------------
@@ -739,6 +772,140 @@ class ISAPAgentService:
             time.sleep(0.05)
 
     # ------------------------------------------------------------------
+    # Multi-finger touch (CMD_LCDTOUCHEXT, FINGER_NUMBER/FINGER_INDEX 활용)
+    # ------------------------------------------------------------------
+
+    def _multi_finger_frame(self, frame: list[tuple[int, int, int]],
+                            finger_num: int, screen_type: str) -> None:
+        """한 '프레임'(동시 시점)에 대해 모든 손가락을 개별 패킷으로 송신.
+
+        frame: [(x, y, action), ...] — finger_index 순서대로 N개.
+        스펙 표 133은 1패킷=1손가락(FingerNum=N, FingerIndex=i) 구조이므로
+        같은 프레임의 손가락을 _send_lock 안에서 연속 송신해 원자성을 보장한다.
+        (펌웨어가 배치형을 요구하면 _multi_finger_frame_batched 로 폴백)
+        """
+        for idx, (x, y, action) in enumerate(frame):
+            self._lcd_touch_ext(int(x), int(y), action, screen_type,
+                                finger_num=finger_num, finger_index=idx)
+
+    def multi_finger_swipe(self, fingers: list[dict],
+                           screen_type: str = "front_center",
+                           duration_ms: int = 500, hold_ms: int = 0) -> None:
+        """진짜 멀티핑거 드래그 (예: 3점 드래그).
+
+        fingers: [{"x1","y1","x2","y2"}, ...] — ADB multi_finger_swipe와 동일 인터페이스.
+        각 손가락을 동시에 Press → (hold) → Move 보간 → Release 한다.
+        프레임 단위로 전 손가락을 함께 갱신해 동시성을 유지한다.
+        """
+        if not fingers:
+            return
+        n = len(fingers)
+        fs = [(int(f["x1"]), int(f["y1"]), int(f["x2"]), int(f["y2"])) for f in fingers]
+        move_dur = max(int(duration_ms or 0), 200)
+        steps = max(3, min(20, max(1, move_dur // 20)))
+        interval_s = max(0.01, (move_dur / 1000.0) / steps)
+
+        with self._capture_lock:
+            time.sleep(0.1)
+            with self._send_lock:
+                # 1) PRESS — 전 손가락 시작점
+                self._multi_finger_frame(
+                    [(x1, y1, TOUCH_PRESS) for (x1, y1, _x2, _y2) in fs], n, screen_type)
+                if hold_ms and hold_ms > 0:
+                    time.sleep(hold_ms / 1000.0)
+                # 2) MOVE — 전 손가락 동시 보간
+                for s in range(1, steps):
+                    t = s / steps
+                    frame = []
+                    for (x1, y1, x2, y2) in fs:
+                        ix = int(round(x1 + (x2 - x1) * t))
+                        iy = int(round(y1 + (y2 - y1) * t))
+                        frame.append((ix, iy, TOUCH_MOVE))
+                    self._multi_finger_frame(frame, n, screen_type)
+                    time.sleep(interval_s)
+                # 3) RELEASE — 전 손가락 끝점
+                self._multi_finger_frame(
+                    [(x2, y2, TOUCH_RELEASE) for (_x1, _y1, x2, y2) in fs], n, screen_type)
+                logger.info("[iSAP MULTI_SWIPE] %d fingers screen=%s dur=%dms hold=%dms",
+                            n, screen_type, move_dur, hold_ms)
+            time.sleep(0.05)
+
+    def multi_finger_tap(self, points: list[dict],
+                         screen_type: str = "front_center") -> None:
+        """멀티핑거 탭 (시작=끝). points: [{"x","y"}, ...]."""
+        fingers = [{"x1": p["x"], "y1": p["y"], "x2": p["x"], "y2": p["y"]} for p in points]
+        if not fingers:
+            return
+        n = len(fingers)
+        pts = [(int(f["x1"]), int(f["y1"])) for f in fingers]
+        with self._capture_lock:
+            time.sleep(0.1)
+            with self._send_lock:
+                self._multi_finger_frame(
+                    [(x, y, TOUCH_PRESS) for (x, y) in pts], n, screen_type)
+                time.sleep(0.05)
+                self._multi_finger_frame(
+                    [(x, y, TOUCH_RELEASE) for (x, y) in pts], n, screen_type)
+                logger.info("[iSAP MULTI_TAP] %d fingers screen=%s", n, screen_type)
+            time.sleep(0.05)
+
+    # ------------------------------------------------------------------
+    # UI Component Status/Property 추출 (CMD_GETUICINFO, 표 164~171)
+    # ------------------------------------------------------------------
+
+    def get_ui_component_info(self, target_system: int = UIC_SYS_TOTAL,
+                              extract_scope: int = UIC_EXTRACT_FOREGROUND,
+                              layer_no: int = 0x00, feature_id: str = "",
+                              data_type: int = UIC_TYPE_JSON,
+                              timeout: float = 10.0) -> dict:
+        """현재 화면의 UI Component 상태/속성을 추출한다 (OCR/image_tap 대체).
+
+        Args:
+            target_system: Sub Command — UIC_SYS_TOTAL/AVNT/CLU/HUD.
+            extract_scope: Data[0] — UIC_EXTRACT_ALL/FOREGROUND/SELECTION.
+            layer_no: Data[1] — SELECTION 시 Layer/App 번호 (0x00=None).
+            feature_id: Data[2:7] — SELECTION 시 5글자 ASCII Feature ID.
+            data_type: Data[7] — UIC_TYPE_JSON(기본)/XML/CSV.
+
+        Returns:
+            {"success": bool, "data_type": int, "raw": bytes, "data": <parsed>|None}
+            data_type이 JSON이면 data에 파싱된 객체, 실패/비JSON이면 None.
+        """
+        # Feature ID 5byte ASCII 패딩 (부족 시 0x00, 초과 시 절단)
+        fid = (feature_id or "").encode("ascii", errors="ignore")[:5]
+        fid = fid + b"\x00" * (5 - len(fid))
+        data = [
+            extract_scope & 0xFF,
+            layer_no & 0xFF,
+            fid[0], fid[1], fid[2], fid[3], fid[4],
+            data_type & 0xFF,
+        ]
+        with self._capture_lock:
+            self._uic_event.clear()
+            self._uic_response = 0
+            self._uic_payload = b""
+            with self._send_lock:
+                self._make_send_packet(CMD_GETUICINFO, target_system & 0xFF, 0, data)
+            if not self._uic_event.wait(timeout=timeout):
+                raise TimeoutError(f"iSAP UIC extraction timeout ({timeout}s)")
+            success = (self._uic_response == RESPONSE_SUCCESS)
+            raw = self._uic_payload
+
+        parsed = None
+        if success and data_type == UIC_TYPE_JSON and raw:
+            try:
+                import json
+                parsed = json.loads(raw.decode("utf-8", errors="replace"))
+            except Exception as e:
+                logger.warning("iSAP UIC JSON parse failed: %s", e)
+        return {
+            "success": success,
+            "data_type": data_type,
+            "raw": raw,
+            "data": parsed,
+        }
+
+    # ------------------------------------------------------------------
     # Hardware keys (표 111)
     # ------------------------------------------------------------------
 
@@ -870,6 +1037,27 @@ class ISAPAgentService:
                           hold_ms: int = 0) -> None:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.swipe, x1, y1, x2, y2, screen_type, duration_ms, hold_ms)
+
+    async def async_multi_finger_swipe(self, fingers: list[dict],
+                                       screen_type: str = "front_center",
+                                       duration_ms: int = 500, hold_ms: int = 0) -> None:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self.multi_finger_swipe, fingers, screen_type, duration_ms, hold_ms)
+
+    async def async_multi_finger_tap(self, points: list[dict],
+                                     screen_type: str = "front_center") -> None:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self.multi_finger_tap, points, screen_type)
+
+    async def async_get_ui_component_info(self, target_system: int = UIC_SYS_TOTAL,
+                                          extract_scope: int = UIC_EXTRACT_FOREGROUND,
+                                          layer_no: int = 0x00, feature_id: str = "",
+                                          data_type: int = UIC_TYPE_JSON,
+                                          timeout: float = 10.0) -> dict:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, self.get_ui_component_info, target_system, extract_scope,
+            layer_no, feature_id, data_type, timeout)
 
     async def async_send_key(self, cmd: int, sub_cmd: int, key_data: int,
                              screen_type: str = "front_center",

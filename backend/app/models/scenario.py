@@ -20,6 +20,7 @@ class StepType(str, Enum):
     HKMC_SWIPE = "hkmc_swipe"
     HKMC_KEY = "hkmc_key"
     HKMC_LONG_PRESS = "hkmc_long_press"
+    HKMC_MULTI_TOUCH = "hkmc_multi_touch"  # iSAP 멀티핑거 제스처 (3점 드래그 등)
     ICAS_TOUCH = "icas_touch"
     ICAS_SWIPE = "icas_swipe"
     ICAS_KEY = "icas_key"

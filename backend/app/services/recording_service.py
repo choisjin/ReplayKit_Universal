@@ -1115,7 +1115,7 @@ class RecordingService:
                 params.get("read_timeout", 1.0),
             )
             return response
-        elif step_type in (StepType.HKMC_TOUCH, StepType.HKMC_SWIPE, StepType.HKMC_KEY, StepType.HKMC_LONG_PRESS):
+        elif step_type in (StepType.HKMC_TOUCH, StepType.HKMC_SWIPE, StepType.HKMC_KEY, StepType.HKMC_LONG_PRESS, StepType.HKMC_MULTI_TOUCH):
             if not device_id:
                 raise ValueError("HKMC/iSAP step requires a device_id")
             dev = self.dm.get_device(device_id)
@@ -1137,6 +1137,21 @@ class RecordingService:
                 await svc.async_swipe(params["x1"], params["y1"], params["x2"], params["y2"],
                                       screen_type, int(params.get("duration_ms", 0)),
                                       hold_ms=int(params.get("hold_ms", 0) or 0))
+            elif step_type == StepType.HKMC_MULTI_TOUCH:
+                if not is_isap:
+                    raise ValueError("HKMC_MULTI_TOUCH은 iSAP 디바이스 전용입니다")
+                fingers = params.get("fingers", [])
+                if not fingers:
+                    raise ValueError("HKMC_MULTI_TOUCH requires fingers array")
+                is_tap = all(f.get("x1") == f.get("x2") and f.get("y1") == f.get("y2")
+                             for f in fingers)
+                if is_tap:
+                    pts = [{"x": f["x1"], "y": f["y1"]} for f in fingers]
+                    await svc.async_multi_finger_tap(pts, screen_type)
+                else:
+                    await svc.async_multi_finger_swipe(
+                        fingers, screen_type, int(params.get("duration_ms", 500)),
+                        hold_ms=int(params.get("hold_ms", 0) or 0))
             elif step_type == StepType.HKMC_KEY:
                 key_name = params.get("key_name")
                 hold_ms = int(params.get("hold_ms", 0) or 0)

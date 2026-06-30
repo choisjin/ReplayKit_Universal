@@ -1003,7 +1003,7 @@ async def get_device_info(device_id: str):
 
 class InputRequest(BaseModel):
     device_id: str
-    action: str  # "tap" | "swipe" | "input_text" | "key_event" | "adb_command" | "serial_command" | "module_command" | "hkmc_touch" | "hkmc_swipe" | "hkmc_key" | "icas_touch" | "icas_swipe" | "icas_key"
+    action: str  # "tap" | "swipe" | "input_text" | "key_event" | "adb_command" | "serial_command" | "module_command" | "hkmc_touch" | "hkmc_swipe" | "hkmc_key" | "hkmc_multi_touch" | "hkmc_uic" | "icas_touch" | "icas_swipe" | "icas_key"
     params: dict
 
 
@@ -1045,7 +1045,8 @@ async def device_input(req: InputRequest):
             )
             return {"result": "ok", "response": response}
 
-        if req.action in ("hkmc_touch", "hkmc_swipe", "hkmc_key", "hkmc_long_press", "repeat_tap") and dev and dev.type == "isap_agent":
+        if req.action in ("hkmc_touch", "hkmc_swipe", "hkmc_key", "hkmc_long_press",
+                          "hkmc_multi_touch", "hkmc_uic", "repeat_tap") and dev and dev.type == "isap_agent":
             isap = dm.get_isap_service(req.device_id)
             if not isap:
                 raise HTTPException(status_code=400, detail=f"iSAP device {req.device_id} not connected")
@@ -1065,6 +1066,35 @@ async def device_input(req: InputRequest):
                 await isap.async_swipe(p["x1"], p["y1"], p["x2"], p["y2"], screen_type,
                                        int(p.get("duration_ms", 0)),
                                        hold_ms=int(p.get("hold_ms", 0) or 0))
+            elif req.action == "hkmc_multi_touch":
+                fingers = p.get("fingers", [])
+                if not fingers:
+                    raise HTTPException(status_code=400, detail="fingers array required")
+                # 탭 vs 드래그 판별: 모든 손가락의 시작=끝이면 탭
+                is_tap = all(f.get("x1") == f.get("x2") and f.get("y1") == f.get("y2") for f in fingers)
+                if is_tap:
+                    points = [{"x": f["x1"], "y": f["y1"]} for f in fingers]
+                    await isap.async_multi_finger_tap(points, screen_type)
+                else:
+                    await isap.async_multi_finger_swipe(
+                        fingers, screen_type, int(p.get("duration_ms", 500)),
+                        hold_ms=int(p.get("hold_ms", 0) or 0))
+            elif req.action == "hkmc_uic":
+                result = await isap.async_get_ui_component_info(
+                    target_system=int(p.get("target_system", 0)),
+                    extract_scope=int(p.get("extract_scope", 1)),
+                    layer_no=int(p.get("layer_no", 0)),
+                    feature_id=p.get("feature_id", ""),
+                    data_type=int(p.get("data_type", 1)),
+                    timeout=float(p.get("timeout", 10.0)),
+                )
+                # raw bytes는 JSON 직렬화 불가 — 메타만 반환
+                return {"result": "ok", "response": {
+                    "success": result["success"],
+                    "data_type": result["data_type"],
+                    "data": result["data"],
+                    "raw_len": len(result["raw"]),
+                }}
             elif req.action == "hkmc_key":
                 key_name = p.get("key_name")
                 if key_name:

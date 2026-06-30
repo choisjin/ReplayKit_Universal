@@ -1397,6 +1397,8 @@ class PlaybackService:
             return f"LP ({p.get('x',0)},{p.get('y',0)}) {p.get('duration_ms',3000)}ms screen={p.get('screen_type','')}"
         if t in (StepType.HKMC_SWIPE, StepType.ICAS_SWIPE):
             return f"DRAG ({p.get('x1',0)},{p.get('y1',0)})→({p.get('x2',0)},{p.get('y2',0)}) {p.get('duration_ms',0)}ms screen={p.get('screen_type','')}"
+        if t == StepType.HKMC_MULTI_TOUCH:
+            return f"MULTI {len(p.get('fingers',[]))}finger {p.get('duration_ms',500)}ms screen={p.get('screen_type','')}"
         # 일반 ADB 등도 혹시 RAND 라벨이 붙으면 동일 포맷으로
         return f"{t.value if hasattr(t, 'value') else t} {p}"
 
@@ -1544,6 +1546,10 @@ class PlaybackService:
         elif step.type == StepType.HKMC_LONG_PRESS:
             st = step.screen_type or p.get("screen_type", "")
             return f"hkmc_long_press ({p.get('x', 0)}, {p.get('y', 0)}) {p.get('duration_ms', 3000)}ms [{st}]"
+        elif step.type == StepType.HKMC_MULTI_TOUCH:
+            st = step.screen_type or p.get("screen_type", "")
+            n = len(p.get("fingers", []))
+            return f"hkmc_multi_touch {n}finger {p.get('duration_ms', 500)}ms [{st}]"
         elif step.type == StepType.ICAS_TOUCH:
             st = step.screen_type or p.get("screen_type", "")
             return f"icas_touch ({p.get('x', 0)}, {p.get('y', 0)}) [{st}]"
@@ -2708,7 +2714,7 @@ class PlaybackService:
                 params["data"],
                 params.get("read_timeout", 1.0),
             )
-        elif step.type in (StepType.HKMC_TOUCH, StepType.HKMC_SWIPE, StepType.HKMC_KEY, StepType.HKMC_LONG_PRESS) or (step.type == StepType.REPEAT_TAP and self._is_hkmc_device(real_id)):
+        elif step.type in (StepType.HKMC_TOUCH, StepType.HKMC_SWIPE, StepType.HKMC_KEY, StepType.HKMC_LONG_PRESS, StepType.HKMC_MULTI_TOUCH) or (step.type == StepType.REPEAT_TAP and self._is_hkmc_device(real_id)):
             if not real_id:
                 raise ValueError("HKMC/iSAP step requires device_id")
             # 액션 실행 중 연결 끊김 시 재연결 후 재시도 (최대 2회).
@@ -2767,6 +2773,21 @@ class PlaybackService:
                             await svc.async_swipe(params["x1"], params["y1"], params["x2"], params["y2"],
                                                   screen_type, int(params.get("duration_ms", 0)),
                                                   hold_ms=hold_ms)
+                    elif step.type == StepType.HKMC_MULTI_TOUCH:
+                        if not is_isap:
+                            raise ValueError("HKMC_MULTI_TOUCH은 iSAP 디바이스 전용입니다")
+                        fingers = params.get("fingers", [])
+                        if not fingers:
+                            raise ValueError("HKMC_MULTI_TOUCH requires fingers array")
+                        is_tap = all(f.get("x1") == f.get("x2") and f.get("y1") == f.get("y2")
+                                     for f in fingers)
+                        if is_tap:
+                            pts = [{"x": f["x1"], "y": f["y1"]} for f in fingers]
+                            await svc.async_multi_finger_tap(pts, screen_type)
+                        else:
+                            await svc.async_multi_finger_swipe(
+                                fingers, screen_type, int(params.get("duration_ms", 500)),
+                                hold_ms=int(params.get("hold_ms", 0) or 0))
                     elif step.type == StepType.HKMC_KEY:
                         key_name = params.get("key_name")
                         direction = params.get("direction")
