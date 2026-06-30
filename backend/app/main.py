@@ -44,7 +44,11 @@ from .services.adb_service import resolve_sf_display_id, resolve_input_display_i
 from .services.capture.ffmpeg_runtime import log_runtime_status as _log_capture_runtime_status
 from .services.capture.scrcpy_server import log_scrcpy_status as _log_scrcpy_status
 from .models.scenario import ScenarioResult
-from .services.playback_service import RESULTS_DIR as _RESULTS_DIR
+from .services.playback_service import (
+    RESULTS_DIR as _RESULTS_DIR,
+    STEPS_NDJSON_NAME as _STEPS_NDJSON_NAME,
+    append_step_ndjson as _append_step_ndjson,
+)
 
 
 def _result_filename(result_path: str) -> str:
@@ -1619,7 +1623,7 @@ async def _run_play_job(data: dict):
             playback_service._result_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             playback_service._setup_run_output_dir(scenario_name)
             if playback_service._run_output_dir:
-                _steps_ndjson = playback_service._run_output_dir / playback_service.STEPS_NDJSON_NAME
+                _steps_ndjson = playback_service._run_output_dir / _STEPS_NDJSON_NAME
                 try:
                     _steps_ndjson.write_text("", encoding="utf-8")  # 새 런 시작 — 빈 파일로 초기화
                 except Exception as e:
@@ -1695,7 +1699,7 @@ async def _run_play_job(data: dict):
                             step_result.description = f"[Cycle {iteration}] {step_result.description}" if step_result.description else f"[Cycle {iteration}]"
                     # NDJSON에 먼저 durable 기록 (remap된 step_id/description 반영분)
                     if _steps_ndjson is not None:
-                        playback_service.append_step_ndjson(_steps_ndjson, step_result)
+                        _append_step_ndjson(_steps_ndjson, step_result)
                     result.step_results.append(step_result)
                     # 인메모리 리스트는 최근 tail만 유지 (출력은 NDJSON 정본에서 조립)
                     if _steps_ndjson is not None and len(result.step_results) > _STEP_MEM_CAP:
@@ -1762,7 +1766,7 @@ async def _run_play_job(data: dict):
         if runtime_fails:
             if _steps_ndjson is not None:
                 for _rf in runtime_fails:
-                    playback_service.append_step_ndjson(_steps_ndjson, _rf)
+                    _append_step_ndjson(_steps_ndjson, _rf)
             result.step_results.extend(runtime_fails)
             result.failed_steps += len(runtime_fails)
             if _steps_ndjson is not None and len(result.step_results) > _STEP_MEM_CAP:
@@ -1895,7 +1899,7 @@ async def _run_play_group_job(data: dict):
         # 런에서 step_results 인메모리 무한 누적/매 사이클 전량 재직렬화로 인한 OOM 방지.
         _steps_ndjson: Optional[Path] = None
         if playback_service._run_output_dir:
-            _steps_ndjson = playback_service._run_output_dir / playback_service.STEPS_NDJSON_NAME
+            _steps_ndjson = playback_service._run_output_dir / _STEPS_NDJSON_NAME
             try:
                 _steps_ndjson.write_text("", encoding="utf-8")
             except Exception as e:
@@ -2016,7 +2020,7 @@ async def _run_play_group_job(data: dict):
                                 step_result.excluded_from_result = True
 
                         if _steps_ndjson is not None:
-                            playback_service.append_step_ndjson(_steps_ndjson, step_result)
+                            _append_step_ndjson(_steps_ndjson, step_result)
                         unified_result.step_results.append(step_result)
                         if _steps_ndjson is not None and len(unified_result.step_results) > _STEP_MEM_CAP:
                             del unified_result.step_results[:-_STEP_MEM_CAP]
@@ -2129,7 +2133,7 @@ async def _run_play_group_job(data: dict):
         if runtime_fails:
             if _steps_ndjson is not None:
                 for _rf in runtime_fails:
-                    playback_service.append_step_ndjson(_steps_ndjson, _rf)
+                    _append_step_ndjson(_steps_ndjson, _rf)
             unified_result.step_results.extend(runtime_fails)
             unified_result.failed_steps += len(runtime_fails)
             if _steps_ndjson is not None and len(unified_result.step_results) > _STEP_MEM_CAP:
