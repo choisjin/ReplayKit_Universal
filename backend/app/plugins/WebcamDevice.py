@@ -19,6 +19,7 @@ import logging
 import sys
 import tempfile
 import threading
+import time as _time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -71,6 +72,7 @@ class WebcamDevice:
         self._cap: Optional[cv2.VideoCapture] = None
         self._is_connected = False
         self._lock = threading.Lock()  # cap.read() 직렬화
+        self._last_read_ts = 0.0  # 마지막 read 시각 — 큐 드레인 필요 여부 판단(_read_frame)
 
     # ------------------------------------------------------------------
     # Connection
@@ -152,9 +154,24 @@ class WebcamDevice:
             cap = self._cap
             if cap is None or not cap.isOpened():
                 raise RuntimeError("Webcam not connected")
-            # DirectShow 카메라는 가끔 첫 read가 stale → 한 번 버리고 다시
-            cap.grab()
+            # 드라이버/백엔드 프레임 큐 드레인 — 마지막 read 이후 쌓인 과거 프레임을
+            # 전부 버리고 '지금' 프레임을 반환한다.
+            # grab() 1회로는 부족: 재생 중에는 미러링(연속 read)이 없어서 read가
+            # 스텝 캡처 때만 일어나고, 큐가 직전 스텝 시점 프레임들로 차 있어
+            # 스텝 N의 캡처가 스텝 N-1 시점 화면으로 나오는 한 스텝 지연이 발생했다.
+            # (스텝 테스트는 미러 뷰가 큐를 상시 비워줘서 정상으로 보였던 것.)
+            # 직전 read가 최근(<0.2s)이면 연속 스트리밍 중 = 큐가 이미 fresh → 기존처럼
+            # 1장만 버려 미러링 fps를 유지하고, 오래됐으면 ~150ms 동안 grab으로 큐를
+            # 소진(큐에 있으면 즉시 pop, 비면 새 프레임 대기 ~33ms/장)한 뒤 읽는다.
+            now = _time.monotonic()
+            if now - self._last_read_ts > 0.2:
+                deadline = now + 0.15
+                while _time.monotonic() < deadline:
+                    cap.grab()
+            else:
+                cap.grab()
             ret, frame = cap.read()
+            self._last_read_ts = _time.monotonic()
         if not ret or frame is None:
             raise RuntimeError("Webcam read failed")
         return frame
