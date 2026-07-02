@@ -1950,6 +1950,25 @@ def disconnect_instance(module_name: str, endpoint: Optional[str] = None):
     return result
 
 
+def _serial_device_still_connected(key: str) -> bool:
+    """캐시 키(module@endpoint)의 인스턴스가, 디바이스 페이지에서 여전히 '연결됨'인
+    시리얼 디바이스 소속인지 확인 (cleanup 시 포트 유지 판단용)."""
+    if "@" not in key:
+        return False
+    mod, _, endpoint = key.partition("@")
+    try:
+        from ..dependencies import device_manager as dm
+        for d in dm.list_all():
+            if d.address == endpoint and (d.info or {}).get("module") == mod \
+                    and d.status == "connected":
+                ct = (d.info or {}).get("connect_type",
+                                        "serial" if d.type == "serial" else "none")
+                return ct == "serial"
+    except Exception:
+        pass
+    return False
+
+
 def cleanup_active_instances(reason: str = "") -> dict[str, str]:
     """모든 활성 모듈 인스턴스에 graceful Disconnect를 시도하고 캐시를 비운다.
 
@@ -1957,14 +1976,32 @@ def cleanup_active_instances(reason: str = "") -> dict[str, str]:
     하기 위함이다. 인스턴스가 Disconnect/Close 같은 메서드를 가지면 호출하고, 어떤 결과든
     조용히 무시한 뒤 캐시에서 제거한다.
 
+    예외: 디바이스 페이지에서 사용자가 연결해 둔 **시리얼** 모듈 인스턴스는 포트를
+    유지한다(진행 중 로깅 세션만 StopLogging으로 저장·정리, 캐시 잔류). 여기서
+    Disconnect 하면 다음 재생의 첫 module_command가 포트를 재오픈하며 DTR 펄스로
+    보드(아두이노 등)가 리셋되어, 부트 구간(~2s)에 떨어진 첫 명령이 씹히고 이미지
+    비교 타이밍이 스텝 테스트와 달라지는 문제가 있었다. 시리얼 포트는 run 스코프가
+    아니라 디바이스 연결 스코프 — 해제는 디바이스 페이지 연결끊기/삭제가 담당한다.
+
     Returns:
-        {module_name: "ok" | "skipped" | "error: <msg>"} — 호출 결과 요약 (디버그/로그용).
+        {module_name: "ok" | "kept" | "skipped" | "error: <msg>"} — 호출 결과 요약.
     """
     summary: dict[str, str] = {}
     # 순회 중 dict 변경을 피하기 위해 키 스냅샷
     for name in list(_instances.keys()):
         inst = _instances.get(name)
         if inst is None:
+            continue
+        # 연결된 시리얼 디바이스 소속 인스턴스 → 포트 유지, 세션만 정리
+        if _serial_device_still_connected(name):
+            if getattr(inst, "_capturing", False):
+                try:
+                    inst.StopLogging()
+                    summary[name] = "kept(StopLogging)"
+                except Exception as e:
+                    summary[name] = f"kept(StopLogging error: {e})"
+            else:
+                summary[name] = "kept(device-connected)"
             continue
         called = False
         # Disconnect → Close → close → StopLogging/StopSave 순서로 시도 (대소문자 다양성).
