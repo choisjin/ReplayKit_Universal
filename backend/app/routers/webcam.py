@@ -21,11 +21,19 @@ router = APIRouter(prefix="/api/webcam", tags=["webcam"])
 
 
 def _get_primary_webcam_indices() -> set[int]:
-    """주 디바이스로 등록된 웹캠 인덱스 집합 (PIP 목록에서 제외용)."""
+    """주 디바이스로 **연결 중**인 웹캠 인덱스 집합 (PIP 목록에서 제외용).
+
+    제외 목적은 하드웨어 경합 방지 — 주 디바이스의 WebcamDevice가 열어둔 캡처를
+    PIP가 재오픈하면 기존 스트리밍이 끊긴다. 따라서 실제로 카메라를 점유 중인
+    (status=connected) 디바이스만 제외한다. 등록만 되어 있고 연결 해제된 웹캠은
+    아무것도 점유하지 않으므로 PIP에서 자유롭게 사용 가능해야 한다.
+    (과거: 등록 여부만 보고 전부 제외 → 웹캠 2대를 모두 등록한 환경에서 하나를
+    연결 해제해도 PIP 목록이 항상 비는 문제가 있었다.)
+    """
     indices: set[int] = set()
     try:
         for d in device_manager.list_primary():
-            if d.type == "webcam":
+            if d.type == "webcam" and d.status == "connected":
                 try:
                     indices.add(int(d.info.get("device_index", -1)))
                 except (TypeError, ValueError):
@@ -44,7 +52,9 @@ async def list_devices():
     """
     svc = get_webcam_service()
     excluded = _get_primary_webcam_indices()
-    return {"devices": svc.list_devices(exclude=excluded)}
+    # excluded 를 함께 반환 — 목록이 비었을 때 "전부 주 디바이스 점유" vs "탐지 실패" 를
+    # 프론트/사용자가 구분할 수 있게 한다.
+    return {"devices": svc.list_devices(exclude=excluded), "excluded": sorted(excluded)}
 
 
 @router.get("/resolutions/{device_index}")
