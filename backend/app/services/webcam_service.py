@@ -429,6 +429,15 @@ class WebcamService:
     # ------------------------------------------------------------
     # Preview
     # ------------------------------------------------------------
+    def get_latest_frame(self) -> Optional["np.ndarray"]:
+        """최신 프레임 BGR ndarray 복사본 반환 (오버레이 미적용).
+
+        Compositor가 이 싱글톤이 점유 중인 카메라를 소스로 쓸 때 이중 오픈 대신
+        여기서 프레임을 공유받는다 (DirectShow는 같은 카메라 이중 오픈 거부)."""
+        with self._latest_frame_lock:
+            frame = self._latest_frame
+            return None if frame is None else frame.copy()
+
     def get_latest_jpeg(self, quality: int = 80) -> Optional[bytes]:
         """최신 프레임을 JPEG bytes로 인코딩. 카메라 미오픈 or 프레임 없음 시 None."""
         with self._latest_frame_lock:

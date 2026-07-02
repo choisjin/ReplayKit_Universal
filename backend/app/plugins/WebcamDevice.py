@@ -234,6 +234,15 @@ class WebcamDevice:
         )
         return frame.copy()
 
+    def GetLatestFrame(self) -> Optional[np.ndarray]:
+        """캡처 스레드가 유지하는 최신 프레임 BGR 복사본 (없으면 None).
+
+        Compositor가 이 디바이스가 점유 중인 카메라를 소스로 쓸 때 이중 오픈 대신
+        여기서 프레임을 공유받는다 (DirectShow는 같은 카메라 이중 오픈 거부)."""
+        with self._frame_lock:
+            frame = self._latest_frame
+            return None if frame is None else frame.copy()
+
     def Capture(self, save_path: str = "") -> str:
         """이미지 캡처. save_path 비어있으면 임시 파일."""
         if not save_path:

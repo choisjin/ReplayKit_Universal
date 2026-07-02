@@ -170,7 +170,15 @@ else:
 
 
 class WebcamCapture(_SourceBase):
-    """cv2.VideoCapture 기반 백그라운드 캡처 (OS 별 backend 자동 선택)."""
+    """웹캠 소스 — 이미 카메라를 점유 중인 소유자가 있으면 프레임을 공유받고,
+    없을 때만 직접 cv2.VideoCapture를 연다.
+
+    DirectShow는 같은 카메라의 이중 오픈을 거부하므로, 주 디바이스(WebcamDevice)나
+    PIP(webcam_service)가 이미 연 카메라를 compositor가 다시 열면 실패해 '[no signal]'
+    검은 화면이 되거나, 반대로 compositor가 선점하면 주 디바이스가 깨졌다.
+    → 소유자 프레임 공유(provider)로 경합 자체를 제거. 소유자가 나타나거나 사라지면
+    루프가 2초 주기로 자동 재획득(reacquire)하여 무중단 전환한다.
+    """
     def __init__(self, src_id: str, device_index: int, capture_w: int = 0, capture_h: int = 0,
                  label: str = ""):
         super().__init__(src_id, label or f"Webcam {device_index}")
@@ -179,12 +187,55 @@ class WebcamCapture(_SourceBase):
         self.capture_h = int(capture_h) if capture_h else 0
         self._cap: Optional[cv2.VideoCapture] = None
         self._actual_fps: float = 30.0
+        # 외부 소유자(주 디바이스/PIP)의 최신 프레임 getter — None이면 직접 오픈 모드
+        self._provider = None  # Optional[Callable[[], Optional[np.ndarray]]]
+        self._provider_desc = ""
 
-    def start(self) -> bool:
+    def _resolve_provider(self):
+        """이 인덱스 카메라를 이미 점유 중인 소유자의 (frame_getter, 설명) 반환. 없으면 None.
+
+        우선순위: 주 디바이스 WebcamDevice(연속 캡처 스레드 보유) → PIP webcam_service.
+        """
+        # 1) 주 디바이스 (WebcamDevice — 연결된 것만)
+        try:
+            from ..dependencies import device_manager as dm
+            for d in dm.list_primary():
+                if d.type == "webcam" and d.status == "connected":
+                    try:
+                        idx = int(d.info.get("device_index", -1))
+                    except (TypeError, ValueError):
+                        continue
+                    if idx == self.device_index:
+                        cam = dm.get_webcam_device(d.id)
+                        if cam is not None and hasattr(cam, "GetLatestFrame"):
+                            return cam.GetLatestFrame, f"primary:{d.id}"
+        except Exception as e:
+            logger.debug("Compositor: primary webcam provider probe failed: %s", e)
+        # 2) PIP 싱글톤 (webcam_service)
+        try:
+            from .webcam_service import get_webcam_service
+            svc = get_webcam_service()
+            if svc.is_open() and getattr(svc, "_device_index", None) == self.device_index:
+                return svc.get_latest_frame, "pip-singleton"
+        except Exception as e:
+            logger.debug("Compositor: pip webcam provider probe failed: %s", e)
+        return None
+
+    def _open_own_cap(self) -> bool:
+        """직접 VideoCapture 오픈 (소유자 부재 시). 성공 시 self._cap 설정."""
         cap = cv2.VideoCapture(self.device_index, _CV_CAM_BACKEND)
         if not cap.isOpened():
-            logger.warning("Compositor: webcam %d open failed", self.device_index)
+            try:
+                cap.release()
+            except Exception:
+                pass
             return False
+        # MJPG(압축) 우선 — YUY2 무압축은 USB 대역폭을 독점해 다른 웹캠과 공존 불가
+        # (WebcamDevice/webcam_service와 동일 정책)
+        try:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        except Exception:
+            pass
         if self.capture_w > 0:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.capture_w)
         if self.capture_h > 0:
@@ -192,30 +243,92 @@ class WebcamCapture(_SourceBase):
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         self._actual_fps = float(fps) if fps > 0 else 30.0
         self._cap = cap
+        return True
+
+    def start(self) -> bool:
+        provider = self._resolve_provider()
+        if provider is not None:
+            self._provider, self._provider_desc = provider
+            self._actual_fps = 30.0
+            logger.info("Compositor source webcam %d shared from %s",
+                        self.device_index, self._provider_desc)
+        else:
+            if not self._open_own_cap():
+                logger.warning("Compositor: webcam %d open failed (no provider, direct open rejected)",
+                               self.device_index)
+                return False
+            logger.info("Compositor source webcam %d opened directly (%.1ffps)",
+                        self.device_index, self._actual_fps)
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._loop, daemon=True, name=f"compositor-webcam-{self.device_index}",
         )
         self._thread.start()
-        logger.info("Compositor source webcam %d opened (%.1ffps)", self.device_index, self._actual_fps)
         return True
+
+    def _reacquire(self) -> None:
+        """프레임이 끊겼을 때 소유자 변화(주 디바이스 연결/해제 등)에 맞춰 소스 재획득."""
+        provider = self._resolve_provider()
+        if provider is not None:
+            fn, desc = provider
+            # 직접 오픈 중이었다면 소유자에게 양보 (경합 제거)
+            if self._cap is not None:
+                try:
+                    self._cap.release()
+                except Exception:
+                    pass
+                self._cap = None
+            if desc != self._provider_desc:
+                logger.info("Compositor source webcam %d re-shared from %s", self.device_index, desc)
+            self._provider, self._provider_desc = fn, desc
+            return
+        # 소유자 없음 → 직접 오픈 (기존 provider 는 무효화)
+        self._provider, self._provider_desc = None, ""
+        if self._cap is None or not self._cap.isOpened():
+            if self._cap is not None:
+                try:
+                    self._cap.release()
+                except Exception:
+                    pass
+                self._cap = None
+            if self._open_own_cap():
+                logger.info("Compositor source webcam %d re-opened directly", self.device_index)
 
     def _loop(self) -> None:
         interval = 1.0 / max(1.0, self._actual_fps)
+        last_frame_ts = time.monotonic()
+        last_reacquire_ts = 0.0
         while not self._stop.is_set():
-            cap = self._cap
-            if cap is None or not cap.isOpened():
-                time.sleep(0.05)
-                continue
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                time.sleep(0.03)
-                continue
-            self._set_latest(frame)
+            frame = None
+            provider = self._provider
+            if provider is not None:
+                try:
+                    frame = provider()
+                except Exception:
+                    frame = None
+            else:
+                cap = self._cap
+                if cap is not None and cap.isOpened():
+                    try:
+                        ok, f = cap.read()
+                        frame = f if (ok and f is not None) else None
+                    except Exception:
+                        frame = None
+            now = time.monotonic()
+            if frame is not None:
+                self._set_latest(frame)
+                last_frame_ts = now
+            elif now - last_frame_ts > 2.0 and now - last_reacquire_ts > 2.0:
+                # 2초 이상 무프레임 → 소유자가 생겼거나(내 직접 오픈이 무효), 사라졌거나
+                # (provider 죽음), USB 드롭 — 재획득 시도
+                last_reacquire_ts = now
+                self._reacquire()
             time.sleep(interval)
 
     def stop(self) -> None:
         super().stop()
+        self._provider = None
+        self._provider_desc = ""
         if self._cap is not None:
             try:
                 self._cap.release()
