@@ -126,6 +126,43 @@ def _collect_candidate_ips_192() -> set[str]:
             if ip_str not in local_ips:
                 candidate_ips.add(ip_str)
     return candidate_ips
+
+
+def _validate_ip_whitelist(ips) -> set[str]:
+    """스캔 설정의 IP 화이트리스트를 검증/정규화한다.
+
+    유효한 IPv4 문자열만 통과시키고, 잘못된 값은 경고 로그 후 제외한다.
+    None/빈 리스트면 빈 집합을 반환한다.
+    """
+    import ipaddress
+
+    out: set[str] = set()
+    for raw in ips or []:
+        s = str(raw).strip()
+        if not s:
+            continue
+        try:
+            ipaddress.IPv4Address(s)
+        except ValueError:
+            logger.warning("scan whitelist: invalid IPv4 skipped: %r", raw)
+            continue
+        out.add(s)
+    return out
+
+
+def _resolve_scan_targets(ips=None) -> set[str]:
+    """스캔 대상 IP 집합을 결정한다.
+
+    - agent별 고정 IP 화이트리스트(ips)가 지정되면 **그 IP만** 프로브한다
+      (서브넷 스윕 없음 — IDS 부하/오탐 최소화).
+    - 화이트리스트가 비어 있으면 기존 동작(192.168.* 서브넷 스윕)으로 폴백한다.
+    """
+    whitelist = _validate_ip_whitelist(ips)
+    if whitelist:
+        return whitelist
+    return _collect_candidate_ips_192()
+
+
 HKMC_HANDSHAKE_VALUES = {
     bytes.fromhex("6161000000035e002185fd6f6f"),
     bytes.fromhex("6161000000035e0000df856f6f"),
@@ -160,17 +197,19 @@ async def _probe_hkmc_host(
 
 async def _scan_hkmc_tcp(
     ports: list[int] | None = None,
+    ips: list[str] | None = None,
     connect_timeout: float = 0.3,
     max_concurrent: int = 100,
 ) -> list[dict]:
-    """LAN 서브넷의 모든 IP에 TCP 연결을 시도하여 HKMC 에이전트를 탐지한다.
-    스캔 범위는 192.168.* 로 제한한다.
+    """HKMC 에이전트를 탐지한다.
+
+    IP 화이트리스트(ips)가 지정되면 그 IP만, 없으면 192.168.* 서브넷을 스윕한다.
     """
     if not ports:
         logger.info("HKMC scan skipped: no ports configured")
         return []
 
-    candidate_ips = _collect_candidate_ips_192()
+    candidate_ips = _resolve_scan_targets(ips)
     if not candidate_ips:
         return []
 
@@ -236,11 +275,15 @@ async def _tcp_reachable(ip: str, port: int, timeout: float = 0.5) -> bool:
 
 async def scan_tcp_port(
     port: int,
+    ips: list[str] | None = None,
     connect_timeout: float = 0.3,
     max_concurrent: int = 100,
 ) -> list[dict]:
-    """LAN 서브넷(192.168.*)에서 특정 TCP 포트가 열린 호스트를 탐지."""
-    candidate_ips = _collect_candidate_ips_192()
+    """특정 TCP 포트가 열린 호스트를 탐지.
+
+    IP 화이트리스트(ips)가 지정되면 그 IP만, 없으면 192.168.* 서브넷을 스윕한다.
+    """
+    candidate_ips = _resolve_scan_targets(ips)
     if not candidate_ips:
         return []
 
@@ -282,11 +325,15 @@ async def _probe_udp_port(
 
 async def _scan_udp_port(
     port: int,
+    ips: list[str] | None = None,
     connect_timeout: float = 0.5,
     max_concurrent: int = 100,
 ) -> list[dict]:
-    """LAN 서브넷(192.168.*)에서 특정 UDP 포트에 응답하는 호스트를 탐지."""
-    candidate_ips = _collect_candidate_ips_192()
+    """특정 UDP 포트에 응답하는 호스트를 탐지.
+
+    IP 화이트리스트(ips)가 지정되면 그 IP만, 없으면 192.168.* 서브넷을 스윕한다.
+    """
+    candidate_ips = _resolve_scan_targets(ips)
     if not candidate_ips:
         return []
 
@@ -341,15 +388,19 @@ async def _probe_dlt_host(
 
 async def _scan_dlt_tcp(
     ports: list[int] | None = None,
+    ips: list[str] | None = None,
     connect_timeout: float = 0.3,
     max_concurrent: int = 100,
 ) -> list[dict]:
-    """LAN 서브넷(192.168.*)에서 DLT 데몬을 탐지."""
+    """DLT 데몬을 탐지.
+
+    IP 화이트리스트(ips)가 지정되면 그 IP만, 없으면 192.168.* 서브넷을 스윕한다.
+    """
     if not ports:
         logger.info("DLT scan skipped: no ports configured")
         return []
 
-    candidate_ips = _collect_candidate_ips_192()
+    candidate_ips = _resolve_scan_targets(ips)
     if not candidate_ips:
         return []
 
@@ -1948,11 +1999,13 @@ class DeviceManager:
             logger.debug("COM port existence check failed for %s: %s", address, e)
             return True  # 스캔 실패 시 기존 연결 시도 흐름 유지
 
-    async def scan_hkmc(self, ports: list[int] | None = None) -> list[dict]:
-        """TCP 포트 스캔으로 LAN(192.168.*) 상의 HKMC 디바이스 탐지.
-        ports가 비어있으면 스캔하지 않음.
+    async def scan_hkmc(
+        self, ports: list[int] | None = None, ips: list[str] | None = None
+    ) -> list[dict]:
+        """HKMC 디바이스 탐지. ports가 비어있으면 스캔하지 않음.
+        ips 화이트리스트가 지정되면 그 IP만, 없으면 192.168.* 서브넷 스윕.
         """
-        return await _scan_hkmc_tcp(ports=ports)
+        return await _scan_hkmc_tcp(ports=ports, ips=ips)
 
     async def scan_bench(self, host: str | None = None, port: int | None = None) -> list[dict]:
         """WoohyunBench 단일 호스트 UDP 프로브. host/port 미지정 시 기본값(192.168.1.101:25000)."""
@@ -1979,18 +2032,22 @@ class DeviceManager:
         """
         return await _scan_radmoon(bridge=bridge)
 
-    async def scan_dlt(self, ports: list[int] | None = None) -> list[dict]:
-        """TCP 포트 스캔으로 LAN(192.168.*) 상의 DLT 데몬 탐지."""
-        return await _scan_dlt_tcp(ports=ports)
+    async def scan_dlt(
+        self, ports: list[int] | None = None, ips: list[str] | None = None
+    ) -> list[dict]:
+        """DLT 데몬 탐지. ips 화이트리스트가 지정되면 그 IP만, 없으면 192.168.* 서브넷 스윕."""
+        return await _scan_dlt_tcp(ports=ports, ips=ips)
 
-    async def scan_isap(self, ports: list[int] | None = None) -> list[dict]:
-        """TCP 포트 스캔으로 LAN(192.168.*) 상의 iSAP Agent 탐지.
-        단순 TCP open 체크 (iSAP은 핸드셰이크를 푸시하지 않는 경우가 있어 검증 생략).
+    async def scan_isap(
+        self, ports: list[int] | None = None, ips: list[str] | None = None
+    ) -> list[dict]:
+        """iSAP Agent 탐지 — 단순 TCP open 체크 (iSAP은 핸드셰이크를 푸시하지 않는 경우가 있어 검증 생략).
+        ips 화이트리스트가 지정되면 그 IP만, 없으면 192.168.* 서브넷 스윕.
         """
         if not ports:
             logger.info("iSAP scan skipped: no ports configured")
             return []
-        candidate_ips = _collect_candidate_ips_192()
+        candidate_ips = _resolve_scan_targets(ips)
         if not candidate_ips:
             return []
         import asyncio as _a
@@ -2011,17 +2068,19 @@ class DeviceManager:
                 logger.info("iSAP scan: found open port at %s:%d", r["ip"], r["port"])
         return deduped
 
-    async def scan_ssh(self, port: int = 22) -> list[dict]:
-        """TCP 포트 스캔으로 LAN 상의 SSH 호스트 탐지."""
-        return await scan_tcp_port(port)
+    async def scan_ssh(self, port: int = 22, ips: list[str] | None = None) -> list[dict]:
+        """SSH 호스트 탐지. ips 화이트리스트가 지정되면 그 IP만, 없으면 192.168.* 서브넷 스윕."""
+        return await scan_tcp_port(port, ips=ips)
 
-    async def scan_icas(self, port: int = 22) -> list[dict]:
-        """LAN 상의 ICAS 후보 호스트 탐지 (SSH 포트 기반 단순 탐지)."""
-        return await scan_tcp_port(port)
+    async def scan_icas(self, port: int = 22, ips: list[str] | None = None) -> list[dict]:
+        """ICAS/MIB 후보 호스트 탐지 (SSH 포트 기반 단순 탐지).
+        ips 화이트리스트가 지정되면 그 IP만, 없으면 192.168.* 서브넷 스윕.
+        """
+        return await scan_tcp_port(port, ips=ips)
 
-    async def scan_udp_port(self, port: int) -> list[dict]:
-        """LAN에서 특정 UDP 포트 응답 호스트 탐지."""
-        return await _scan_udp_port(port)
+    async def scan_udp_port(self, port: int, ips: list[str] | None = None) -> list[dict]:
+        """특정 UDP 포트 응답 호스트 탐지. ips 화이트리스트가 지정되면 그 IP만, 없으면 서브넷 스윕."""
+        return await _scan_udp_port(port, ips=ips)
 
     async def scan_vision_cameras(self) -> list[dict]:
         """GigE Vision 카메라 스캔 (Harvester 기반)."""

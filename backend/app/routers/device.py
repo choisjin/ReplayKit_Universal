@@ -45,15 +45,15 @@ _DEFAULT_SCAN_SETTINGS = {
     "builtin": {
         "adb":            {"enabled": True,  "module": "",             "category": "primary"},
         "serial":         {"enabled": True,  "module": "SerialLogging","category": "auxiliary"},
-        "hkmc":           {"enabled": True,  "module": "",             "category": "primary",   "ports": [6655, 5000]},
-        "isap":           {"enabled": False, "module": "",             "category": "primary",   "ports": [20000]},
-        "icas":           {"enabled": True,  "module": "",             "category": "primary",   "port": 22},
-        "mib":            {"enabled": True,  "module": "",             "category": "primary",   "port": 22},
-        "dlt":            {"enabled": True,  "module": "DLTLogging",   "category": "auxiliary", "ports": [3490]},
+        "hkmc":           {"enabled": True,  "module": "",             "category": "primary",   "ports": [6655, 5000], "ips": []},
+        "isap":           {"enabled": False, "module": "",             "category": "primary",   "ports": [20000], "ips": []},
+        "icas":           {"enabled": True,  "module": "",             "category": "primary",   "port": 22, "ips": []},
+        "mib":            {"enabled": True,  "module": "",             "category": "primary",   "port": 22, "ips": []},
+        "dlt":            {"enabled": True,  "module": "DLTLogging",   "category": "auxiliary", "ports": [3490], "ips": []},
         "bench":          {"enabled": True,  "module": "WoohyunBench", "category": "auxiliary", "host": "192.168.1.101", "port": 25000},
         "vision_camera":  {"enabled": False, "module": "VisionCamera", "category": "primary"},
         "webcam":         {"enabled": True,  "module": "WebcamDevice", "category": "primary"},
-        "ssh":            {"enabled": True,  "module": "SSHManager",   "category": "auxiliary", "port": 22},
+        "ssh":            {"enabled": True,  "module": "SSHManager",   "category": "auxiliary", "port": 22, "ips": []},
         "smartbench":     {"enabled": True,  "module": "SmartBench",   "category": "auxiliary", "host": "192.167.0.5", "port": 8000},
         # SCAR: Linux 전용. localhost:8081 REST API 와 docker 컨테이너 'scar' 양쪽 모두 프로브.
         # 양쪽 다 죽어 있으면 결과 0건, 한쪽이라도 살아있으면 1행 반환.
@@ -84,6 +84,13 @@ def _load_scan_settings() -> dict:
             for key, default_entry in _DEFAULT_SCAN_SETTINGS["builtin"].items():
                 if key not in builtin:
                     builtin[key] = dict(default_entry)
+            # IP 화이트리스트 필드 마이그레이션: 서브넷 스윕(sweep) 대상 항목에만 ips 키 보충.
+            #   host+port 단일 프로브(smartbench/bench/scar 등)는 대상 아님.
+            _SWEEP_KEYS = ("hkmc", "isap", "icas", "mib", "dlt", "ssh")
+            for key in _SWEEP_KEYS:
+                entry = builtin.get(key)
+                if isinstance(entry, dict) and "ips" not in entry:
+                    entry["ips"] = []
             # bench 마이그레이션: 옛 {ports: [25000]} → 새 {host, port} 형태
             bench = builtin.get("bench")
             if isinstance(bench, dict):
@@ -405,10 +412,24 @@ async def scan_ports():
                 pass
         return result
 
+    def _ips_of(entry: dict) -> list[str]:
+        """스캔 설정 항목의 고정 IP 화이트리스트를 문자열 리스트로 반환.
+
+        비어 있으면 [] → 스캔 함수가 192.168.* 서브넷 스윕으로 폴백한다.
+        """
+        if not isinstance(entry, dict):
+            return []
+        raw = entry.get("ips") or []
+        return [str(x).strip() for x in raw if str(x).strip()]
+
     if _enabled("hkmc"):
-        tasks["hkmc_devices"] = asyncio.ensure_future(dm.scan_hkmc(ports=_ports_of("hkmc")))
+        tasks["hkmc_devices"] = asyncio.ensure_future(
+            dm.scan_hkmc(ports=_ports_of("hkmc"), ips=_ips_of(builtin.get("hkmc", {})))
+        )
     if _enabled("isap"):
-        tasks["isap_hosts"] = asyncio.ensure_future(dm.scan_isap(ports=_ports_of("isap")))
+        tasks["isap_hosts"] = asyncio.ensure_future(
+            dm.scan_isap(ports=_ports_of("isap"), ips=_ips_of(builtin.get("isap", {})))
+        )
     if _enabled("bench"):
         # WoohyunBench: 단일 호스트 + 포트로 UDP 프로브 (SmartBench와 동일한 단일-프로브 패턴).
         # LAN 전체 스캔(ARP+ping+UDP)은 제거됨 — 항상 host/port가 설정에 명시되어 있어야 한다.
@@ -450,7 +471,9 @@ async def scan_ports():
             return cams
         tasks["webcams"] = asyncio.ensure_future(_scan_webcams())
     if _enabled("dlt"):
-        tasks["dlt_devices"] = asyncio.ensure_future(dm.scan_dlt(ports=_ports_of("dlt")))
+        tasks["dlt_devices"] = asyncio.ensure_future(
+            dm.scan_dlt(ports=_ports_of("dlt"), ips=_ips_of(builtin.get("dlt", {})))
+        )
     if _enabled("smartbench"):
         sb_entry = builtin.get("smartbench", {}) if isinstance(builtin.get("smartbench"), dict) else {}
         sb_host = str(sb_entry.get("host") or "").strip() or None
@@ -481,14 +504,14 @@ async def scan_ports():
     if _enabled("ssh"):
         ssh_entry = builtin.get("ssh", {}) if isinstance(builtin.get("ssh"), dict) else {}
         ssh_port = int(ssh_entry.get("port", 22))
-        tasks["ssh_hosts"] = asyncio.ensure_future(dm.scan_ssh(ssh_port))
+        tasks["ssh_hosts"] = asyncio.ensure_future(dm.scan_ssh(ssh_port, ips=_ips_of(ssh_entry)))
     if _enabled("icas"):
         icas_entry = builtin.get("icas", {}) if isinstance(builtin.get("icas"), dict) else {}
         try:
             icas_port = int(icas_entry.get("port", 22))
         except (TypeError, ValueError):
             icas_port = 22
-        tasks["icas_hosts"] = asyncio.ensure_future(dm.scan_icas(icas_port))
+        tasks["icas_hosts"] = asyncio.ensure_future(dm.scan_icas(icas_port, ips=_ips_of(icas_entry)))
     if _enabled("mib"):
         # MIB도 SSH 22 기반이라 ICAS와 동일한 scan 함수 재사용. 결과 호스트는
         # 등록 시 사용자가 ICAS/MIB Agent 중 선택.
@@ -497,7 +520,7 @@ async def scan_ports():
             mib_port = int(mib_entry.get("port", 22))
         except (TypeError, ValueError):
             mib_port = 22
-        tasks["mib_hosts"] = asyncio.ensure_future(dm.scan_icas(mib_port))
+        tasks["mib_hosts"] = asyncio.ensure_future(dm.scan_icas(mib_port, ips=_ips_of(mib_entry)))
 
     # 커스텀 TCP/UDP 포트 스캔
     custom_tasks: list[tuple[str, asyncio.Task]] = []
@@ -506,10 +529,11 @@ async def scan_ports():
             label = entry.get("label", f"{entry.get('type','tcp').upper()}:{entry['port']}")
             proto = entry.get("type", "tcp")
             port = int(entry["port"])
+            entry_ips = _ips_of(entry)
             if proto == "udp":
-                custom_tasks.append((label, asyncio.ensure_future(dm.scan_udp_port(port))))
+                custom_tasks.append((label, asyncio.ensure_future(dm.scan_udp_port(port, ips=entry_ips))))
             else:
-                custom_tasks.append((label, asyncio.ensure_future(scan_tcp_port(port))))
+                custom_tasks.append((label, asyncio.ensure_future(scan_tcp_port(port, ips=entry_ips))))
 
     # 모든 태스크 병렬 실행
     all_keys = list(tasks.keys())

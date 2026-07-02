@@ -464,7 +464,7 @@ export default function DevicePage() {
   const BENCH_DEFAULT_PORT = 25000;
   // 백엔드에서 받아온 builtin 설정에 고정 포트를 강제 적용
   const applyFixedPorts = (
-    b: Record<string, { enabled: boolean; module: string; port?: number; ports?: number[]; host?: string; category?: ScanCategory }>,
+    b: Record<string, { enabled: boolean; module: string; port?: number; ports?: number[]; host?: string; ips?: string[]; category?: ScanCategory }>,
   ) => {
     const result = { ...b };
     for (const [key, ports] of Object.entries(FIXED_PORTS)) {
@@ -480,7 +480,7 @@ export default function DevicePage() {
     };
     return result;
   };
-  const [scanBuiltin, setScanBuiltin] = useState<Record<string, { enabled: boolean; module: string; port?: number; ports?: number[]; host?: string; container?: string; category?: ScanCategory }>>({
+  const [scanBuiltin, setScanBuiltin] = useState<Record<string, { enabled: boolean; module: string; port?: number; ports?: number[]; host?: string; container?: string; ips?: string[]; category?: ScanCategory }>>({
     adb: { enabled: true, module: '', category: 'primary' },
     serial: { enabled: true, module: 'SerialLogging', category: 'auxiliary' },
     hkmc: { enabled: true, module: '', ports: [6655, 5000], category: 'primary' },
@@ -494,7 +494,7 @@ export default function DevicePage() {
     scar: { enabled: true, module: 'SCAR', host: 'localhost', port: 8081, category: 'auxiliary' },
     radmoon: { enabled: true, module: 'TH', category: 'auxiliary' },
   });
-  const [scanCustom, setScanCustom] = useState<{ label: string; type: string; port: number; module: string; enabled: boolean; category?: ScanCategory }[]>([]);
+  const [scanCustom, setScanCustom] = useState<{ label: string; type: string; port: number; module: string; enabled: boolean; ips?: string[]; category?: ScanCategory }[]>([]);
 
   // 앱 시작 시 스캔 설정 동기화 — device 추가 모달에서 category 기준 필터링 위해 필요
   useEffect(() => {
@@ -3049,8 +3049,10 @@ export default function DevicePage() {
             { key: 'scar',           label: 'SCAR',           proto: 'HTTP',     editablePorts: false },
             { key: 'radmoon',        label: 'RAD_Moon (TH)',  proto: 'USB',      editablePorts: false },
           ];
+          // 서브넷 스윕 대상 — 이 항목들만 IP 화이트리스트 편집 가능(비우면 192.168.* 서브넷 스캔)
+          const SWEEP_KEYS = new Set(['hkmc', 'isap', 'icas', 'mib', 'dlt', 'ssh']);
           type BuiltinItem = typeof builtinItems[number];
-          type CustomItem = { label: string; type: string; port: number; module?: string; enabled?: boolean; category?: ScanCategory; __idx: number; __kind: 'custom' };
+          type CustomItem = { label: string; type: string; port: number; module?: string; enabled?: boolean; ips?: string[]; category?: ScanCategory; __idx: number; __kind: 'custom' };
           type BuiltinRow = BuiltinItem & { __kind: 'builtin' };
           type Row = BuiltinRow | CustomItem;
 
@@ -3151,6 +3153,22 @@ export default function DevicePage() {
                   ) : portLabel}
                 </td>
                 <td style={{ padding: '4px' }}>
+                  {SWEEP_KEYS.has(item.key) ? (
+                    <Input
+                      size="small"
+                      value={(v.ips || []).join(', ')}
+                      placeholder={t('device.ipWhitelistPlaceholder')}
+                      onChange={e => {
+                        const ips = e.target.value
+                          .split(/[,\s]+/)
+                          .map(s => s.trim())
+                          .filter(Boolean);
+                        setScanBuiltin({ ...scanBuiltin, [item.key]: { ...v, ips } });
+                      }}
+                    />
+                  ) : <span style={{ color: '#bbb' }}>-</span>}
+                </td>
+                <td style={{ padding: '4px' }}>
                   <Select size="small" allowClear disabled placeholder="-" value={v.module || undefined}
                     onChange={val => setScanBuiltin({ ...scanBuiltin, [item.key]: { ...v, module: val || '' } })}
                     style={{ width: '100%' }} options={visibleModules.map(m => ({ label: m.label, value: m.name }))} />
@@ -3183,6 +3201,22 @@ export default function DevicePage() {
                 </td>
                 <td style={{ padding: '4px' }}>{entry.port}</td>
                 <td style={{ padding: '4px' }}>
+                  <Input
+                    size="small"
+                    value={(entry.ips || []).join(', ')}
+                    placeholder={t('device.ipWhitelistPlaceholder')}
+                    onChange={e => {
+                      const ips = e.target.value
+                        .split(/[,\s]+/)
+                        .map(s => s.trim())
+                        .filter(Boolean);
+                      const n = [...scanCustom];
+                      n[idx] = { ...scanCustom[idx], ips };
+                      setScanCustom(n);
+                    }}
+                  />
+                </td>
+                <td style={{ padding: '4px' }}>
                   <Select size="small" allowClear placeholder="-" value={entry.module || undefined}
                     onChange={val => { const n = [...scanCustom]; n[idx] = { ...scanCustom[idx], module: val || '' }; setScanCustom(n); }}
                     style={{ width: '100%' }} options={visibleModules.map(m => ({ label: m.label, value: m.name }))} />
@@ -3201,13 +3235,13 @@ export default function DevicePage() {
           const renderSection = (title: string, rows: Row[], color: string) => (
             <tbody>
               <tr>
-                <td colSpan={7} style={{ padding: '8px 4px 4px', fontWeight: 600, fontSize: 11, color, borderTop: '1px solid #d9d9d9' }}>
+                <td colSpan={8} style={{ padding: '8px 4px 4px', fontWeight: 600, fontSize: 11, color, borderTop: '1px solid #d9d9d9' }}>
                   <Tag color={color === '#1677ff' ? 'blue' : 'default'}>{title}</Tag>
                   <span style={{ color: '#888', fontWeight: 400, marginLeft: 3 }}>({rows.length})</span>
                 </td>
               </tr>
               {rows.length === 0 ? (
-                <tr><td colSpan={7} style={{ padding: '6px 8px', color: '#bbb', fontSize: 11 }}>—</td></tr>
+                <tr><td colSpan={8} style={{ padding: '6px 8px', color: '#bbb', fontSize: 11 }}>—</td></tr>
               ) : (
                 rows.map(r => renderRow(r))
               )}
@@ -3223,6 +3257,7 @@ export default function DevicePage() {
                   <th style={{ padding: '6px 4px', width: 80 }}>{t('device.protocol')}</th>
                   <th style={{ padding: '6px 4px', width: 100 }}>{t('device.category')}</th>
                   <th style={{ padding: '6px 4px', width: 110 }}>{t('device.port')}</th>
+                  <th style={{ padding: '6px 4px', width: 180 }}>{t('device.ipWhitelist')}</th>
                   <th style={{ padding: '6px 4px', width: 140 }}>{t('device.module')}</th>
                   <th style={{ padding: '6px 4px', width: 40 }}></th>
                 </tr>
@@ -3249,6 +3284,7 @@ export default function DevicePage() {
                     <InputNumber size="small" placeholder="Port" value={newCustomPort}
                       onChange={v => setNewCustomPort(v)} min={1} max={65535} style={{ width: '100%' }} />
                   </td>
+                  <td style={{ padding: '4px', color: '#bbb', fontSize: 10 }}>{t('device.ipWhitelistPlaceholder')}</td>
                   <td style={{ padding: '4px' }}>
                     <Select size="small" allowClear placeholder="Module" value={newCustomModule || undefined}
                       onChange={v => setNewCustomModule(v || '')} style={{ width: '100%' }}
