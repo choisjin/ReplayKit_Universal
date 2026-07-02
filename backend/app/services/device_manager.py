@@ -3259,17 +3259,23 @@ class DeviceManager:
             return f"Disconnected: {dev.id}"
 
         if dev.type == "serial" or dev.type == "module":
-            # 화이트리스트 module 만 teardown (SCAR: netns 복원으로 인터넷 복구). 다른 module 은 무영향.
-            if dev.type == "module":
-                module_name = dev.info.get("module")
-                from .module_service import MODULES_WITH_DISCONNECT_TEARDOWN, disconnect_instance
-                if module_name in MODULES_WITH_DISCONNECT_TEARDOWN:
-                    try:
-                        msg = disconnect_instance(module_name)
-                        if msg:
-                            logger.info("module '%s' disconnect teardown: %s", module_name, msg)
-                    except Exception as e:
-                        logger.debug("module teardown failed for %s: %s", module_name, e)
+            module_name = dev.info.get("module")
+            from .module_service import MODULES_WITH_DISCONNECT_TEARDOWN, disconnect_instance
+            # 시리얼 계열 디바이스는 모듈 인스턴스(SerialLogging 등)가 실제 COM 포트를
+            # 소유한다 — _serial_conns 는 비어 있다. 여기서 모듈을 teardown 하지 않으면
+            # 포트가 열린 채 남아 사용자가 '연결 해제'해도 Arduino IDE 등 외부 도구가
+            # 포트를 잡지 못한다. 해당 포트(endpoint)의 인스턴스만 정리해 멀티 시리얼
+            # 환경에서 다른 포트 세션을 죽이지 않는다.
+            # module 타입 중 SCAR/TH 는 netns/UI 복원 등 무거운 teardown 이 필요(화이트리스트).
+            is_serial_like = dev.type == "serial" or dev.info.get("connect_type") == "serial"
+            if module_name and (is_serial_like or module_name in MODULES_WITH_DISCONNECT_TEARDOWN):
+                endpoint = dev.address if is_serial_like else None
+                try:
+                    msg = disconnect_instance(module_name, endpoint=endpoint)
+                    if msg:
+                        logger.info("module '%s' disconnect teardown: %s", module_name, msg)
+                except Exception as e:
+                    logger.debug("module teardown failed for %s: %s", module_name, e)
             self._close_serial_conn(device_id)
             dev.status = "disconnected"
             return f"Disconnected: {dev.id}"

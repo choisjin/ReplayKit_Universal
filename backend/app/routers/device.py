@@ -1578,6 +1578,7 @@ async def update_device(req: UpdateDeviceRequest):
             raise HTTPException(status_code=500, detail="Device rename failed")
 
     need_serial_reconnect = False
+    _prev_address = dev.address  # 모듈 인스턴스 키(module@port) teardown 에 필요 — 주소 변경 전 값
     if req.name is not None:
         dev.name = req.name
     if req.address is not None:
@@ -1589,10 +1590,23 @@ async def update_device(req: UpdateDeviceRequest):
             need_serial_reconnect = True
         dev.info["baudrate"] = req.baudrate
     if req.module is not None:
+        _prev_module = dev.info.get("module")
         dev.info["module"] = req.module
-        # Reset cached module instance when module changes
-        from ..services.module_service import reset_instance
-        reset_instance(req.module)
+        # Reset cached module instance when module changes.
+        # 시리얼 디바이스는 아래 serial reconnect 블록이 graceful teardown+재연결을 담당하므로
+        # 여기서 non-graceful reset_instance(단순 pop)로 포트를 고아화하지 않는다. 대신 재연결을
+        # 트리거하고, 모듈명이 바뀐 경우 옛 모듈 인스턴스는 이 포트에서 graceful teardown.
+        if dev.type == "serial":
+            need_serial_reconnect = True
+            if _prev_module and _prev_module != req.module:
+                from ..services.module_service import disconnect_instance
+                try:
+                    disconnect_instance(_prev_module, endpoint=dev.address)
+                except Exception as e:
+                    logger.warning("prev serial module teardown failed: %s", e)
+        else:
+            from ..services.module_service import reset_instance
+            reset_instance(req.module)
     if req.connect_type is not None:
         dev.info["connect_type"] = req.connect_type
     mib_resolution_changed = False
@@ -1649,11 +1663,16 @@ async def update_device(req: UpdateDeviceRequest):
                     )
                 except Exception as e:
                     logger.warning("Failed to update live MIB touch scale: %s", e)
-        # Reset cached module instance when connection params change
+        # Reset cached module instance when connection params change.
+        # 시리얼 디바이스는 아래 serial reconnect 블록이 graceful teardown+재연결로 처리
+        # (non-graceful pop 이 포트를 고아화하지 않도록). 재연결만 트리거한다.
         module_name = dev.info.get("module")
         if module_name:
-            from ..services.module_service import reset_instance
-            reset_instance(module_name)
+            if dev.type == "serial":
+                need_serial_reconnect = True
+            else:
+                from ..services.module_service import reset_instance
+                reset_instance(module_name)
 
     # Persist changes — auxiliary는 항상, primary 중 mib_agent는 해상도 변경 시 저장.
     if dev.category == "auxiliary" or (dev.type == "mib_agent" and mib_resolution_changed):
@@ -1661,11 +1680,35 @@ async def update_device(req: UpdateDeviceRequest):
 
     # Reopen serial connection if address or baudrate changed
     if need_serial_reconnect and dev.type == "serial":
-        dm._close_serial_conn(req.device_id)
+        module_name = dev.info.get("module", "")
         try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, dm._get_serial_conn, req.device_id)
+            if module_name:
+                # 모듈 기반 시리얼: 실제 COM 포트를 소유한 모듈 인스턴스(SerialLogging 등)를
+                # graceful teardown 후 새 baud/port 로 재연결한다.
+                #   - reset_instance(단순 pop)로는 옛 포트가 열린 채 남아 새 인스턴스가
+                #     포트를 못 열고, _instance_key(module@port)가 baud 를 포함하지 않아
+                #     옛 인스턴스가 그대로 재사용 → 보드레이트 변경이 반영되지 않는다.
+                # 옛/새 주소 모두 정리(주소 변경 케이스 포함) 후 connect_device_by_id 로
+                # dev.info(baudrate 갱신됨) 기반 fresh 인스턴스 생성.
+                from ..services.module_service import disconnect_instance
+                for ep in {_prev_address, dev.address}:
+                    if ep:
+                        disconnect_instance(module_name, endpoint=ep)
+                dm._close_serial_conn(req.device_id)
+                result_msg = await dm.connect_device_by_id(dev.id)
+                if dev.status != "connected":
+                    return {
+                        "result": f"updated (reconnect failed: {result_msg})",
+                        "device": dev.to_dict(),
+                        "primary": _with_protected_flag(dm.list_primary()),
+                        "auxiliary": _with_protected_flag(dm.list_auxiliary()),
+                    }
+            else:
+                # 순수 시리얼(모듈 없음): shared conn 재오픈
+                dm._close_serial_conn(req.device_id)
+                import asyncio
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, dm._get_serial_conn, req.device_id)
         except Exception as e:
             dev.status = "disconnected"
             return {

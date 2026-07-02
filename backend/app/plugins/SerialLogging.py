@@ -174,6 +174,16 @@ class SerialLogging:
         self._capture_thread: Optional[threading.Thread] = None
         self._capturing = False
         self._lock = threading.Lock()
+        # _serial 핸들 I/O(open/close/reopen)와 write 를 직렬화하는 락.
+        # self._lock(로그 버퍼 보호)과 분리한다 — 캡처 루프의 블로킹 readline 은 이 락을
+        # 잡지 않아 write 가 지연되지 않고, 캡처 루프가 핸들을 close/reopen 하는 구간에서만
+        # writer(SendCommand 계열)를 배제한다. writer 가 닫히는 중인 핸들에 쓰거나, 재open
+        # 직후 보드 부트로더 구간(DTR 리셋)에 명령을 흘려 '씹히는' 것을 막는 핵심 장치.
+        self._io_lock = threading.Lock()
+        # 재연결(포트 재open) 직후 안정화 대기(ms). USB-Serial 보드는 open 시 DTR 펄스로
+        # 리셋(아두이노 ~1.5~2s 부트로더)되므로, 이 대기를 _io_lock 안에서 소비해 그 사이
+        # writer 가 부트 구간에 write 하지 못하게 한다.
+        self._reconnect_settle_ms = 1500
 
         # 로그 버퍼 + 라인별 capture timestamp (epoch float)
         # _log_capture_ts와 _logs는 같은 길이 유지 — backfill 스캔 시 정확한 발생 시각 사용
@@ -189,7 +199,7 @@ class SerialLogging:
     # 연결 관리 (내부)
     # ------------------------------------------------------------------
 
-    def _connect(self, settle_ms: int = 500) -> str:
+    def _connect(self, settle_ms: int = 1000) -> str:
         """시리얼 포트 연결.
 
         Args:
@@ -236,13 +246,16 @@ class SerialLogging:
             self._stop_capture()
         except Exception as e:
             logger.warning("[SerialLogging] stop_capture raised: %s", e)
-        if self._serial is not None:
-            try:
-                if getattr(self._serial, "is_open", False):
-                    self._serial.close()
-            except Exception as e:
-                logger.warning("[SerialLogging] serial.close raised: %s", e)
-        self._serial = None
+        # 캡처 스레드 join 후 close — _io_lock 으로 진행 중 writer 와의 close/write 경합 차단.
+        # (capture 스레드는 이미 종료돼 락을 잡지 않으므로 데드락 없음.)
+        with self._io_lock:
+            if self._serial is not None:
+                try:
+                    if getattr(self._serial, "is_open", False):
+                        self._serial.close()
+                except Exception as e:
+                    logger.warning("[SerialLogging] serial.close raised: %s", e)
+            self._serial = None
         logger.info("[SerialLogging] Disconnected")
 
     def IsConnected(self) -> bool:
@@ -450,12 +463,19 @@ class SerialLogging:
         Returns:
             결과 메시지
         """
-        if not self._serial or not self._serial.is_open:
-            return "ERROR: 시리얼 포트가 연결되어 있지 않습니다. StartLogging() 먼저 호출하세요."
         data = command
         if append_newline and not data.endswith("\n"):
             data += "\n"
-        self._serial.write(data.encode(encoding))
+        # _io_lock: 캡처 루프의 close/reopen 과 겹쳐 닫히는 핸들에 쓰거나 재open 부트 구간에
+        # 명령이 씹히는 것을 방지. is_open 재확인도 락 안에서 해야 원자적이다.
+        with self._io_lock:
+            if not self._serial or not self._serial.is_open:
+                return "ERROR: 시리얼 포트가 연결되어 있지 않습니다. StartLogging() 먼저 호출하세요."
+            try:
+                self._serial.write(data.encode(encoding))
+                self._serial.flush()  # OS TX 버퍼까지 비워 wire 도달 보장 (Send_Packet 과 동일)
+            except Exception as e:
+                return f"ERROR: 명령 전송 실패 — {e}"
         logger.info("[SerialLogging] SendCommand: %s", command.strip())
         return "OK"
 
@@ -495,8 +515,11 @@ class SerialLogging:
             return f"ERROR: hex 파싱 실패 — {e}"
 
         try:
-            self._serial.write(raw)
-            self._serial.flush()  # OS 출력 버퍼 비워서 wire 도달 보장
+            with self._io_lock:
+                if not self._serial or not self._serial.is_open:
+                    return "ERROR: 시리얼 포트가 연결되어 있지 않습니다."
+                self._serial.write(raw)
+                self._serial.flush()  # OS 출력 버퍼 비워서 wire 도달 보장
         except Exception as e:
             return f"ERROR: 송신 실패 — {e}"
 
@@ -542,7 +565,11 @@ class SerialLogging:
 
         data = command if (not append_newline or command.endswith("\n")) else command + "\n"
         try:
-            self._serial.write(data.encode(encoding))
+            with self._io_lock:
+                if not self._serial or not self._serial.is_open:
+                    return "ERROR: 시리얼 포트가 연결되어 있지 않습니다."
+                self._serial.write(data.encode(encoding))
+                self._serial.flush()
         except Exception as e:
             return f"ERROR: 명령 전송 실패 — {e}"
         logger.info("[SerialLogging] SendCommand_fail_on_keyword: cmd='%s' kw='%s' time=%.1fs",
@@ -627,7 +654,11 @@ class SerialLogging:
 
         data = command if (not append_newline or command.endswith("\n")) else command + "\n"
         try:
-            self._serial.write(data.encode(encoding))
+            with self._io_lock:
+                if not self._serial or not self._serial.is_open:
+                    return "ERROR: 시리얼 포트가 연결되어 있지 않습니다."
+                self._serial.write(data.encode(encoding))
+                self._serial.flush()
         except Exception as e:
             return f"ERROR: 명령 전송 실패 — {e}"
         logger.info("[SerialLogging] SendCommand_pass_on_keyword: cmd='%s' kw='%s' time=%.1fs",
@@ -906,7 +937,14 @@ class SerialLogging:
             ser = self._serial
             # 핸들이 없거나 닫혀 있으면 재연결 시도 (버퍼는 유지 → 이어서 기록)
             if ser is None or not getattr(ser, "is_open", False):
-                if self._reconnect_serial():
+                # 핸들 스왑(재open + settle)은 _io_lock 안에서 수행 — 이 사이 writer 는
+                # 락 대기하며, 보드 부트 구간이 지난 뒤에야 write 하게 되어 명령이 안 씹힌다.
+                with self._io_lock:
+                    if self._serial and getattr(self._serial, "is_open", False):
+                        reconnected = True  # 대기 중 다른 경로가 이미 재연결
+                    else:
+                        reconnected = self._reconnect_serial()
+                if reconnected:
                     backoff = 0.5
                     ser = self._serial
                 else:
@@ -922,7 +960,9 @@ class SerialLogging:
                     logger.warning("[SerialLogging] read failed (%s) — reconnecting to %s",
                                    e, self._port)
                     self._emit_marker("serial disconnected — reconnecting")
-                self._safe_close_serial()
+                # 핸들 정리도 _io_lock 안에서 — writer 가 닫히는 핸들에 write 하는 창을 없앤다.
+                with self._io_lock:
+                    self._safe_close_serial()
                 continue
 
             if not raw:
@@ -995,6 +1035,11 @@ class SerialLogging:
         except Exception as e:
             logger.debug("[SerialLogging] reconnect to %s failed: %s", self._port, e)
             return False
+        # 재open 직후 보드 리셋(DTR 펄스) 부트 구간 대기. 호출자(_capture_loop)가 _io_lock 을
+        # 쥔 채로 여기 들어오므로, 이 대기 동안 writer 는 락에서 대기하다 부트 완료 후 write 한다.
+        # interruptible 이라 Disconnect(_capturing=False) 시 즉시 깨어나 종료를 지연시키지 않는다.
+        if self._reconnect_settle_ms and self._reconnect_settle_ms > 0:
+            self._interruptible_sleep(self._reconnect_settle_ms / 1000.0)
         try:
             ser.reset_input_buffer()
             ser.reset_output_buffer()

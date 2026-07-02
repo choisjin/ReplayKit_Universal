@@ -1901,19 +1901,28 @@ def reset_instance(module_name: str) -> None:
         _auto_connected.discard(key)
 
 
-def disconnect_instance(module_name: str):
+def disconnect_instance(module_name: str, endpoint: Optional[str] = None):
     """연결 해제/등록 삭제 시 모듈 인스턴스에 graceful teardown 후 캐시 제거.
 
     인스턴스가 Disconnect/Close/close 를 가지면 호출(예외는 문자열로 캡처)하고 pop 한다.
     SCAR 처럼 해제 시 정리(netns 복원 등)가 필요한 모듈을 위함. '단순 무효화(재생성용)' 에는
     teardown 을 부르면 안 되므로 그 경우는 reset_instance 를 계속 쓸 것.
 
+    Args:
+        endpoint: 특정 포트/호스트(예: "COM3")의 인스턴스만 정리. 멀티 시리얼 환경에서
+            한 디바이스만 해제할 때 다른 포트의 SerialLogging 세션까지 죽이지 않도록 한다.
+            None 이면 해당 모듈의 모든 엔드포인트 인스턴스를 정리(기존 동작 — SCAR/TH).
+
     Returns:
         teardown 메서드 반환값(문자열) 또는 None(해당 메서드 없음/인스턴스 없음).
     """
     result = None
     # 포트별 키(module@port)로 분리되므로 해당 모듈의 모든 엔드포인트 인스턴스를 정리한다.
-    for key in _keys_for(module_name):
+    keys = _keys_for(module_name)
+    if endpoint:
+        target = f"{module_name}@{endpoint}"
+        keys = [k for k in keys if k == target]
+    for key in keys:
         inst = _instances.get(key)
         if inst is not None:
             for method_name in ("Disconnect", "disconnect", "Close", "close"):
