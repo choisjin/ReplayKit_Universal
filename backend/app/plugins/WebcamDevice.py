@@ -72,15 +72,24 @@ class WebcamDevice:
         self._cap: Optional[cv2.VideoCapture] = None
         self._is_connected = False
         self._lock = threading.Lock()  # cap.read() 직렬화
-        self._last_read_ts = 0.0  # 마지막 read 시각 — 큐 드레인 필요 여부 판단(_read_frame)
+
+        # 연속 캡처 스레드가 유지하는 최신 프레임 (+도착 시각).
+        # 단발 cap.read()는 드라이버/그래프가 마지막으로 '전달해 둔' 프레임을 반환할 뿐
+        # '지금' 프레임을 보장하지 않는다 — 재생 중(미러링 없음) 캡처가 이전 스텝 시점
+        # 화면으로 나오던 원인. 캡처 스레드가 카메라 fps로 상시 read하여 스트림을 살아있게
+        # 유지하고, _read_frame은 '요청 시점 이후 도착한' 프레임만 반환한다.
+        self._capture_thread: Optional[threading.Thread] = None
+        self._stop_capture = threading.Event()
+        self._frame_lock = threading.Lock()
+        self._latest_frame: Optional[np.ndarray] = None
+        self._latest_ts = 0.0  # _latest_frame 도착 시각 (monotonic)
 
     # ------------------------------------------------------------------
     # Connection
     # ------------------------------------------------------------------
 
     def Connect(self) -> str:
-        """웹캠 오픈. 성공 시 캡처 가능 상태가 되고 자체적인 capture loop는 없음
-        (단발 캡처 시 lock 하에 cap.read())."""
+        """웹캠 오픈 + 연속 캡처 스레드 시작 (최신 프레임 유지)."""
         if self._is_connected and self._cap is not None:
             return "Already connected"
 
@@ -118,12 +127,26 @@ class WebcamDevice:
         self._width = actual_w
         self._height = actual_h
         self._is_connected = True
+        # 연속 캡처 스레드 시작 — 최신 프레임 유지 + 스트림 활성 유지
+        self._stop_capture.clear()
+        with self._frame_lock:
+            self._latest_frame = None
+            self._latest_ts = 0.0
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop, name=f"WebcamDevice-{self._device_index}", daemon=True
+        )
+        self._capture_thread.start()
         logger.info("Webcam device connected: index=%d %dx%d",
                     self._device_index, actual_w, actual_h)
         return f"Connected: webcam {self._device_index} ({actual_w}x{actual_h})"
 
     def Disconnect(self) -> str:
         """웹캠 해제."""
+        # 캡처 스레드 먼저 정지 (현재 read가 끝나면 루프 탈출)
+        self._stop_capture.set()
+        if self._capture_thread and self._capture_thread.is_alive():
+            self._capture_thread.join(timeout=3)
+        self._capture_thread = None
         with self._lock:
             if self._cap is not None:
                 try:
@@ -132,8 +155,38 @@ class WebcamDevice:
                     pass
                 self._cap = None
             self._is_connected = False
+        with self._frame_lock:
+            self._latest_frame = None
+            self._latest_ts = 0.0
         logger.info("Webcam device disconnected: index=%d", self._device_index)
         return "Disconnected"
+
+    def _capture_loop(self) -> None:
+        """카메라 fps로 상시 read하여 최신 프레임을 유지하는 백그라운드 루프.
+
+        read 실패가 이어져도 스레드를 죽이지 않고 짧게 쉬며 재시도 — 일시적 USB
+        드롭에서 스트림이 복귀하면 자동으로 이어진다.
+        """
+        fail_count = 0
+        while not self._stop_capture.is_set():
+            with self._lock:
+                cap = self._cap
+                if cap is None:
+                    break
+                try:
+                    ret, frame = cap.read()
+                except Exception:
+                    ret, frame = False, None
+            if ret and frame is not None:
+                fail_count = 0
+                with self._frame_lock:
+                    self._latest_frame = frame
+                    self._latest_ts = _time.monotonic()
+            else:
+                fail_count += 1
+                # 연속 실패 시 backoff — busy-spin 방지 (0.1s → 최대 0.5s)
+                _time.sleep(0.1 if fail_count < 30 else 0.5)
+        logger.debug("WebcamDevice capture loop ended: index=%d", self._device_index)
 
     def IsConnected(self) -> bool:
         if not self._is_connected or self._cap is None:
@@ -148,33 +201,38 @@ class WebcamDevice:
     # ------------------------------------------------------------------
 
     def _read_frame(self) -> np.ndarray:
-        if not self._is_connected or self._cap is None:
+        """'지금' 시점의 프레임 반환 — 요청 시각 이후에 캡처 스레드로 도착한 프레임만 사용.
+
+        단발 cap.read()는 드라이버/그래프에 남아 있던 과거 프레임을 반환할 수 있어
+        (재생 중 스텝 캡처가 직전 스텝 시점 화면으로 나오던 원인), 요청 시각(req_ts)
+        이후 도착 프레임을 최대 1초 대기한다. 30fps면 ~33ms 안에 도착하므로 정상
+        상태에선 지연이 거의 없다. 1초 내 새 프레임이 없으면 스트림 정체(USB 대역폭/
+        드라이버) — 가장 최근 프레임으로 폴백하되 경고 로그로 정체를 가시화한다.
+        """
+        if not self._is_connected:
             raise RuntimeError("Webcam not connected")
-        with self._lock:
-            cap = self._cap
-            if cap is None or not cap.isOpened():
-                raise RuntimeError("Webcam not connected")
-            # 드라이버/백엔드 프레임 큐 드레인 — 마지막 read 이후 쌓인 과거 프레임을
-            # 전부 버리고 '지금' 프레임을 반환한다.
-            # grab() 1회로는 부족: 재생 중에는 미러링(연속 read)이 없어서 read가
-            # 스텝 캡처 때만 일어나고, 큐가 직전 스텝 시점 프레임들로 차 있어
-            # 스텝 N의 캡처가 스텝 N-1 시점 화면으로 나오는 한 스텝 지연이 발생했다.
-            # (스텝 테스트는 미러 뷰가 큐를 상시 비워줘서 정상으로 보였던 것.)
-            # 직전 read가 최근(<0.2s)이면 연속 스트리밍 중 = 큐가 이미 fresh → 기존처럼
-            # 1장만 버려 미러링 fps를 유지하고, 오래됐으면 ~150ms 동안 grab으로 큐를
-            # 소진(큐에 있으면 즉시 pop, 비면 새 프레임 대기 ~33ms/장)한 뒤 읽는다.
-            now = _time.monotonic()
-            if now - self._last_read_ts > 0.2:
-                deadline = now + 0.15
-                while _time.monotonic() < deadline:
-                    cap.grab()
-            else:
-                cap.grab()
-            ret, frame = cap.read()
-            self._last_read_ts = _time.monotonic()
-        if not ret or frame is None:
-            raise RuntimeError("Webcam read failed")
-        return frame
+        req_ts = _time.monotonic()
+        deadline = req_ts + 1.0
+        while _time.monotonic() < deadline:
+            with self._frame_lock:
+                frame = self._latest_frame
+                ts = self._latest_ts
+            if frame is not None and ts >= req_ts:
+                return frame.copy()
+            _time.sleep(0.01)
+        # 폴백: 요청 이후 프레임이 안 옴 — 스트림 정체. 최신 보유 프레임 사용 + 경고.
+        with self._frame_lock:
+            frame = self._latest_frame
+            ts = self._latest_ts
+        if frame is None:
+            raise RuntimeError("Webcam read failed (no frame from capture thread)")
+        age = _time.monotonic() - ts
+        logger.warning(
+            "Webcam frame STALE: %.1fs old (index=%d) — 스트림 정체. "
+            "USB 대역폭(웹캠 2대 동일 허브)/드라이버 확인 필요",
+            age, self._device_index,
+        )
+        return frame.copy()
 
     def Capture(self, save_path: str = "") -> str:
         """이미지 캡처. save_path 비어있으면 임시 파일."""
