@@ -1921,7 +1921,18 @@ def disconnect_instance(module_name: str, endpoint: Optional[str] = None):
     keys = _keys_for(module_name)
     if endpoint:
         target = f"{module_name}@{endpoint}"
-        keys = [k for k in keys if k == target]
+
+        def _holds_endpoint(k: str) -> bool:
+            # 키 매칭 + 인스턴스의 실제 포트 속성 매칭 — bare 키('SerialLogging') 등
+            # 다른 키로 생성된 인스턴스가 같은 COM 포트를 쥔 경우도 잡는다.
+            if k == target:
+                return True
+            inst = _instances.get(k)
+            if inst is None:
+                return False
+            return endpoint in (getattr(inst, "_port", None), getattr(inst, "port", None))
+
+        keys = [k for k in keys if _holds_endpoint(k)]
     for key in keys:
         inst = _instances.get(key)
         if inst is not None:

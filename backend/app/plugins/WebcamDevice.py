@@ -89,6 +89,15 @@ class WebcamDevice:
                 f"(tried backends {_CV_CAM_BACKENDS})"
             )
 
+        # MJPG(압축) 포맷 우선 — DirectShow 기본 YUY2(무압축)는 1080p 하나가 USB2
+        # 대역폭(480Mbps)을 거의 다 예약해, 같은 허브의 두 번째 웹캠이 아예 열리지
+        # 못한다(주 디바이스 연결 시 PIP 웹캠 실종의 원인). MJPG는 대역폭이 ~1/10이라
+        # 멀티 웹캠 공존 가능. 미지원 카메라는 set이 조용히 무시되어 기본 포맷 유지.
+        try:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        except Exception:
+            pass
+
         # 해상도 설정 (실패해도 무시 — driver가 지원하는 범위로 고정됨)
         if self._width > 0 and self._height > 0:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)

@@ -303,7 +303,11 @@ class SerialLogging:
         진행 중인 로깅 세션(capture 활성 + 미저장 버퍼)이 있으면 포트 close 전에
         자동 저장 — 시나리오 비정상 종료(cleanup_active_instances) 시 로그 유실 방지.
         """
-        if not self._serial or not self._serial.is_open:
+        # 포트 핸들이 잠시 닫혀 있어도(자동 재연결 중) 캡처 스레드가 살아 있으면 반드시
+        # 전체 teardown 을 수행해야 한다. 과거엔 핸들만 보고 early-return → 인스턴스는
+        # 캐시에서 pop 되는데 캡처 스레드는 고아로 남아 포트를 다시 열고 영구 점유
+        # ('연결 끊기' 후 Arduino IDE 등 외부 도구가 포트를 못 잡는 원인).
+        if (not self._serial or not self._serial.is_open) and not self._capturing:
             return "Already disconnected"
         # 진행 중인 로깅 세션이 있으면 먼저 저장 (cleanup 안전성)
         if self._capturing and self._logs:
@@ -1040,6 +1044,14 @@ class SerialLogging:
         # interruptible 이라 Disconnect(_capturing=False) 시 즉시 깨어나 종료를 지연시키지 않는다.
         if self._reconnect_settle_ms and self._reconnect_settle_ms > 0:
             self._interruptible_sleep(self._reconnect_settle_ms / 1000.0)
+        # open/settle 동안 teardown(_capturing=False)이 들어왔으면 방금 연 핸들을 버리고
+        # 실패로 종료 — self._serial 에 할당하지 않아 닫힌 인스턴스가 포트를 leak 하지 않는다.
+        if not self._capturing:
+            try:
+                ser.close()
+            except Exception:
+                pass
+            return False
         try:
             ser.reset_input_buffer()
             ser.reset_output_buffer()

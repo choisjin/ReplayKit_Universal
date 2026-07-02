@@ -2387,14 +2387,20 @@ class DeviceManager:
                 pass
         # Close SSH connection if applicable
         self._close_ssh_conn(dev.id)
-        # 모듈 인스턴스 정리: 화이트리스트 module 은 teardown(SCAR: netns 복원) + pop, 나머지는 pop 만.
+        # 모듈 인스턴스 정리: 화이트리스트 module(SCAR: netns 복원)과 시리얼 계열은
+        # graceful teardown + pop, 나머지는 pop 만.
+        # 시리얼 계열은 모듈 인스턴스(SerialLogging 등)가 실제 COM 포트를 소유하므로
+        # reset_instance(단순 pop)로는 캡처 스레드가 고아로 남아 포트를 계속 점유한다
+        # — disconnect_device_by_id 와 동일하게 해당 endpoint 만 teardown.
         module_name = dev.info.get("module")
         if module_name:
             from .module_service import (MODULES_WITH_DISCONNECT_TEARDOWN,
                                          disconnect_instance, reset_instance)
-            if module_name in MODULES_WITH_DISCONNECT_TEARDOWN:
+            is_serial_like = dev.type == "serial" or dev.info.get("connect_type") == "serial"
+            if module_name in MODULES_WITH_DISCONNECT_TEARDOWN or is_serial_like:
+                endpoint = dev.address if is_serial_like else None
                 try:
-                    msg = disconnect_instance(module_name)
+                    msg = disconnect_instance(module_name, endpoint=endpoint)
                     if msg:
                         logger.info("module '%s' remove teardown: %s", module_name, msg)
                 except Exception as e:

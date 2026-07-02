@@ -307,6 +307,13 @@ class WebcamService:
         if cap is None:
             logger.warning("Webcam open failed: device %d (all backends rejected)", device_index)
             return False
+        # MJPG(압축) 포맷 우선 — 기본 YUY2(무압축)는 USB 대역폭을 크게 예약해
+        # 주 디바이스 웹캠과 같은 허브에서 공존이 불가능해진다 (WebcamDevice와 동일 정책).
+        # 미지원 카메라는 set이 조용히 무시됨.
+        try:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        except Exception:
+            pass
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         # 카메라의 최대 fps 를 요청 — 드라이버가 지원 최댓값으로 클램프한다.
