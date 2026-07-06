@@ -1865,8 +1865,15 @@ class DeviceManager:
                 port = dev.info.get("port", 0)
                 if not port:
                     continue
+                # error 상태(연속 실패로 포기)라도, 디바이스가 전원 ON 으로 복귀해
+                # 포트가 다시 열렸으면 자동 복구한다 (HKMC 6th와 동일한 수정).
                 if dev.status == "error":
-                    continue
+                    if await _tcp_reachable(dev.address, port):
+                        logger.info("HKMC5thWide device %s reachable again — resetting error state", dev.id)
+                        self._hkmc5th_wide_reconnect_attempts.pop(dev.id, None)
+                        dev.status = "reconnecting"
+                    else:
+                        continue
                 attempts = self._hkmc5th_wide_reconnect_attempts.get(dev.id, 0)
                 if attempts >= self.HKMC_MAX_RECONNECT_ATTEMPTS:
                     dev.status = "error"
@@ -1916,8 +1923,15 @@ class DeviceManager:
                 port = dev.info.get("port", 0)
                 if not port:
                     continue
+                # error 상태(연속 실패로 포기)라도, 디바이스가 전원 ON 으로 복귀해
+                # 포트가 다시 열렸으면 자동 복구한다 (HKMC 6th와 동일한 수정).
                 if dev.status == "error":
-                    continue
+                    if await _tcp_reachable(dev.address, port):
+                        logger.info("iSAP device %s reachable again — resetting error state", dev.id)
+                        self._isap_reconnect_attempts.pop(dev.id, None)
+                        dev.status = "reconnecting"
+                    else:
+                        continue
                 attempts = self._isap_reconnect_attempts.get(dev.id, 0)
                 if attempts >= self.ISAP_MAX_RECONNECT_ATTEMPTS:
                     dev.status = "error"
