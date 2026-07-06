@@ -1052,6 +1052,13 @@
           "local_path": "PC의 저장 경로"
         }
       },
+      "get_folder": {
+        "description": "원격 장비의 폴더를 하위 폴더까지 통째로 PC에 다운로드합니다 (SFTP 재귀). 심볼릭 링크 등 일반 파일이 아닌 항목은 건너뜁니다. 일부 파일 실패 시 'FAIL:' 접두사를 반환하여 스텝이 fail로 판정됩니다.",
+        "params": {
+          "remote_path": "원격 장비의 폴더 경로. 예: '/var/log'",
+          "local_path": "PC의 저장 폴더 경로. 비워두면 재생 중 런 폴더 logs/ 하위에 원격 폴더명으로 자동 저장"
+        }
+      },
       "get_file_list_in_dir": {
         "description": "원격 장비의 디렉토리 내 파일 목록을 조회합니다.",
         "params": {

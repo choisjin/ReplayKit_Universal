@@ -994,6 +994,14 @@ def get_module_functions(module_name: str) -> list[dict]:
                 {"name": "timeout", "required": False, "default": "60"},
             ],
         })
+        # get_file의 폴더 버전 가상 함수: SFTP로 원격 폴더를 재귀 다운로드 (실제 클래스에는 없음)
+        functions.append({
+            "name": "get_folder",
+            "params": [
+                {"name": "remote_path", "required": True},
+                {"name": "local_path", "required": False, "default": "''"},
+            ],
+        })
 
     # 가이드 데이터 병합
     guides = _load_guides()
@@ -1612,6 +1620,69 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
         if passed:
             return output
         return f"FAIL: logic({logic}): {keywords}\n---\n{output}"
+
+    # SSHManager.get_folder 가상 함수: get_file의 폴더 버전 (실제 클래스에는 없음).
+    # SSHManager가 pyd 바이너리라 메서드 추가가 불가능하므로, 내부 paramiko ssh_client로
+    # SFTP 세션을 열어 원격 디렉토리를 재귀 순회하며 통째로 다운로드한다.
+    if module_name == "SSHManager" and function_name == "get_folder":
+        client = getattr(instance, "ssh_client", None)
+        if client is None:
+            raise RuntimeError("SSH client not connected")
+        import os
+        import posixpath
+        import stat as stat_module
+
+        remote_path = str(args.get("remote_path", "") or "").rstrip("/")
+        if not remote_path:
+            raise ValueError("remote_path is required")
+        local_path = str(args.get("local_path", "") or "").strip()
+        if not local_path:
+            # 빈 값이면 다른 경로 파라미터들처럼 런 폴더 logs/ 하위로 자동 저장
+            from .playback_service import get_run_output_dir
+            run_dir = get_run_output_dir()
+            if not run_dir:
+                raise ValueError("local_path is required (재생 중이 아니어서 런 폴더 자동 경로를 쓸 수 없음)")
+            local_path = str(run_dir / "logs" / (posixpath.basename(remote_path) or "remote_folder"))
+
+        sftp = client.open_sftp()
+        try:
+            st = sftp.stat(remote_path)
+            if not stat_module.S_ISDIR(st.st_mode or 0):
+                raise ValueError(f"remote_path is not a directory: {remote_path} (파일은 get_file 사용)")
+
+            ok_count = 0
+            skipped: list[str] = []
+            failed: list[str] = []
+
+            def _download_dir(rdir: str, ldir: str) -> None:
+                nonlocal ok_count
+                os.makedirs(ldir, exist_ok=True)
+                for entry in sftp.listdir_attr(rdir):
+                    rpath = posixpath.join(rdir, entry.filename)
+                    lpath = os.path.join(ldir, entry.filename)
+                    mode = entry.st_mode or 0
+                    if stat_module.S_ISDIR(mode):
+                        _download_dir(rpath, lpath)
+                    elif stat_module.S_ISREG(mode):
+                        try:
+                            sftp.get(rpath, lpath)
+                            ok_count += 1
+                        except Exception as e:
+                            failed.append(f"{rpath} ({e})")
+                    else:
+                        # 심볼릭 링크/디바이스 파일 등은 건너뜀
+                        skipped.append(rpath)
+
+            _download_dir(remote_path, local_path)
+        finally:
+            sftp.close()
+
+        summary = f"{ok_count} files → {local_path}"
+        if skipped:
+            summary += f" | skipped {len(skipped)} non-regular: {', '.join(skipped[:5])}"
+        if failed:
+            return f"FAIL: {len(failed)} file(s) failed — {', '.join(failed[:5])}\n---\nok: {summary}"
+        return f"ok: {summary}"
 
     # SSHManager.send_command_stream 가상 함수: 실시간 스트리밍 (bg_task_store 사용)
     if module_name == "SSHManager" and function_name == "send_command_stream":
