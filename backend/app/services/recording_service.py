@@ -335,9 +335,14 @@ class RecordingService:
         return changed
 
     async def list_scenarios(self) -> list[str]:
-        """List all saved scenario names."""
+        """List all saved scenario names (이름 오름차순).
+
+        glob() 순서는 파일시스템 의존 — Windows(NTFS)는 알파벳순이지만
+        Linux(ext4)는 임의 순서라 명시적으로 정렬해야 UI 목록 순서가 보장된다.
+        """
         SCENARIOS_DIR.mkdir(parents=True, exist_ok=True)
-        return [p.stem for p in SCENARIOS_DIR.glob("*.json") if p.name not in ("groups.json", "folders.json", "group_folders.json")]
+        names = [p.stem for p in SCENARIOS_DIR.glob("*.json") if p.name not in ("groups.json", "folders.json", "group_folders.json")]
+        return sorted(names, key=str.casefold)
 
     async def delete_scenario(self, name: str) -> bool:
         """Delete a scenario file + screenshots folder."""
@@ -942,7 +947,8 @@ class RecordingService:
                 group_names = list(gdata.keys())
 
             scenarios_info = []
-            for sn in scenario_names:
+            # manifest 없는 레거시 ZIP은 zip 엔트리 순서 그대로라 이름순으로 정렬
+            for sn in sorted(scenario_names, key=str.casefold):
                 scenarios_info.append({"name": sn, "conflict": sn in existing_scenarios})
 
             groups_info = []

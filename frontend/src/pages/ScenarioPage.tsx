@@ -2017,7 +2017,8 @@ export default function ScenarioPage() {
                 title: `${fname} (${existingCount})`,
                 icon: <FolderOutlined />,
                 isLeaf: false,
-                children: items.filter(n => filteredScenarios.includes(n)).map(n => ({
+                // filteredScenarios 기준 필터 — 폴더 저장순(추가순)이 아닌 이름 오름차순 유지
+                children: filteredScenarios.filter(n => items.includes(n)).map(n => ({
                   key: `scenario:${n}`,
                   title: <span style={playing && (currentGroupScenario === n || playingName === n) ? { color: '#1677ff', fontWeight: 700 } : undefined}>{n}</span>,
                   icon: <FileOutlined style={playing && (currentGroupScenario === n || playingName === n) ? { color: '#1677ff' } : undefined} />,
@@ -2037,9 +2038,7 @@ export default function ScenarioPage() {
             // 순서: 각 폴더의 시나리오 → 폴더에 속하지 않은 루트 시나리오.
             const flatScenarioOrder: string[] = [];
             for (const items of Object.values(folders)) {
-              for (const n of items) {
-                if (filteredScenarios.includes(n)) flatScenarioOrder.push(n);
-              }
+              flatScenarioOrder.push(...filteredScenarios.filter(n => items.includes(n)));
             }
             for (const name of filteredScenarios) {
               if (!foldered.has(name)) flatScenarioOrder.push(name);
@@ -3014,7 +3013,8 @@ export default function ScenarioPage() {
               const treeData: any[] = [];
               if (modalTreeFolder === '__all__') {
                 for (const [fname, items] of Object.entries(folders)) {
-                  const children = items.filter(n => scenarios.includes(n)).map(n => ({
+                  // scenarios 기준 필터 — 폴더 저장순(추가순)이 아닌 이름 오름차순 유지
+                  const children = scenarios.filter(n => items.includes(n)).map(n => ({
                     key: `scenario:${n}`,
                     title: n,
                     icon: <FileOutlined />,
@@ -3043,7 +3043,7 @@ export default function ScenarioPage() {
               const flatOrder: string[] = [];
               if (modalTreeFolder === '__all__') {
                 for (const items of Object.values(folders)) {
-                  for (const n of items) if (scenarios.includes(n)) flatOrder.push(n);
+                  flatOrder.push(...scenarios.filter(n => items.includes(n)));
                 }
                 for (const name of scenarios) if (!foldered.has(name)) flatOrder.push(name);
               } else {
@@ -3103,7 +3103,8 @@ export default function ScenarioPage() {
                         if (key.startsWith('folder:')) {
                           // 폴더 드래그 — 하위 시나리오 전체를 일괄 추가
                           const fname = key.replace('folder:', '');
-                          names = (folders[fname] || []).filter(n => scenarios.includes(n));
+                          const fitems = folders[fname] || [];
+                          names = scenarios.filter(n => fitems.includes(n));
                           if (names.length === 0) return;
                         } else if (key.startsWith('scenario:')) {
                           const draggedName = key.replace('scenario:', '');
