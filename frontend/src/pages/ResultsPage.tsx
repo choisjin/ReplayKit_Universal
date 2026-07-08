@@ -78,6 +78,23 @@ interface StepResultDetail {
   excluded_from_result?: boolean;   // 조건부이동 결과 미반영 → Status를 '분기'로 표시
 }
 
+// Frame_Check 모듈 측정 결과 1건 — 시나리오 종료 후 녹화 영상 프레임 분석 산출물
+interface FrameCheckResultEntry {
+  iteration: number;
+  pair_index?: number;
+  status: string;  // ok | start_image_not_found | target_not_found | no_video | error | ...
+  message?: string;
+  video?: string;
+  start_mode?: string;  // function | image
+  start_image?: string | null;
+  target_image?: string;
+  start_video_ms?: number;
+  target_video_ms?: number;
+  elapsed_ms?: number;
+  start_score?: number | null;
+  target_score?: number | null;
+}
+
 interface ResultDetail {
   scenario_name: string;
   device_serial: string;
@@ -93,6 +110,7 @@ interface ResultDetail {
   finished_at: string;
   stopped_at_iteration?: number | null;
   stopped_at_step?: number | null;
+  frame_check_results?: FrameCheckResultEntry[] | null;
 }
 
 const statusColor = (s: string) =>
@@ -1535,6 +1553,47 @@ export default function ResultsPage() {
                 </Space>
               </Descriptions.Item>
             </Descriptions>
+
+            {/* Frame_Check 측정 결과 — 녹화 영상 프레임 분석 (시작점 → 타겟 이미지 경과 시간) */}
+            {detail.frame_check_results && detail.frame_check_results.length > 0 && (
+              <Card
+                size="small"
+                title={<Space size={4}><VideoCameraOutlined />Frame Check — 동작 시간 측정</Space>}
+                style={{ marginBottom: 13 }}
+                bodyStyle={{ padding: 5 }}
+              >
+                <Table
+                  size="small"
+                  pagination={false}
+                  rowKey={(r: FrameCheckResultEntry, i?: number) => `${r.iteration}_${r.pair_index ?? 0}_${i}`}
+                  dataSource={detail.frame_check_results}
+                  columns={[
+                    { title: 'Cycle', dataIndex: 'iteration', width: 60,
+                      render: (v: number) => <Tag color="blue" style={{ margin: 0 }}>R{v}</Tag> },
+                    { title: 'Pair', dataIndex: 'pair_index', width: 50, render: (v?: number) => v ?? '-' },
+                    { title: '시작 기준', dataIndex: 'start_mode', width: 90,
+                      render: (v?: string) => v === 'image' ? '이미지 등장' : v === 'function' ? '스텝 실행' : '-' },
+                    { title: '시작(영상 ms)', dataIndex: 'start_video_ms', width: 110,
+                      render: (v?: number) => v != null ? v.toLocaleString() : '-' },
+                    { title: '타겟(영상 ms)', dataIndex: 'target_video_ms', width: 110,
+                      render: (v?: number) => v != null ? v.toLocaleString() : '-' },
+                    { title: '경과 시간', dataIndex: 'elapsed_ms', width: 110,
+                      render: (v?: number) => v != null
+                        ? <strong style={{ color: '#1677ff' }}>{v.toLocaleString()} ms</strong> : '-' },
+                    { title: 'Score', key: 'score', width: 110,
+                      render: (_: unknown, r: FrameCheckResultEntry) => {
+                        const s = r.start_score != null ? r.start_score.toFixed(2) : '-';
+                        const e = r.target_score != null ? r.target_score.toFixed(2) : '-';
+                        return <span style={{ fontSize: 11 }}>{s} / {e}</span>;
+                      } },
+                    { title: 'Status', dataIndex: 'status', width: 140,
+                      render: (v: string) => <Tag color={v === 'ok' ? 'green' : 'red'} style={{ margin: 0 }}>{v.toUpperCase()}</Tag> },
+                    { title: 'Message', dataIndex: 'message', ellipsis: true,
+                      render: (v?: string) => v ? <Tooltip title={v}><span style={{ fontSize: 11 }}>{v}</span></Tooltip> : '-' },
+                  ] as any}
+                />
+              </Card>
+            )}
 
             <div style={{ display: 'flex', gap: 6, maxHeight: 'calc(90vh - 200px)', overflow: 'hidden' }}>
               {/* 좌측: 웹캠 녹화 패널 (접힘/펼침) */}

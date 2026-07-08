@@ -1524,6 +1524,81 @@ async def _webcam_session_finalize(session: Optional[_WebcamPlaybackSession], re
     await asyncio.to_thread(_webcam_session_finalize_sync, session, result_path)
 
 
+async def _frame_check_analyze(session: Optional[_WebcamPlaybackSession],
+                               result: "ScenarioResult") -> None:
+    """Frame_Check 마커가 있으면 녹화 영상을 프레임 분석해 result.frame_check_results 를 채운다.
+
+    반드시 _save_result 호출 **전에** 실행 — 결과가 model_dump 를 타고 result.json/html 에
+    자연스럽게 포함되도록 한다. 진행 중이던 마지막 cycle 녹화는 여기서 조기 종료한다
+    (finalize 의 stop_recording 은 이중 호출에 안전, current_path=None 처리로 중복 이동 방지).
+    """
+    from .services.frame_check_service import get_frame_check_service
+    fc = get_frame_check_service()
+    if not fc.has_markers():
+        return
+
+    entries: list[dict] = []
+    if session is None or not session.is_active():
+        for it in fc.iterations_with_markers():
+            entries.append({
+                "iteration": it, "status": "no_video",
+                "message": "웹캠 녹화 없음 — 재생 시작 전 PIP 웹캠이 열려 있어야 측정 가능",
+            })
+        result.frame_check_results = entries
+        return
+
+    # 진행 중이던 마지막 cycle 녹화 종료 + (run_dir 이 있으면) 최종 위치로 이동.
+    # moov atom 이 기록된 완성 mp4 여야 프레임 분석이 가능하다.
+    try:
+        if session.kind == "compositor":
+            from .services.compositor_service import get_compositor_service
+            svc: Any = get_compositor_service()
+        else:
+            from .services.webcam_service import get_webcam_service
+            svc = get_webcam_service()
+        await asyncio.to_thread(svc.stop_recording)
+        if session.current_path is not None:
+            prev_started = session.current_started_at
+            moved = await asyncio.to_thread(
+                _try_move_cycle_to_final,
+                session.current_cycle, session.current_path, prev_started, session.kind,
+            )
+            session.cycle_files.append((
+                session.current_cycle,
+                moved or session.current_path,
+                prev_started or "",
+            ))
+            session.current_path = None
+            session.current_started_at = None
+    except Exception as e:
+        logger.warning("Frame_Check: early recording stop failed: %s", e)
+
+    by_iter: dict[int, tuple[Path, str]] = {
+        it: (p, started) for it, p, started in session.cycle_files
+    }
+    for it in fc.iterations_with_markers():
+        rec = by_iter.get(it)
+        if rec is None:
+            entries.append({"iteration": it, "status": "no_video",
+                            "message": "해당 회차의 녹화 파일 없음"})
+            continue
+        video_path, started_at = rec
+        try:
+            rows = await asyncio.to_thread(fc.analyze_video, video_path, started_at, it)
+        except Exception as e:
+            logger.exception("Frame_Check analysis failed (cycle %d)", it)
+            rows = [{"iteration": it, "status": "error", "message": str(e)}]
+        if rows:
+            entries.extend(rows)
+        else:
+            entries.append({"iteration": it, "status": "no_pair",
+                            "message": "측정 시작점(MeasureStart)/타겟(MeasureEnd) 쌍이 완성되지 않음"})
+    if entries:
+        result.frame_check_results = entries
+        ok_rows = [e for e in entries if e.get("status") == "ok"]
+        logger.info("Frame_Check: %d/%d measurement(s) succeeded", len(ok_rows), len(entries))
+
+
 def _parse_until_time(raw: Any) -> Optional[datetime]:
     """프론트가 보낸 'until_time' 문자열을 timezone-aware datetime으로 변환.
 
@@ -1576,6 +1651,9 @@ async def _run_play_job(data: dict):
         mark_playback_active(True)
         mark_runtime_fail_active(True)  # SerialLogging/DLTLogging assert_keyword fail 누적 활성화
         publish_event({"type": "playback_reset", "scenario": scenario_name})
+        # Frame_Check 마커 초기화 — 이전 런/단발 스텝 테스트의 잔여 마커 제거
+        from .services.frame_check_service import get_frame_check_service
+        get_frame_check_service().reset()
         # 웹캠 녹화 시작 (열려 있을 때만)
         webcam_session = await _webcam_session_start(iteration=1)
 
@@ -1772,6 +1850,13 @@ async def _run_play_job(data: dict):
             if _steps_ndjson is not None and len(result.step_results) > _STEP_MEM_CAP:
                 del result.step_results[:-_STEP_MEM_CAP]
 
+        # Frame_Check 마커가 있으면 녹화를 조기 종료하고 영상을 프레임 분석해
+        # result.frame_check_results 에 측정 시간을 기록 (result 저장 전이어야 함).
+        try:
+            await _frame_check_analyze(webcam_session, result)
+        except Exception as e:
+            logger.warning("Frame_Check analyze error: %s", e)
+
         # 중단 처리 — 진행 중이던 회차의 부분 step도 보존하고 영상도 함께 남김.
         if playback_service._should_stop:
             # 진행 중이던 회차가 끝까지 안 갔으면 그 회차를 stopped로 마킹
@@ -1864,6 +1949,10 @@ async def _run_play_group_job(data: dict):
         mark_playback_active(True)
         mark_runtime_fail_active(True)
         publish_event({"type": "playback_reset", "group": True})
+        # Frame_Check 마커 초기화 — 그룹 재생은 영상 분석 미지원(회차↔시나리오 매핑 모호),
+        # 잔여 마커가 다음 단일 재생을 오염시키지 않도록만 정리한다.
+        from .services.frame_check_service import get_frame_check_service
+        get_frame_check_service().reset()
         webcam_session = await _webcam_session_start(iteration=1)
 
         all_preflight_errors: list[str] = []

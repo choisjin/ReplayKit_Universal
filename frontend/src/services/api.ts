@@ -166,6 +166,18 @@ export const scenarioApi = {
     device_id: deviceId,
     x_offset: xOffset,
   }),
+  // Frame_Check: 웹캠 프레임 크롭을 측정 이미지로 저장 → 스텝 args.image 경로 반환
+  frameCheckSaveImage: (
+    scenarioName: string,
+    imageBase64: string,
+    crop: { x: number; y: number; width: number; height: number },
+    kind: 'start' | 'target',
+  ) => api.post('/scenario/frame-check/save-image', {
+    scenario_name: scenarioName,
+    image_base64: imageBase64,
+    crop,
+    kind,
+  }),
   // Folders
   getFolders: () => api.get('/scenario/folders'),
   createFolder: (name: string) => api.post('/scenario/folders/create', { name }),

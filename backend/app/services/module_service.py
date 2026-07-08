@@ -812,6 +812,40 @@ def get_module_functions(module_name: str) -> list[dict]:
         _module_functions_cache[module_name] = (plugin_mtime, guides_mtime, functions)
         return functions
 
+    # Frame_Check: 녹화 영상 기반 동작 시간 측정 가상 모듈.
+    # 스텝 실행은 마커 기록만 수행하고, 시나리오 종료 후 재생 잡이 웹캠 녹화 영상을
+    # 프레임 단위로 분석해 결과(frame_check_results)에 측정 시간을 기록한다.
+    if module_name == "Frame_Check":
+        functions = [
+            {
+                "name": "MeasureStart",
+                "params": [
+                    {"name": "mode", "required": False, "default": "'function'"},
+                    {"name": "image", "required": False, "default": "''"},
+                    {"name": "threshold", "required": False, "default": "'0.8'"},
+                ],
+            },
+            {
+                "name": "MeasureEnd",
+                "params": [
+                    {"name": "image", "required": True},
+                    {"name": "threshold", "required": False, "default": "'0.8'"},
+                ],
+            },
+        ]
+        # 가이드 병합 후 캐싱하고 즉시 반환 (Android 가상 모듈과 동일 패턴)
+        guides = _load_guides()
+        mod_guide = guides.get(module_name, {})
+        func_guides = mod_guide.get("functions", {})
+        for fn in functions:
+            fg = func_guides.get(fn["name"], {})
+            fn["description"] = fg.get("description", "")
+            param_guides = fg.get("params", {})
+            for p in fn["params"]:
+                p["description"] = param_guides.get(p["name"], "")
+        _module_functions_cache[module_name] = (plugin_mtime, guides_mtime, functions)
+        return functions
+
     # Android: 네이티브 lge.auto.Android 함수들은 노출하지 않고
     # ReplayKit 자체 ADBService 기반의 Send_adb_command 단일 가상 함수만 제공
     if module_name == "Android":
@@ -1450,6 +1484,12 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
         finally:
             loop.close()
         return output if output is not None else "(no output)"
+
+    # Frame_Check — 영상 측정 마커 기록 가상 함수. 실제 인스턴스/디바이스 불필요.
+    # 재생 중이든 단발 스텝 테스트든 동일하게 FrameCheckService에 마커만 기록한다.
+    if module_name == "Frame_Check":
+        from .frame_check_service import get_frame_check_service
+        return get_frame_check_service().execute_step(function_name, args)
 
     # Android logcat 캡처/판독 가상 함수 — LogcatService로 라우팅 (adb로 명령 push 안 함)
     if module_name == "Android" and function_name in (

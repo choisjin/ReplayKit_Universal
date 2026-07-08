@@ -909,6 +909,7 @@ class DeviceManager:
         self._ensure_default_common_device()
         self._ensure_default_wincontrol_device()
         self._ensure_default_ocr_device()
+        self._ensure_default_frame_check_device()
 
     # 기본 Common 디바이스 ID — 삭제/수정 금지
     DEFAULT_COMMON_DEVICE_ID = "Common"
@@ -916,6 +917,8 @@ class DeviceManager:
     DEFAULT_WINCONTROL_DEVICE_ID = "WinControl"
     # 기본 OCR 디바이스 ID — 삭제/수정 금지
     DEFAULT_OCR_DEVICE_ID = "OCR"
+    # 기본 Frame_Check 디바이스 ID — 삭제/수정 금지 (녹화 영상 기반 동작 시간 측정 가상 모듈)
+    DEFAULT_FRAME_CHECK_DEVICE_ID = "Frame_Check"
 
     def _ensure_default_common_device(self) -> None:
         """Common 디바이스를 기본값으로 등록 + 상태를 항상 connected로 고정.
@@ -975,6 +978,27 @@ class DeviceManager:
         self._save_auxiliary_devices()
         logger.info("Registered default 'OCR' device (OCR module)")
 
+    def _ensure_default_frame_check_device(self) -> None:
+        """Frame_Check 가상 디바이스를 기본값으로 등록 + 상태를 항상 connected로 고정."""
+        existing = self._devices.get(self.DEFAULT_FRAME_CHECK_DEVICE_ID)
+        if existing and existing.info.get("module") == "Frame_Check":
+            existing.status = "connected"
+            existing.type = "module"
+            existing.category = "auxiliary"
+            return
+        dev = ManagedDevice(
+            id=self.DEFAULT_FRAME_CHECK_DEVICE_ID,
+            type="module",
+            category="auxiliary",
+            address="",
+            status="connected",
+            name="Common",
+            info={"module": "Frame_Check", "connect_type": "none"},
+        )
+        self._devices[self.DEFAULT_FRAME_CHECK_DEVICE_ID] = dev
+        self._save_auxiliary_devices()
+        logger.info("Registered default 'Frame_Check' device (Frame_Check module)")
+
     def _ensure_default_wincontrol_device(self) -> None:
         """WinControl 디바이스를 기본값으로 등록 (미연결 상태가 기본).
 
@@ -1023,7 +1047,8 @@ class DeviceManager:
 
     def is_protected_device(self, device_id: str) -> bool:
         """삭제/수정이 금지된 시스템 기본 디바이스인지 여부."""
-        return device_id in (self.DEFAULT_COMMON_DEVICE_ID, self.DEFAULT_WINCONTROL_DEVICE_ID, self.DEFAULT_OCR_DEVICE_ID)
+        return device_id in (self.DEFAULT_COMMON_DEVICE_ID, self.DEFAULT_WINCONTROL_DEVICE_ID,
+                             self.DEFAULT_OCR_DEVICE_ID, self.DEFAULT_FRAME_CHECK_DEVICE_ID)
 
     def _load_auxiliary_devices(self) -> None:
         """Load saved auxiliary devices from disk.
@@ -3322,9 +3347,10 @@ class DeviceManager:
         if not dev:
             return f"Device {device_id} not found"
 
-        # Common/OCR: 항상 연결 상태 유지 (no-op) — 가상 모듈 디바이스로 외부 연결 없음.
+        # Common/OCR/Frame_Check: 항상 연결 상태 유지 (no-op) — 가상 모듈 디바이스로 외부 연결 없음.
         # WinControl은 사용자가 명시적으로 disconnect 가능 (별도 처리).
-        if device_id in (self.DEFAULT_COMMON_DEVICE_ID, self.DEFAULT_OCR_DEVICE_ID):
+        if device_id in (self.DEFAULT_COMMON_DEVICE_ID, self.DEFAULT_OCR_DEVICE_ID,
+                         self.DEFAULT_FRAME_CHECK_DEVICE_ID):
             return f"Device '{device_id}' is a protected system default (no-op)"
 
         self._ever_connected.discard(device_id)

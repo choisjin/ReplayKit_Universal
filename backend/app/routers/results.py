@@ -616,6 +616,46 @@ def _build_html_report(data: dict, output_path: Path, steps_iter=None) -> str:
     parts.append(f"<span>{e(_fmt_ts(started_at))} ~ {e(_fmt_ts(finished_at))}</span>")
     parts.append("</div>")
 
+    # Frame_Check 측정 결과 — 녹화 영상 프레임 분석 (시작점 → 타겟 이미지 경과 시간)
+    fc_results = data.get("frame_check_results") or []
+    if fc_results:
+        parts.append('<h2 style="font-size:14px;margin:12px 0 6px">Frame Check — 동작 시간 측정</h2>')
+        parts.append('<table style="border-collapse:collapse;font-size:12px;margin-bottom:12px">')
+        parts.append(
+            "<tr>" + "".join(
+                f'<th style="border:1px solid #d1d5db;padding:3px 8px;background:#f3f4f6">{h}</th>'
+                for h in ("Cycle", "Pair", "시작 기준", "시작(영상 ms)", "타겟(영상 ms)",
+                          "경과 시간(ms)", "Score(시작/타겟)", "Status", "Message")
+            ) + "</tr>"
+        )
+        for fc in fc_results:
+            mode = fc.get("start_mode")
+            mode_str = "이미지 등장" if mode == "image" else ("스텝 실행" if mode == "function" else "-")
+            elapsed = fc.get("elapsed_ms")
+            elapsed_str = f"<b>{elapsed:,.0f}</b>" if isinstance(elapsed, (int, float)) else "-"
+            sc = fc.get("start_score")
+            tc = fc.get("target_score")
+            score_str = f"{sc if sc is not None else '-'} / {tc if tc is not None else '-'}"
+            st = str(fc.get("status", ""))
+            st_color = "#15803d" if st == "ok" else "#b91c1c"
+            cells = [
+                f"R{e(fc.get('iteration', ''))}",
+                e(fc.get("pair_index", "-")),
+                mode_str,
+                e(fc.get("start_video_ms", "-")),
+                e(fc.get("target_video_ms", "-")),
+                elapsed_str,
+                e(score_str),
+                f'<span style="color:{st_color};font-weight:600">{e(st.upper())}</span>',
+                e(fc.get("message", "")),
+            ]
+            parts.append(
+                "<tr>" + "".join(
+                    f'<td style="border:1px solid #d1d5db;padding:3px 8px">{c}</td>' for c in cells
+                ) + "</tr>"
+            )
+        parts.append("</table>")
+
     # 상단 컨트롤 — 전역 검색, 필터 초기화, PDF 저장
     parts.append('<div class="controls">')
     parts.append('<input id="filter-text" type="text" placeholder="전체 검색 (모든 열)">')

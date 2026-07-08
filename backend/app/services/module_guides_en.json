@@ -1664,5 +1664,25 @@
         }
       }
     }
+  },
+  "Frame_Check": {
+    "_description": "Operation-time measurement tool based on the test recording video (webcam). Add a measurement start point (MeasureStart) and a target-image point (MeasureEnd) step to the scenario; when the scenario ends, webcam recording stops automatically and the video is analyzed frame by frame to report the elapsed time (ms) from the start point to the first appearance of the target image. The PIP webcam must be open before playback for recording/measurement.",
+    "functions": {
+      "MeasureStart": {
+        "description": "Records the measurement start point. With mode='function' the moment this step executes is the start point; with mode='image' the start point is the first video frame (after this step executes) where the given image appears. Use the edit button to crop the current PIP webcam frame.",
+        "params": {
+          "mode": "Start-point basis: 'function' (step execution time) or 'image' (first frame the image appears)",
+          "image": "Start-point image (required when mode='image'). Set by cropping the webcam frame via the edit button",
+          "threshold": "Image match similarity threshold (0.0~1.0, default 0.8)"
+        }
+      },
+      "MeasureEnd": {
+        "description": "Records the target-image point. After the scenario ends, the recording is scanned for the first frame (after the start point) where the target image appears, and the elapsed time (ms) from the start point is reported in the result. Use the edit button to crop the current PIP webcam frame.",
+        "params": {
+          "image": "Target image (required). Set by cropping the webcam frame via the edit button",
+          "threshold": "Image match similarity threshold (0.0~1.0, default 0.8)"
+        }
+      }
+    }
   }
 }

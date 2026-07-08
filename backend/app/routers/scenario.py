@@ -892,6 +892,75 @@ async def update_image_tap(req: UpdateImageTapRequest):
     }
 
 
+class FrameCheckImageRequest(BaseModel):
+    """Frame_Check 스텝용 크롭 이미지 저장.
+
+    프론트 크롭 모달에 표시되던 현재 PIP 웹캠 프레임(image_base64)에서 사용자가
+    드래그한 crop 영역을 PNG로 저장하고, 스텝 args.image 에 넣을 상대 경로를 반환한다.
+    녹화 중이 아니어도 사용 가능 (기존 스텝 편집 시에도 호출됨).
+    """
+    scenario_name: str
+    image_base64: str  # 웹캠 프리뷰 프레임 (data: prefix 허용, JPEG/PNG)
+    crop: dict  # {x, y, width, height} — image_base64 픽셀 좌표
+    kind: str = "start"  # "start" | "target" — 파일명 구분용
+
+
+@router.post("/frame-check/save-image")
+async def frame_check_save_image(req: FrameCheckImageRequest):
+    """웹캠 프레임 크롭을 Frame_Check 측정 이미지로 저장."""
+    import cv2
+    import numpy as np
+    import time as _time
+
+    name = (req.scenario_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="scenario_name is required")
+
+    try:
+        raw = req.image_base64
+        if raw.startswith("data:"):
+            raw = raw.split(",", 1)[1]
+        img_bytes = base64.b64decode(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 image data")
+
+    arr = np.frombuffer(img_bytes, dtype=np.uint8)
+    src_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if src_img is None:
+        raise HTTPException(status_code=400, detail="Cannot decode webcam frame")
+
+    cx = int(req.crop.get("x", 0))
+    cy = int(req.crop.get("y", 0))
+    cw = int(req.crop.get("width", 0))
+    ch = int(req.crop.get("height", 0))
+    if cw < 5 or ch < 5:
+        raise HTTPException(status_code=400, detail="Crop region too small (need >=5×5)")
+    ih, iw = src_img.shape[:2]
+    cx = max(0, min(cx, iw - 1))
+    cy = max(0, min(cy, ih - 1))
+    cw = max(1, min(cw, iw - cx))
+    ch = max(1, min(ch, ih - cy))
+    cropped = src_img[cy:cy + ch, cx:cx + cw]
+
+    save_dir = SCREENSHOTS_DIR / name
+    save_dir.mkdir(parents=True, exist_ok=True)
+    kind = "target" if req.kind == "target" else "start"
+    ts = int(_time.time() * 1000) % 1000000
+    filename = f"framecheck_{kind}_{ts}.png"
+    ok, buf = cv2.imencode(".png", cropped)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to encode cropped image")
+    (save_dir / filename).write_bytes(buf.tobytes())
+
+    return {
+        "status": "ok",
+        # 스텝 args.image 에 그대로 저장되는 값 — SCREENSHOTS_DIR 기준 상대 경로
+        "image": f"{name}/{filename}",
+        "width": cw,
+        "height": ch,
+    }
+
+
 class ImportStepsRequest(BaseModel):
     target_name: str
     source_name: str

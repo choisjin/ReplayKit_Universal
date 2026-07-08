@@ -701,6 +701,18 @@ export default function RecordPage() {
     startX: 0, startY: 0, curX: 0, curY: 0, active: false,
   });
 
+  // Frame_Check 웹캠 크롭 모달 — 현재 PIP 웹캠 프레임을 크롭해 측정 이미지로 저장
+  const [frameCheckCropModalOpen, setFrameCheckCropModalOpen] = useState(false);
+  const frameCheckCropCanvasRef = useRef<HTMLCanvasElement>(null);
+  const frameCheckCropScreenshotRef = useRef<string>('');
+  // 크롭 결과 반영 대상: 'create'=스텝 생성 폼(moduleFuncArgs), 'edit'=커맨드 수정 모달(editStepParams)
+  const frameCheckCropTargetRef = useRef<'create' | 'edit'>('create');
+  // 저장 파일명 구분: MeasureStart='start', MeasureEnd='target'
+  const frameCheckCropKindRef = useRef<'start' | 'target'>('target');
+  const frameCheckCropDragRef = useRef<{ startX: number; startY: number; curX: number; curY: number; active: boolean }>({
+    startX: 0, startY: 0, curX: 0, curY: 0, active: false,
+  });
+
   // CANAT.CAN_PANEL 모니터 크롭 모달 (PC 모니터 캡처 → 패널 위치/크기 지정)
   const [canPanelCropModalOpen, setCanPanelCropModalOpen] = useState(false);
   const canPanelCropCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -2553,6 +2565,129 @@ export default function RecordPage() {
   }, [ocrCropModalOpen, drawOcrCropCanvas]);
 
   // ── /OCR ExtractRegion 크롭 모달 ────────────────────────────────────────
+
+  // ── Frame_Check 웹캠 크롭 모달 ──────────────────────────────────────────
+  // 현재 PIP 웹캠 프레임을 가져와 드래그 크롭 → 서버에 PNG 저장 → 스텝 args.image 에 경로 반영.
+
+  const drawFrameCheckCropCanvas = useCallback((dragRect?: { x: number; y: number; w: number; h: number }) => {
+    const canvas = frameCheckCropCanvasRef.current;
+    const src = frameCheckCropScreenshotRef.current;
+    if (!canvas || !src) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const img = new window.Image();
+    img.onload = () => {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      ctx.drawImage(img, 0, 0);
+      if (dragRect && dragRect.w > 5 && dragRect.h > 5) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(dragRect.x, dragRect.y, dragRect.w, dragRect.h);
+        ctx.drawImage(img, dragRect.x, dragRect.y, dragRect.w, dragRect.h,
+                      dragRect.x, dragRect.y, dragRect.w, dragRect.h);
+        ctx.strokeStyle = '#52c41a';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(dragRect.x, dragRect.y, dragRect.w, dragRect.h);
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#52c41a';
+        ctx.font = '24px sans-serif';
+        ctx.fillText(`${dragRect.x},${dragRect.y}  ${dragRect.w}×${dragRect.h}`, dragRect.x + 4, dragRect.y - 8);
+      }
+    };
+    img.src = src;
+  }, []);
+
+  const openFrameCheckCropModal = useCallback(async (target: 'create' | 'edit', kind: 'start' | 'target') => {
+    if (!scenarioName) {
+      message.warning(t('record.selectModule'));
+      return;
+    }
+    try {
+      // PIP 웹캠 싱글톤의 최신 프레임 — 녹화 영상과 동일한 소스/해상도(오버레이 포함)
+      const resp = await fetch(`/api/webcam/preview.jpg?t=${Date.now()}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result as string);
+        fr.onerror = reject;
+        fr.readAsDataURL(blob);
+      });
+      frameCheckCropScreenshotRef.current = dataUrl;
+      frameCheckCropTargetRef.current = target;
+      frameCheckCropKindRef.current = kind;
+      setFrameCheckCropModalOpen(true);
+    } catch {
+      message.error('웹캠 프레임을 가져올 수 없습니다 — PIP 웹캠이 열려 있는지 확인하세요');
+    }
+  }, [scenarioName, t]);
+
+  const frameCheckCropMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = frameCheckCropCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+    frameCheckCropDragRef.current = { startX: x, startY: y, curX: x, curY: y, active: true };
+  }, []);
+
+  const frameCheckCropMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!frameCheckCropDragRef.current.active) return;
+    const canvas = frameCheckCropCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+    frameCheckCropDragRef.current.curX = x;
+    frameCheckCropDragRef.current.curY = y;
+    const { startX, startY } = frameCheckCropDragRef.current;
+    drawFrameCheckCropCanvas({
+      x: Math.min(startX, x), y: Math.min(startY, y),
+      w: Math.abs(x - startX), h: Math.abs(y - startY),
+    });
+  }, [drawFrameCheckCropCanvas]);
+
+  const frameCheckCropMouseUp = useCallback(async () => {
+    if (!frameCheckCropDragRef.current.active) return;
+    frameCheckCropDragRef.current.active = false;
+    const { startX, startY, curX, curY } = frameCheckCropDragRef.current;
+    const rx = Math.min(startX, curX);
+    const ry = Math.min(startY, curY);
+    const rw = Math.abs(curX - startX);
+    const rh = Math.abs(curY - startY);
+    if (rw < 5 || rh < 5) return;
+    if (!scenarioName) return;
+    try {
+      const res = await scenarioApi.frameCheckSaveImage(
+        scenarioName,
+        frameCheckCropScreenshotRef.current,
+        { x: rx, y: ry, width: rw, height: rh },
+        frameCheckCropKindRef.current,
+      );
+      const imgPath: string = res.data.image;
+      if (frameCheckCropTargetRef.current === 'edit') {
+        setEditStepParams((prev: any) => ({ ...prev, args: { ...(prev.args || {}), image: imgPath } }));
+      } else {
+        setModuleFuncArgs(prev => ({ ...prev, image: imgPath }));
+      }
+      setFrameCheckCropModalOpen(false);
+      message.success(`측정 이미지 저장됨: ${imgPath} (${rw}×${rh})`);
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || '측정 이미지 저장 실패');
+    }
+  }, [scenarioName]);
+
+  useEffect(() => {
+    if (frameCheckCropModalOpen) setTimeout(() => drawFrameCheckCropCanvas(), 50);
+  }, [frameCheckCropModalOpen, drawFrameCheckCropCanvas]);
+
+  // ── /Frame_Check 웹캠 크롭 모달 ─────────────────────────────────────────
 
   // ── CANAT.CAN_PANEL 모니터 크롭 모달 ────────────────────────────────────
 
@@ -6103,6 +6238,20 @@ export default function RecordPage() {
                               {t('record.ocr.cropButton')}
                             </Button>
                           )}
+                          {/* Frame_Check: 웹캠 크롭으로 측정 이미지 지정 (MeasureEnd 항상, MeasureStart 는 mode=image 일 때만) */}
+                          {selectedModuleName === 'Frame_Check' &&
+                           (selectedModuleFunc === 'MeasureEnd' ||
+                            (selectedModuleFunc === 'MeasureStart' && (moduleFuncArgs['mode'] || 'function') === 'image')) && (
+                            <Button
+                              size="small"
+                              icon={<span>✂</span>}
+                              onClick={() => openFrameCheckCropModal('create', selectedModuleFunc === 'MeasureStart' ? 'start' : 'target')}
+                              style={{ alignSelf: 'flex-start' }}
+                            >
+                              웹캠 크롭 (측정 이미지)
+                              {moduleFuncArgs['image'] ? ` — ${moduleFuncArgs['image']}` : ''}
+                            </Button>
+                          )}
                           {/* CANAT.CAN_PANEL: 모니터 크롭으로 패널 위치/크기 지정 (On 일 때만 — OFF/Close 는 위치 무관) */}
                           {selectedModuleName === 'CANAT' && selectedModuleFunc === 'CAN_PANEL' &&
                            (moduleFuncArgs['state'] || 'on') === 'on' && (
@@ -6158,6 +6307,12 @@ export default function RecordPage() {
                             // x/y/width/height → 숨김(모니터 크롭 버튼으로만 설정).
                             const isCanPanel = selectedModuleName === 'CANAT' && selectedModuleFunc === 'CAN_PANEL';
                             const canPanelOpts = isCanPanel ? canPanelSelectOptions(selectedModuleFunc, p.name) : null;
+                            // Frame_Check: MeasureStart.mode → 콤보박스,
+                            // image 파라미터는 mode='image' 또는 MeasureEnd 일 때만 표시 (웹캠 크롭 버튼으로 설정).
+                            const isFrameCheck = selectedModuleName === 'Frame_Check';
+                            const isFrameCheckMode = isFrameCheck && selectedModuleFunc === 'MeasureStart' && p.name === 'mode';
+                            if (isFrameCheck && p.name === 'image' && selectedModuleFunc === 'MeasureStart' &&
+                                (moduleFuncArgs['mode'] || 'function') !== 'image') return null;
                             if (isCanPanel && CAN_PANEL_HIDDEN_PARAMS.includes(p.name)) return null;
                             if (isOcrRegionParam && moduleFuncArgs['mode'] !== 'Region') return null;
                             if (isAndroidSerialHidden) return null;
@@ -6165,7 +6320,18 @@ export default function RecordPage() {
                             <div key={p.name} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                               <div style={{ display: 'flex', gap: 4, alignItems: 'center', width: '100%' }}>
                                 <Tag style={{ minWidth: 70, textAlign: 'center', margin: 0, flexShrink: 0 }}>{p.name}{p.required && <span style={{ color: '#ff4d4f' }}>*</span>}</Tag>
-                                {isOcrMode ? (
+                                {isFrameCheckMode ? (
+                                  <Select
+                                    size="small"
+                                    value={moduleFuncArgs[p.name] || 'function'}
+                                    onChange={(v) => setModuleFuncArgs(prev => ({ ...prev, [p.name]: v }))}
+                                    style={{ flex: 1, minWidth: 0 }}
+                                    options={[
+                                      { value: 'function', label: 'function (스텝 실행 시점 = 시작점)' },
+                                      { value: 'image', label: 'image (이미지 최초 등장 프레임 = 시작점)' },
+                                    ]}
+                                  />
+                                ) : isOcrMode ? (
                                   <Select
                                     size="small"
                                     value={moduleFuncArgs[p.name] || 'Full Screen'}
@@ -6580,6 +6746,32 @@ export default function RecordPage() {
         </div>
       </Modal>
 
+      {/* Frame_Check 웹캠 크롭 모달 */}
+      <Modal
+        title="웹캠 크롭 — 드래그한 영역이 측정 이미지로 저장됩니다"
+        open={frameCheckCropModalOpen}
+        onCancel={() => setFrameCheckCropModalOpen(false)}
+        width="90vw"
+        style={{ top: 20 }}
+        footer={
+          <Button onClick={() => setFrameCheckCropModalOpen(false)}>{t('common.cancel')}</Button>
+        }
+      >
+        <div style={{ overflow: 'auto', maxHeight: '75vh', textAlign: 'center' }}>
+          <canvas
+            ref={frameCheckCropCanvasRef}
+            onMouseDown={frameCheckCropMouseDown}
+            onMouseMove={frameCheckCropMouseMove}
+            onMouseUp={frameCheckCropMouseUp}
+            style={{ cursor: 'crosshair', maxWidth: '100%' }}
+          />
+        </div>
+        <div style={{ marginTop: 6, color: subTextColor, fontSize: 11, textAlign: 'center' }}>
+          현재 PIP 웹캠 화면입니다. 측정에 사용할 영역을 드래그하면 이미지가 저장되고 스텝의 image 파라미터에 경로가 입력됩니다.
+          타임스탬프 오버레이 영역은 피해서 크롭하세요.
+        </div>
+      </Modal>
+
       {/* CANAT.CAN_PANEL 모니터 크롭 모달 */}
       <Modal
         title="모니터 크롭 — 드래그한 영역이 패널 위치/크기가 됩니다"
@@ -6908,6 +7100,20 @@ export default function RecordPage() {
                     {editFnGuide.description}
                   </div>
                 )}
+                {/* Frame_Check: 측정 이미지는 웹캠 크롭 버튼으로 교체 */}
+                {editStepParams.module === 'Frame_Check' &&
+                 (editStepParams.function === 'MeasureEnd' ||
+                  (editStepParams.function === 'MeasureStart' && (args.mode || 'function') === 'image')) && (
+                  <Button
+                    size="small"
+                    icon={<span>✂</span>}
+                    onClick={() => openFrameCheckCropModal('edit', editStepParams.function === 'MeasureStart' ? 'start' : 'target')}
+                    style={{ alignSelf: 'flex-start', marginBottom: 6 }}
+                  >
+                    웹캠 크롭 (측정 이미지)
+                    {args.image ? ` — ${args.image}` : ''}
+                  </Button>
+                )}
                 {/* CANAT.CAN_PANEL: 위치/크기는 모니터 크롭 버튼으로만 설정 (On 일 때만 — OFF/Close 는 위치 무관) */}
                 {editStepParams.module === 'CANAT' && editStepParams.function === 'CAN_PANEL' &&
                  (args.state || 'on') === 'on' && (
@@ -6946,9 +7152,21 @@ export default function RecordPage() {
                       // x/y/width/height → 숨김(위의 모니터 크롭 버튼으로만 설정).
                       const isCanPanelEdit = editStepParams.module === 'CANAT' && editStepParams.function === 'CAN_PANEL';
                       const canPanelOptionsEdit = isCanPanelEdit ? canPanelSelectOptions(editStepParams.function, k) : null;
+                      // Frame_Check: MeasureStart.mode → 콤보박스,
+                      // image 파라미터는 mode='function'이면 숨김 (웹캠 크롭 버튼으로 설정).
+                      const isFrameCheckEdit = editStepParams.module === 'Frame_Check';
+                      const frameCheckModeOptions =
+                        isFrameCheckEdit && editStepParams.function === 'MeasureStart' && k === 'mode'
+                          ? [
+                              { value: 'function', label: 'function (스텝 실행 시점 = 시작점)' },
+                              { value: 'image', label: 'image (이미지 최초 등장 프레임 = 시작점)' },
+                            ]
+                          : null;
+                      if (isFrameCheckEdit && k === 'image' && editStepParams.function === 'MeasureStart' &&
+                          (args.mode || 'function') !== 'image') return null;
                       if (isCanPanelEdit && CAN_PANEL_HIDDEN_PARAMS.includes(k)) return null;
                       if (isAndroidSerialHidden) return null;
-                      const selectOptions = woohyunOptions || canPanelOptionsEdit;
+                      const selectOptions = woohyunOptions || canPanelOptionsEdit || frameCheckModeOptions;
                       return (
                         <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           <div style={{ display: 'flex', gap: 4, alignItems: 'center', width: '100%' }}>

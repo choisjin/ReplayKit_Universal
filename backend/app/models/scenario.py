@@ -197,3 +197,6 @@ class ScenarioResult(BaseModel):
     # 중단 시 진행 중이던 회차/스텝 추적 (status="stopped"일 때 의미 있음).
     stopped_at_iteration: Optional[int] = None  # 1-based; None이면 일반 종료
     stopped_at_step: Optional[int] = None       # 1-based; iteration 안에서의 step 인덱스
+    # Frame_Check 모듈 측정 결과 — 시나리오 종료 후 녹화 영상 프레임 분석으로 채워짐.
+    # 항목: {iteration, pair_index, status, elapsed_ms, start_video_ms, target_video_ms, ...}
+    frame_check_results: Optional[list[dict]] = None
