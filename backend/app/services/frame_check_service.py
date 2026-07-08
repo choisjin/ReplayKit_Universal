@@ -306,6 +306,7 @@ class FrameCheckService:
             _seek(lower_ms)
             last_pos = lower_ms
             best_score = -1.0
+            checked = 0  # 실제 매칭을 수행한 프레임 수 — 1이면 첫 프레임 즉시 매치
             while True:
                 ok, frame = cap.read()
                 if not ok:
@@ -316,6 +317,7 @@ class FrameCheckService:
                     continue  # seek 가 키프레임(이전)에 안착한 구간 — 전진만
                 if pos_ms > deadline_ms:
                     break
+                checked += 1
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 score, loc = _match(gray, tpl)
                 if score > best_score:
@@ -323,10 +325,11 @@ class FrameCheckService:
                 if score >= threshold:
                     return {"pos": pos_ms, "score": round(score, 4), "loc": loc,
                             "frame": frame, "last_pos": last_pos,
-                            "best_score": round(best_score, 4)}
+                            "best_score": round(best_score, 4), "checked": checked}
             return {"pos": None, "score": None, "loc": None, "frame": None,
                     "last_pos": last_pos,
-                    "best_score": round(best_score, 4) if best_score >= 0 else None}
+                    "best_score": round(best_score, 4) if best_score >= 0 else None,
+                    "checked": checked}
 
         def _collect_pre_frames(match_pos_ms: float, count: int = 5) -> list:
             """매치 프레임 직전 count 프레임 수집 — 매치 지점 앞으로 re-seek 후 전진 디코드.
@@ -459,6 +462,15 @@ class FrameCheckService:
             "clip_from_ms": round(clip_from_ms, 1),
             "clip_to_ms": round(target_video_ms + CLIP_MARGIN_MS, 1),
         }
+        # 탐색 첫 프레임에서 즉시 매치 = 타겟이 탐색 시작 시점에 이미 표시되어 있었다는 뜻.
+        # 측정 시작점이 실제 등장보다 늦었을 가능성이 높으므로 경고를 남긴다
+        # (Frame_Measure 스텝을 트리거 동작 뒤에 배치했거나 wait_time 이 과함).
+        if t.get("checked") == 1:
+            result["immediate_match"] = True
+            result["message"] = (
+                "주의: 탐색 시작 프레임에서 즉시 매치 — 타겟이 측정 시작 전에 이미 표시되었을 수 "
+                "있습니다. Frame_Measure 스텝을 트리거 동작 이전에 배치하거나 wait_time 을 줄이세요."
+            )
         if match_image:
             result["match_image"] = match_image
         if frames_out:
