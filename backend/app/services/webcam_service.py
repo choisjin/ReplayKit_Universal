@@ -357,7 +357,8 @@ class WebcamService:
         self._frames_written: int = 0
 
         # Audio (마이크) 녹음 설정 — Windows dshow 한정. ffmpeg writer에 두 번째 입력으로 붙는다.
-        self._audio_enabled: bool = True
+        # 기본 off — 사용자가 PIP 모달에서 음성이 필요한 경우에만 켠다 (opt-in).
+        self._audio_enabled: bool = False
         self._audio_device: str = ""  # "" = auto (첫 번째 dshow 오디오 장치)
         self._audio_validated: set[str] = set()  # 이 세션에서 오픈 프로브를 통과한 장치
         self._audio_failed: set[str] = set()     # 프로브 실패한 장치 — 설정 변경 전까지 skip

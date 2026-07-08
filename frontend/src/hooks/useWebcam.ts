@@ -50,8 +50,8 @@ export function useWebcam() {
   const [webcamResolutions, setWebcamResolutions] = useState<string[]>([]);
   const [exposureAuto, setExposureAuto] = useState(true);
 
-  // 마이크(음성) 녹음 설정 — 백엔드 ffmpeg dshow 캡처와 sync
-  const [audioEnabled, setAudioEnabledState] = useState(true);
+  // 마이크(음성) 녹음 설정 — 백엔드 ffmpeg dshow 캡처와 sync (기본 off, opt-in)
+  const [audioEnabled, setAudioEnabledState] = useState(false);
   const [audioDevice, setAudioDeviceState] = useState(''); // '' = auto
   const [audioDevices, setAudioDevices] = useState<AudioDeviceInfo[]>([]);
 

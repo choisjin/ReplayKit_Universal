@@ -1,9 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Button, ConfigProvider, Select, Slider, Switch, theme } from 'antd';
+import { Button, ConfigProvider, Select, Slider, Switch, Tooltip, theme } from 'antd';
 import {
   PlayCircleOutlined, PauseOutlined, VideoCameraOutlined,
   SettingOutlined, CloseOutlined, MinusOutlined, AppstoreOutlined,
-  AudioOutlined,
+  AudioOutlined, AudioMutedOutlined,
 } from '@ant-design/icons';
 import { useWebcam } from '../hooks/useWebcam';
 import { useTranslation } from '../i18n';
@@ -193,6 +193,16 @@ export default function WebcamPip({ webcam, onClose, isDark, onOpenCompositor }:
                 label: d.label || t('webcam.camera', { index: String(i) }),
               }))}
             />
+            {/* 음성 녹화 opt-in 토글 — 켜져 있을 때만 녹화 mp4에 마이크 오디오 포함 */}
+            <Tooltip title={audioEnabled ? t('webcam.audioOn') : t('webcam.audioOff')}>
+              <Button
+                size="small"
+                type={audioEnabled ? 'primary' : 'default'}
+                icon={audioEnabled ? <AudioOutlined /> : <AudioMutedOutlined />}
+                onClick={() => setAudioEnabled(!audioEnabled)}
+                disabled={webcamRecording}
+              />
+            </Tooltip>
             {!webcamRecording ? (
               <Button size="small" type="primary" danger icon={<PlayCircleOutlined />} onClick={startWebcamRecording}>
                 {t('webcam.record')}
