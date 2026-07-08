@@ -30,6 +30,9 @@ SCREENSHOTS_DIR = Path(__file__).resolve().parent.parent.parent / "screenshots"
 DEFAULT_THRESHOLD = 0.8
 
 
+DEFAULT_MAX_TIME_S = 60.0  # MeasureEnd 타겟 탐색 최대 시간(초). 0 = 무제한
+
+
 @dataclass
 class _Marker:
     kind: str  # "start" | "target"
@@ -39,6 +42,7 @@ class _Marker:
     mode: str = "function"  # start 전용: "function" | "image"
     image: str = ""  # SCREENSHOTS_DIR 기준 상대 경로 (예: "MyScenario/framecheck_123.png")
     threshold: float = DEFAULT_THRESHOLD
+    max_time_s: float = DEFAULT_MAX_TIME_S  # target 전용: 탐색 시작점부터 최대 확인 시간(초)
 
 
 @dataclass
@@ -100,13 +104,28 @@ class FrameCheckService:
             err = self._validate_image(image)
             if err:
                 return f"FAIL: {err}"
+            max_time_s = self._parse_max_time(args.get("max_time"))
             marker = _Marker(kind="target", ts_iso=now_iso, iteration=iteration,
-                             step_id=step_id, mode="image", image=image, threshold=threshold)
+                             step_id=step_id, mode="image", image=image, threshold=threshold,
+                             max_time_s=max_time_s)
             with self._lock:
                 self._markers.append(marker)
-            return f"타겟 이미지 시점 기록 (image='{image}', cycle={iteration})"
+            limit = f"{max_time_s:g}s" if max_time_s > 0 else "무제한"
+            return f"타겟 이미지 시점 기록 (image='{image}', max_time={limit}, cycle={iteration})"
 
         return f"FAIL: unknown Frame_Check function '{function_name}'"
+
+    @staticmethod
+    def _parse_max_time(raw: Any) -> float:
+        """max_time 인자(초) 파싱. 0 = 무제한, 빈 값/미지정/비숫자 = 기본 60초."""
+        s = str(raw).strip().strip("'\"") if raw is not None else ""
+        if not s:
+            return DEFAULT_MAX_TIME_S
+        try:
+            v = float(s)
+        except ValueError:
+            return DEFAULT_MAX_TIME_S
+        return max(0.0, v)
 
     @staticmethod
     def _parse_threshold(raw: Any) -> float:
@@ -232,12 +251,23 @@ class FrameCheckService:
 
     def _measure_pair(self, cv2, cap, start_m: _Marker, target_m: _Marker,
                       started_at: datetime) -> dict:
-        """단일 start→target 쌍 측정. cap 은 현재 위치에서 이어서 순차 스캔."""
+        """단일 start→target 쌍 측정.
+
+        속도 최적화: 각 마커의 스텝 실행 시각 이전 구간은 seek 로 점프한다
+        (시작 이미지 탐색 = MeasureStart 실행 시각부터, 타겟 탐색 = MeasureEnd
+        실행 시각부터). 타겟 탐색은 max_time 초를 넘기면 중단 — 영상이 길어도
+        분석 시간이 유계.
+        """
         start_marker_dt = self._parse_iso(start_m.ts_iso)
         if start_marker_dt is None:
             return {"status": "error", "message": "시작 마커 시각 파싱 실패"}
         # 스텝 실행 시각 → 영상 내 오프셋(ms). 녹화 시작 전이면 0으로 클램프.
         start_lower_ms = max(0.0, (start_marker_dt - started_at).total_seconds() * 1000.0)
+        target_marker_dt = self._parse_iso(target_m.ts_iso)
+        target_exec_ms = (
+            max(0.0, (target_marker_dt - started_at).total_seconds() * 1000.0)
+            if target_marker_dt is not None else 0.0
+        )
 
         tpl_target = self._load_template_gray(cv2, target_m.image)
         if tpl_target is None:
@@ -249,15 +279,6 @@ class FrameCheckService:
             if tpl_start is None:
                 return {"status": "error", "message": f"시작 이미지 로드 실패: {start_m.image}"}
 
-        start_video_ms: Optional[float] = None
-        start_score: Optional[float] = None
-        if start_m.mode == "function":
-            # 함수 실행 시점 자체가 시작점 — 프레임 탐색 불필요
-            start_video_ms = start_lower_ms
-
-        target_video_ms: Optional[float] = None
-        target_score: Optional[float] = None
-
         def _match(gray_frame, tpl) -> float:
             th, tw = tpl.shape[:2]
             fh, fw = gray_frame.shape[:2]
@@ -266,45 +287,76 @@ class FrameCheckService:
             res = cv2.matchTemplate(gray_frame, tpl, cv2.TM_CCOEFF_NORMED)
             return float(cv2.minMaxLoc(res)[1])
 
-        # 단일 순차 디코드 패스. FFMPEG 백엔드는 read() **후**의 POS_MSEC가
-        # 방금 디코드한 프레임의 PTS다 (read 전에 읽으면 직전 프레임 값 — 1프레임 lag).
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            pos_ms = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
-            gray = None
-            # 1) 시작 이미지 탐색 (mode=image, 아직 미발견)
-            if start_video_ms is None:
-                if pos_ms < start_lower_ms:
-                    continue
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                score = _match(gray, tpl_start)
-                if score >= start_m.threshold:
-                    start_video_ms = pos_ms
-                    start_score = round(score, 4)
-                else:
-                    continue
-            # 2) 타겟 이미지 탐색 — 시작점 이후 프레임부터
-            if pos_ms < start_video_ms:
-                continue
-            if gray is None:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            score = _match(gray, tpl_target)
-            if score >= target_m.threshold:
-                target_video_ms = pos_ms
-                target_score = round(score, 4)
-                break
+        def _seek(ms: float) -> None:
+            # FFMPEG seek 은 요청 시각 이전의 키프레임에 안착 → 이후 read 로 전진하며
+            # pos < ms 프레임은 호출부 가드가 건너뜀 (프레임 누락 없음).
+            if ms > 0:
+                try:
+                    cap.set(cv2.CAP_PROP_POS_MSEC, ms)
+                except Exception:
+                    pass
 
-        if start_video_ms is None:
-            return {"status": "start_image_not_found",
-                    "message": "시작 이미지가 영상에서 발견되지 않음",
-                    "search_from_ms": round(start_lower_ms, 1)}
+        # FFMPEG 백엔드는 read() **후**의 POS_MSEC가 방금 디코드한 프레임의 PTS다
+        # (read 전에 읽으면 직전 프레임 값 — 1프레임 lag).
+        def _scan(lower_ms: float, tpl, threshold: float,
+                  deadline_ms: float) -> tuple[Optional[float], Optional[float], float]:
+            """lower_ms 이후 프레임에서 tpl 최초 매치 탐색.
+
+            반환: (매치 프레임 PTS, score, 마지막으로 본 프레임 PTS).
+            deadline_ms 를 넘기거나 영상이 끝나면 (None, None, last_pos).
+            """
+            _seek(lower_ms)
+            last_pos = lower_ms
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    return None, None, last_pos
+                pos_ms = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
+                last_pos = pos_ms
+                if pos_ms < lower_ms:
+                    continue  # seek 가 키프레임(이전)에 안착한 구간 — 전진만
+                if pos_ms > deadline_ms:
+                    return None, None, last_pos
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                score = _match(gray, tpl)
+                if score >= threshold:
+                    return pos_ms, round(score, 4), last_pos
+            # unreachable
+
+        # 1) 시작점 — mode=function 이면 스텝 실행 시각 자체, mode=image 면
+        #    실행 시각부터 시작 이미지 최초 등장 프레임 탐색 (이전 구간은 seek 점프).
+        start_score: Optional[float] = None
+        if start_m.mode == "function":
+            start_video_ms: Optional[float] = start_lower_ms
+        else:
+            start_video_ms, start_score, _ = _scan(
+                start_lower_ms, tpl_start, start_m.threshold, float("inf"))
+            if start_video_ms is None:
+                return {"status": "start_image_not_found",
+                        "message": "시작 이미지가 영상에서 발견되지 않음",
+                        "search_from_ms": round(start_lower_ms, 1)}
+
+        # 2) 타겟 — MeasureEnd 실행 시각 이전은 점프하고, max_time 초까지만 탐색.
+        target_from_ms = max(start_video_ms, target_exec_ms)
+        deadline_ms = (
+            target_from_ms + target_m.max_time_s * 1000.0
+            if target_m.max_time_s > 0 else float("inf")
+        )
+        target_video_ms, target_score, last_pos = _scan(
+            target_from_ms, tpl_target, target_m.threshold, deadline_ms)
+
         if target_video_ms is None:
+            timed_out = deadline_ms != float("inf") and last_pos > deadline_ms
+            msg = (
+                f"타겟 이미지 미발견 — 최대 확인 시간 {target_m.max_time_s:g}초 초과"
+                if timed_out else "타겟 이미지가 탐색 구간 영상에서 발견되지 않음"
+            )
             return {"status": "target_not_found",
-                    "message": "타겟 이미지가 시작점 이후 영상에서 발견되지 않음",
+                    "message": msg,
                     "start_video_ms": round(start_video_ms, 1),
-                    "start_score": start_score}
+                    "start_score": start_score,
+                    "search_from_ms": round(target_from_ms, 1),
+                    "max_time_s": target_m.max_time_s}
         return {
             "status": "ok",
             "start_video_ms": round(start_video_ms, 1),

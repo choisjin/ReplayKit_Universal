@@ -830,6 +830,7 @@ def get_module_functions(module_name: str) -> list[dict]:
                 "params": [
                     {"name": "image", "required": True},
                     {"name": "threshold", "required": False, "default": "'0.8'"},
+                    {"name": "max_time", "required": False, "default": "'60'"},
                 ],
             },
         ]

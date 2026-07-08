@@ -1677,10 +1677,11 @@
         }
       },
       "MeasureEnd": {
-        "description": "Records the target-image point. After the scenario ends, the recording is scanned for the first frame (after the start point) where the target image appears, and the elapsed time (ms) from the start point is reported in the result. Use the edit button to crop the current PIP webcam frame.",
+        "description": "Records the target-image point. After the scenario ends, the recording is scanned starting from this step's execution time (earlier frames are skipped) for the first frame where the target image appears, and the elapsed time (ms) from the start point is reported. Scanning stops after max_time seconds. Use the edit button to crop the current PIP webcam frame.",
         "params": {
           "image": "Target image (required). Set by cropping the webcam frame via the edit button",
-          "threshold": "Image match similarity threshold (0.0~1.0, default 0.8)"
+          "threshold": "Image match similarity threshold (0.0~1.0, default 0.8)",
+          "max_time": "Maximum scan time in seconds. If the target is not found within this window from the scan start point, it is reported as not found. 0 = unlimited (default 60)"
         }
       }
     }
