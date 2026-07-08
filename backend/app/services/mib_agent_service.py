@@ -122,7 +122,23 @@ for lid in f_ids(scr, "layer render order:"):
 if not order:
     LW, LH = SW, SH
 
-hmi = None; cands = []
+def clip_to_layer(src, dst):
+    # dst가 레이어를 벗어나는 서피스(예: 800x480 레이어에 1280x640 backdrop 맵)는
+    # 보이는 부분만 유효 — dst를 레이어로 클립하고 src도 비례 보정.
+    x0, y0, dw, dh = dst
+    cx0 = max(0, x0); cy0 = max(0, y0)
+    cx1 = min(LW, x0 + dw); cy1 = min(LH, y0 + dh)
+    cw = cx1 - cx0; ch = cy1 - cy0
+    if cw <= 0 or ch <= 0:
+        return None
+    if cw == dw and ch == dh:
+        return src, dst
+    sx, sy, sw, sh = src
+    return ((sx + sw * (cx0 - x0) // dw, sy + sh * (cy0 - y0) // dh,
+             max(1, sw * cw // dw), max(1, sh * ch // dh)),
+            (cx0, cy0, cw, ch))
+
+hmi = None; cands = []; hmi_cands = []
 for sid in order:
     st = lmc(["get", "surface", sid]); v = re.search(r"visibility:\s*(\d+)", st)
     if v and v.group(1) == "0":
@@ -133,10 +149,22 @@ for sid in order:
         continue
     if osz and osz[0] * osz[1] < 64 * 64:   # cursor/system surface 제외
         continue
-    if dst[0] == 0 and dst[1] == 0 and dst[2] >= LW * 0.95 and dst[3] >= LH * 0.95:
-        hmi = (sid, src)                      # 전체화면 = HMI 크롬
+    # HMI = dst가 레이어와 '정확히' 일치(±5%)하는 풀스크린만. 레이어보다 큰 dst
+    # (MQB 800x480처럼 backdrop 맵이 1280x640으로 깔리는 모델)는 맵 후보 — 클립해서 cands로.
+    if (dst[0] == 0 and dst[1] == 0 and LW * 0.95 <= dst[2] <= LW * 1.05
+            and LH * 0.95 <= dst[3] <= LH * 1.05):
+        hmi_cands.append((sid, src))
     else:
-        cands.append((sid, src, dst))
+        c = clip_to_layer(src, dst)
+        if c:
+            cands.append((sid, c[0], c[1]))
+# HMI 후보가 여럿이면(black 베이스 서피스 + 진짜 크롬 공존 모델) 비검정 중 마지막(최상위) 선택.
+for sid, src in hmi_cands:
+    b = dump(sid, "/tmp/_mlhpick.bmp")
+    if b is not None and not mostly_black(parse(b)):
+        hmi = (sid, src)
+if hmi is None and hmi_cands:
+    hmi = hmi_cands[-1]
 # MAP = 최대 면적의 "비검정" 후보 (보조 서피스/빈 서피스 자동 배제)
 def hole_frac(hp, dst, T=2):
     # 0x10(HMI)의 dst(layer좌표) 영역에서 검정(=투명 구멍) 픽셀 비율. 맵은 이 비율이 높은 자리.
@@ -183,8 +211,9 @@ def map_rect(ms):
     return (md[0] * TW // LW, md[1] * TH // LH,
             max(1, md[2] * TW // LW), max(1, md[3] * TH // LH))
 
-sys.stderr.write("MIBLIVE hmi=%s cands=%d TW=%d TH=%d LW=%d LH=%d\n"
-                 % (hmi[0] if hmi else None, len(cands), TW, TH, LW, LH))
+sys.stderr.write("MIBLIVE hmi=%s hmi_cands=%s cands=%s TW=%d TH=%d LW=%d LH=%d\n"
+                 % (hmi[0] if hmi else None, [c[0] for c in hmi_cands],
+                    [(c[0], c[2]) for c in cands], TW, TH, LW, LH))
 sys.stderr.flush()
 
 out = sys.stdout.buffer
@@ -2368,6 +2397,15 @@ class MIBAgentService:
             pass
         while not self._live_stop.is_set():
             try:
+                # 스트리머 stderr(scene 판정 진단: hmi/cands 등)를 로그로 회수
+                while chan.recv_stderr_ready():
+                    err = chan.recv_stderr(4096)
+                    if err:
+                        logger.info("MIB streamer: %s",
+                                    err.decode("utf-8", "replace").strip())
+            except Exception:
+                pass
+            try:
                 data = chan.recv(262144)
             except Exception:
                 break
@@ -2413,7 +2451,12 @@ class MIBAgentService:
                             hole = reg.max(axis=2) <= self._map_key_t  # HMI가 (거의) 검정 = 투명 구멍
                             # 맵-영역이 대부분 구멍일 때만 맵 합성(홈). Dial/차량뷰처럼 불투명
                             # 콘텐츠가 채운 화면은 검정비율이 낮아 맵을 안 깐다(비침 방지).
-                            if hole.mean() > self._map_hole_gate:
+                            # 단 맵이 프레임 전체를 덮는 backdrop 모델(MQB 등)은 불투명 크롬이
+                            # 섞여 비율이 낮아지므로 device select_map과 같은 0.55로 완화.
+                            gate = self._map_hole_gate
+                            if mw * mh >= tw * th * 0.9:
+                                gate = min(gate, 0.55)
+                            if hole.mean() > gate:
                                 reg[hole] = mp[hole]
                     img = Image.fromarray(comp[:, :, ::-1], "RGB")  # BGR→RGB
                     bio = io.BytesIO()
