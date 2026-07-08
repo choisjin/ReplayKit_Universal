@@ -93,6 +93,8 @@ interface FrameCheckResultEntry {
   elapsed_ms?: number;
   start_score?: number | null;
   target_score?: number | null;
+  // 측정 구간 클립 (MeasureStart 실행 5초 전 ~ 종료점 5초 후) — run 폴더 기준 상대 경로
+  clip?: string | null;
 }
 
 interface ResultDetail {
@@ -1588,6 +1590,19 @@ export default function ResultsPage() {
                       } },
                     { title: 'Status', dataIndex: 'status', width: 140,
                       render: (v: string) => <Tag color={v === 'ok' ? 'green' : 'red'} style={{ margin: 0 }}>{v.toUpperCase()}</Tag> },
+                    { title: 'Clip', dataIndex: 'clip', width: 60,
+                      render: (v?: string | null) => {
+                        if (!v) return '-';
+                        const base = detailFilename.includes('/')
+                          ? detailFilename.substring(0, detailFilename.lastIndexOf('/')) : '';
+                        if (!base) return '-';
+                        return (
+                          <a href={`/results-files/${base}/${v}`} target="_blank" rel="noreferrer"
+                             title="측정 구간 클립 (시작 5초 전 ~ 종료 5초 후)">
+                            ▶
+                          </a>
+                        );
+                      } },
                     { title: 'Message', dataIndex: 'message', ellipsis: true,
                       render: (v?: string) => v ? <Tooltip title={v}><span style={{ fontSize: 11 }}>{v}</span></Tooltip> : '-' },
                   ] as any}

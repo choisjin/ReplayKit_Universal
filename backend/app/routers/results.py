@@ -625,7 +625,7 @@ def _build_html_report(data: dict, output_path: Path, steps_iter=None) -> str:
             "<tr>" + "".join(
                 f'<th style="border:1px solid #d1d5db;padding:3px 8px;background:#f3f4f6">{h}</th>'
                 for h in ("Cycle", "Pair", "시작 기준", "시작(영상 ms)", "타겟(영상 ms)",
-                          "경과 시간(ms)", "Score(시작/타겟)", "Status", "Message")
+                          "경과 시간(ms)", "Score(시작/타겟)", "Status", "Clip", "Message")
             ) + "</tr>"
         )
         for fc in fc_results:
@@ -638,6 +638,12 @@ def _build_html_report(data: dict, output_path: Path, steps_iter=None) -> str:
             score_str = f"{sc if sc is not None else '-'} / {tc if tc is not None else '-'}"
             st = str(fc.get("status", ""))
             st_color = "#15803d" if st == "ok" else "#b91c1c"
+            # 클립은 result.html 과 같은 폴더의 recordings/ 에 있어 상대 링크로 동작
+            # (서버 서빙 /results-files/... 과 file:// 더블클릭 양쪽 모두).
+            clip_rel = str(fc.get("clip") or "")
+            clip_link = (
+                f'<a href="{e(clip_rel)}" target="_blank">&#9654; 재생</a>' if clip_rel else "-"
+            )
             cells = [
                 f"R{e(fc.get('iteration', ''))}",
                 e(fc.get("pair_index", "-")),
@@ -647,6 +653,7 @@ def _build_html_report(data: dict, output_path: Path, steps_iter=None) -> str:
                 elapsed_str,
                 e(score_str),
                 f'<span style="color:{st_color};font-weight:600">{e(st.upper())}</span>',
+                clip_link,
                 e(fc.get("message", "")),
             ]
             parts.append(

@@ -1525,19 +1525,25 @@ async def _webcam_session_finalize(session: Optional[_WebcamPlaybackSession], re
 
 
 async def _frame_check_analyze(session: Optional[_WebcamPlaybackSession],
-                               result: "ScenarioResult") -> None:
+                               result: "ScenarioResult") -> list[tuple[Path, str]]:
     """Frame_Check 마커가 있으면 녹화 영상을 프레임 분석해 result.frame_check_results 를 채운다.
 
     반드시 _save_result 호출 **전에** 실행 — 결과가 model_dump 를 타고 result.json/html 에
     자연스럽게 포함되도록 한다. 진행 중이던 마지막 cycle 녹화는 여기서 조기 종료한다
     (finalize 의 stop_recording 은 이중 호출에 안전, current_path=None 처리로 중복 이동 방지).
+
+    측정 구간 클립(MeasureStart 실행 5초 전 ~ 종료점 5초 후)도 pass/fail 무관하게
+    임시 폴더에 추출하고, 반환값 [(임시경로, 최종파일명)] 을 finalize 이후
+    `_frame_check_publish_clips` 가 run_dir/recordings/ 로 이동한다. entry["clip"] 에는
+    최종 상대 경로를 미리 기록해 result.json 에 포함시킨다.
     """
     from .services.frame_check_service import get_frame_check_service
     fc = get_frame_check_service()
     if not fc.has_markers():
-        return
+        return []
 
     entries: list[dict] = []
+    clips: list[tuple[Path, str]] = []
     if session is None or not session.is_active():
         for it in fc.iterations_with_markers():
             entries.append({
@@ -1545,7 +1551,7 @@ async def _frame_check_analyze(session: Optional[_WebcamPlaybackSession],
                 "message": "웹캠 녹화 없음 — 재생 시작 전 PIP 웹캠이 열려 있어야 측정 가능",
             })
         result.frame_check_results = entries
-        return
+        return []
 
     # 진행 중이던 마지막 cycle 녹화 종료 + (run_dir 이 있으면) 최종 위치로 이동.
     # moov atom 이 기록된 완성 mp4 여야 프레임 분석이 가능하다.
@@ -1593,10 +1599,81 @@ async def _frame_check_analyze(session: Optional[_WebcamPlaybackSession],
         else:
             entries.append({"iteration": it, "status": "no_pair",
                             "message": "측정 시작점(MeasureStart)/타겟(MeasureEnd) 쌍이 완성되지 않음"})
+
+    # 측정 구간 클립 추출 (pass/fail 모두) — 임시 폴더에 만들고 finalize 이후 이동.
+    clip_tmp_dir: Optional[Path] = None
+    by_iter_src = {it: p for it, (p, _s) in by_iter.items()}
+    for entry in entries:
+        if entry.get("clip_from_ms") is None or entry.get("clip_to_ms") is None:
+            continue
+        src = by_iter_src.get(entry.get("iteration"))
+        if src is None or not src.exists():
+            continue
+        final_name = f"framecheck_r{entry['iteration']}_p{entry.get('pair_index', 1)}.mp4"
+        if clip_tmp_dir is None:
+            clip_tmp_dir = _RESULTS_DIR / f"_tmp_fcclips_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+            clip_tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp_out = clip_tmp_dir / final_name
+        ok = await asyncio.to_thread(
+            fc.extract_clip, src, tmp_out,
+            float(entry["clip_from_ms"]), float(entry["clip_to_ms"]),
+        )
+        if ok:
+            entry["clip"] = f"recordings/{final_name}"
+            clips.append((tmp_out, final_name))
+        else:
+            logger.warning("Frame_Check: clip extraction skipped/failed for %s", final_name)
+
     if entries:
         result.frame_check_results = entries
         ok_rows = [e for e in entries if e.get("status") == "ok"]
-        logger.info("Frame_Check: %d/%d measurement(s) succeeded", len(ok_rows), len(entries))
+        logger.info("Frame_Check: %d/%d measurement(s) succeeded, %d clip(s) extracted",
+                    len(ok_rows), len(entries), len(clips))
+    return clips
+
+
+def _frame_check_publish_clips_sync(clips: list[tuple[Path, str]],
+                                    result_path: Optional[str]) -> None:
+    """분석 때 임시 폴더에 추출한 측정 클립을 run_dir/recordings/ 로 이동.
+
+    finalize 이후에 호출 — result_path 로 run_dir 을 확정할 수 있는 시점.
+    result.json 의 entry["clip"] 은 이 최종 위치를 미리 가리키고 있다.
+    result_path 가 없으면(저장 전 예외 종료) 클립은 폐기한다.
+    """
+    if not clips:
+        return
+    import shutil
+    tmp_dir = clips[0][0].parent
+    try:
+        if result_path:
+            result_file = Path(result_path)
+            if result_file.name == "result.json":
+                run_dir = result_file.parent
+            else:
+                run_dir = result_file.parent / result_file.stem
+            final_dir = run_dir / "recordings"
+            final_dir.mkdir(parents=True, exist_ok=True)
+            for src, name in clips:
+                if not src.exists():
+                    continue
+                try:
+                    shutil.move(str(src), str(final_dir / name))
+                    logger.info("Frame_Check clip published: %s", final_dir / name)
+                except Exception as e:
+                    logger.warning("Frame_Check clip move failed (%s): %s", name, e)
+        else:
+            logger.warning("Frame_Check: result path unknown — discarding %d clip(s)", len(clips))
+            for src, _name in clips:
+                try:
+                    src.unlink(missing_ok=True)
+                except Exception:
+                    pass
+    finally:
+        try:
+            if tmp_dir.exists() and not any(tmp_dir.iterdir()):
+                tmp_dir.rmdir()
+        except Exception:
+            pass
 
 
 def _parse_until_time(raw: Any) -> Optional[datetime]:
@@ -1641,6 +1718,8 @@ async def _run_play_job(data: dict):
     _is_multi_cycle = False
     result_path: Optional[str] = None
     webcam_session: Optional[_WebcamPlaybackSession] = None
+    # Frame_Check 측정 클립 [(임시경로, 최종파일명)] — finalize 이후 recordings/ 로 이동
+    _fc_clips: list[tuple[Path, str]] = []
     # 종료 이벤트는 finally에서 모든 리소스 정리(웹캠 finalize 등) 후에만 발행.
     # 프론트가 결과 상세에 진입했을 때 녹화 파일·결과 파일이 모두 최종 위치에 있어야 404/깨짐을 방지.
     terminal_event: Optional[dict] = None
@@ -1852,8 +1931,9 @@ async def _run_play_job(data: dict):
 
         # Frame_Check 마커가 있으면 녹화를 조기 종료하고 영상을 프레임 분석해
         # result.frame_check_results 에 측정 시간을 기록 (result 저장 전이어야 함).
+        # 측정 구간 클립은 임시 추출 후 finally 에서 recordings/ 로 이동.
         try:
-            await _frame_check_analyze(webcam_session, result)
+            _fc_clips = await _frame_check_analyze(webcam_session, result)
         except Exception as e:
             logger.warning("Frame_Check analyze error: %s", e)
 
@@ -1895,6 +1975,12 @@ async def _run_play_job(data: dict):
             await _webcam_session_finalize(webcam_session, result_path)
         except Exception as e:
             logger.warning("webcam finalize error: %s", e)
+        # Frame_Check 측정 클립을 결과 폴더 recordings/ 로 이동 (result.json 의 clip 경로와 일치)
+        if _fc_clips:
+            try:
+                await asyncio.to_thread(_frame_check_publish_clips_sync, _fc_clips, result_path)
+            except Exception as e:
+                logger.warning("Frame_Check clip publish error: %s", e)
         mark_playback_active(False)
         mark_runtime_fail_active(False)
         # 중단/예외로 끝난 경우 모듈 인스턴스를 정리해 포트/스레드 leak 방지.

@@ -31,6 +31,7 @@ DEFAULT_THRESHOLD = 0.8
 
 
 DEFAULT_MAX_TIME_S = 60.0  # MeasureEnd 타겟 탐색 최대 시간(초). 0 = 무제한
+CLIP_MARGIN_MS = 5000.0  # 결과 클립 여유 구간 — MeasureStart 실행 5초 전 ~ 종료점 5초 후
 
 
 @dataclass
@@ -323,6 +324,10 @@ class FrameCheckService:
                     return pos_ms, round(score, 4), last_pos
             # unreachable
 
+        # 결과 클립 구간 — pass/fail 무관하게 MeasureStart 실행 5초 전부터 제공.
+        # 종료점은 결과에 따라 아래에서 확정 (타겟 발견/MeasureEnd 실행 중 늦은 쪽 + 5초).
+        clip_from_ms = max(0.0, start_lower_ms - CLIP_MARGIN_MS)
+
         # 1) 시작점 — mode=function 이면 스텝 실행 시각 자체, mode=image 면
         #    실행 시각부터 시작 이미지 최초 등장 프레임 탐색 (이전 구간은 seek 점프).
         start_score: Optional[float] = None
@@ -334,7 +339,9 @@ class FrameCheckService:
             if start_video_ms is None:
                 return {"status": "start_image_not_found",
                         "message": "시작 이미지가 영상에서 발견되지 않음",
-                        "search_from_ms": round(start_lower_ms, 1)}
+                        "search_from_ms": round(start_lower_ms, 1),
+                        "clip_from_ms": round(clip_from_ms, 1),
+                        "clip_to_ms": round(target_exec_ms + CLIP_MARGIN_MS, 1)}
 
         # 2) 타겟 — MeasureEnd 실행 시각 이전은 점프하고, max_time 초까지만 탐색.
         target_from_ms = max(start_video_ms, target_exec_ms)
@@ -356,7 +363,9 @@ class FrameCheckService:
                     "start_video_ms": round(start_video_ms, 1),
                     "start_score": start_score,
                     "search_from_ms": round(target_from_ms, 1),
-                    "max_time_s": target_m.max_time_s}
+                    "max_time_s": target_m.max_time_s,
+                    "clip_from_ms": round(clip_from_ms, 1),
+                    "clip_to_ms": round(max(target_exec_ms, start_video_ms) + CLIP_MARGIN_MS, 1)}
         return {
             "status": "ok",
             "start_video_ms": round(start_video_ms, 1),
@@ -364,7 +373,53 @@ class FrameCheckService:
             "elapsed_ms": round(target_video_ms - start_video_ms, 1),
             "start_score": start_score,
             "target_score": target_score,
+            "clip_from_ms": round(clip_from_ms, 1),
+            "clip_to_ms": round(max(target_exec_ms, target_video_ms) + CLIP_MARGIN_MS, 1),
         }
+
+
+    # ---------- 결과 클립 추출 ----------
+
+    @staticmethod
+    def extract_clip(src: Path, dst: Path, from_ms: float, to_ms: float) -> bool:
+        """녹화 영상에서 측정 구간(±여유 포함) 클립을 추출한다.
+
+        스트림 카피는 키프레임(-g 미지정 x264 = 최대 250프레임) 경계로만 잘려
+        구간이 수 초씩 어긋나므로 재인코딩 사용 — 클립은 수십 초라 비용이 작다.
+        """
+        if to_ms <= from_ms or not src.exists():
+            return False
+        try:
+            from .webcam_service import _find_ffmpeg
+            ffmpeg = _find_ffmpeg()
+        except Exception:
+            ffmpeg = None
+        if not ffmpeg:
+            logger.warning("Frame_Check clip: ffmpeg not found — skip %s", dst.name)
+            return False
+        import subprocess
+        import sys as _sys
+        dur_s = (to_ms - from_ms) / 1000.0
+        cmd = [
+            ffmpeg, "-y",
+            "-ss", f"{max(0.0, from_ms) / 1000.0:.3f}",
+            "-i", str(src),
+            "-t", f"{dur_s:.3f}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an",
+            str(dst),
+        ]
+        try:
+            flags = subprocess.CREATE_NO_WINDOW if _sys.platform == "win32" else 0
+            r = subprocess.run(cmd, capture_output=True, timeout=300, creationflags=flags)
+            if r.returncode != 0:
+                logger.warning("Frame_Check clip ffmpeg rc=%d: %s", r.returncode,
+                               r.stderr.decode(errors="replace")[-300:])
+                return False
+            return dst.exists() and dst.stat().st_size > 0
+        except Exception as e:
+            logger.warning("Frame_Check clip extraction failed (%s): %s", dst.name, e)
+            return False
 
 
 _service: Optional[FrameCheckService] = None
