@@ -72,9 +72,19 @@ const CAN_PANEL_MSGTYPE_OPTS = [
   { value: 'Classic', label: 'Classic' },
 ];
 const CAN_PANEL_HIDDEN_PARAMS = ['x', 'y', 'width', 'height'];
-// CAN_PANEL 의 특정 파라미터에 대한 드롭다운 옵션(있으면 Select, 없으면 일반 입력).
+// CANAT.check_can_message / check_no_can_message: match_mode 드롭다운 옵션
+const CANAT_MATCH_MODE_OPTS = [
+  { value: 'startswith', label: 'startswith (앞부분 일치)' },
+  { value: 'exact', label: 'exact (정확 일치)' },
+  { value: 'contains', label: 'contains (어디든 포함)' },
+  { value: 'bitmask', label: 'bitmask (지정 비트 켜짐)' },
+];
+// CANAT 가상 함수의 특정 파라미터에 대한 드롭다운 옵션(있으면 Select, 없으면 일반 입력).
 function canPanelSelectOptions(funcName: string | undefined, paramName: string):
   { value: string; label: string }[] | null {
+  if (funcName === 'check_can_message' || funcName === 'check_no_can_message') {
+    return paramName === 'match_mode' ? CANAT_MATCH_MODE_OPTS : null;
+  }
   if (funcName !== 'CAN_PANEL') return null;
   switch (paramName) {
     case 'state': return CAN_PANEL_STATE_OPTS;
@@ -6319,7 +6329,7 @@ export default function RecordPage() {
                             // CANAT.CAN_PANEL: state/cycle_time/bus_channel/message_type → 드롭다운,
                             // x/y/width/height → 숨김(모니터 크롭 버튼으로만 설정).
                             const isCanPanel = selectedModuleName === 'CANAT' && selectedModuleFunc === 'CAN_PANEL';
-                            const canPanelOpts = isCanPanel ? canPanelSelectOptions(selectedModuleFunc, p.name) : null;
+                            const canPanelOpts = selectedModuleName === 'CANAT' ? canPanelSelectOptions(selectedModuleFunc, p.name) : null;
                             // Frame_Check.Frame_Measure: mode → 콤보박스,
                             // start_image/start_threshold 는 mode='image' 일 때만 표시 (웹캠 크롭 버튼으로 설정).
                             const isFrameCheck = selectedModuleName === 'Frame_Check' && selectedModuleFunc === 'Frame_Measure';
@@ -7174,7 +7184,7 @@ export default function RecordPage() {
                       // CANAT.CAN_PANEL: state/cycle_time/bus_channel/message_type → 드롭다운,
                       // x/y/width/height → 숨김(위의 모니터 크롭 버튼으로만 설정).
                       const isCanPanelEdit = editStepParams.module === 'CANAT' && editStepParams.function === 'CAN_PANEL';
-                      const canPanelOptionsEdit = isCanPanelEdit ? canPanelSelectOptions(editStepParams.function, k) : null;
+                      const canPanelOptionsEdit = editStepParams.module === 'CANAT' ? canPanelSelectOptions(editStepParams.function, k) : null;
                       // Frame_Check.Frame_Measure: mode → 콤보박스,
                       // start_image/start_threshold 는 mode='function'이면 숨김 (웹캠 크롭 버튼으로 설정).
                       const isFrameCheckEdit =

@@ -996,6 +996,18 @@ def get_module_functions(module_name: str) -> list[dict]:
                 {"name": "height", "required": False, "default": "300"},
             ],
         })
+        # check_can_message / check_no_can_message — RX 수신 확인 가상 함수 (실제 .pyd 에는 없음).
+        # CANat DLL 의 수신 축적 리스트(ExtPreSaveCANDataAllList 등)를 사용 — canat_rx.py 참조.
+        # 주의: 두 함수가 param dict 를 공유하면 아래 가이드 병합에서 설명이 덮어써지므로 딥카피.
+        def _canat_check_params() -> list[dict]:
+            return [
+                {"name": "message_id", "required": True},
+                {"name": "expected_data", "required": False, "default": "''"},
+                {"name": "match_mode", "required": False, "default": "'startswith'"},
+                {"name": "timeout", "required": False, "default": "5"},
+            ]
+        functions.append({"name": "check_can_message", "params": _canat_check_params()})
+        functions.append({"name": "check_no_can_message", "params": _canat_check_params()})
 
     # SSHManager: 스트리밍 send_command 가상 함수 추가 (실제 클래스에는 없음)
     if module_name == "SSHManager":
@@ -1600,6 +1612,21 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
         panel.highlight()
         result = send_fn(message_id, cycle_time, can_message, bus_channel, message_type)
         return f"ok: CAN_PANEL highlighted + sent (id={message_id} ch={bus_channel} type={message_type}) → {result}"
+
+    # CANAT.check_can_message / check_no_can_message — RX 수신 확인 가상 함수.
+    # .pyd 에는 수신 API 가 없으므로 인스턴스의 CANat DLL 핸들(hdll)로 직접 확인한다.
+    # 반환이 "FAIL:" 로 시작하면 재생 엔진이 스텝 실패로 판정 (SSHManager.Check 와 동일 규약).
+    if module_name == "CANAT" and function_name in ("check_can_message", "check_no_can_message"):
+        from .canat_rx import check_can_message, check_no_can_message
+        instance = _get_instance(module_name, constructor_kwargs, shared_serial_conn, ssh_credentials)
+        fn = check_can_message if function_name == "check_can_message" else check_no_can_message
+        return fn(
+            instance,
+            message_id=str(args.get("message_id", "") or ""),
+            expected_data=str(args.get("expected_data", "") or ""),
+            match_mode=str(args.get("match_mode", "startswith") or "startswith"),
+            timeout=_cast_arg(args.get("timeout", 5), float),
+        )
 
     instance = _get_instance(module_name, constructor_kwargs, shared_serial_conn, ssh_credentials)
 

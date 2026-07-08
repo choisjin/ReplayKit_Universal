@@ -44,6 +44,24 @@
           "height": "Panel height (px, default 300)"
         }
       },
+      "check_can_message": {
+        "description": "Checks whether a specific CAN message is received (RX) within the timeout. PASS if received, FAIL otherwise. Leave data empty to check message ID reception only. Works as a single step — no prepare/cleanup steps needed.",
+        "params": {
+          "message_id": "CAN message ID to check (hex). e.g. '0x18DAF141' or '291'",
+          "expected_data": "Expected data (hex bytes, space-separated). Empty = ID-only check. '*' ignores a nibble — e.g. '1A 2B', '1* ** 33'",
+          "match_mode": "Data comparison mode. 'startswith' (default: prefix match) / 'exact' (full-length match) / 'contains' (match anywhere in data) / 'bitmask' (all set bits present)",
+          "timeout": "Max wait time in seconds (default 5). Returns PASS immediately when matched"
+        }
+      },
+      "check_no_can_message": {
+        "description": "Inverse check — PASS only if the message is NOT received during the timeout. Fails immediately on first reception (e.g. a message must stop after entering sleep).",
+        "params": {
+          "message_id": "CAN message ID that must not be received (hex). e.g. '0x18DAF141'",
+          "expected_data": "Expected data (hex bytes). Empty = any reception of the ID fails. '*' nibble wildcard supported",
+          "match_mode": "Data comparison mode. 'startswith' / 'exact' / 'contains' / 'bitmask'",
+          "timeout": "Watch duration in seconds (default 5). PASS if not received for this long"
+        }
+      },
       "stop_can_message": {
         "description": "Stops periodic transmission of a specific CAN message.",
         "params": {

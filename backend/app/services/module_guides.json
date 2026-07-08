@@ -44,6 +44,24 @@
           "height": "패널 높이(px, 기본 300)"
         }
       },
+      "check_can_message": {
+        "description": "지정 시간(timeout) 안에 특정 CAN 메시지가 수신(RX)되는지 확인합니다. 수신되면 PASS, 시간 안에 못 찾으면 FAIL. 데이터를 비우면 메시지 ID 수신 여부만 확인합니다. 준비/정리 스텝 없이 이 스텝 하나로 동작합니다.",
+        "params": {
+          "message_id": "확인할 CAN 메시지 ID (hex). 예: '0x18DAF141' 또는 '291'",
+          "expected_data": "기대 데이터 (hex 바이트, 공백 구분). 비우면 ID만 확인. '*'로 니블 무시 가능 — 예: '1A 2B', '1* ** 33'",
+          "match_mode": "데이터 비교 방식. 'startswith'(기본: 앞부분 일치) / 'exact'(길이까지 정확 일치) / 'contains'(데이터 중 어디든 연속 일치) / 'bitmask'(지정 비트가 모두 켜져 있는지)",
+          "timeout": "최대 대기 시간 (초, 기본 5). 이 시간 안에 수신되면 즉시 PASS"
+        }
+      },
+      "check_no_can_message": {
+        "description": "지정 시간(timeout) 동안 특정 CAN 메시지가 수신되지 않아야 PASS 하는 역검증입니다. 한 번이라도 수신되면 즉시 FAIL (예: Sleep 진입 후 특정 메시지가 더 이상 나오면 안 되는 경우).",
+        "params": {
+          "message_id": "수신되면 안 되는 CAN 메시지 ID (hex). 예: '0x18DAF141'",
+          "expected_data": "기대 데이터 (hex 바이트). 비우면 ID 수신 자체가 FAIL. '*' 니블 무시 가능",
+          "match_mode": "데이터 비교 방식. 'startswith' / 'exact' / 'contains' / 'bitmask'",
+          "timeout": "감시 시간 (초, 기본 5). 이 시간 동안 미수신이어야 PASS"
+        }
+      },
       "stop_can_message": {
         "description": "특정 CAN 메시지의 주기적 전송을 중지합니다.",
         "params": {
