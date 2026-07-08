@@ -295,21 +295,17 @@ class FrameCheckService:
 
         # FFMPEG 백엔드는 read() **후**의 POS_MSEC가 방금 디코드한 프레임의 PTS다
         # (read 전에 읽으면 직전 프레임 값 — 1프레임 lag).
-        def _scan(lower_ms: float, tpl, threshold: float, deadline_ms: float,
-                  keep_context: bool = False):
+        def _scan(lower_ms: float, tpl, threshold: float, deadline_ms: float):
             """lower_ms 이후 프레임에서 tpl 최초 매치 탐색.
 
             반환 dict:
               pos/score/loc/frame — 매치 프레임 (미발견 시 None)
               last_pos — 마지막으로 본 프레임 PTS
               best_score — 탐색 구간에서 관측된 최고 유사도 (미발견 원인 진단용)
-              context — keep_context=True 면 매치 직전 최대 5프레임 [(pos, frame)]
             """
-            from collections import deque
             _seek(lower_ms)
             last_pos = lower_ms
             best_score = -1.0
-            context = deque(maxlen=6) if keep_context else None
             while True:
                 ok, frame = cap.read()
                 if not ok:
@@ -320,8 +316,6 @@ class FrameCheckService:
                     continue  # seek 가 키프레임(이전)에 안착한 구간 — 전진만
                 if pos_ms > deadline_ms:
                     break
-                if context is not None:
-                    context.append((pos_ms, frame))  # cap.read 는 매번 새 버퍼 반환 — 복사 불필요
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 score, loc = _match(gray, tpl)
                 if score > best_score:
@@ -329,11 +323,35 @@ class FrameCheckService:
                 if score >= threshold:
                     return {"pos": pos_ms, "score": round(score, 4), "loc": loc,
                             "frame": frame, "last_pos": last_pos,
-                            "best_score": round(best_score, 4), "context": context}
+                            "best_score": round(best_score, 4)}
             return {"pos": None, "score": None, "loc": None, "frame": None,
                     "last_pos": last_pos,
-                    "best_score": round(best_score, 4) if best_score >= 0 else None,
-                    "context": context}
+                    "best_score": round(best_score, 4) if best_score >= 0 else None}
+
+        def _collect_pre_frames(match_pos_ms: float, count: int = 5) -> list:
+            """매치 프레임 직전 count 프레임 수집 — 매치 지점 앞으로 re-seek 후 전진 디코드.
+
+            탐색 중 롤링 버퍼 방식은 매치가 탐색 첫 프레임에서 나면(= wait_time 시점에
+            타겟이 이미 떠 있으면) 직전 프레임이 하나도 없으므로, 항상 re-seek 로 확보한다.
+            여유 구간(margin) 안에 프레임이 count 장 미만이면(초저 fps) 한 번 더 넓혀 재시도.
+            """
+            from collections import deque
+            for margin_ms in (2000.0, 10000.0):
+                if match_pos_ms <= 0:
+                    return []
+                buf: deque = deque(maxlen=count)
+                _seek(max(0.0, match_pos_ms - margin_ms))
+                while True:
+                    ok, f = cap.read()
+                    if not ok:
+                        break
+                    p = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
+                    if p >= match_pos_ms - 0.001:  # 매치 프레임 자신은 제외
+                        break
+                    buf.append((p, f))
+                if len(buf) >= count or match_pos_ms - margin_ms <= 0:
+                    return list(buf)
+            return list(buf)
 
         def _save_jpg(name: str, img) -> Optional[str]:
             if assets_dir is None:
@@ -374,8 +392,7 @@ class FrameCheckService:
             target_from_ms + m.max_time_s * 1000.0
             if m.max_time_s > 0 else float("inf")
         )
-        t = _scan(target_from_ms, tpl_target, m.target_threshold, deadline_ms,
-                  keep_context=assets_dir is not None)
+        t = _scan(target_from_ms, tpl_target, m.target_threshold, deadline_ms)
         target_video_ms, target_score = t["pos"], t["score"]
 
         if target_video_ms is None:
@@ -400,11 +417,23 @@ class FrameCheckService:
         frames_out: list[str] = []
         match_image: Optional[str] = None
         if assets_dir is not None:
-            prev = list(t["context"] or [])[:-1][-5:]  # 매치 직전 최대 5프레임 (시간순)
+            # 1) 매치 이후 5프레임 먼저 — cap 이 매치 프레임 직후에 위치해 있어 이어서 read
+            #    (직전 프레임 수집이 re-seek 로 cap 위치를 바꾸므로 순서 중요)
+            post_names: list[str] = []
+            for i in range(1, 6):
+                ok, f2 = cap.read()
+                if not ok:
+                    break
+                name = _save_jpg(f"{asset_prefix}_post{i}.jpg", f2)
+                if name:
+                    post_names.append(name)
+            # 2) 매치 직전 5프레임 — re-seek 로 확정 수집 (탐색 첫 프레임 매치여도 확보)
+            prev = _collect_pre_frames(target_video_ms, 5)
             for i, (_p, f) in enumerate(prev):
                 name = _save_jpg(f"{asset_prefix}_pre{len(prev) - i}.jpg", f)
                 if name:
                     frames_out.append(name)
+            # 3) 매치 프레임 annotate (빨간 박스 + 일치율)
             annotated = t["frame"].copy()
             if t["loc"] is not None:
                 x, y = t["loc"]
@@ -416,14 +445,7 @@ class FrameCheckService:
             match_image = _save_jpg(f"{asset_prefix}_match.jpg", annotated)
             if match_image:
                 frames_out.append(match_image)
-            # 매치 이후 5프레임 — cap 이 매치 프레임 직후에 위치해 있어 이어서 read
-            for i in range(1, 6):
-                ok, f2 = cap.read()
-                if not ok:
-                    break
-                name = _save_jpg(f"{asset_prefix}_post{i}.jpg", f2)
-                if name:
-                    frames_out.append(name)
+            frames_out.extend(post_names)
 
         result = {
             "status": "ok",
