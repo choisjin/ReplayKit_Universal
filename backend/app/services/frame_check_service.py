@@ -157,8 +157,13 @@ class FrameCheckService:
             return sorted({m.iteration for m in self._markers})
 
     def analyze_video(self, video_path: Path, started_at_iso: str,
-                      iteration: int) -> list[dict]:
-        """녹화 영상 1개(1 cycle)에서 마커별 측정 수행 (여러 측정 지원, 기록 순서대로)."""
+                      iteration: int, assets_dir: Optional[Path] = None) -> list[dict]:
+        """녹화 영상 1개(1 cycle)에서 마커별 측정 수행 (여러 측정 지원, 기록 순서대로).
+
+        assets_dir 가 주어지면 pass 측정의 매치 프레임 ±5프레임 이미지를 그 폴더에
+        저장하고 entry["frames"]/["match_image"] 에 파일명을 기록한다 (경로 rewrite 는
+        호출자 몫 — 최종 위치는 run_dir/recordings/).
+        """
         markers = self.markers_for_iteration(iteration)
         if not markers:
             return []
@@ -190,8 +195,11 @@ class FrameCheckService:
             for idx, marker in enumerate(markers):
                 entry: dict[str, Any] = {**base_entry, **self._marker_info(marker),
                                          "pair_index": idx + 1}
+                asset_prefix = f"framecheck_r{iteration}_p{idx + 1}"
                 try:
-                    entry.update(self._measure(cv2, cap, marker, started_at))
+                    entry.update(self._measure(cv2, cap, marker, started_at,
+                                               assets_dir=assets_dir,
+                                               asset_prefix=asset_prefix))
                 except Exception as e:
                     logger.exception("Frame_Check measurement %d analysis failed", idx + 1)
                     entry.update({"status": "error", "message": str(e)})
@@ -233,12 +241,23 @@ class FrameCheckService:
             return None
         return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    def _measure(self, cv2, cap, m: _Marker, started_at: datetime) -> dict:
+    @staticmethod
+    def _fmt_wall(started_at: datetime, offset_ms: float) -> str:
+        """영상 내 오프셋(ms) → 로컬 wall-clock 문자열 (예: 2026-07-08 13:59:30.125)."""
+        from datetime import timedelta
+        dt = (started_at + timedelta(milliseconds=offset_ms)).astimezone()
+        return dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+    def _measure(self, cv2, cap, m: _Marker, started_at: datetime,
+                 assets_dir: Optional[Path] = None, asset_prefix: str = "fc") -> dict:
         """마커 1건 측정.
 
         속도 최적화: 스텝 실행 시각 이전 구간과 시작점 이후 wait_time 구간은
         seek 로 점프한다. 타겟 탐색은 max_time 초를 넘기면 중단 — 영상이 길어도
         분석 시간이 유계.
+
+        assets_dir 가 주어지면 pass 시 매치 프레임 앞뒤 5프레임 + 매치 프레임
+        (빨간 박스·일치율 annotate)을 JPEG 로 저장한다.
         """
         marker_dt = self._parse_iso(m.ts_iso)
         if marker_dt is None:
@@ -256,13 +275,14 @@ class FrameCheckService:
             if tpl_start is None:
                 return {"status": "error", "message": f"시작 이미지 로드 실패: {m.start_image}"}
 
-        def _match(gray_frame, tpl) -> float:
+        def _match(gray_frame, tpl) -> tuple[float, Optional[tuple[int, int]]]:
             th, tw = tpl.shape[:2]
             fh, fw = gray_frame.shape[:2]
             if th > fh or tw > fw:
-                return -1.0
+                return -1.0, None
             res = cv2.matchTemplate(gray_frame, tpl, cv2.TM_CCOEFF_NORMED)
-            return float(cv2.minMaxLoc(res)[1])
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            return float(max_val), (int(max_loc[0]), int(max_loc[1]))
 
         def _seek(ms: float) -> None:
             # FFMPEG seek 은 요청 시각 이전의 키프레임에 안착 → 이후 read 로 전진하며
@@ -275,30 +295,57 @@ class FrameCheckService:
 
         # FFMPEG 백엔드는 read() **후**의 POS_MSEC가 방금 디코드한 프레임의 PTS다
         # (read 전에 읽으면 직전 프레임 값 — 1프레임 lag).
-        def _scan(lower_ms: float, tpl, threshold: float,
-                  deadline_ms: float) -> tuple[Optional[float], Optional[float], float]:
+        def _scan(lower_ms: float, tpl, threshold: float, deadline_ms: float,
+                  keep_context: bool = False):
             """lower_ms 이후 프레임에서 tpl 최초 매치 탐색.
 
-            반환: (매치 프레임 PTS, score, 마지막으로 본 프레임 PTS).
-            deadline_ms 를 넘기거나 영상이 끝나면 (None, None, last_pos).
+            반환 dict:
+              pos/score/loc/frame — 매치 프레임 (미발견 시 None)
+              last_pos — 마지막으로 본 프레임 PTS
+              best_score — 탐색 구간에서 관측된 최고 유사도 (미발견 원인 진단용)
+              context — keep_context=True 면 매치 직전 최대 5프레임 [(pos, frame)]
             """
+            from collections import deque
             _seek(lower_ms)
             last_pos = lower_ms
+            best_score = -1.0
+            context = deque(maxlen=6) if keep_context else None
             while True:
                 ok, frame = cap.read()
                 if not ok:
-                    return None, None, last_pos
+                    break
                 pos_ms = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
                 last_pos = pos_ms
                 if pos_ms < lower_ms:
                     continue  # seek 가 키프레임(이전)에 안착한 구간 — 전진만
                 if pos_ms > deadline_ms:
-                    return None, None, last_pos
+                    break
+                if context is not None:
+                    context.append((pos_ms, frame))  # cap.read 는 매번 새 버퍼 반환 — 복사 불필요
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                score = _match(gray, tpl)
+                score, loc = _match(gray, tpl)
+                if score > best_score:
+                    best_score = score
                 if score >= threshold:
-                    return pos_ms, round(score, 4), last_pos
-            # unreachable
+                    return {"pos": pos_ms, "score": round(score, 4), "loc": loc,
+                            "frame": frame, "last_pos": last_pos,
+                            "best_score": round(best_score, 4), "context": context}
+            return {"pos": None, "score": None, "loc": None, "frame": None,
+                    "last_pos": last_pos,
+                    "best_score": round(best_score, 4) if best_score >= 0 else None,
+                    "context": context}
+
+        def _save_jpg(name: str, img) -> Optional[str]:
+            if assets_dir is None:
+                return None
+            try:
+                from ..utils.cv_io import safe_imwrite
+                path = assets_dir / name
+                if safe_imwrite(str(path), img):
+                    return name
+            except Exception as e:
+                logger.warning("Frame_Check frame save failed (%s): %s", name, e)
+            return None
 
         # 결과 클립 구간 — pass/fail 무관하게 스텝 실행 5초 전부터 제공.
         # 종료점은 결과에 따라 아래에서 확정.
@@ -310,14 +357,16 @@ class FrameCheckService:
         if m.mode == "function":
             start_video_ms: Optional[float] = exec_ms
         else:
-            start_video_ms, start_score, last_pos = _scan(
-                exec_ms, tpl_start, m.start_threshold, float("inf"))
+            s = _scan(exec_ms, tpl_start, m.start_threshold, float("inf"))
+            start_video_ms, start_score = s["pos"], s["score"]
             if start_video_ms is None:
                 return {"status": "start_image_not_found",
                         "message": "시작 이미지가 영상에서 발견되지 않음",
                         "search_from_ms": round(exec_ms, 1),
+                        # 미발견이어도 관측된 최고 유사도를 남겨 원인 진단에 사용
+                        "start_score": s["best_score"],
                         "clip_from_ms": round(clip_from_ms, 1),
-                        "clip_to_ms": round(last_pos + CLIP_MARGIN_MS, 1)}
+                        "clip_to_ms": round(s["last_pos"] + CLIP_MARGIN_MS, 1)}
 
         # 2) 타겟 — 시작점 + wait_time(여유시간) 이전은 점프하고, max_time 초까지만 탐색.
         target_from_ms = start_video_ms + m.wait_time_s * 1000.0
@@ -325,11 +374,12 @@ class FrameCheckService:
             target_from_ms + m.max_time_s * 1000.0
             if m.max_time_s > 0 else float("inf")
         )
-        target_video_ms, target_score, last_pos = _scan(
-            target_from_ms, tpl_target, m.target_threshold, deadline_ms)
+        t = _scan(target_from_ms, tpl_target, m.target_threshold, deadline_ms,
+                  keep_context=assets_dir is not None)
+        target_video_ms, target_score = t["pos"], t["score"]
 
         if target_video_ms is None:
-            timed_out = deadline_ms != float("inf") and last_pos > deadline_ms
+            timed_out = deadline_ms != float("inf") and t["last_pos"] > deadline_ms
             msg = (
                 f"타겟 이미지 미발견 — 최대 확인 시간 {m.max_time_s:g}초 초과"
                 if timed_out else "타겟 이미지가 탐색 구간 영상에서 발견되지 않음"
@@ -337,21 +387,61 @@ class FrameCheckService:
             return {"status": "target_not_found",
                     "message": msg,
                     "start_video_ms": round(start_video_ms, 1),
+                    "start_time": self._fmt_wall(started_at, start_video_ms),
                     "start_score": start_score,
+                    # 미발견이어도 탐색 구간의 최고 유사도를 남겨 원인 진단에 사용
+                    "target_score": t["best_score"],
                     "search_from_ms": round(target_from_ms, 1),
                     "clip_from_ms": round(clip_from_ms, 1),
                     # fail 클립은 실제로 탐색한 구간 전체를 담는다 (마지막 확인 프레임 + 5초)
-                    "clip_to_ms": round(last_pos + CLIP_MARGIN_MS, 1)}
-        return {
+                    "clip_to_ms": round(t["last_pos"] + CLIP_MARGIN_MS, 1)}
+
+        # pass — 매치 프레임 앞뒤 5프레임 + annotate 된 매치 프레임 저장
+        frames_out: list[str] = []
+        match_image: Optional[str] = None
+        if assets_dir is not None:
+            prev = list(t["context"] or [])[:-1][-5:]  # 매치 직전 최대 5프레임 (시간순)
+            for i, (_p, f) in enumerate(prev):
+                name = _save_jpg(f"{asset_prefix}_pre{len(prev) - i}.jpg", f)
+                if name:
+                    frames_out.append(name)
+            annotated = t["frame"].copy()
+            if t["loc"] is not None:
+                x, y = t["loc"]
+                th_, tw_ = tpl_target.shape[:2]
+                cv2.rectangle(annotated, (x, y), (x + tw_, y + th_), (0, 0, 255), 3)
+                cv2.putText(annotated, f"{target_score * 100:.1f}%",
+                            (x, max(y - 10, 25)), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.9, (0, 0, 255), 2, cv2.LINE_AA)
+            match_image = _save_jpg(f"{asset_prefix}_match.jpg", annotated)
+            if match_image:
+                frames_out.append(match_image)
+            # 매치 이후 5프레임 — cap 이 매치 프레임 직후에 위치해 있어 이어서 read
+            for i in range(1, 6):
+                ok, f2 = cap.read()
+                if not ok:
+                    break
+                name = _save_jpg(f"{asset_prefix}_post{i}.jpg", f2)
+                if name:
+                    frames_out.append(name)
+
+        result = {
             "status": "ok",
             "start_video_ms": round(start_video_ms, 1),
             "target_video_ms": round(target_video_ms, 1),
+            "start_time": self._fmt_wall(started_at, start_video_ms),
+            "target_time": self._fmt_wall(started_at, target_video_ms),
             "elapsed_ms": round(target_video_ms - start_video_ms, 1),
             "start_score": start_score,
             "target_score": target_score,
             "clip_from_ms": round(clip_from_ms, 1),
             "clip_to_ms": round(target_video_ms + CLIP_MARGIN_MS, 1),
         }
+        if match_image:
+            result["match_image"] = match_image
+        if frames_out:
+            result["frames"] = frames_out
+        return result
 
     # ---------- 결과 클립 추출 ----------
 

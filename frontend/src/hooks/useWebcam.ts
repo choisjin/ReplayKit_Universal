@@ -18,11 +18,19 @@ interface WebcamStatus {
   recording_duration_s: number;
   frames_written: number;
   overlay_position: string;
+  audio_enabled?: boolean;
+  audio_device?: string;
+  recording_audio?: boolean;
 }
 
 interface DeviceInfo {
   index: number;
   label: string;
+}
+
+interface AudioDeviceInfo {
+  name: string;
+  alt: string;
 }
 
 export function useWebcam() {
@@ -41,6 +49,11 @@ export function useWebcam() {
   const [webcamResolution, setWebcamResolution] = useState('');
   const [webcamResolutions, setWebcamResolutions] = useState<string[]>([]);
   const [exposureAuto, setExposureAuto] = useState(true);
+
+  // 마이크(음성) 녹음 설정 — 백엔드 ffmpeg dshow 캡처와 sync
+  const [audioEnabled, setAudioEnabledState] = useState(true);
+  const [audioDevice, setAudioDeviceState] = useState(''); // '' = auto
+  const [audioDevices, setAudioDevices] = useState<AudioDeviceInfo[]>([]);
 
   // 타임스탬프 오버레이 설정 (프런트 ↔ 백엔드 sync)
   const [timestampPosition, setTimestampPositionState] = useState<'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'off'>('top-left');
@@ -66,6 +79,8 @@ export function useWebcam() {
       webcamOpenRef.current = s.open;  // 즉시 ref도 업데이트 (다음 React render 기다리지 않음)
       setWebcamRecording(s.recording);
       if (s.width && s.height) setWebcamResolution(`${s.width}x${s.height}`);
+      if (typeof s.audio_enabled === 'boolean') setAudioEnabledState(s.audio_enabled);
+      if (typeof s.audio_device === 'string') setAudioDeviceState(s.audio_device);
       return s;
     } catch {
       return null;
@@ -256,6 +271,30 @@ export function useWebcam() {
   }, []);
 
   // ------------------------------------------------------------
+  // 마이크(음성) 녹음 설정
+  // ------------------------------------------------------------
+  const loadAudioDevices = useCallback(async () => {
+    try {
+      const r = await axios.get('/api/webcam/audio-devices');
+      setAudioDevices(r.data?.devices || []);
+      if (typeof r.data?.enabled === 'boolean') setAudioEnabledState(r.data.enabled);
+      if (typeof r.data?.device === 'string') setAudioDeviceState(r.data.device);
+    } catch {
+      setAudioDevices([]);
+    }
+  }, []);
+
+  const setAudioEnabled = useCallback(async (enabled: boolean) => {
+    setAudioEnabledState(enabled);
+    try { await axios.post('/api/webcam/audio', { enabled }); } catch { /* ignore */ }
+  }, []);
+
+  const setAudioDevice = useCallback(async (device: string) => {
+    setAudioDeviceState(device);
+    try { await axios.post('/api/webcam/audio', { device }); } catch { /* ignore */ }
+  }, []);
+
+  // ------------------------------------------------------------
   // Exposure (Level 2 — 노출만 노출)
   // ------------------------------------------------------------
   const loadWebcamCapabilities = useCallback(async () => {
@@ -360,5 +399,11 @@ export function useWebcam() {
     isStreamReady,
     exposureAuto,
     setExposureAutoMode,
+    audioEnabled,
+    setAudioEnabled,
+    audioDevice,
+    setAudioDevice,
+    audioDevices,
+    loadAudioDevices,
   };
 }

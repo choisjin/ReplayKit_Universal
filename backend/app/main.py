@@ -1582,6 +1582,9 @@ async def _frame_check_analyze(session: Optional[_WebcamPlaybackSession],
     by_iter: dict[int, tuple[Path, str]] = {
         it: (p, started) for it, p, started in session.cycle_files
     }
+    # 클립/매치 프레임 이미지 공용 임시 폴더 — finalize 이후 recordings/ 로 이동
+    clip_tmp_dir = _RESULTS_DIR / f"_tmp_fcclips_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+    clip_tmp_dir.mkdir(parents=True, exist_ok=True)
     for it in fc.iterations_with_markers():
         rec = by_iter.get(it)
         if rec is None:
@@ -1590,7 +1593,8 @@ async def _frame_check_analyze(session: Optional[_WebcamPlaybackSession],
             continue
         video_path, started_at = rec
         try:
-            rows = await asyncio.to_thread(fc.analyze_video, video_path, started_at, it)
+            rows = await asyncio.to_thread(
+                fc.analyze_video, video_path, started_at, it, clip_tmp_dir)
         except Exception as e:
             logger.exception("Frame_Check analysis failed (cycle %d)", it)
             rows = [{"iteration": it, "status": "error", "message": str(e)}]
@@ -1600,8 +1604,28 @@ async def _frame_check_analyze(session: Optional[_WebcamPlaybackSession],
             entries.append({"iteration": it, "status": "no_pair",
                             "message": "Frame_Measure 측정 마커 없음"})
 
+    # 매치 프레임 이미지(분석 중 임시 폴더에 저장됨)를 publish 목록에 등록하고
+    # entry 경로를 최종 상대 경로(recordings/...)로 rewrite.
+    for entry in entries:
+        names = list(entry.get("frames") or [])
+        rewritten: list[str] = []
+        for n in names:
+            p = clip_tmp_dir / n
+            if p.exists():
+                clips.append((p, n))
+                rewritten.append(f"recordings/{n}")
+        if rewritten:
+            entry["frames"] = rewritten
+        elif "frames" in entry:
+            del entry["frames"]
+        mi = entry.get("match_image")
+        if mi:
+            if (clip_tmp_dir / mi).exists():
+                entry["match_image"] = f"recordings/{mi}"  # 파일은 frames 등록으로 함께 이동
+            else:
+                del entry["match_image"]
+
     # 측정 구간 클립 추출 (pass/fail 모두) — 임시 폴더에 만들고 finalize 이후 이동.
-    clip_tmp_dir: Optional[Path] = None
     by_iter_src = {it: p for it, (p, _s) in by_iter.items()}
     for entry in entries:
         if entry.get("clip_from_ms") is None or entry.get("clip_to_ms") is None:
@@ -1610,9 +1634,6 @@ async def _frame_check_analyze(session: Optional[_WebcamPlaybackSession],
         if src is None or not src.exists():
             continue
         final_name = f"framecheck_r{entry['iteration']}_p{entry.get('pair_index', 1)}.mp4"
-        if clip_tmp_dir is None:
-            clip_tmp_dir = _RESULTS_DIR / f"_tmp_fcclips_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
-            clip_tmp_dir.mkdir(parents=True, exist_ok=True)
         tmp_out = clip_tmp_dir / final_name
         ok = await asyncio.to_thread(
             fc.extract_clip, src, tmp_out,
@@ -1623,6 +1644,14 @@ async def _frame_check_analyze(session: Optional[_WebcamPlaybackSession],
             clips.append((tmp_out, final_name))
         else:
             logger.warning("Frame_Check: clip extraction skipped/failed for %s", final_name)
+
+    # 아무것도 만들어지지 않았으면 임시 폴더 정리
+    if not clips:
+        try:
+            if clip_tmp_dir.exists() and not any(clip_tmp_dir.iterdir()):
+                clip_tmp_dir.rmdir()
+        except Exception:
+            pass
 
     if entries:
         result.frame_check_results = entries

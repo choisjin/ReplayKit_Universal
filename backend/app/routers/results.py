@@ -624,8 +624,8 @@ def _build_html_report(data: dict, output_path: Path, steps_iter=None) -> str:
         parts.append(
             "<tr>" + "".join(
                 f'<th style="border:1px solid #d1d5db;padding:3px 8px;background:#f3f4f6">{h}</th>'
-                for h in ("Cycle", "Pair", "시작 기준", "시작(영상 ms)", "타겟(영상 ms)",
-                          "경과 시간(ms)", "Score(시작/타겟)", "Status", "Clip", "Message")
+                for h in ("Cycle", "Pair", "시작 기준", "시작 시각", "타겟 시각",
+                          "경과 시간(ms)", "Score(시작/타겟)", "매치", "Status", "Clip", "Message")
             ) + "</tr>"
         )
         for fc in fc_results:
@@ -638,20 +638,34 @@ def _build_html_report(data: dict, output_path: Path, steps_iter=None) -> str:
             score_str = f"{sc if sc is not None else '-'} / {tc if tc is not None else '-'}"
             st = str(fc.get("status", ""))
             st_color = "#15803d" if st == "ok" else "#b91c1c"
-            # 클립은 result.html 과 같은 폴더의 recordings/ 에 있어 상대 링크로 동작
+            # 시작/타겟 시각 — 녹화 started_at + 영상 오프셋의 wall-clock (없으면 영상 ms 폴백)
+            def _t(fc_row, time_key, ms_key):
+                v = fc_row.get(time_key)
+                if v:
+                    return e(v)
+                ms = fc_row.get(ms_key)
+                return f"{e(ms)} ms" if ms is not None else "-"
+            # 클립/매치 이미지는 result.html 과 같은 폴더의 recordings/ 에 있어 상대 링크로 동작
             # (서버 서빙 /results-files/... 과 file:// 더블클릭 양쪽 모두).
             clip_rel = str(fc.get("clip") or "")
             clip_link = (
                 f'<a href="{e(clip_rel)}" target="_blank">&#9654; 재생</a>' if clip_rel else "-"
             )
+            match_rel = str(fc.get("match_image") or "")
+            match_link = (
+                f'<a href="{e(match_rel)}" target="_blank">'
+                f'<img src="{e(match_rel)}" style="height:28px;border-radius:3px;vertical-align:middle" '
+                f'alt="match"></a>' if match_rel else "-"
+            )
             cells = [
                 f"R{e(fc.get('iteration', ''))}",
                 e(fc.get("pair_index", "-")),
                 mode_str,
-                e(fc.get("start_video_ms", "-")),
-                e(fc.get("target_video_ms", "-")),
+                _t(fc, "start_time", "start_video_ms"),
+                _t(fc, "target_time", "target_video_ms"),
                 elapsed_str,
                 e(score_str),
+                match_link,
                 f'<span style="color:{st_color};font-weight:600">{e(st.upper())}</span>',
                 clip_link,
                 e(fc.get("message", "")),

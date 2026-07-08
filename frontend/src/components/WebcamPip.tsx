@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Button, ConfigProvider, Select, Slider, theme } from 'antd';
+import { Button, ConfigProvider, Select, Slider, Switch, theme } from 'antd';
 import {
   PlayCircleOutlined, PauseOutlined, VideoCameraOutlined,
   SettingOutlined, CloseOutlined, MinusOutlined, AppstoreOutlined,
+  AudioOutlined,
 } from '@ant-design/icons';
 import { useWebcam } from '../hooks/useWebcam';
 import { useTranslation } from '../i18n';
@@ -37,6 +38,8 @@ export default function WebcamPip({ webcam, onClose, isDark, onOpenCompositor }:
     timestampColor, setTimestampColor,
     timestampFontSize, setTimestampFontSize,
     exposureAuto, setExposureAutoMode,
+    audioEnabled, setAudioEnabled, audioDevice, setAudioDevice,
+    audioDevices, loadAudioDevices,
   } = webcam as any;
 
   const [minimized, setMinimized] = useState(false);
@@ -203,7 +206,7 @@ export default function WebcamPip({ webcam, onClose, isDark, onOpenCompositor }:
             <Button
               size="small"
               icon={<SettingOutlined />}
-              onClick={() => { loadWebcamCapabilities(); setWebcamSettingsOpen((v: boolean) => !v); }}
+              onClick={() => { loadWebcamCapabilities(); loadAudioDevices(); setWebcamSettingsOpen((v: boolean) => !v); }}
               type={webcamSettingsOpen ? 'primary' : 'default'}
             />
           </div>
@@ -267,6 +270,40 @@ export default function WebcamPip({ webcam, onClose, isDark, onOpenCompositor }:
                     ]}
                   />
                 </div>
+              </div>
+              {/* 마이크(음성) 녹음 설정 — 녹화 mp4에 오디오 트랙 포함 여부 */}
+              <div style={{ marginBottom: 5 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, marginBottom: 2 }}>
+                  <span style={{ color: subColor }}>
+                    <AudioOutlined style={{ marginRight: 3 }} />
+                    {t('webcam.audioRecord')}
+                  </span>
+                  <Switch
+                    size="small"
+                    checked={audioEnabled}
+                    onChange={(v: boolean) => setAudioEnabled(v)}
+                  />
+                </div>
+                {audioEnabled && (
+                  (audioDevices as { name: string; alt: string }[]).length > 0 ? (
+                    <Select
+                      size="small"
+                      value={audioDevice || ''}
+                      onChange={setAudioDevice}
+                      style={{ width: '100%' }}
+                      getPopupContainer={getContainer}
+                      options={[
+                        { value: '', label: t('webcam.audioAuto') },
+                        ...(audioDevices as { name: string; alt: string }[]).map(d => ({
+                          value: d.alt || d.name,
+                          label: d.name,
+                        })),
+                      ]}
+                    />
+                  ) : (
+                    <div style={{ color: subColor, fontSize: 10 }}>{t('webcam.audioNoDevices')}</div>
+                  )
+                )}
               </div>
               {/* 노출 설정 — 자동/수동 토글 + 슬라이더 */}
               {webcamCapabilities.exposure ? (

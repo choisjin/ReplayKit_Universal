@@ -93,8 +93,14 @@ interface FrameCheckResultEntry {
   elapsed_ms?: number;
   start_score?: number | null;
   target_score?: number | null;
-  // 측정 구간 클립 (MeasureStart 실행 5초 전 ~ 종료점 5초 후) — run 폴더 기준 상대 경로
+  // 시작/타겟 프레임의 실제 시각 (녹화 started_at + 영상 오프셋, 로컬 시간)
+  start_time?: string | null;
+  target_time?: string | null;
+  // 측정 구간 클립 (스텝 실행 5초 전 ~ 종료점 5초 후) — run 폴더 기준 상대 경로
   clip?: string | null;
+  // 타겟 매치 프레임 (빨간 박스 + 일치율 annotate) 및 앞뒤 5프레임 — run 폴더 기준 상대 경로
+  match_image?: string | null;
+  frames?: string[] | null;
 }
 
 interface ResultDetail {
@@ -1575,18 +1581,49 @@ export default function ResultsPage() {
                     { title: 'Pair', dataIndex: 'pair_index', width: 50, render: (v?: number) => v ?? '-' },
                     { title: '시작 기준', dataIndex: 'start_mode', width: 90,
                       render: (v?: string) => v === 'image' ? '이미지 등장' : v === 'function' ? '스텝 실행' : '-' },
-                    { title: '시작(영상 ms)', dataIndex: 'start_video_ms', width: 110,
-                      render: (v?: number) => v != null ? v.toLocaleString() : '-' },
-                    { title: '타겟(영상 ms)', dataIndex: 'target_video_ms', width: 110,
-                      render: (v?: number) => v != null ? v.toLocaleString() : '-' },
+                    { title: '시작 시각', key: 'start_time', width: 165,
+                      render: (_: unknown, r: FrameCheckResultEntry) =>
+                        r.start_time
+                          ? <span style={{ fontSize: 11 }}>{r.start_time}</span>
+                          : r.start_video_ms != null ? `${r.start_video_ms.toLocaleString()} ms` : '-' },
+                    { title: '타겟 시각', key: 'target_time', width: 165,
+                      render: (_: unknown, r: FrameCheckResultEntry) =>
+                        r.target_time
+                          ? <span style={{ fontSize: 11 }}>{r.target_time}</span>
+                          : r.target_video_ms != null ? `${r.target_video_ms.toLocaleString()} ms` : '-' },
                     { title: '경과 시간', dataIndex: 'elapsed_ms', width: 110,
                       render: (v?: number) => v != null
                         ? <strong style={{ color: '#1677ff' }}>{v.toLocaleString()} ms</strong> : '-' },
                     { title: 'Score', key: 'score', width: 110,
                       render: (_: unknown, r: FrameCheckResultEntry) => {
-                        const s = r.start_score != null ? r.start_score.toFixed(2) : '-';
-                        const e = r.target_score != null ? r.target_score.toFixed(2) : '-';
+                        // 미발견(fail) 행의 score 는 탐색 구간에서 관측된 최고 유사도
+                        const s = r.start_score != null ? r.start_score.toFixed(3) : '-';
+                        const e = r.target_score != null ? r.target_score.toFixed(3) : '-';
                         return <span style={{ fontSize: 11 }}>{s} / {e}</span>;
+                      } },
+                    { title: '매치', dataIndex: 'match_image', width: 70,
+                      render: (v: string | null | undefined, r: FrameCheckResultEntry) => {
+                        if (!v) return '-';
+                        const base = detailFilename.includes('/')
+                          ? detailFilename.substring(0, detailFilename.lastIndexOf('/')) : '';
+                        if (!base) return '-';
+                        const urls = (r.frames && r.frames.length ? r.frames : [v])
+                          .map(f => `/results-files/${base}/${f}`);
+                        const mainUrl = `/results-files/${base}/${v}`;
+                        return (
+                          <Image.PreviewGroup>
+                            {urls.map(u => (
+                              <Image
+                                key={u}
+                                src={u}
+                                width={u === mainUrl ? 52 : 0}
+                                height={u === mainUrl ? 30 : 0}
+                                style={u === mainUrl ? { objectFit: 'cover', borderRadius: 3 } : { display: 'none' }}
+                                preview={{ mask: null }}
+                              />
+                            ))}
+                          </Image.PreviewGroup>
+                        );
                       } },
                     { title: 'Status', dataIndex: 'status', width: 140,
                       render: (v: string) => <Tag color={v === 'ok' ? 'green' : 'red'} style={{ margin: 0 }}>{v.toUpperCase()}</Tag> },

@@ -12,6 +12,7 @@ Frontend MediaRecorder를 대체하여 WebSocket 연결 상태와 무관하게
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -54,6 +55,93 @@ def _find_ffmpeg() -> Optional[str]:
         return None
 
 
+# dshow 장치 열거 결과 캐시 — 열거는 ffmpeg subprocess 실행(수백 ms)이라
+# 녹화 시작(auto 모드) 때마다 돌리면 시작이 지연된다. TTL 내에서는 캐시 재사용.
+_DSHOW_DEV_CACHE: dict = {"ts": 0.0, "video": [], "audio": []}
+_DSHOW_DEV_CACHE_TTL = 30.0
+_dshow_dev_cache_lock = threading.Lock()
+
+
+def _list_dshow_devices(force: bool = False) -> dict:
+    """Windows DirectShow 장치 열거 — {"video": [...], "audio": [...]}.
+
+    `ffmpeg -list_devices true -f dshow -i dummy` 의 stderr 를 파싱한다.
+    각 항목: {"name": 표시명, "alt": "@device_..." (없으면 "")}
+    - alt(alternative name)는 ASCII 고정 식별자 — 한글 표시명의 인코딩 왕복 문제를
+      피하기 위해 캡처 시에는 alt 를 우선 사용한다.
+    - 신형("Name" (audio)) / 구형(DirectShow audio devices 섹션) 출력 형식 모두 지원.
+    - video 목록은 dshow 비디오 카테고리 열거 순서 그대로 — OpenCV CAP_DSHOW 인덱스와
+      같은 열거자를 쓰므로 순서가 일치한다(웹캠 인덱스 → 장치명 매핑에 사용).
+    비 Windows / ffmpeg 부재 시 빈 목록들.
+    """
+    empty = {"video": [], "audio": []}
+    if sys.platform != "win32":
+        return empty
+    now = time.monotonic()
+    with _dshow_dev_cache_lock:
+        if not force and now - _DSHOW_DEV_CACHE["ts"] < _DSHOW_DEV_CACHE_TTL:
+            return {"video": list(_DSHOW_DEV_CACHE["video"]), "audio": list(_DSHOW_DEV_CACHE["audio"])}
+    ffmpeg = _find_ffmpeg()
+    if ffmpeg is None:
+        return empty
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+            capture_output=True, timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        text = proc.stderr.decode("utf-8", errors="replace")
+    except Exception as e:
+        logger.warning("dshow device enumeration failed: %s", e)
+        return empty
+    video: list[dict] = []
+    audio: list[dict] = []
+    section = ""
+    pending: Optional[dict] = None  # 직후의 Alternative name 라인을 붙일 대상
+    for raw in text.splitlines():
+        # "[dshow @ 0x...] 내용" → 내용만
+        line = raw.split("]", 1)[-1].strip() if raw.lstrip().startswith("[") else raw.strip()
+        if "DirectShow video devices" in line:
+            section = "video"
+            continue
+        if "DirectShow audio devices" in line:
+            section = "audio"
+            continue
+        alt_m = re.search(r'Alternative name\s+"(.+)"', line)
+        if alt_m:
+            if pending is not None:
+                pending["alt"] = alt_m.group(1)
+            continue
+        name_m = re.match(r'^"(.+?)"\s*(\([^)]*\))?$', line)
+        if not name_m:
+            continue
+        name, kinds = name_m.group(1), name_m.group(2) or ""
+        pending = {"name": name, "alt": ""}
+        if kinds:
+            # 신형: 타입 태그. "(none)"(가상캠 등)도 비디오 카테고리 열거 항목이므로
+            # 비-오디오는 전부 video 목록에 넣어 OpenCV 인덱스와의 순서 정합을 지킨다.
+            if "audio" in kinds:
+                audio.append(pending)
+            if "audio" not in kinds or "video" in kinds:
+                video.append(pending)
+        elif section == "audio":
+            audio.append(pending)
+        elif section == "video":
+            video.append(pending)
+    with _dshow_dev_cache_lock:
+        _DSHOW_DEV_CACHE["ts"] = time.monotonic()
+        _DSHOW_DEV_CACHE["video"] = list(video)
+        _DSHOW_DEV_CACHE["audio"] = list(audio)
+    logger.debug("dshow devices: video=%s audio=%s",
+                 [d["name"] for d in video], [d["name"] for d in audio])
+    return {"video": video, "audio": audio}
+
+
+def list_audio_input_devices(force: bool = False) -> list[dict]:
+    """Windows DirectShow 오디오 입력(마이크) 장치 열거. _list_dshow_devices 참조."""
+    return _list_dshow_devices(force=force)["audio"]
+
+
 class _FfmpegProc:
     """ffmpeg subprocess + stderr drain thread + 최근 로그 링버퍼."""
     def __init__(self, proc: subprocess.Popen):
@@ -84,11 +172,52 @@ class _FfmpegProc:
             return b"".join(self._stderr_tail)[-600:]
 
 
-def _spawn_ffmpeg_writer(output_path: Path, width: int, height: int, fps: float) -> Optional[_FfmpegProc]:
+def _probe_audio_device(device: str) -> bool:
+    """dshow 오디오 장치가 실제로 열리는지 짧게(0.2s) 캡처해 확인.
+
+    녹화 writer 는 stdin 프레임이 들어오기 전까지 dshow 입력을 열지 않으므로
+    (입력 순차 오픈), 잘못된 장치는 녹화가 시작된 '뒤에' ffmpeg 를 죽여
+    BrokenPipe 로 그 회차 녹화 전체를 날린다. 스폰 전에 여기서 미리 걸러낸다.
+    """
+    ffmpeg = _find_ffmpeg()
+    if ffmpeg is None:
+        return False
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-hide_banner",
+             "-f", "dshow", "-audio_buffer_size", "80", "-i", f"audio={device}",
+             "-t", "0.2", "-f", "null", "-"],
+            capture_output=True, timeout=10, creationflags=creationflags,
+        )
+        if proc.returncode != 0:
+            logger.warning("Audio device probe failed for '%s': %s", device,
+                           proc.stderr.decode(errors="replace")[-400:])
+            return False
+        return True
+    except Exception as e:
+        logger.warning("Audio device probe error for '%s': %s", device, e)
+        return False
+
+
+def _spawn_ffmpeg_writer(
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: float,
+    audio_device: Optional[str] = None,
+) -> Optional[_FfmpegProc]:
     """ffmpeg subprocess를 열어 raw BGR 프레임 → H.264 mp4 직접 인코딩.
 
     stderr drain thread로 파이프 블로킹을 방지한다 (장시간 녹화 시 ffmpeg가 stall되는 것을 막음).
     종료 시 stdin을 닫으면 ffmpeg가 flush 후 +faststart moov atom을 작성한다.
+
+    audio_device: Windows dshow 오디오 장치 식별자(표시명 또는 @device_ alternative name).
+    주어지면 마이크 입력을 두 번째 입력으로 붙여 AAC 로 함께 먹싱한다. 양쪽 입력 모두
+    -use_wallclock_as_timestamps 1 로 같은 벽시계 기준 PTS 를 쓰므로 A/V 싱크가 맞는다.
+    -shortest: 영상(stdin) EOF 후 라이브 오디오 입력이 ffmpeg 를 붙잡고 있지 않게 종료 트리거.
+    장치 유효성은 호출 전에 _probe_audio_device 로 확인할 것 — ffmpeg 는 입력을 순차로
+    열기 때문에 여기서 스폰 직후 생존 확인을 해도 dshow 오픈 실패를 감지할 수 없다.
     """
     ffmpeg = _find_ffmpeg()
     if ffmpeg is None:
@@ -109,13 +238,34 @@ def _spawn_ffmpeg_writer(output_path: Path, width: int, height: int, fps: float)
         "-pix_fmt", "bgr24",
         "-use_wallclock_as_timestamps", "1",
         "-i", "-",  # stdin
+    ]
+    if audio_device:
+        cmd += [
+            "-f", "dshow",
+            "-use_wallclock_as_timestamps", "1",
+            "-thread_queue_size", "1024",
+            "-audio_buffer_size", "80",  # ms — 기본(500ms)은 A/V 오프셋이 커짐
+            "-i", f"audio={audio_device}",
+        ]
+    cmd += [
+        "-map", "0:v",
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-crf", "23",
         "-pix_fmt", "yuv420p",
         "-vsync", "vfr",
+    ]
+    if audio_device:
+        cmd += [
+            "-map", "1:a",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-shortest",
+        ]
+    else:
+        cmd += ["-an"]
+    cmd += [
         "-movflags", "+faststart",
-        "-an",  # 오디오 없음
         str(output_path),
     ]
     try:
@@ -127,7 +277,8 @@ def _spawn_ffmpeg_writer(output_path: Path, width: int, height: int, fps: float)
             creationflags=creationflags,
             bufsize=0,  # stdin은 unbuffered — 프레임 즉시 전송
         )
-        logger.info("ffmpeg writer spawned: %s (%dx%d, VFR/wallclock)", output_path, width, height)
+        logger.info("ffmpeg writer spawned: %s (%dx%d, VFR/wallclock, audio=%s)",
+                    output_path, width, height, audio_device or "off")
         return _FfmpegProc(proc)
     except Exception as e:
         logger.warning("Failed to spawn ffmpeg writer: %s", e)
@@ -204,6 +355,13 @@ class WebcamService:
         self._recording_lock = threading.Lock()
         self._record_start_ts: float = 0.0
         self._frames_written: int = 0
+
+        # Audio (마이크) 녹음 설정 — Windows dshow 한정. ffmpeg writer에 두 번째 입력으로 붙는다.
+        self._audio_enabled: bool = True
+        self._audio_device: str = ""  # "" = auto (첫 번째 dshow 오디오 장치)
+        self._audio_validated: set[str] = set()  # 이 세션에서 오픈 프로브를 통과한 장치
+        self._audio_failed: set[str] = set()     # 프로브 실패한 장치 — 설정 변경 전까지 skip
+        self._recording_has_audio: bool = False
 
         # Overlay config (matches frontend preferences)
         # 기본값: top-left + 24px (frontend useWebcam.ts와 동기화)
@@ -453,10 +611,89 @@ class WebcamService:
         return buf.tobytes()
 
     # ------------------------------------------------------------
+    # Audio (마이크) 설정
+    # ------------------------------------------------------------
+    def list_audio_devices(self, force: bool = False) -> list[dict]:
+        """dshow 오디오 입력 장치 목록 (비 Windows / ffmpeg 부재 시 빈 목록)."""
+        return list_audio_input_devices(force=force)
+
+    def set_audio(self, enabled: Optional[bool] = None, device: Optional[str] = None) -> None:
+        """마이크 녹음 on/off + 장치 선택 ("" = auto). 설정 변경 시 실패 캐시를 비워 재시도를 허용."""
+        if enabled is not None:
+            self._audio_enabled = bool(enabled)
+        if device is not None:
+            self._audio_device = device
+        if enabled is not None or device is not None:
+            self._audio_failed.clear()
+            logger.info("Webcam audio config: enabled=%s device=%s",
+                        self._audio_enabled, self._audio_device or "(auto)")
+
+    def _auto_audio_candidates(self) -> list[str]:
+        """auto 모드 오디오 장치 후보 목록 (우선순위 순 식별자).
+
+        1순위: 현재 웹캠의 내장 마이크 — dshow 오디오 장치명에 비디오 장치명이
+        포함되는 관례로 매칭한다 (예: 웹캠 "USB CAMERA" ↔ 마이크 "마이크(USB CAMERA)").
+        비디오 장치명은 dshow 비디오 열거 순서 == OpenCV CAP_DSHOW 인덱스 가정으로
+        self._device_index 에서 얻는다 (같은 열거자라 순서가 일치; 틀려도 폴백이라 안전).
+        이후: 나머지 오디오 장치를 열거 순서대로 (웹캠 마이크가 못 열리면 다음 후보로).
+        """
+        devs = _list_dshow_devices()
+        audio = devs["audio"]
+        if not audio:
+            return []
+        ordered = list(audio)
+        video = devs["video"]
+        if 0 <= self._device_index < len(video):
+            cam_name = video[self._device_index]["name"].strip()
+            if cam_name:
+                matched = [a for a in audio if cam_name.lower() in a["name"].lower()]
+                if matched:
+                    logger.info("Webcam audio: matched webcam mic '%s' for camera '%s'",
+                                matched[0]["name"], cam_name)
+                    ordered = matched + [a for a in audio if a not in matched]
+                else:
+                    logger.info("Webcam audio: no mic matching camera '%s' — falling back to enumeration order",
+                                cam_name)
+        # 인코딩 왕복 문제가 없는 ASCII alternative name 우선
+        return [a.get("alt") or a["name"] for a in ordered]
+
+    def _resolve_audio_device(self) -> Optional[str]:
+        """이번 녹화에 사용할 dshow 오디오 장치 식별자. 비활성/미지원/장치없음/프로브실패 → None.
+
+        장치당 세션 최초 1회 실제 오픈 프로브를 수행한다(_probe_audio_device 참조).
+        auto 모드는 후보(웹캠 마이크 → 나머지)를 순서대로 시도한다.
+        락 밖에서 호출할 것 — 열거/프로브는 ffmpeg subprocess 실행이다.
+        """
+        if not self._audio_enabled or sys.platform != "win32":
+            return None
+        if self._audio_device:
+            candidates = [self._audio_device]
+        else:
+            candidates = self._auto_audio_candidates()
+            if not candidates:
+                logger.info("Webcam audio: no dshow audio devices found — recording video-only")
+                return None
+        for target in candidates:
+            if target in self._audio_failed:
+                continue
+            if target not in self._audio_validated:
+                if not _probe_audio_device(target):
+                    logger.warning("Webcam audio device '%s' unusable — trying next candidate", target)
+                    self._audio_failed.add(target)
+                    continue
+                self._audio_validated.add(target)
+            return target
+        logger.warning("Webcam audio: no usable audio device — recording video-only")
+        return None
+
+    # ------------------------------------------------------------
     # Recording
     # ------------------------------------------------------------
     def start_recording(self, output_path: str | Path) -> bool:
         """녹화 시작. output_path의 상위 폴더는 자동 생성. 우선 ffmpeg subprocess로 H.264 인코딩 시도, 실패 시 cv2.VideoWriter(mp4v)로 폴백."""
+        # 오디오 장치 결정은 락 밖에서 — auto 모드의 장치 열거는 ffmpeg subprocess 실행이라
+        # 락을 잡은 채 돌리면 캡처 루프(프리뷰/프레임 공유)가 그동안 통째로 멈춘다.
+        audio_dev = self._resolve_audio_device()
         with self._recording_lock:
             if self._ffmpeg_proc is not None or self._cv_writer is not None:
                 logger.warning("Webcam recording already in progress")
@@ -467,9 +704,14 @@ class WebcamService:
             path = Path(output_path)
             path.parent.mkdir(parents=True, exist_ok=True)
 
-            # 1순위: ffmpeg subprocess (브라우저 호환 H.264)
-            proc = _spawn_ffmpeg_writer(path, self._width, self._height, self._actual_fps)
+            # 1순위: ffmpeg subprocess (브라우저 호환 H.264) — 마이크 오디오 동시 캡처
+            # (audio_dev 는 위에서 프로브 검증 완료 — 여기서 실패하면 ffmpeg 자체 문제)
+            proc = _spawn_ffmpeg_writer(
+                path, self._width, self._height, self._actual_fps,
+                audio_device=audio_dev,
+            )
             if proc is not None:
+                self._recording_has_audio = audio_dev is not None
                 self._ffmpeg_proc = proc
             else:
                 # 폴백: cv2.VideoWriter mp4v
@@ -479,14 +721,16 @@ class WebcamService:
                     logger.error("Failed to open VideoWriter: %s", path)
                     return False
                 self._cv_writer = writer
+                self._recording_has_audio = False
 
             self._recording_path = path
             self._recording_paused = False
             self._record_start_ts = time.monotonic()
             self._frames_written = 0
-            logger.info("Webcam recording started: %s (%dx%d @%.1ffps, mode=%s)",
+            logger.info("Webcam recording started: %s (%dx%d @%.1ffps, mode=%s, audio=%s)",
                         path, self._width, self._height, self._actual_fps,
-                        "ffmpeg-h264" if self._ffmpeg_proc else "cv2-mp4v")
+                        "ffmpeg-h264" if self._ffmpeg_proc else "cv2-mp4v",
+                        "on" if self._recording_has_audio else "off")
             return True
 
     def stop_recording(self) -> Optional[str]:
@@ -503,8 +747,10 @@ class WebcamService:
             self._cv_writer = None
             self._recording_path = None
             self._recording_paused = False
+            self._recording_has_audio = False
 
         # ffmpeg flush + 종료 대기 (lock 외부) — +faststart moov atom 재작성 포함
+        # (오디오 포함 시 stdin close → 영상 EOF → -shortest 가 라이브 오디오 입력을 끊는다)
         if proc is not None:
             sp = proc.proc
             try:
@@ -608,6 +854,10 @@ class WebcamService:
                     except Exception:
                         pass
                     self._ffmpeg_proc = None
+                    if self._recording_has_audio:
+                        # 오디오 입력이 녹화 도중 ffmpeg 를 죽였을 수 있다(마이크 분리/점유 등)
+                        # — 다음 녹화에서 프로브를 다시 거치도록 검증 캐시를 비운다.
+                        self._audio_validated.clear()
                 except Exception as e:
                     logger.warning("ffmpeg write error: %s", e)
         elif self._cv_writer is not None:
@@ -752,6 +1002,9 @@ class WebcamService:
             "recording_duration_s": duration,
             "frames_written": frames,
             "overlay_position": self._overlay_position,
+            "audio_enabled": self._audio_enabled,
+            "audio_device": self._audio_device,
+            "recording_audio": self._recording_has_audio if recording else False,
         }
 
 

@@ -175,6 +175,34 @@ async def set_overlay(req: OverlayRequest):
     return svc.status()
 
 
+@router.get("/audio-devices")
+async def list_audio_devices(force: bool = False):
+    """dshow 오디오 입력(마이크) 장치 목록 + 현재 오디오 설정.
+
+    Windows 전용 — 그 외 플랫폼/ffmpeg 부재 시 devices 는 빈 배열.
+    """
+    svc = get_webcam_service()
+    st = svc.status()
+    return {
+        "devices": svc.list_audio_devices(force=force),
+        "enabled": st.get("audio_enabled", False),
+        "device": st.get("audio_device", ""),
+    }
+
+
+class AudioRequest(BaseModel):
+    enabled: Optional[bool] = None
+    device: Optional[str] = None  # "" = auto (첫 번째 장치)
+
+
+@router.post("/audio")
+async def set_audio(req: AudioRequest):
+    """마이크 녹음 설정 — 다음 녹화 시작부터 적용된다."""
+    svc = get_webcam_service()
+    svc.set_audio(enabled=req.enabled, device=req.device)
+    return svc.status()
+
+
 @router.get("/exposure")
 async def get_exposure():
     """현재 노출값/모드 + 카메라 지원 범위."""
