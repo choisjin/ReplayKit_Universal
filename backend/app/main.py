@@ -1598,7 +1598,7 @@ async def _frame_check_analyze(session: Optional[_WebcamPlaybackSession],
             entries.extend(rows)
         else:
             entries.append({"iteration": it, "status": "no_pair",
-                            "message": "측정 시작점(MeasureStart)/타겟(MeasureEnd) 쌍이 완성되지 않음"})
+                            "message": "Frame_Measure 측정 마커 없음"})
 
     # 측정 구간 클립 추출 (pass/fail 모두) — 임시 폴더에 만들고 finalize 이후 이동.
     clip_tmp_dir: Optional[Path] = None

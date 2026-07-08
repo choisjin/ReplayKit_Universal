@@ -2671,10 +2671,12 @@ export default function RecordPage() {
         frameCheckCropKindRef.current,
       );
       const imgPath: string = res.data.image;
+      // Frame_Measure 인자명: 시작 이미지=start_image, 타겟 이미지=target_image
+      const argName = frameCheckCropKindRef.current === 'start' ? 'start_image' : 'target_image';
       if (frameCheckCropTargetRef.current === 'edit') {
-        setEditStepParams((prev: any) => ({ ...prev, args: { ...(prev.args || {}), image: imgPath } }));
+        setEditStepParams((prev: any) => ({ ...prev, args: { ...(prev.args || {}), [argName]: imgPath } }));
       } else {
-        setModuleFuncArgs(prev => ({ ...prev, image: imgPath }));
+        setModuleFuncArgs(prev => ({ ...prev, [argName]: imgPath }));
       }
       setFrameCheckCropModalOpen(false);
       message.success(`측정 이미지 저장됨: ${imgPath} (${rw}×${rh})`);
@@ -6238,18 +6240,29 @@ export default function RecordPage() {
                               {t('record.ocr.cropButton')}
                             </Button>
                           )}
-                          {/* Frame_Check: 웹캠 크롭으로 측정 이미지 지정 (MeasureEnd 항상, MeasureStart 는 mode=image 일 때만) */}
-                          {selectedModuleName === 'Frame_Check' &&
-                           (selectedModuleFunc === 'MeasureEnd' ||
-                            (selectedModuleFunc === 'MeasureStart' && (moduleFuncArgs['mode'] || 'function') === 'image')) && (
+                          {/* Frame_Check.Frame_Measure: 웹캠 크롭으로 측정 이미지 지정
+                              (시작 이미지 = mode=image 일 때만, 타겟 이미지 = 항상) */}
+                          {selectedModuleName === 'Frame_Check' && selectedModuleFunc === 'Frame_Measure' &&
+                           (moduleFuncArgs['mode'] || 'function') === 'image' && (
                             <Button
                               size="small"
                               icon={<span>✂</span>}
-                              onClick={() => openFrameCheckCropModal('create', selectedModuleFunc === 'MeasureStart' ? 'start' : 'target')}
+                              onClick={() => openFrameCheckCropModal('create', 'start')}
                               style={{ alignSelf: 'flex-start' }}
                             >
-                              웹캠 크롭 (측정 이미지)
-                              {moduleFuncArgs['image'] ? ` — ${moduleFuncArgs['image']}` : ''}
+                              웹캠 크롭 (시작 이미지)
+                              {moduleFuncArgs['start_image'] ? ` — ${moduleFuncArgs['start_image']}` : ''}
+                            </Button>
+                          )}
+                          {selectedModuleName === 'Frame_Check' && selectedModuleFunc === 'Frame_Measure' && (
+                            <Button
+                              size="small"
+                              icon={<span>✂</span>}
+                              onClick={() => openFrameCheckCropModal('create', 'target')}
+                              style={{ alignSelf: 'flex-start' }}
+                            >
+                              웹캠 크롭 (타겟 이미지)
+                              {moduleFuncArgs['target_image'] ? ` — ${moduleFuncArgs['target_image']}` : ''}
                             </Button>
                           )}
                           {/* CANAT.CAN_PANEL: 모니터 크롭으로 패널 위치/크기 지정 (On 일 때만 — OFF/Close 는 위치 무관) */}
@@ -6307,11 +6320,11 @@ export default function RecordPage() {
                             // x/y/width/height → 숨김(모니터 크롭 버튼으로만 설정).
                             const isCanPanel = selectedModuleName === 'CANAT' && selectedModuleFunc === 'CAN_PANEL';
                             const canPanelOpts = isCanPanel ? canPanelSelectOptions(selectedModuleFunc, p.name) : null;
-                            // Frame_Check: MeasureStart.mode → 콤보박스,
-                            // image 파라미터는 mode='image' 또는 MeasureEnd 일 때만 표시 (웹캠 크롭 버튼으로 설정).
-                            const isFrameCheck = selectedModuleName === 'Frame_Check';
-                            const isFrameCheckMode = isFrameCheck && selectedModuleFunc === 'MeasureStart' && p.name === 'mode';
-                            if (isFrameCheck && p.name === 'image' && selectedModuleFunc === 'MeasureStart' &&
+                            // Frame_Check.Frame_Measure: mode → 콤보박스,
+                            // start_image/start_threshold 는 mode='image' 일 때만 표시 (웹캠 크롭 버튼으로 설정).
+                            const isFrameCheck = selectedModuleName === 'Frame_Check' && selectedModuleFunc === 'Frame_Measure';
+                            const isFrameCheckMode = isFrameCheck && p.name === 'mode';
+                            if (isFrameCheck && (p.name === 'start_image' || p.name === 'start_threshold') &&
                                 (moduleFuncArgs['mode'] || 'function') !== 'image') return null;
                             if (isCanPanel && CAN_PANEL_HIDDEN_PARAMS.includes(p.name)) return null;
                             if (isOcrRegionParam && moduleFuncArgs['mode'] !== 'Region') return null;
@@ -7100,19 +7113,29 @@ export default function RecordPage() {
                     {editFnGuide.description}
                   </div>
                 )}
-                {/* Frame_Check: 측정 이미지는 웹캠 크롭 버튼으로 교체 */}
-                {editStepParams.module === 'Frame_Check' &&
-                 (editStepParams.function === 'MeasureEnd' ||
-                  (editStepParams.function === 'MeasureStart' && (args.mode || 'function') === 'image')) && (
-                  <Button
-                    size="small"
-                    icon={<span>✂</span>}
-                    onClick={() => openFrameCheckCropModal('edit', editStepParams.function === 'MeasureStart' ? 'start' : 'target')}
-                    style={{ alignSelf: 'flex-start', marginBottom: 6 }}
-                  >
-                    웹캠 크롭 (측정 이미지)
-                    {args.image ? ` — ${args.image}` : ''}
-                  </Button>
+                {/* Frame_Check.Frame_Measure: 측정 이미지는 웹캠 크롭 버튼으로 교체
+                    (시작 이미지 = mode=image 일 때만, 타겟 이미지 = 항상) */}
+                {editStepParams.module === 'Frame_Check' && editStepParams.function === 'Frame_Measure' && (
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+                    {(args.mode || 'function') === 'image' && (
+                      <Button
+                        size="small"
+                        icon={<span>✂</span>}
+                        onClick={() => openFrameCheckCropModal('edit', 'start')}
+                      >
+                        웹캠 크롭 (시작 이미지)
+                        {args.start_image ? ` — ${args.start_image}` : ''}
+                      </Button>
+                    )}
+                    <Button
+                      size="small"
+                      icon={<span>✂</span>}
+                      onClick={() => openFrameCheckCropModal('edit', 'target')}
+                    >
+                      웹캠 크롭 (타겟 이미지)
+                      {args.target_image ? ` — ${args.target_image}` : ''}
+                    </Button>
+                  </div>
                 )}
                 {/* CANAT.CAN_PANEL: 위치/크기는 모니터 크롭 버튼으로만 설정 (On 일 때만 — OFF/Close 는 위치 무관) */}
                 {editStepParams.module === 'CANAT' && editStepParams.function === 'CAN_PANEL' &&
@@ -7152,17 +7175,18 @@ export default function RecordPage() {
                       // x/y/width/height → 숨김(위의 모니터 크롭 버튼으로만 설정).
                       const isCanPanelEdit = editStepParams.module === 'CANAT' && editStepParams.function === 'CAN_PANEL';
                       const canPanelOptionsEdit = isCanPanelEdit ? canPanelSelectOptions(editStepParams.function, k) : null;
-                      // Frame_Check: MeasureStart.mode → 콤보박스,
-                      // image 파라미터는 mode='function'이면 숨김 (웹캠 크롭 버튼으로 설정).
-                      const isFrameCheckEdit = editStepParams.module === 'Frame_Check';
+                      // Frame_Check.Frame_Measure: mode → 콤보박스,
+                      // start_image/start_threshold 는 mode='function'이면 숨김 (웹캠 크롭 버튼으로 설정).
+                      const isFrameCheckEdit =
+                        editStepParams.module === 'Frame_Check' && editStepParams.function === 'Frame_Measure';
                       const frameCheckModeOptions =
-                        isFrameCheckEdit && editStepParams.function === 'MeasureStart' && k === 'mode'
+                        isFrameCheckEdit && k === 'mode'
                           ? [
                               { value: 'function', label: 'function (스텝 실행 시점 = 시작점)' },
                               { value: 'image', label: 'image (이미지 최초 등장 프레임 = 시작점)' },
                             ]
                           : null;
-                      if (isFrameCheckEdit && k === 'image' && editStepParams.function === 'MeasureStart' &&
+                      if (isFrameCheckEdit && (k === 'start_image' || k === 'start_threshold') &&
                           (args.mode || 'function') !== 'image') return null;
                       if (isCanPanelEdit && CAN_PANEL_HIDDEN_PARAMS.includes(k)) return null;
                       if (isAndroidSerialHidden) return null;

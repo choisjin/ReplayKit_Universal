@@ -1666,22 +1666,18 @@
     }
   },
   "Frame_Check": {
-    "_description": "Operation-time measurement tool based on the test recording video (webcam). Add a measurement start point (MeasureStart) and a target-image point (MeasureEnd) step to the scenario; when the scenario ends, webcam recording stops automatically and the video is analyzed frame by frame to report the elapsed time (ms) from the start point to the first appearance of the target image. The PIP webcam must be open before playback for recording/measurement.",
+    "_description": "Operation-time measurement tool based on the test recording video (webcam). Add a Frame_Measure step to the scenario; when the scenario ends, webcam recording stops automatically and the video is analyzed frame by frame to report the elapsed time (ms) from the measurement start point to the first appearance of the target image, along with a clip of the measured section (5s before start to 5s after end). The PIP webcam must be open before playback for recording/measurement.",
     "functions": {
-      "MeasureStart": {
-        "description": "Records the measurement start point. With mode='function' the moment this step executes is the start point; with mode='image' the start point is the first video frame (after this step executes) where the given image appears. Use the edit button to crop the current PIP webcam frame.",
+      "Frame_Measure": {
+        "description": "Defines one operation-time measurement. The start point is this step's execution time with mode='function', or the first frame where start_image appears (after execution) with mode='image'. The target is the first frame where target_image appears after start point + wait_time; if not found within max_time seconds it is reported as not found. Use the edit button to crop the current PIP webcam frame.",
         "params": {
-          "mode": "Start-point basis: 'function' (step execution time) or 'image' (first frame the image appears)",
-          "image": "Start-point image (required when mode='image'). Set by cropping the webcam frame via the edit button",
-          "threshold": "Image match similarity threshold (0.0~1.0, default 0.8)"
-        }
-      },
-      "MeasureEnd": {
-        "description": "Records the target-image point. After the scenario ends, the recording is scanned starting from this step's execution time (earlier frames are skipped) for the first frame where the target image appears, and the elapsed time (ms) from the start point is reported. Scanning stops after max_time seconds. Use the edit button to crop the current PIP webcam frame.",
-        "params": {
-          "image": "Target image (required). Set by cropping the webcam frame via the edit button",
-          "threshold": "Image match similarity threshold (0.0~1.0, default 0.8)",
-          "max_time": "Maximum scan time in seconds. If the target is not found within this window from the scan start point, it is reported as not found. 0 = unlimited (default 60)"
+          "mode": "Start-point basis: 'function' (step execution time) or 'image' (first frame start_image appears)",
+          "start_image": "Start-point image (required when mode='image'). Set by cropping the webcam frame via the edit button",
+          "start_threshold": "Start image match similarity threshold (0.0~1.0, default 0.8)",
+          "wait_time": "Grace period in seconds before the target can appear. Target scanning skips this interval after the start point (default 0)",
+          "target_image": "Target image (required). Set by cropping the webcam frame via the edit button",
+          "target_threshold": "Target image match similarity threshold (0.0~1.0, default 0.8)",
+          "max_time": "Maximum scan time in seconds from the scan start point. 0 = unlimited (default 60)"
         }
       }
     }

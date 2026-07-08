@@ -818,18 +818,14 @@ def get_module_functions(module_name: str) -> list[dict]:
     if module_name == "Frame_Check":
         functions = [
             {
-                "name": "MeasureStart",
+                "name": "Frame_Measure",
                 "params": [
                     {"name": "mode", "required": False, "default": "'function'"},
-                    {"name": "image", "required": False, "default": "''"},
-                    {"name": "threshold", "required": False, "default": "'0.8'"},
-                ],
-            },
-            {
-                "name": "MeasureEnd",
-                "params": [
-                    {"name": "image", "required": True},
-                    {"name": "threshold", "required": False, "default": "'0.8'"},
+                    {"name": "start_image", "required": False, "default": "''"},
+                    {"name": "start_threshold", "required": False, "default": "'0.8'"},
+                    {"name": "wait_time", "required": False, "default": "'0'"},
+                    {"name": "target_image", "required": True},
+                    {"name": "target_threshold", "required": False, "default": "'0.8'"},
                     {"name": "max_time", "required": False, "default": "'60'"},
                 ],
             },
