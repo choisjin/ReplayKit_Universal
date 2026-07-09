@@ -49,6 +49,10 @@ import sys, os, time, struct, subprocess, re
 os.environ["XDG_RUNTIME_DIR"] = "/run/platform/weston"
 TW = __TW__
 TH_OVR = __TH__
+# 레이어 칼리브레이션 오버라이드 (사용자 수동 지정, 빈 문자열/-1 = 자동)
+HMI_OVR = "__HMI_OVR__"   # HMI 서피스 id 강제
+MAP_OVR = "__MAP_OVR__"   # 맵 서피스 id 강제 / "none" = 맵 합성 안 함
+GATE_OVR = __GATE_OVR__   # select_map 구멍 비율 임계치 (0~1, <=0 = 기본 0.55)
 
 def lmc(a):
     try:
@@ -138,7 +142,7 @@ def clip_to_layer(src, dst):
              max(1, sw * cw // dw), max(1, sh * ch // dh)),
             (cx0, cy0, cw, ch))
 
-hmi = None; cands = []; hmi_cands = []
+hmi = None; cands = []; hmi_cands = []; allsurf = {}
 for sid in order:
     st = lmc(["get", "surface", sid]); v = re.search(r"visibility:\s*(\d+)", st)
     if v and v.group(1) == "0":
@@ -147,6 +151,7 @@ for sid in order:
     osz = f_xy(st, "original size:")
     if not src or not dst:
         continue
+    allsurf[sid] = (src, dst)   # 칼리브레이션 오버라이드용 — 필터 전 원본 지오메트리
     if osz and osz[0] * osz[1] < 64 * 64:   # cursor/system surface 제외
         continue
     # HMI = dst가 레이어와 '정확히' 일치(±5%)하는 풀스크린만. 레이어보다 큰 dst
@@ -165,6 +170,9 @@ for sid, src in hmi_cands:
         hmi = (sid, src)
 if hmi is None and hmi_cands:
     hmi = hmi_cands[-1]
+# 사용자 수동 지정이 있으면 자동 판정을 덮어씀
+if HMI_OVR and HMI_OVR in allsurf:
+    hmi = (HMI_OVR, allsurf[HMI_OVR][0])
 # MAP = 최대 면적의 "비검정" 후보 (보조 서피스/빈 서피스 자동 배제)
 def hole_frac(hp, dst, T=2):
     # 0x10(HMI)의 dst(layer좌표) 영역에서 검정(=투명 구멍) 픽셀 비율. 맵은 이 비율이 높은 자리.
@@ -189,12 +197,25 @@ def hole_frac(hp, dst, T=2):
 def select_map():
     # 맵 = 0x10의 '구멍(검정)'이 가장 많이 겹치는 후보(투명 뒤 backdrop). 면적 휴리스틱 폐기.
     # 구멍 비율이 낮으면(맵 없는 화면) None → 맵 합성 안 함(비침 방지). 화면 전환마다 재선택.
+    if MAP_OVR == "none":
+        return None
+    if MAP_OVR:
+        # 사용자 지정 서피스 고정 — 구멍 비율 판정 없이 항상 후보로 사용
+        for c in cands:
+            if c[0] == MAP_OVR:
+                return c
+        s = allsurf.get(MAP_OVR)
+        if s:
+            cc = clip_to_layer(s[0], s[1])
+            if cc:
+                return (MAP_OVR, cc[0], cc[1])
+        return None
     if hmi is None:
         return None
     hb = dump(hmi[0], "/tmp/_mlhsel.bmp")
     if hb is None:
         return None
-    hp = parse(hb); best = None; bestf = 0.55
+    hp = parse(hb); best = None; bestf = GATE_OVR if GATE_OVR > 0 else 0.55
     for sid, src, dst in cands:
         bm = dump(sid, "/tmp/_mlsel.bmp")
         if bm is None or mostly_black(parse(bm)):
@@ -211,9 +232,10 @@ def map_rect(ms):
     return (md[0] * TW // LW, md[1] * TH // LH,
             max(1, md[2] * TW // LW), max(1, md[3] * TH // LH))
 
-sys.stderr.write("MIBLIVE hmi=%s hmi_cands=%s cands=%s TW=%d TH=%d LW=%d LH=%d\n"
+sys.stderr.write("MIBLIVE hmi=%s hmi_cands=%s cands=%s TW=%d TH=%d LW=%d LH=%d ovr=(%s,%s,%.2f)\n"
                  % (hmi[0] if hmi else None, [c[0] for c in hmi_cands],
-                    [(c[0], c[2]) for c in cands], TW, TH, LW, LH))
+                    [(c[0], c[2]) for c in cands], TW, TH, LW, LH,
+                    HMI_OVR or "-", MAP_OVR or "-", GATE_OVR))
 sys.stderr.flush()
 
 out = sys.stdout.buffer
@@ -247,6 +269,56 @@ while True:
     except Exception:
         time.sleep(0.05)
 '''
+
+# ── 레이어 칼리브레이션용 장면 프로브 — 서피스 지오메트리를 JSON 한 줄로 출력 ──
+# 라이브 스트리머와 같은 LayerManagerControl 파싱. dump(픽셀 검사)는 하지 않아 ~수백 ms에 끝남.
+_MIB_SCENE_PROBE = r'''
+import os, re, json, subprocess
+os.environ["XDG_RUNTIME_DIR"] = "/run/platform/weston"
+
+def lmc(a):
+    try:
+        return subprocess.run(["LayerManagerControl"] + a, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL).stdout.decode("utf-8", "replace")
+    except Exception:
+        return ""
+
+def f_xy(t, k):
+    m = re.search(k + r"\D*x=(-?\d+),\s*y=(-?\d+)", t)
+    return [int(m.group(1)), int(m.group(2))] if m else None
+
+def f_reg(t, k):
+    m = re.search(k + r"\D*x=(-?\d+),\s*y=(-?\d+),\s*w=(\d+),\s*h=(\d+)", t)
+    return [int(m.group(i)) for i in range(1, 5)] if m else None
+
+def f_ids(t, k):
+    m = re.search(k + r"\s*(.*)", t)
+    return re.findall(r"(\d+)\(0x[0-9a-fA-F]+\)", m.group(1)) if m else []
+
+scr = lmc(["get", "screen", "0"])
+sw_sh = f_xy(scr, "resolution:") or [0, 0]
+LW = LH = 0; order = []; layers = []
+for lid in f_ids(scr, "layer render order:"):
+    lt = lmc(["get", "layer", lid]); o = f_ids(lt, "surface render order:")
+    lsz = f_xy(lt, "original size:")
+    layers.append({"id": lid, "size": lsz, "surfaces": o})
+    if o and not order:
+        LW, LH = lsz or sw_sh; order = o
+surfs = []
+for sid in order:
+    st = lmc(["get", "surface", sid])
+    v = re.search(r"visibility:\s*(\d+)", st)
+    surfs.append({
+        "sid": sid,
+        "visible": not (v and v.group(1) == "0"),
+        "src": f_reg(st, "source region:"),
+        "dst": f_reg(st, "destination region:"),
+        "orig": f_xy(st, "original size:"),
+    })
+print(json.dumps({"sw": sw_sh[0], "sh": sw_sh[1], "lw": LW, "lh": LH,
+                  "layers": layers, "surfaces": surfs}))
+'''
+
 
 # ── 하드키 서브 커맨드 (HKMC6thService API 호환용 — 내부적으로 press/release 구분) ──
 SHORT_KEY = 0x43
@@ -531,6 +603,11 @@ class MIBAgentService:
         self._screen_fail_count: dict[int, int] = {i: 0 for i in self._screen_indices}
         self._screen_disabled: set[int] = set()
         self._screen_fail_threshold = 3  # 3회 연속 실패하면 해당 인덱스 dump 시도 중단
+        # 레이어 칼리브레이션 오버라이드 — 자동 장면 판정(HMI/MAP 선택)이 빗나가는 모델에서
+        # 사용자가 서피스를 직접 지정. dev.info["live_scene"]에 영구 저장되고 연결 시 재적용.
+        self._live_hmi_sid: str = ""      # "" = 자동
+        self._live_map_sid: str = ""      # "" = 자동, "none" = 맵 합성 안 함
+        self._live_gate_override: Optional[float] = None  # None = 자동(0.8/backdrop 0.55)
 
     # ------------------------------------------------------------------
     # Basic accessors
@@ -1493,6 +1570,60 @@ class MIBAgentService:
     def get_touch_scale(self) -> tuple:
         return (self._touch_x_scale, self._touch_y_scale)
 
+    # ------------------------------------------------------------------
+    # 레이어 칼리브레이션 (라이브 장면 오버라이드)
+    # ------------------------------------------------------------------
+    def set_live_scene(self, hmi_sid=None, map_sid=None, gate=None) -> None:
+        """라이브 합성 장면 오버라이드 설정. 다음 start_live_stream부터 적용.
+
+        hmi_sid: HMI 서피스 id 강제 ("" = 자동)
+        map_sid: 맵 서피스 id 강제 / "none" = 맵 합성 안 함 ("" = 자동)
+        gate: 맵 합성 구멍 비율 임계치 0~1 (None/범위 밖 = 자동)
+        """
+        self._live_hmi_sid = str(hmi_sid or "").strip()
+        self._live_map_sid = str(map_sid or "").strip()
+        g = None
+        try:
+            if gate not in (None, ""):
+                gf = float(gate)
+                if 0 < gf <= 1:
+                    g = gf
+        except Exception:
+            g = None
+        self._live_gate_override = g
+        logger.info("MIB live scene overrides: hmi=%s map=%s gate=%s",
+                    self._live_hmi_sid or "-", self._live_map_sid or "-",
+                    self._live_gate_override)
+
+    def get_live_scene(self) -> dict:
+        return {
+            "hmi_sid": self._live_hmi_sid,
+            "map_sid": self._live_map_sid,
+            "gate": self._live_gate_override,
+        }
+
+    def probe_live_scene(self, timeout: float = 10.0) -> dict:
+        """디바이스 장면(레이어/서피스 지오메트리)을 1회 조회 — 칼리브레이션 UI용.
+
+        입력 전용 SSH 세션 사용(캡처/라이브와 독립). 반환: sw/sh, lw/lh, layers, surfaces.
+        """
+        import json as _json
+        with self._input_ssh_lock:
+            ssh = self._get_input_ssh()
+            stdin, stdout, stderr = ssh.exec_command("python3 -u -", timeout=timeout)
+            try:
+                stdin.write(_MIB_SCENE_PROBE)
+                stdin.channel.shutdown_write()
+            except Exception:
+                pass
+            out = stdout.read().decode("utf-8", "replace")
+            err = stderr.read().decode("utf-8", "replace")
+        for line in reversed(out.strip().splitlines()):
+            line = line.strip()
+            if line.startswith("{"):
+                return _json.loads(line)
+        raise RuntimeError(f"scene probe failed: stdout={out.strip()[:200]!r} stderr={err.strip()[:200]!r}")
+
     def _touch_press(self, x: int, y: int) -> None:
         self._ksend(self._touch_frame(x, y, 0xFD))
 
@@ -2368,7 +2499,12 @@ class MIBAgentService:
             chan.exec_command("python3 -u -")
             script = (_MIB_LIVE_STREAMER
                       .replace("__TW__", str(self._live_w))
-                      .replace("__TH__", str(self._live_h)))
+                      .replace("__TH__", str(self._live_h))
+                      .replace("__HMI_OVR__", self._live_hmi_sid)
+                      .replace("__MAP_OVR__", self._live_map_sid)
+                      .replace("__GATE_OVR__", str(
+                          self._live_gate_override
+                          if self._live_gate_override is not None else -1.0)))
             chan.sendall(script.encode("utf-8"))
             chan.shutdown_write()  # 스트리머는 stdin을 읽지 않음 → 즉시 EOF
             t = threading.Thread(target=self._live_reader, args=(chan,), daemon=True)
@@ -2466,9 +2602,13 @@ class MIBAgentService:
                             # 콘텐츠가 채운 화면은 검정비율이 낮아 맵을 안 깐다(비침 방지).
                             # 단 맵이 프레임 전체를 덮는 backdrop 모델(MQB 등)은 불투명 크롬이
                             # 섞여 비율이 낮아지므로 device select_map과 같은 0.55로 완화.
-                            gate = self._map_hole_gate
-                            if mw * mh >= tw * th * 0.9:
-                                gate = min(gate, 0.55)
+                            # 사용자 칼리브레이션 게이트가 있으면 그 값을 그대로 사용(완화 없음).
+                            if self._live_gate_override is not None:
+                                gate = self._live_gate_override
+                            else:
+                                gate = self._map_hole_gate
+                                if mw * mh >= tw * th * 0.9:
+                                    gate = min(gate, 0.55)
                             if hole.mean() > gate:
                                 reg[hole] = mp[hole]
                     img = Image.fromarray(comp[:, :, ::-1], "RGB")  # BGR→RGB
