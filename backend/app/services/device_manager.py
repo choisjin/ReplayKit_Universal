@@ -1439,6 +1439,23 @@ class DeviceManager:
         if device_model:
             info["device_model"] = device_model
 
+        # 재등록(스캔→연결 등)이 기존 디바이스의 학습/캘리브레이션 값을 지우지 않도록
+        # 기존 info 위에 폼 값만 덮어쓴다. 보존 대상: ksend_src/ksend_dst(주소 자동보정),
+        # touch_x_scale/touch_y_scale/touch_x_offset/touch_y_offset(터치 캘리브레이션),
+        # screens/screen_indices, 자동 감지 resolution, mib_keys 등.
+        existing = self._devices.get(final_id)
+        if existing is not None and existing.type == "mib_agent":
+            merged = dict(existing.info)
+            merged.update(info)
+            # 폼 기본 해상도가 기존 자동 감지 값을 덮지 않도록 기존 해상도 유지
+            # (해상도 변경은 디바이스 편집 모달이 정식 경로 — 편집 시 즉시 반영/저장됨).
+            if existing.info.get("resolution_str"):
+                merged["resolution"] = existing.info["resolution"]
+                merged["resolution_str"] = existing.info["resolution_str"]
+            info = merged
+            if not name:
+                display_name = existing.name
+
         dev = ManagedDevice(
             id=final_id,
             type="mib_agent",

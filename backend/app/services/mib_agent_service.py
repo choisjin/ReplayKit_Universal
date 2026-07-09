@@ -274,6 +274,19 @@ MIB_KEYS: dict[str, dict] = {
     "MUTE":        {"class": "short",  "key": 0x20},
     "HOME":        {"class": "long",   "key": 0x66, "category": 0x30},
     "POWER":       {"class": "long",   "key": 0x38, "category": 0x30},
+    # HK 키코드 표 기반 추가분 — HOME/POWER와 같은 keypanel 코드 공간이라 long/0x30 기본.
+    # 특정 디바이스에서 무반응이면 per-device override(mib_keys)로 class/key 조정.
+    "MENU":        {"class": "long",   "key": 0x1A, "category": 0x30},
+    "MEDIA":       {"class": "long",   "key": 0x02, "category": 0x30},
+    "PHONE":       {"class": "long",   "key": 0x04, "category": 0x30},
+    "NAVI":        {"class": "long",   "key": 0x05, "category": 0x30},
+    "EMANAGER":    {"class": "long",   "key": 0x07, "category": 0x30},
+    "CAR":         {"class": "long",   "key": 0x07, "category": 0x30},  # EMANAGER와 동일 코드(HK 표 기준)
+    "SETUP":       {"class": "long",   "key": 0x08, "category": 0x30},
+    "RADIO":       {"class": "long",   "key": 0x18, "category": 0x30},
+    "VOICE":       {"class": "long",   "key": 0x1D, "category": 0x30},
+    "CLIMATE":     {"class": "long",   "key": 0x41, "category": 0x30},
+    "APP":         {"class": "long",   "key": 0x64, "category": 0x30},
 }
 
 
