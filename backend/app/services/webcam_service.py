@@ -214,7 +214,8 @@ def _spawn_ffmpeg_writer(
 
     audio_device: Windows dshow 오디오 장치 식별자(표시명 또는 @device_ alternative name).
     주어지면 마이크 입력을 두 번째 입력으로 붙여 AAC 로 함께 먹싱한다. 양쪽 입력 모두
-    -use_wallclock_as_timestamps 1 로 같은 벽시계 기준 PTS 를 쓰므로 A/V 싱크가 맞는다.
+    -use_wallclock_as_timestamps 1 로 같은 벽시계 기준 PTS 를 쓰고, -copyts 로 그 공통
+    기준을 출력까지 보존해야 A/V 싱크가 맞는다 (아래 cmd 주석 참조).
     -shortest: 영상(stdin) EOF 후 라이브 오디오 입력이 ffmpeg 를 붙잡고 있지 않게 종료 트리거.
     장치 유효성은 호출 전에 _probe_audio_device 로 확인할 것 — ffmpeg 는 입력을 순차로
     열기 때문에 여기서 스폰 직후 생존 확인을 해도 dshow 오픈 실패를 감지할 수 없다.
@@ -256,11 +257,25 @@ def _spawn_ffmpeg_writer(
         "-vsync", "vfr",
     ]
     if audio_device:
+        # A/V 타임스탬프 기준 통일 — -copyts 가 없으면 ffmpeg 는 입력별로 start_time 을
+        # 빼서 0-기준으로 정규화하는데, 라이브 오디오 캡처 입력은 start_time 이 잡히지
+        # 않아 epoch 절대 타임스탬프(µs)가 출력에 그대로 새고 비디오만 0-기준이 된다.
+        # → 결과 mp4 의 duration 이 수십만 시간으로 튀고, 플레이어가 오디오 클럭에 영상을
+        #   맞추려다 배속 재생/싱크 붕괴처럼 보이며, muxer 가 interleave 대기로 stdin 을
+        #   막아 프레임까지 대량 유실된다 (오디오 켰을 때만 발생하던 증상의 원인).
+        # -copyts: 양쪽 입력의 벽시계 PTS 를 정규화 없이 그대로 통과 (공통 기준 유지)
+        # -avoid_negative_ts make_zero: muxer 가 모든 스트림을 동일 오프셋으로 0점 이동
+        #   → 상대 정렬(진짜 벽시계 싱크)은 보존한 채 파일은 0초에서 시작.
+        # aresample=async=1000: 캡처 지터로 오디오 PTS 가 샘플 연속성과 어긋날 때
+        #   삽입/드롭으로 보정 (버스트 수신 시 Non-monotonic DTS → 오디오 트랙 붕괴 방지).
         cmd += [
             "-map", "1:a",
+            "-af", "aresample=async=1000",
             "-c:a", "aac",
             "-b:a", "128k",
             "-shortest",
+            "-copyts",
+            "-avoid_negative_ts", "make_zero",
         ]
     else:
         cmd += ["-an"]
