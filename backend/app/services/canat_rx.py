@@ -42,6 +42,32 @@ def _get_hdll(instance):
     return hdll
 
 
+def _enable_can_monitor(hdll) -> None:
+    """DLL 의 CAN 수신 모니터를 켠다 (축적 리스트 캡처의 필수 전제).
+
+    CANat DLL 은 전역 싱글톤 하나로 동작하며, 수신 디스패처가 프레임을
+    내부 축적 리스트(AllList)/콜백으로 넘기기 전에 '모니터 플래그'를 검사한다.
+    이 플래그가 꺼져 있으면 들어온 CAN 프레임이 전부 버려진다.
+
+    문제: lge.auto CANAT .pyd 의 init() 은 모니터를 끈 상태(ExtSetCANMonitor(False))로
+    끝난다. 레퍼런스 canat.py 는 init 말미에 ExtSetCANMonitor(True) 로 다시 켜지만
+    .pyd 는 그 단계를 생략했다. 그래서 우리 가상 함수가 ExtPreSaveCANDataAllList 로
+    수집 플래그만 세워도 모니터가 꺼져 있으면 AllList 가 영원히 비어
+    '5s 동안 수신 메시지 없음' 오탐이 난다. 캡처 직전에 반드시 켠다.
+
+    모니터를 켠 채로 두는 것은 레퍼런스의 정상 수신 상태와 동일하므로 되돌리지 않는다
+    (check_no_can_message 도 모니터가 켜져 있어야 '금지 메시지 수신'을 실제로 감지한다).
+    """
+    fn = getattr(hdll, "ExtSetCANMonitor", None)
+    if fn is None:
+        logger.warning("CANat DLL에 ExtSetCANMonitor 없음 — 모니터 강제 활성화 불가")
+        return
+    try:
+        fn(True)
+    except Exception as e:
+        logger.warning("ExtSetCANMonitor(True) failed: %s", e)
+
+
 def _parse_id(text: str) -> int:
     """'0x18DAF141' / '18DAF141' / '291' 등 hex 표기를 int 로 (0x 유무/대소문자 무관)."""
     s = str(text or "").strip()
@@ -152,6 +178,9 @@ def find_can_message(
     last_seen_data: Optional[str] = None  # 같은 ID 인데 데이터가 안 맞은 경우 디버깅용
     seen_total = 0
 
+    # .pyd init 이 CAN 모니터를 꺼둔 채 끝나므로, 수집을 시작하기 전에 반드시 켠다.
+    # (모니터가 꺼져 있으면 DLL 수신 디스패처가 프레임을 버려 AllList 가 비어 있게 됨)
+    _enable_can_monitor(hdll)
     hdll.ExtPreSaveCANDataAllList()
     try:
         while True:
