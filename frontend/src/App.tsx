@@ -156,8 +156,15 @@ function AppContent() {
 
   // --- Backend health polling ---
   const [backendReady, setBackendReady] = useState(false);
+  // 한 번이라도 ready였는지 — true면 이후 일시적 health 실패에도 페이지를 언마운트하지 않고
+  // (상태 보존) 재연결 배너만 오버레이한다. 초기 콜드 스타트에서만 전체화면 스피너를 쓴다.
+  const [everReady, setEverReady] = useState(false);
   const readyRef = useRef(false);
   const everReadyRef = useRef(false);
+  // health 연속 실패 카운트 — 단발 타임아웃(무거운 동기작업으로 이벤트 루프가 잠깐 막힘)에
+  // 페이지가 통째로 blank/리마운트되던 문제 방지. 이 임계 이상 연속 실패해야 not-ready 처리.
+  const failCountRef = useRef(0);
+  const HEALTH_FAIL_LIMIT = 3;
   const activeKeyRef = useRef(activeKey);
   activeKeyRef.current = activeKey;
 
@@ -168,10 +175,12 @@ function AppContent() {
       if (!mounted) return;
       try {
         await axios.get('/api/health', { timeout: 5000 });
+        failCountRef.current = 0;
         if (!readyRef.current) {
           readyRef.current = true;
           await fetchSettings();
           setBackendReady(true);
+          setEverReady(true);
           everReadyRef.current = true;
           // 디스크 용량 조회
           serverApi.diskUsage().then(res => {
@@ -186,13 +195,19 @@ function AppContent() {
           }).catch(() => {});
         }
       } catch {
-        if (readyRef.current) {
+        // 단발 실패는 무시(이벤트 루프가 무거운 동기작업으로 잠깐 막힌 경우). 연속 실패가
+        // 임계 이상일 때만 not-ready 처리 → 페이지 blank/리마운트 대신 재연결 배너로 표시.
+        failCountRef.current += 1;
+        if (readyRef.current && failCountRef.current >= HEALTH_FAIL_LIMIT) {
           readyRef.current = false;
           setBackendReady(false);
         }
       }
       if (mounted) {
-        setTimeout(poll, readyRef.current ? 10000 : 2000);
+        // 정상(연속실패 0)일 때만 10s 저빈도. 한 번이라도 실패하면 2s로 당겨
+        // 임계 도달/복구를 빠르게 수렴시킨다.
+        const healthy = readyRef.current && failCountRef.current === 0;
+        setTimeout(poll, healthy ? 10000 : 2000);
       }
     };
 
@@ -501,8 +516,24 @@ function AppContent() {
             <AnnouncementBanner />
             <PopupNotice />
             <PlaybackStatusBanner />
-            {backendReady ? (
+            {everReady ? (
+              // 한 번이라도 연결됐으면 페이지는 항상 마운트 유지(로컬 상태 보존).
+              // 일시적 health 실패 시엔 언마운트 대신 얇은 재연결 배너만 띄운다 —
+              // 무거운 백엔드 작업(디바이스 해제/스캔)으로 이벤트 루프가 잠깐 막혀도
+              // 화면이 통째로 새로고침되던 현상 방지.
               <>
+                {!backendReady && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    padding: '6px 12px', marginBottom: 6, borderRadius: 6,
+                    background: isDark ? '#3b2f1e' : '#fff7e6',
+                    border: `1px solid ${isDark ? '#5c4820' : '#ffd591'}`,
+                    color: isDark ? '#ffd591' : '#ad6800', fontSize: 12,
+                  }}>
+                    <LoadingOutlined spin />
+                    {t('common.backendConnecting')}
+                  </div>
+                )}
                 {pages.map(({ key, component }) => (
                   <div key={key} style={{ display: activeKey === key ? 'block' : 'none' }}>
                     {component}
