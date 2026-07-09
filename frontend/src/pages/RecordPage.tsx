@@ -7,6 +7,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { deviceApi, scenarioApi } from '../services/api';
 import { useDevice } from '../context/DeviceContext';
 import { useSettings } from '../context/SettingsContext';
+import { useTestMode, TEST_ONLY_MODULES } from '../hooks/useTestMode';
 import { useTranslation } from '../i18n';
 import type { TranslationKey } from '../i18n/translations';
 import { findInvalidNameChars, INVALID_NAME_CHARS_DISPLAY } from '../utils/entityName';
@@ -369,6 +370,10 @@ export default function RecordPage() {
     screenPausedForPlayback,
     pauseScreenStream, resumeScreenStream,
   } = useDevice();
+
+  // 실험적 기능 게이트 — URL hash `#test` 에서만 Frame_Check 등 실험 모듈을 스텝
+  // 모듈/함수 선택에 노출한다(디바이스 페이지와 동일 게이트).
+  const testMode = useTestMode();
 
   const [recording, setRecording] = useState(false);
   const [scenarioName, setScenarioName] = useState('');
@@ -994,7 +999,9 @@ export default function RecordPage() {
   // 연결된 디바이스만 표시 (disconnected/offline/error/reconnecting 등은 제외)
   const isDeviceConnected = (d: { status?: string }) => d.status === 'connected' || d.status === 'device';
   const moduleDevices = [
-    ...auxiliaryDevices.filter(d => d.info?.module && isDeviceConnected(d)),
+    ...auxiliaryDevices.filter(d => d.info?.module && isDeviceConnected(d)
+      // 실험적(테스트 전용) 모듈은 `#test` 모드에서만 스텝 대상 디바이스로 노출.
+      && (testMode || !TEST_ONLY_MODULES.has(d.info.module as string))),
     ...primaryDevices
       .filter(d => d.type === 'adb' && isDeviceConnected(d))
       .map(d => ({ ...d, info: { ...d.info, module: 'Android' } })),

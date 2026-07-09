@@ -8,6 +8,7 @@ import { useDevice, ManagedDevice } from '../context/DeviceContext';
 import { useSettings } from '../context/SettingsContext';
 import { deviceApi } from '../services/api';
 import { useTranslation } from '../i18n';
+import { useTestMode, TEST_ONLY_MODULES } from '../hooks/useTestMode';
 
 const { Option } = Select;
 
@@ -147,6 +148,9 @@ export default function DevicePage() {
   const { t } = useTranslation();
   const { primaryDevices, auxiliaryDevices, loading, fetchDevices, connectDevice, disconnectDevice, updateDeviceLists, pauseDevicePolling, resumeDevicePolling } = useDevice();
   const { browseFolder } = useSettings();
+  // 실험적 기능 게이트 — URL hash `#test` 에서만 노출. Frame_Check 등 실험 모듈은
+  // 이 플래그가 꺼져 있으면 디바이스/모듈 목록에서 숨긴다.
+  const testMode = useTestMode();
 
   // ADB reconnect state
   const [reconnecting, setReconnecting] = useState(false);
@@ -1186,6 +1190,8 @@ export default function DevicePage() {
   const deviceGroups = useMemo(() => {
     const groups: Record<string, ManagedDevice[]> = {};
     for (const d of allDevices) {
+      // 실험적(테스트 전용) 모듈 디바이스는 `#test` 모드에서만 목록에 표시.
+      if (!testMode && TEST_ONLY_MODULES.has(d.info?.module as string)) continue;
       const prefix = getDevicePrefix(d.id);
       if (!groups[prefix]) groups[prefix] = [];
       groups[prefix].push(d);
@@ -1199,7 +1205,7 @@ export default function DevicePage() {
       });
     }
     return groups;
-  }, [allDevices]);
+  }, [allDevices, testMode]);
 
   const groupOrder = useMemo(() => {
     // primary 그룹(Android, HKMC, VisionCam) 우선, 나머지는 알파벳
