@@ -170,15 +170,21 @@ def hole_frac(hp, dst, T=2):
         yy += gy
     return (cnt / tot) if tot else 0.0
 
-def select_map():
+def select_map(prev=None):
     # 맵 = 0x10의 '구멍(검정)'이 가장 많이 겹치는 후보(투명 뒤 backdrop). 면적 휴리스틱 폐기.
     # 구멍 비율이 낮으면(맵 없는 화면) None → 맵 합성 안 함(비침 방지). 화면 전환마다 재선택.
     if hmi is None:
         return None
     hb = dump(hmi[0], "/tmp/_mlhsel.bmp")
     if hb is None:
-        return None
+        return prev   # HMI dump 일시 실패 시 직전 선택 유지 (블링킹 방지)
     hp = parse(hb); best = None; bestf = 0.55
+    # 히스테리시스: 직전 선택이 여전히 0.43 이상이면 유지 — 임계 경계에서
+    # 2초마다 선택↔해제가 반복되며 맵이 깜빡이는 것을 방지.
+    if prev is not None:
+        f = hole_frac(hp, prev[2])
+        if f > 0.43:
+            return prev
     for sid, src, dst in cands:
         bm = dump(sid, "/tmp/_mlsel.bmp")
         if bm is None or mostly_black(parse(bm)):
@@ -203,13 +209,14 @@ sys.stderr.flush()
 out = sys.stdout.buffer
 HMI_BMP, MAP_BMP = "/tmp/_mlhmi.bmp", "/tmp/_mlmap.bmp"
 mapsel = None; sel_t = -999.0
+last_map = (0, 0, 0, 0, b"")   # 직전 성공 맵 프레임 (dump 일시 실패 시 재사용 — 블링킹 방지)
 while True:
     try:
         if hmi is None:
             time.sleep(0.2); continue
         now = time.time()
         if now - sel_t > 2.0:   # 2초마다 맵 재선택(화면 전환 적응; 맵 없는 화면이면 None)
-            mapsel = select_map(); sel_t = now
+            mapsel = select_map(mapsel); sel_t = now
         hb = dump(hmi[0], HMI_BMP)
         if hb is None:
             time.sleep(0.05); continue
@@ -222,6 +229,9 @@ while True:
             if mb is not None:
                 mp = parse(mb); ms = mapsel[1]
                 mbytes = b"".join(region(mp, ms[0], ms[1], ms[2], ms[3], mw, mh))
+                last_map = (mx, my, mw, mh, mbytes)
+            elif last_map[4] and last_map[0:4] == (mx, my, mw, mh):
+                mbytes = last_map[4]   # 같은 지오메트리의 직전 프레임 재사용
         cmw, cmh = (mw, mh) if mbytes else (0, 0)
         # SW,SH(실제 화면 해상도)도 보고 → 백엔드가 등록 해상도를 보정(터치 좌표 일치).
         out.write(b"MIBF" + struct.pack("<HHhhHHHH", TW, TH, mx, my, cmw, cmh, SW, SH) + hbytes + mbytes)
@@ -343,6 +353,12 @@ class LiveStreamMixin:
         import numpy as np
         HDR = 20  # b"MIBF"(4) + '<HHhhHHHH'(16): tw,th,mx,my,mw,mh,sw,sh
         buf = b""
+        # 맵 합성 on/off 히스테리시스 — hole 비율이 게이트 경계에 걸리면 프레임마다
+        # 합성이 켜졌다 꺼졌다 하며 화면이 심하게 깜빡인다. on은 게이트 초과 2프레임,
+        # off는 (게이트-0.1) 미만 3프레임 연속일 때만 전환, 중간 밴드에서는 상태 유지.
+        map_on = False
+        on_cnt = 0
+        off_cnt = 0
         try:
             chan.settimeout(5.0)
         except Exception:
@@ -411,7 +427,19 @@ class LiveStreamMixin:
                             gate = self._map_hole_gate
                             if mw * mh >= tw * th * 0.9:
                                 gate = min(gate, 0.55)
-                            if hole.mean() > gate:
+                            # 히스테리시스 — 경계에서 프레임 단위 on/off 반복(블링킹) 방지
+                            h = float(hole.mean())
+                            if h > gate:
+                                on_cnt += 1; off_cnt = 0
+                            elif h < max(0.0, gate - 0.1):
+                                off_cnt += 1; on_cnt = 0
+                            else:
+                                on_cnt = 0; off_cnt = 0  # 중간 밴드: 상태 유지
+                            if not map_on and on_cnt >= 2:
+                                map_on = True
+                            elif map_on and off_cnt >= 3:
+                                map_on = False
+                            if map_on:
                                 reg[hole] = mp[hole]
                     img = Image.fromarray(comp[:, :, ::-1], "RGB")  # BGR→RGB
                     bio = io.BytesIO()
