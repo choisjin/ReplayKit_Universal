@@ -1634,6 +1634,7 @@ async def update_device(req: UpdateDeviceRequest):
     if req.connect_type is not None:
         dev.info["connect_type"] = req.connect_type
     mib_resolution_changed = False
+    mib_touch_calib_changed = False
     if req.extra_fields is not None:
         for k, v in req.extra_fields.items():
             # MIB의 resolution은 dict 스키마({width,height})를 보존해야 하므로
@@ -1664,6 +1665,7 @@ async def update_device(req: UpdateDeviceRequest):
         if dev.type == "mib_agent" and (
             "touch_x_offset" in req.extra_fields or "touch_y_offset" in req.extra_fields
         ):
+            mib_touch_calib_changed = True
             svc = dm.get_mib_service(dev.id)
             if svc is not None:
                 try:
@@ -1678,6 +1680,7 @@ async def update_device(req: UpdateDeviceRequest):
         if dev.type == "mib_agent" and (
             "touch_x_scale" in req.extra_fields or "touch_y_scale" in req.extra_fields
         ):
+            mib_touch_calib_changed = True
             svc = dm.get_mib_service(dev.id)
             if svc is not None:
                 try:
@@ -1698,8 +1701,11 @@ async def update_device(req: UpdateDeviceRequest):
                 from ..services.module_service import reset_instance
                 reset_instance(module_name)
 
-    # Persist changes — auxiliary는 항상, primary 중 mib_agent는 해상도 변경 시 저장.
-    if dev.category == "auxiliary" or (dev.type == "mib_agent" and mib_resolution_changed):
+    # Persist changes — auxiliary는 항상, primary 중 mib_agent는 해상도/터치보정 변경 시 저장.
+    # 터치 스케일/오프셋은 라이브 반영만 하고 저장하지 않으면 백엔드 재시작 시 유실된다.
+    if dev.category == "auxiliary" or (
+        dev.type == "mib_agent" and (mib_resolution_changed or mib_touch_calib_changed)
+    ):
         dm._save_auxiliary_devices()
 
     # Reopen serial connection if address or baudrate changed
