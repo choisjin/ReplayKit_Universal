@@ -134,10 +134,14 @@ for sid in order:
         continue
     if osz and osz[0] * osz[1] < 64 * 64:   # cursor/system surface 제외
         continue
-    # HMI = dst가 레이어와 '정확히' 일치(±5%)하는 풀스크린만. 레이어보다 큰 dst
-    # (MQB 800x480처럼 backdrop 맵이 1280x640으로 깔리는 모델)는 맵 후보 — 클립해서 cands로.
+    # HMI = dst가 레이어와 '정확히' 일치(±5%)하는 풀스크린 + orig도 레이어와 유사(±20%)한
+    # 1:1 렌더 서피스만. 레이어보다 큰 dst(MQB 800x480처럼 backdrop 맵이 1280x640으로
+    # 깔리는 모델)는 맵 후보 — 클립해서 cands로. orig가 레이어와 크게 다른 서피스(예: MQB
+    # nav가 dst를 풀스크린으로 바꿔도 orig는 1280x640)는 dst가 풀스크린이어도 맵 후보.
     if (dst[0] == 0 and dst[1] == 0 and LW * 0.95 <= dst[2] <= LW * 1.05
-            and LH * 0.95 <= dst[3] <= LH * 1.05):
+            and LH * 0.95 <= dst[3] <= LH * 1.05
+            and (not osz or (LW * 0.8 <= osz[0] <= LW * 1.2
+                             and LH * 0.8 <= osz[1] <= LH * 1.2))):
         hmi_cands.append((sid, src))
     else:
         c = clip_to_layer(src, dst)
@@ -217,6 +221,17 @@ while True:
         now = time.time()
         if now - sel_t > 2.0:   # 2초마다 맵 재선택(화면 전환 적응; 맵 없는 화면이면 None)
             mapsel = select_map(mapsel); sel_t = now
+            # 지오메트리 재조회 — src/dst가 런타임에 바뀌는 서피스(MQB nav의 dst가
+            # backdrop↔풀스크린으로 변함) 적응. 스트림 재시작 없이 크롭/배치 추종.
+            st = lmc(["get", "surface", hmi[0]]); s = f_reg(st, "source region:")
+            if s:
+                hmi = (hmi[0], s)
+            if mapsel is not None:
+                st = lmc(["get", "surface", mapsel[0]])
+                s = f_reg(st, "source region:"); d = f_reg(st, "destination region:")
+                if s and d:
+                    c = clip_to_layer(s, d)
+                    mapsel = (mapsel[0], c[0], c[1]) if c else None
         hb = dump(hmi[0], HMI_BMP)
         if hb is None:
             time.sleep(0.05); continue
@@ -359,6 +374,11 @@ class LiveStreamMixin:
         map_on = False
         on_cnt = 0
         off_cnt = 0
+        # HMI 덤프 글리치 필터 — GPU 버퍼 스왑과 경합해 HMI 덤프가 단발성 전체-검정으로
+        # 떨어지면 그 프레임은 전부 구멍(=맵 전체 화면)이 되어 HMI↔MAP이 프레임 단위로
+        # 번갈아 보인다(블링킹). 직전 정상 프레임 대비 hole이 급등한 프레임은 버린다.
+        prev_h: Optional[float] = None
+        glitch_cnt = 0
         try:
             chan.settimeout(5.0)
         except Exception:
@@ -427,8 +447,18 @@ class LiveStreamMixin:
                             gate = self._map_hole_gate
                             if mw * mh >= tw * th * 0.9:
                                 gate = min(gate, 0.55)
-                            # 히스테리시스 — 경계에서 프레임 단위 on/off 반복(블링킹) 방지
                             h = float(hole.mean())
+                            # 글리치 드랍: 직전 정상 프레임(hole<0.85)에서 갑자기 전면 구멍
+                            # (hole>0.97)으로 튄 프레임은 HMI 덤프 실패(전체 검정)로 간주하고
+                            # 버림(직전 JPEG 유지). 5프레임 연속이면 진짜 풀맵 전환으로 수용.
+                            if h > 0.97 and prev_h is not None and prev_h < 0.85:
+                                glitch_cnt += 1
+                                if glitch_cnt <= 4:
+                                    continue
+                            else:
+                                glitch_cnt = 0
+                            prev_h = h
+                            # 히스테리시스 — 경계에서 프레임 단위 on/off 반복(블링킹) 방지
                             if h > gate:
                                 on_cnt += 1; off_cnt = 0
                             elif h < max(0.0, gate - 0.1):
