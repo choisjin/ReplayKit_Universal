@@ -296,6 +296,62 @@ while True:
         time.sleep(0.05)
 '''
 
+# ── 실화면(screen dump) 스트리머 — 컴포지터 합성 결과를 그대로 송출 ──
+# weston이 z순서+픽셀알파 룰로 합성한 최종 화면을 dump screen(항상 PNG)으로 읽는다.
+# 레이어 판정/black-key/게이트가 전부 불필요 → 블링킹·겹침·고스트 원천 차단.
+# 대가는 fps: PNG 인코딩이 해상도에 비례 (MQB 800x480 실측 ~165ms = ~6fps,
+# 대형 패널은 0.5s+일 수 있어 기본은 서피스 합성 모드 유지, 칼리브레이션에서 선택).
+# 프레임 형식: b"MIBP" + struct('<IHH', png_len, sw, sh) + PNG bytes
+_MIB_SCREEN_STREAMER = r'''
+import sys, os, time, struct, subprocess, re
+os.environ["XDG_RUNTIME_DIR"] = "/run/platform/weston"
+
+def lmc(a):
+    try:
+        return subprocess.run(["LayerManagerControl"] + a, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL).stdout.decode("utf-8", "replace")
+    except Exception:
+        return ""
+
+m = re.search(r"resolution:\D*x=(\d+),\s*y=(\d+)", lmc(["get", "screen", "0"]))
+SW, SH = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+sys.stderr.write("MIBSCR screen mode SW=%d SH=%d\n" % (SW, SH))
+sys.stderr.flush()
+out = sys.stdout.buffer
+P = "/tmp/_mlscr.png"
+while True:
+    try:
+        try:
+            os.remove(P)
+        except OSError:
+            pass
+        subprocess.run(["LayerManagerControl", "dump", "screen", "0", "to", P],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # PNG 완성 대기 — dump는 비동기 기록: 크기 안정화 + IEND(마지막 청크) 확인
+        data = None; t0 = time.time(); last = -1
+        while time.time() - t0 < 2.0:
+            try:
+                sz = os.path.getsize(P)
+            except OSError:
+                sz = 0
+            if sz > 12 and sz == last:
+                with open(P, "rb") as f:
+                    b = f.read()
+                if b[-8:-4] == b"IEND":
+                    data = b; break
+            last = sz
+            time.sleep(0.02)
+        if not data:
+            time.sleep(0.1); continue
+        out.write(b"MIBP" + struct.pack("<IHH", len(data), SW, SH) + data)
+        out.flush()
+    except (BrokenPipeError, IOError):
+        break
+    except Exception:
+        time.sleep(0.1)
+'''
+
+
 # ── 레이어 칼리브레이션용 장면 프로브 — 서피스 지오메트리를 JSON 한 줄로 출력 ──
 # 라이브 스트리머와 같은 LayerManagerControl 파싱. dump(픽셀 검사)는 하지 않아 ~수백 ms에 끝남.
 _MIB_SCENE_PROBE = r'''
@@ -634,6 +690,17 @@ class MIBAgentService:
         self._live_hmi_sid: str = ""      # "" = 자동
         self._live_map_sid: str = ""      # "" = 자동, "none" = 맵 합성 안 함
         self._live_gate_override: Optional[float] = None  # None = 자동(0.8/backdrop 0.55)
+        # 미러 방식: "" = 서피스 합성(기본, 빠름) / "screen" = 실화면 dump(정확, PNG 인코딩
+        # 비용으로 fps 하락 — 소형 패널은 ~6fps 실측이라 실용적, MQB 권장).
+        self._live_mode: str = ""
+        # 실화면 참조 마스크(chrome mask) — HMI 덤프의 '검정'은 투명 구멍과 진짜 검정 UI
+        # (내비 상단바/아이콘)를 구분할 수 없다(24bpp, 알파 소실). weston이 알파로 합성한
+        # 실화면 스크린샷에서 비검정인 자리만 구멍으로 허용해 고스트/비침을 제거한다.
+        # 장면 변화 시에만 갱신(스크린샷 ~1s 부하). None = 마스크 없음(순수 black-key).
+        self._hole_allow = None           # np.ndarray(bool, th×tw) — True=맵 합성 허용
+        self._hole_basis_h: float = -1.0  # 마스크 갱신 당시의 원시 hole 비율(장면 변화 감지용)
+        self._hole_mask_ts: float = 0.0
+        self._hole_mask_inflight = False
 
     # ------------------------------------------------------------------
     # Basic accessors
@@ -1599,12 +1666,13 @@ class MIBAgentService:
     # ------------------------------------------------------------------
     # 레이어 칼리브레이션 (라이브 장면 오버라이드)
     # ------------------------------------------------------------------
-    def set_live_scene(self, hmi_sid=None, map_sid=None, gate=None) -> None:
+    def set_live_scene(self, hmi_sid=None, map_sid=None, gate=None, mode=None) -> None:
         """라이브 합성 장면 오버라이드 설정. 다음 start_live_stream부터 적용.
 
         hmi_sid: HMI 서피스 id 강제 ("" = 자동)
         map_sid: 맵 서피스 id 강제 / "none" = 맵 합성 안 함 ("" = 자동)
         gate: 맵 합성 구멍 비율 임계치 0~1 (None/범위 밖 = 자동)
+        mode: "" = 서피스 합성(기본) / "screen" = 실화면 dump 스트리밍
         """
         self._live_hmi_sid = str(hmi_sid or "").strip()
         self._live_map_sid = str(map_sid or "").strip()
@@ -1617,15 +1685,18 @@ class MIBAgentService:
         except Exception:
             g = None
         self._live_gate_override = g
-        logger.info("MIB live scene overrides: hmi=%s map=%s gate=%s",
+        m = str(mode or "").strip().lower()
+        self._live_mode = m if m in ("screen",) else ""
+        logger.info("MIB live scene overrides: hmi=%s map=%s gate=%s mode=%s",
                     self._live_hmi_sid or "-", self._live_map_sid or "-",
-                    self._live_gate_override)
+                    self._live_gate_override, self._live_mode or "surface")
 
     def get_live_scene(self) -> dict:
         return {
             "hmi_sid": self._live_hmi_sid,
             "map_sid": self._live_map_sid,
             "gate": self._live_gate_override,
+            "mode": self._live_mode,
         }
 
     def probe_live_scene(self, timeout: float = 10.0) -> dict:
@@ -2523,17 +2594,23 @@ class MIBAgentService:
                 return False
             chan = transport.open_session()
             chan.exec_command("python3 -u -")
-            script = (_MIB_LIVE_STREAMER
-                      .replace("__TW__", str(self._live_w))
-                      .replace("__TH__", str(self._live_h))
-                      .replace("__HMI_OVR__", self._live_hmi_sid)
-                      .replace("__MAP_OVR__", self._live_map_sid)
-                      .replace("__GATE_OVR__", str(
-                          self._live_gate_override
-                          if self._live_gate_override is not None else -1.0)))
+            if self._live_mode == "screen":
+                # 실화면 모드 — 합성 결과(dump screen PNG)를 그대로 스트리밍
+                script = _MIB_SCREEN_STREAMER
+                reader = self._live_reader_screen
+            else:
+                script = (_MIB_LIVE_STREAMER
+                          .replace("__TW__", str(self._live_w))
+                          .replace("__TH__", str(self._live_h))
+                          .replace("__HMI_OVR__", self._live_hmi_sid)
+                          .replace("__MAP_OVR__", self._live_map_sid)
+                          .replace("__GATE_OVR__", str(
+                              self._live_gate_override
+                              if self._live_gate_override is not None else -1.0)))
+                reader = self._live_reader
             chan.sendall(script.encode("utf-8"))
             chan.shutdown_write()  # 스트리머는 stdin을 읽지 않음 → 즉시 EOF
-            t = threading.Thread(target=self._live_reader, args=(chan,), daemon=True)
+            t = threading.Thread(target=reader, args=(chan,), daemon=True)
             with self._live_lock:
                 self._live_ssh = ssh
                 self._live_chan = chan
@@ -2553,6 +2630,96 @@ class MIBAgentService:
                 self._live_chan = None
                 self._live_thread = None
             return False
+
+    def _refresh_hole_mask(self, tw: int, th: int, basis_h: float) -> None:
+        """실화면(weston 알파 합성 결과) 1장을 받아 구멍-허용 마스크 재계산.
+
+        실화면에서 비검정 = 그 자리에 실제로 맵이 보임 = 구멍 허용.
+        실화면에서 검정 = 진짜 검정 UI(상단바/아이콘/메뉴 배경) = 맵 합성 금지.
+        공유 SSH를 쓰므로(_screencap_hu) 장면 변화 시에만 호출된다(~1s 부하).
+        """
+        try:
+            import numpy as np
+            from PIL import Image
+            png = self.screencap_bytes("HU", "png")
+            img = Image.open(io.BytesIO(png)).convert("RGB").resize((tw, th), Image.NEAREST)
+            arr = np.asarray(img)
+            allow = arr.max(axis=2) > (self._map_key_t + 8)
+            self._hole_allow = allow
+            self._hole_basis_h = basis_h
+            self._hole_mask_ts = time.time()
+            logger.info("MIB live: chrome mask 갱신 (구멍 허용 %.0f%%)", 100.0 * float(allow.mean()))
+        except Exception as e:
+            logger.debug("MIB live chrome mask refresh failed: %s", e)
+            self._hole_mask_ts = time.time()  # 실패 백오프(3s) — 스팸 방지
+        finally:
+            self._hole_mask_inflight = False
+
+    def _live_reader_screen(self, chan) -> None:
+        """실화면 모드 리더 — MIBP 프레임(완성 PNG)을 받아 JPEG 변환만 수행.
+
+        합성/black-key 없음: 컴포지터가 이미 알파·z순서 룰로 합성한 화면이라 그대로 표시.
+        프레임 형식: b"MIBP" + struct('<IHH', png_len, sw, sh) + PNG bytes
+        """
+        from PIL import Image
+        HDR = 12  # b"MIBP"(4) + '<IHH'(8)
+        buf = b""
+        try:
+            chan.settimeout(5.0)
+        except Exception:
+            pass
+        while not self._live_stop.is_set():
+            try:
+                while chan.recv_stderr_ready():
+                    err = chan.recv_stderr(4096)
+                    if err:
+                        logger.info("MIB streamer: %s",
+                                    err.decode("utf-8", "replace").strip())
+            except Exception:
+                pass
+            try:
+                data = chan.recv(262144)
+            except Exception:
+                break
+            if not data:
+                break
+            buf += data
+            while True:
+                idx = buf.find(b"MIBP")
+                if idx < 0:
+                    if len(buf) > (1 << 23):
+                        buf = buf[-8:]
+                    break
+                if len(buf) < idx + HDR:
+                    break
+                png_len, sw, sh = struct.unpack("<IHH", buf[idx + 4: idx + HDR])
+                if png_len <= 0 or png_len > (1 << 23):
+                    buf = buf[idx + 4:]  # 손상 헤더 — 매직 재탐색
+                    continue
+                total = idx + HDR + png_len
+                if len(buf) < total:
+                    break
+                png = buf[idx + HDR: total]
+                buf = buf[total:]
+                # 실제 화면 해상도로 등록 해상도 1회 보정 (터치 좌표 일치, MIBF와 동일)
+                if not self._live_res_synced and sw > 0 and sh > 0:
+                    self._live_res_synced = True
+                    try:
+                        if self._maybe_autoupdate_resolution(sw, sh):
+                            logger.info("MIB live(screen): 등록 해상도 보정 → %dx%d", sw, sh)
+                    except Exception as e:
+                        logger.debug("MIB live resolution sync failed: %s", e)
+                try:
+                    img = Image.open(io.BytesIO(png)).convert("RGB")
+                    bio = io.BytesIO()
+                    img.save(bio, format="JPEG", quality=self._live_jpeg_q)
+                    jpg = bio.getvalue()
+                    with self._live_lock:
+                        self._latest_live_jpeg = jpg
+                        self._live_frame_id += 1
+                except Exception:
+                    continue
+        logger.info("MIB live reader(screen) exited")
 
     def _live_reader(self, chan) -> None:
         """채널에서 MIBF 프레임(HMI + 맵 따로)을 파싱 → numpy black-key 합성 → JPEG.
@@ -2669,7 +2836,25 @@ class MIBAgentService:
                             elif map_on and off_cnt >= 3:
                                 map_on = False
                             if map_on:
+                                # 실화면 참조 마스크 적용 — 실화면에서도 검정인 자리(상단바 등
+                                # 진짜 검정 UI)는 구멍에서 제외해 맵이 뚫고 나오지 않게 한다.
+                                allow = self._hole_allow
+                                if allow is not None and allow.shape == (th, tw):
+                                    hole &= allow[y0:y0 + hole.shape[0], x0:x0 + hole.shape[1]]
                                 reg[hole] = mp[hole]
+                            # 마스크 갱신 트리거 — 최초/장면 변화(원시 hole 비율 급변)/노후(20s).
+                            # 3s 최소 간격(실패 백오프 겸용), 단일 비행.
+                            nowt = time.time()
+                            if (map_on and not self._hole_mask_inflight
+                                    and nowt - self._hole_mask_ts > 3.0
+                                    and (self._hole_allow is None
+                                         or abs(h - self._hole_basis_h) > 0.06
+                                         or nowt - self._hole_mask_ts > 20.0)):
+                                self._hole_mask_inflight = True
+                                threading.Thread(
+                                    target=self._refresh_hole_mask,
+                                    args=(tw, th, h), daemon=True,
+                                ).start()
                     img = Image.fromarray(comp[:, :, ::-1], "RGB")  # BGR→RGB
                     bio = io.BytesIO()
                     img.save(bio, format="JPEG", quality=self._live_jpeg_q)

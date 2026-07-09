@@ -41,7 +41,7 @@ export const deviceApi = {
     api.post('/device/mib/detect_resolution', { device_id: deviceId }),
   getMibLiveScene: (deviceId: string) =>
     api.get('/device/mib/live-scene', { params: { device_id: deviceId } }),
-  setMibLiveScene: (deviceId: string, payload: { hmi_sid?: string; map_sid?: string; gate?: number | null }) =>
+  setMibLiveScene: (deviceId: string, payload: { hmi_sid?: string; map_sid?: string; gate?: number | null; mode?: string }) =>
     api.post('/device/mib/live-scene', { device_id: deviceId, ...payload }),
   disconnect: (deviceId: string) => api.post('/device/disconnect', { address: deviceId }),
   updateDevice: (device_id: string, updates: Record<string, any>) =>

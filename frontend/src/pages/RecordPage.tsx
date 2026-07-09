@@ -656,6 +656,7 @@ export default function RecordPage() {
   const [mibCalibHmi, setMibCalibHmi] = useState('');
   const [mibCalibMap, setMibCalibMap] = useState('');
   const [mibCalibGate, setMibCalibGate] = useState<number | null>(null);
+  const [mibCalibMode, setMibCalibMode] = useState<'' | 'screen'>('');
 
   // 뷰포트 크롭 상태 localStorage 로드 (디바이스 변경 시)
   useEffect(() => {
@@ -1303,6 +1304,7 @@ export default function RecordPage() {
       setMibCalibHmi(ov.hmi_sid || '');
       setMibCalibMap(ov.map_sid || '');
       setMibCalibGate(typeof ov.gate === 'number' ? ov.gate : null);
+      setMibCalibMode(ov.mode === 'screen' ? 'screen' : '');
     } catch (err: any) {
       message.error(err?.response?.data?.detail || '장면 조회 실패 — 디바이스 연결 상태를 확인하세요');
       setMibScene(null);
@@ -1316,15 +1318,15 @@ export default function RecordPage() {
     setMibCalibSaving(true);
     try {
       await deviceApi.setMibLiveScene(screenshotDeviceId, reset
-        ? { hmi_sid: '', map_sid: '', gate: null }
-        : { hmi_sid: mibCalibHmi, map_sid: mibCalibMap, gate: mibCalibGate });
+        ? { hmi_sid: '', map_sid: '', gate: null, mode: '' }
+        : { hmi_sid: mibCalibHmi, map_sid: mibCalibMap, gate: mibCalibGate, mode: mibCalibMode });
       message.success(reset ? '자동 판정으로 복귀 — 라이브 화면 재시작 중' : '레이어 보정 적용 — 라이브 화면 재시작 중');
       setMibCalibOpen(false);
     } catch (err: any) {
       message.error(err?.response?.data?.detail || '레이어 보정 적용 실패');
     }
     setMibCalibSaving(false);
-  }, [screenshotDeviceId, mibCalibHmi, mibCalibMap, mibCalibGate]);
+  }, [screenshotDeviceId, mibCalibHmi, mibCalibMap, mibCalibGate, mibCalibMode]);
 
   // Execute or record an action (화면 제스처/HKMC키 전용 — 모듈 스텝 추가와는 별개 경로)
   const executeAction = useCallback(async (action: string, params: Record<string, any>, desc: string) => {
@@ -7518,8 +7520,25 @@ export default function RecordPage() {
       >
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
           <div style={{ fontSize: 11, color: '#888' }}>
-            라이브 화면이 겹쳐 보이거나 일부만 보일 때 사용합니다. HMI(전경 UI)와 맵(배경) 서피스를
-            직접 지정하면 자동 판정을 덮어쓰며, 적용 즉시 라이브 화면이 재시작됩니다. 설정은 디바이스에 저장됩니다.
+            라이브 화면이 겹쳐 보이거나 일부만 보일 때 사용합니다. 적용 즉시 라이브 화면이
+            재시작되며, 설정은 디바이스에 저장됩니다.
+          </div>
+          <div>
+            <div style={{ fontSize: 11, marginBottom: 4 }}>미러 방식</div>
+            <Radio.Group
+              size="small"
+              value={mibCalibMode}
+              onChange={(e) => setMibCalibMode(e.target.value)}
+              optionType="button"
+              buttonStyle="solid"
+            >
+              <Radio.Button value="">서피스 합성 (빠름, ~8fps)</Radio.Button>
+              <Radio.Button value="screen">실화면 캡처 (정확, ~5fps)</Radio.Button>
+            </Radio.Group>
+            <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
+              실화면 캡처: 시료 컴포지터가 합성한 최종 화면을 그대로 표시 — 레이어 겹침·비침·깜빡임이
+              원천적으로 없습니다. 소형 패널(800x480 등)에서 권장. 아래 서피스/게이트 설정은 서피스 합성 방식에만 적용됩니다.
+            </div>
           </div>
           {mibCalibLoading ? (
             <div style={{ color: '#888', textAlign: 'center', padding: 13 }}>장면 조회 중…</div>
@@ -7546,6 +7565,7 @@ export default function RecordPage() {
                 <div style={{ fontSize: 11, marginBottom: 4 }}>HMI 서피스 (전경 UI)</div>
                 <Select
                   size="small" style={{ width: '100%' }}
+                  disabled={mibCalibMode === 'screen'}
                   value={mibCalibHmi}
                   onChange={setMibCalibHmi}
                   options={[
@@ -7561,6 +7581,7 @@ export default function RecordPage() {
                 <div style={{ fontSize: 11, marginBottom: 4 }}>맵 서피스 (배경 — HMI의 검정 영역에만 합성)</div>
                 <Select
                   size="small" style={{ width: '100%' }}
+                  disabled={mibCalibMode === 'screen'}
                   value={mibCalibMap}
                   onChange={setMibCalibMap}
                   options={[
@@ -7579,6 +7600,7 @@ export default function RecordPage() {
                 </div>
                 <InputNumber
                   size="small" min={0.05} max={1} step={0.05}
+                  disabled={mibCalibMode === 'screen'}
                   value={mibCalibGate}
                   onChange={(v) => setMibCalibGate(v ?? null)}
                   placeholder="자동"

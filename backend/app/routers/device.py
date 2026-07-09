@@ -2279,6 +2279,7 @@ class MibLiveSceneRequest(BaseModel):
     hmi_sid: str = ""          # "" = 자동
     map_sid: str = ""          # "" = 자동, "none" = 맵 합성 안 함
     gate: Optional[float] = None  # 0~1, None = 자동
+    mode: str = ""             # "" = 서피스 합성(기본) / "screen" = 실화면 dump
 
 
 @router.post("/mib/live-scene")
@@ -2287,15 +2288,18 @@ async def set_mib_live_scene(req: MibLiveSceneRequest):
     dev, svc = _get_connected_mib(req.device_id)
     hmi_sid = (req.hmi_sid or "").strip()
     map_sid = (req.map_sid or "").strip()
+    mode = (req.mode or "").strip().lower()
+    if mode not in ("", "screen"):
+        raise HTTPException(status_code=400, detail=f"mode must be '' or 'screen': {mode}")
     gate = req.gate
     if gate is not None and not (0 < float(gate) <= 1):
         raise HTTPException(status_code=400, detail=f"gate must be in (0, 1]: {gate}")
-    ls = {"hmi_sid": hmi_sid, "map_sid": map_sid, "gate": gate}
-    if hmi_sid or map_sid or gate is not None:
+    ls = {"hmi_sid": hmi_sid, "map_sid": map_sid, "gate": gate, "mode": mode}
+    if hmi_sid or map_sid or gate is not None or mode:
         dev.info["live_scene"] = ls
     else:
         dev.info.pop("live_scene", None)
-    svc.set_live_scene(hmi_sid, map_sid, gate)
+    svc.set_live_scene(hmi_sid, map_sid, gate, mode)
     # 라이브 스트림 재시작으로 즉시 반영 (스트리머는 시작 시 1회 장면 판정)
     import asyncio
     loop = asyncio.get_event_loop()
