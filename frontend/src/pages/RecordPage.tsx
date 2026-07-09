@@ -645,19 +645,6 @@ export default function RecordPage() {
   const [webcamExposureInfo, setWebcamExposureInfo] = useState<{ supported: boolean; value?: number; auto?: boolean; min?: number; max?: number; step?: number }>({ supported: false });
   const [webcamExposureLoading, setWebcamExposureLoading] = useState(false);
 
-  // MIB 레이어 칼리브레이션 모달 — 자동 장면 판정(HMI/맵)이 빗나가는 모델에서 수동 지정
-  const [mibCalibOpen, setMibCalibOpen] = useState(false);
-  const [mibCalibLoading, setMibCalibLoading] = useState(false);
-  const [mibCalibSaving, setMibCalibSaving] = useState(false);
-  const [mibScene, setMibScene] = useState<{
-    lw: number; lh: number; sw: number; sh: number;
-    surfaces: { sid: string; visible: boolean; src: number[] | null; dst: number[] | null; orig: number[] | null }[];
-  } | null>(null);
-  const [mibCalibHmi, setMibCalibHmi] = useState('');
-  const [mibCalibMap, setMibCalibMap] = useState('');
-  const [mibCalibGate, setMibCalibGate] = useState<number | null>(null);
-  const [mibCalibMode, setMibCalibMode] = useState<'' | 'screen'>('');
-
   // 뷰포트 크롭 상태 localStorage 로드 (디바이스 변경 시)
   useEffect(() => {
     if (!screenshotDeviceId) return;
@@ -1291,42 +1278,6 @@ export default function RecordPage() {
     }
     setWebcamExposureLoading(false);
   }, [screenshotDeviceId, message, t]);
-
-  // MIB 레이어 칼리브레이션 모달 열기 — 장면(서피스 목록) 조회 후 현재 오버라이드 표시
-  const openMibCalibModal = useCallback(async () => {
-    if (!screenshotDeviceId) return;
-    setMibCalibOpen(true);
-    setMibCalibLoading(true);
-    try {
-      const res = await deviceApi.getMibLiveScene(screenshotDeviceId);
-      setMibScene(res.data.scene || null);
-      const ov = res.data.overrides || {};
-      setMibCalibHmi(ov.hmi_sid || '');
-      setMibCalibMap(ov.map_sid || '');
-      setMibCalibGate(typeof ov.gate === 'number' ? ov.gate : null);
-      setMibCalibMode(ov.mode === 'screen' ? 'screen' : '');
-    } catch (err: any) {
-      message.error(err?.response?.data?.detail || '장면 조회 실패 — 디바이스 연결 상태를 확인하세요');
-      setMibScene(null);
-    }
-    setMibCalibLoading(false);
-  }, [screenshotDeviceId]);
-
-  // MIB 레이어 칼리브레이션 적용 — 저장 + 라이브 스트림 재시작 (백엔드에서 수행)
-  const saveMibCalib = useCallback(async (reset = false) => {
-    if (!screenshotDeviceId) return;
-    setMibCalibSaving(true);
-    try {
-      await deviceApi.setMibLiveScene(screenshotDeviceId, reset
-        ? { hmi_sid: '', map_sid: '', gate: null, mode: '' }
-        : { hmi_sid: mibCalibHmi, map_sid: mibCalibMap, gate: mibCalibGate, mode: mibCalibMode });
-      message.success(reset ? '자동 판정으로 복귀 — 라이브 화면 재시작 중' : '레이어 보정 적용 — 라이브 화면 재시작 중');
-      setMibCalibOpen(false);
-    } catch (err: any) {
-      message.error(err?.response?.data?.detail || '레이어 보정 적용 실패');
-    }
-    setMibCalibSaving(false);
-  }, [screenshotDeviceId, mibCalibHmi, mibCalibMap, mibCalibGate, mibCalibMode]);
 
   // Execute or record an action (화면 제스처/HKMC키 전용 — 모듈 스텝 추가와는 별개 경로)
   const executeAction = useCallback(async (action: string, params: Record<string, any>, desc: string) => {
@@ -5301,13 +5252,6 @@ export default function RecordPage() {
                       }}
                     />
                   </Tooltip>
-                  {screenDevice?.type === 'mib_agent' && (
-                    <Tooltip title="레이어 보정 — 화면이 겹쳐 보이거나 일부만 보일 때 HMI/맵 서피스를 직접 지정">
-                      <Button size="small" icon={<FundProjectionScreenOutlined />} onClick={openMibCalibModal}>
-                        레이어
-                      </Button>
-                    </Tooltip>
-                  )}
                   {screenDevice?.type === 'webcam' ? (
                     <Tooltip title={t('record.webcamSettings')}>
                       <Button
@@ -7494,118 +7438,6 @@ export default function RecordPage() {
                 <div style={{ fontSize: 10, color: '#888' }}>
                   {t('record.webcamExposureHint')}
                 </div>
-              </div>
-            </>
-          )}
-        </Space>
-      </Modal>
-
-      {/* MIB 레이어 칼리브레이션 모달 */}
-      <Modal
-        title="레이어 보정 (MIB)"
-        open={mibCalibOpen}
-        onCancel={() => setMibCalibOpen(false)}
-        width={560}
-        footer={
-          <Space>
-            <Button onClick={() => saveMibCalib(true)} loading={mibCalibSaving} danger>
-              자동으로 복귀
-            </Button>
-            <Button onClick={() => setMibCalibOpen(false)}>취소</Button>
-            <Button type="primary" onClick={() => saveMibCalib(false)} loading={mibCalibSaving} disabled={mibCalibLoading}>
-              적용
-            </Button>
-          </Space>
-        }
-      >
-        <Space direction="vertical" style={{ width: '100%' }} size={12}>
-          <div style={{ fontSize: 11, color: '#888' }}>
-            라이브 화면이 겹쳐 보이거나 일부만 보일 때 사용합니다. 적용 즉시 라이브 화면이
-            재시작되며, 설정은 디바이스에 저장됩니다.
-          </div>
-          <div>
-            <div style={{ fontSize: 11, marginBottom: 4 }}>미러 방식</div>
-            <Radio.Group
-              size="small"
-              value={mibCalibMode}
-              onChange={(e) => setMibCalibMode(e.target.value)}
-              optionType="button"
-              buttonStyle="solid"
-            >
-              <Radio.Button value="">서피스 합성 (빠름, ~8fps)</Radio.Button>
-              <Radio.Button value="screen">실화면 캡처 (정확, ~5fps)</Radio.Button>
-            </Radio.Group>
-            <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
-              실화면 캡처: 시료 컴포지터가 합성한 최종 화면을 그대로 표시 — 레이어 겹침·비침·깜빡임이
-              원천적으로 없습니다. 소형 패널(800x480 등)에서 권장. 아래 서피스/게이트 설정은 서피스 합성 방식에만 적용됩니다.
-            </div>
-          </div>
-          {mibCalibLoading ? (
-            <div style={{ color: '#888', textAlign: 'center', padding: 13 }}>장면 조회 중…</div>
-          ) : !mibScene ? (
-            <div style={{ color: '#888', textAlign: 'center', padding: 13 }}>장면 정보를 가져오지 못했습니다</div>
-          ) : (
-            <>
-              <div style={{ fontSize: 11, color: '#888' }}>
-                레이어 {mibScene.lw}x{mibScene.lh} · 화면 {mibScene.sw}x{mibScene.sh} · 서피스 {mibScene.surfaces.length}개 (아래가 최상위)
-              </div>
-              <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid rgba(128,128,128,0.25)', borderRadius: 4, padding: '4px 8px' }}>
-                {mibScene.surfaces.map(s => (
-                  <div key={s.sid} style={{ fontSize: 11, display: 'flex', gap: 8, opacity: s.visible ? 1 : 0.45 }}>
-                    <span style={{ minWidth: 42, fontWeight: 600 }}>#{s.sid}</span>
-                    <span>dst {s.dst ? `(${s.dst[0]},${s.dst[1]}) ${s.dst[2]}x${s.dst[3]}` : '-'}</span>
-                    <span style={{ color: '#888' }}>orig {s.orig ? `${s.orig[0]}x${s.orig[1]}` : '-'}</span>
-                    {!s.visible && <span style={{ color: '#888' }}>(숨김)</span>}
-                    {mibCalibHmi === s.sid && <Tag color="blue">HMI</Tag>}
-                    {mibCalibMap === s.sid && <Tag color="green">맵</Tag>}
-                  </div>
-                ))}
-              </div>
-              <div>
-                <div style={{ fontSize: 11, marginBottom: 4 }}>HMI 서피스 (전경 UI)</div>
-                <Select
-                  size="small" style={{ width: '100%' }}
-                  disabled={mibCalibMode === 'screen'}
-                  value={mibCalibHmi}
-                  onChange={setMibCalibHmi}
-                  options={[
-                    { label: '자동 판정', value: '' },
-                    ...mibScene.surfaces.filter(s => s.visible).map(s => ({
-                      label: `#${s.sid} — dst ${s.dst ? `${s.dst[2]}x${s.dst[3]}` : '?'}`,
-                      value: s.sid,
-                    })),
-                  ]}
-                />
-              </div>
-              <div>
-                <div style={{ fontSize: 11, marginBottom: 4 }}>맵 서피스 (배경 — HMI의 검정 영역에만 합성)</div>
-                <Select
-                  size="small" style={{ width: '100%' }}
-                  disabled={mibCalibMode === 'screen'}
-                  value={mibCalibMap}
-                  onChange={setMibCalibMap}
-                  options={[
-                    { label: '자동 판정', value: '' },
-                    { label: '사용 안 함 (맵 합성 끔 — 겹침 제거)', value: 'none' },
-                    ...mibScene.surfaces.filter(s => s.visible).map(s => ({
-                      label: `#${s.sid} — dst ${s.dst ? `${s.dst[2]}x${s.dst[3]}` : '?'}`,
-                      value: s.sid,
-                    })),
-                  ]}
-                />
-              </div>
-              <div>
-                <div style={{ fontSize: 11, marginBottom: 4 }}>
-                  맵 합성 게이트 (검정 비율 임계치) — 비우면 자동. 겹침(비침)이 보이면 높이고, 맵이 안 보이면 낮추세요
-                </div>
-                <InputNumber
-                  size="small" min={0.05} max={1} step={0.05}
-                  disabled={mibCalibMode === 'screen'}
-                  value={mibCalibGate}
-                  onChange={(v) => setMibCalibGate(v ?? null)}
-                  placeholder="자동"
-                  style={{ width: 120 }}
-                />
               </div>
             </>
           )}

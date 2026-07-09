@@ -32,275 +32,12 @@ from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
 
-# ── 라이브 미러 device-side 스트리머 (인치 무관 동적 합성) ──
-# NOTE: 이 스트리머/스트리밍 메서드는 live_stream_mixin.LiveStreamMixin 과 동일 구현이다.
-#   ICAS는 mixin을 상속해 쓴다(중복 제거). MIB은 검증·동작 중이라 인라인 유지 중 —
-#   추후 MIB도 mixin 상속으로 이관 예정(그때 아래 상수/메서드 삭제). 수정 시 양쪽 동기화 필요.
-# weston screen dump은 PNG 인코딩 때문에 0.63s/frame(1.6fps 천장)이라 라이브에 부적합.
-# 대신 surface를 무압축 BMP로 dump(~20ms)해서, 연결 시 LayerManagerControl get scene을
-# 파싱해 HMI(전체화면 서피스) + MAP(최대 면적의 비검정 서브 서피스)을 자동 식별한다
-# (하드코딩 좌표/ID 없음 → 10"/12.9"/15"/8" 등 모든 인치 자동 적응).
-# device엔 PIL/numpy 없어 순수 stdlib로 nearest 다운스케일만 하고, HMI/MAP을 따로 송출:
-#   b"MIBF" + struct('<HHhhHH', tw, th, mx, my, mw, mh) + HMI(tw*th*3 BGR) + MAP(mw*mh*3 BGR)
-# 백엔드가 numpy black-key 합성(HMI가 검정=투명인 곳에만 MAP) 후 JPEG.
-# __TW__ / __TH__(0=화면비율 자동)는 start_live_stream에서 .replace()로 주입.
-_MIB_LIVE_STREAMER = r'''
-import sys, os, time, struct, subprocess, re
-os.environ["XDG_RUNTIME_DIR"] = "/run/platform/weston"
-TW = __TW__
-TH_OVR = __TH__
-# 레이어 칼리브레이션 오버라이드 (사용자 수동 지정, 빈 문자열/-1 = 자동)
-HMI_OVR = "__HMI_OVR__"   # HMI 서피스 id 강제
-MAP_OVR = "__MAP_OVR__"   # 맵 서피스 id 강제 / "none" = 맵 합성 안 함
-GATE_OVR = __GATE_OVR__   # select_map 구멍 비율 임계치 (0~1, <=0 = 기본 0.55)
-
-def lmc(a):
-    try:
-        return subprocess.run(["LayerManagerControl"] + a, stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL).stdout.decode("utf-8", "replace")
-    except Exception:
-        return ""
-
-def f_xy(t, k):
-    m = re.search(k + r"\D*x=(-?\d+),\s*y=(-?\d+)", t)
-    return (int(m.group(1)), int(m.group(2))) if m else None
-
-def f_reg(t, k):
-    m = re.search(k + r"\D*x=(-?\d+),\s*y=(-?\d+),\s*w=(\d+),\s*h=(\d+)", t)
-    return tuple(int(m.group(i)) for i in range(1, 5)) if m else None
-
-def f_ids(t, k):
-    m = re.search(k + r"\s*(.*)", t)
-    return re.findall(r"(\d+)\(0x[0-9a-fA-F]+\)", m.group(1)) if m else []
-
-def parse(b):
-    off = struct.unpack("<I", b[10:14])[0]
-    w = struct.unpack("<i", b[18:22])[0]; h = struct.unpack("<i", b[22:26])[0]
-    px = struct.unpack("<H", b[28:30])[0] // 8
-    return b, w, abs(h), off, ((w * px + 3) & ~3), px
-
-def dump(sid, path, timeout=2.0):
-    try: os.remove(path)
-    except OSError: pass
-    subprocess.run(["LayerManagerControl", "dump", "surface", sid, "to", path],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    dec = None; t0 = time.time()
-    while time.time() - t0 < timeout:
-        try: sz = os.path.getsize(path)
-        except OSError: sz = 0
-        if sz >= 6 and dec is None:
-            with open(path, "rb") as f:
-                f.seek(2); dec = struct.unpack("<I", f.read(4))[0]
-        if dec and sz >= dec:
-            with open(path, "rb") as f: return f.read()
-        time.sleep(0.003)
-    return None
-
-def mostly_black(bm, samples=2048):
-    data, w, h, off, stride, px = bm
-    end = off + stride * h; step = max(px, ((end - off) // samples // px or 1) * px); i = off
-    while i + 3 <= end:
-        if data[i] > 16 or data[i + 1] > 16 or data[i + 2] > 16:
-            return False
-        i += step
-    return True
-
-def region(bm, sx, sy, sw, sh, dw, dh):
-    data, w, h, off, stride, px = bm
-    cols = [(sx + dx * sw // dw) * px for dx in range(dw)]
-    rows = []
-    for dy in range(dh):
-        rb = off + (h - 1 - (sy + dy * sh // dh)) * stride
-        rows.append(b"".join(data[rb + c: rb + c + 3] for c in cols))
-    return rows
-
-# ── scene 파싱: HMI(전체화면) + MAP(최대 면적 비검정 서브 서피스) 자동 식별 ──
-scr = lmc(["get", "screen", "0"])
-SW, SH = f_xy(scr, "resolution:") or (1560, 878)
-TH = TH_OVR if TH_OVR > 0 else max(1, round(TW * SH / SW))
-LW = LH = 0; order = []
-for lid in f_ids(scr, "layer render order:"):
-    lt = lmc(["get", "layer", lid]); o = f_ids(lt, "surface render order:")
-    if o:
-        LW, LH = f_xy(lt, "original size:") or (SW, SH); order = o; break
-if not order:
-    LW, LH = SW, SH
-
-def clip_to_layer(src, dst):
-    # dst가 레이어를 벗어나는 서피스(예: 800x480 레이어에 1280x640 backdrop 맵)는
-    # 보이는 부분만 유효 — dst를 레이어로 클립하고 src도 비례 보정.
-    x0, y0, dw, dh = dst
-    cx0 = max(0, x0); cy0 = max(0, y0)
-    cx1 = min(LW, x0 + dw); cy1 = min(LH, y0 + dh)
-    cw = cx1 - cx0; ch = cy1 - cy0
-    if cw <= 0 or ch <= 0:
-        return None
-    if cw == dw and ch == dh:
-        return src, dst
-    sx, sy, sw, sh = src
-    return ((sx + sw * (cx0 - x0) // dw, sy + sh * (cy0 - y0) // dh,
-             max(1, sw * cw // dw), max(1, sh * ch // dh)),
-            (cx0, cy0, cw, ch))
-
-hmi = None; cands = []; hmi_cands = []; allsurf = {}
-for sid in order:
-    st = lmc(["get", "surface", sid]); v = re.search(r"visibility:\s*(\d+)", st)
-    if v and v.group(1) == "0":
-        continue
-    src = f_reg(st, "source region:"); dst = f_reg(st, "destination region:")
-    osz = f_xy(st, "original size:")
-    if not src or not dst:
-        continue
-    allsurf[sid] = (src, dst)   # 칼리브레이션 오버라이드용 — 필터 전 원본 지오메트리
-    if osz and osz[0] * osz[1] < 64 * 64:   # cursor/system surface 제외
-        continue
-    # HMI = dst가 레이어와 '정확히' 일치(±5%)하는 풀스크린 + orig도 레이어와 유사(±20%)한
-    # 1:1 렌더 서피스만. 레이어보다 큰 dst(MQB 800x480처럼 backdrop 맵이 1280x640으로
-    # 깔리는 모델)는 맵 후보 — 클립해서 cands로. orig가 레이어와 크게 다른 서피스(예: MQB
-    # nav가 dst를 풀스크린으로 바꿔도 orig는 1280x640)는 dst가 풀스크린이어도 맵 후보.
-    if (dst[0] == 0 and dst[1] == 0 and LW * 0.95 <= dst[2] <= LW * 1.05
-            and LH * 0.95 <= dst[3] <= LH * 1.05
-            and (not osz or (LW * 0.8 <= osz[0] <= LW * 1.2
-                             and LH * 0.8 <= osz[1] <= LH * 1.2))):
-        hmi_cands.append((sid, src))
-    else:
-        c = clip_to_layer(src, dst)
-        if c:
-            cands.append((sid, c[0], c[1]))
-# HMI 후보가 여럿이면(black 베이스 서피스 + 진짜 크롬 공존 모델) 비검정 중 마지막(최상위) 선택.
-for sid, src in hmi_cands:
-    b = dump(sid, "/tmp/_mlhpick.bmp")
-    if b is not None and not mostly_black(parse(b)):
-        hmi = (sid, src)
-if hmi is None and hmi_cands:
-    hmi = hmi_cands[-1]
-# 사용자 수동 지정이 있으면 자동 판정을 덮어씀
-if HMI_OVR and HMI_OVR in allsurf:
-    hmi = (HMI_OVR, allsurf[HMI_OVR][0])
-# MAP = 최대 면적의 "비검정" 후보 (보조 서피스/빈 서피스 자동 배제)
-def hole_frac(hp, dst, T=2):
-    # 0x10(HMI)의 dst(layer좌표) 영역에서 검정(=투명 구멍) 픽셀 비율. 맵은 이 비율이 높은 자리.
-    data, w, h, off, stride, px = hp
-    x0, y0, rw, rh = dst
-    gx = max(1, rw // 120); gy = max(1, rh // 120)
-    cnt = tot = 0; yy = y0
-    while yy < y0 + rh:
-        if 0 <= yy < h:
-            rb = off + (h - 1 - yy) * stride; xx = x0
-            while xx < x0 + rw:
-                if 0 <= xx < w:
-                    o = rb + xx * px
-                    if o + 3 <= len(data):
-                        tot += 1
-                        if max(data[o], data[o + 1], data[o + 2]) <= T:
-                            cnt += 1
-                xx += gx
-        yy += gy
-    return (cnt / tot) if tot else 0.0
-
-def select_map(prev=None):
-    # 맵 = 0x10의 '구멍(검정)'이 가장 많이 겹치는 후보(투명 뒤 backdrop). 면적 휴리스틱 폐기.
-    # 구멍 비율이 낮으면(맵 없는 화면) None → 맵 합성 안 함(비침 방지). 화면 전환마다 재선택.
-    if MAP_OVR == "none":
-        return None
-    if MAP_OVR:
-        # 사용자 지정 서피스 고정 — 구멍 비율 판정 없이 항상 후보로 사용
-        for c in cands:
-            if c[0] == MAP_OVR:
-                return c
-        s = allsurf.get(MAP_OVR)
-        if s:
-            cc = clip_to_layer(s[0], s[1])
-            if cc:
-                return (MAP_OVR, cc[0], cc[1])
-        return None
-    if hmi is None:
-        return None
-    hb = dump(hmi[0], "/tmp/_mlhsel.bmp")
-    if hb is None:
-        return prev   # HMI dump 일시 실패 시 직전 선택 유지 (블링킹 방지)
-    hp = parse(hb); g = GATE_OVR if GATE_OVR > 0 else 0.55
-    # 히스테리시스: 직전 선택이 여전히 (g-0.12) 이상이면 유지 — 임계 경계에서
-    # 2초마다 선택↔해제가 반복되며 맵이 깜빡이는 것을 방지.
-    if prev is not None:
-        f = hole_frac(hp, prev[2])
-        if f > max(0.2, g - 0.12):
-            return prev
-    best = None; bestf = g
-    for sid, src, dst in cands:
-        bm = dump(sid, "/tmp/_mlsel.bmp")
-        if bm is None or mostly_black(parse(bm)):
-            continue
-        f = hole_frac(hp, dst)
-        if f > bestf:
-            bestf = f; best = (sid, src, dst)
-    return best
-
-def map_rect(ms):
-    if not ms:
-        return 0, 0, 0, 0
-    md = ms[2]
-    return (md[0] * TW // LW, md[1] * TH // LH,
-            max(1, md[2] * TW // LW), max(1, md[3] * TH // LH))
-
-sys.stderr.write("MIBLIVE hmi=%s hmi_cands=%s cands=%s TW=%d TH=%d LW=%d LH=%d ovr=(%s,%s,%.2f)\n"
-                 % (hmi[0] if hmi else None, [c[0] for c in hmi_cands],
-                    [(c[0], c[2]) for c in cands], TW, TH, LW, LH,
-                    HMI_OVR or "-", MAP_OVR or "-", GATE_OVR))
-sys.stderr.flush()
-
-out = sys.stdout.buffer
-HMI_BMP, MAP_BMP = "/tmp/_mlhmi.bmp", "/tmp/_mlmap.bmp"
-mapsel = None; sel_t = -999.0
-last_map = (0, 0, 0, 0, b"")   # 직전 성공 맵 프레임 (dump 일시 실패 시 재사용 — 블링킹 방지)
-while True:
-    try:
-        if hmi is None:
-            time.sleep(0.2); continue
-        now = time.time()
-        if now - sel_t > 2.0:   # 2초마다 맵 재선택(화면 전환 적응; 맵 없는 화면이면 None)
-            mapsel = select_map(mapsel); sel_t = now
-            # 지오메트리 재조회 — src/dst가 런타임에 바뀌는 서피스(MQB nav의 dst가
-            # backdrop↔풀스크린으로 변함) 적응. 스트림 재시작 없이 크롭/배치 추종.
-            st = lmc(["get", "surface", hmi[0]]); s = f_reg(st, "source region:")
-            if s:
-                hmi = (hmi[0], s)
-            if mapsel is not None:
-                st = lmc(["get", "surface", mapsel[0]])
-                s = f_reg(st, "source region:"); d = f_reg(st, "destination region:")
-                if s and d:
-                    c = clip_to_layer(s, d)
-                    mapsel = (mapsel[0], c[0], c[1]) if c else None
-        hb = dump(hmi[0], HMI_BMP)
-        if hb is None:
-            time.sleep(0.05); continue
-        hp = parse(hb); hs = hmi[1]
-        hbytes = b"".join(region(hp, hs[0], hs[1], hs[2], hs[3], TW, TH))
-        mx, my, mw, mh = map_rect(mapsel)
-        mbytes = b""
-        if mapsel and mw > 0 and mh > 0:
-            mb = dump(mapsel[0], MAP_BMP)
-            if mb is not None:
-                mp = parse(mb); ms = mapsel[1]
-                mbytes = b"".join(region(mp, ms[0], ms[1], ms[2], ms[3], mw, mh))
-                last_map = (mx, my, mw, mh, mbytes)
-            elif last_map[4] and last_map[0:4] == (mx, my, mw, mh):
-                mbytes = last_map[4]   # 같은 지오메트리의 직전 프레임 재사용
-        cmw, cmh = (mw, mh) if mbytes else (0, 0)
-        # SW,SH(실제 화면 해상도)도 보고 → 백엔드가 등록 해상도를 보정(터치 좌표 일치).
-        out.write(b"MIBF" + struct.pack("<HHhhHHHH", TW, TH, mx, my, cmw, cmh, SW, SH) + hbytes + mbytes)
-        out.flush()
-    except (BrokenPipeError, IOError):
-        break
-    except Exception:
-        time.sleep(0.05)
-'''
-
 # ── 실화면(screen dump) 스트리머 — 컴포지터 합성 결과를 그대로 송출 ──
 # weston이 z순서+픽셀알파 룰로 합성한 최종 화면을 dump screen(항상 PNG)으로 읽는다.
-# 레이어 판정/black-key/게이트가 전부 불필요 → 블링킹·겹침·고스트 원천 차단.
-# 대가는 fps: PNG 인코딩이 해상도에 비례 (MQB 800x480 실측 ~165ms = ~6fps,
-# 대형 패널은 0.5s+일 수 있어 기본은 서피스 합성 모드 유지, 칼리브레이션에서 선택).
+# 과거의 서피스 합성(black-key)은 24bpp 덤프에서 알파가 소실되어 '진짜 검정 UI'와
+# '투명 구멍'을 원리적으로 구분할 수 없었고(겹침/고스트/블링킹), 전 패널 실화면으로 통일.
+# 대가는 fps: PNG 인코딩이 해상도에 비례 (800x480 실측 ~165ms=~6fps, 1560x878 ~0.63s).
+# NOTE: live_stream_mixin(ICAS 등)과 동일 구현 — MIB은 인라인 유지 중, 수정 시 양쪽 동기화.
 # 프레임 형식: b"MIBP" + struct('<IHH', png_len, sw, sh) + PNG bytes
 _MIB_SCREEN_STREAMER = r'''
 import sys, os, time, struct, subprocess, re
@@ -349,56 +86,6 @@ while True:
         break
     except Exception:
         time.sleep(0.1)
-'''
-
-
-# ── 레이어 칼리브레이션용 장면 프로브 — 서피스 지오메트리를 JSON 한 줄로 출력 ──
-# 라이브 스트리머와 같은 LayerManagerControl 파싱. dump(픽셀 검사)는 하지 않아 ~수백 ms에 끝남.
-_MIB_SCENE_PROBE = r'''
-import os, re, json, subprocess
-os.environ["XDG_RUNTIME_DIR"] = "/run/platform/weston"
-
-def lmc(a):
-    try:
-        return subprocess.run(["LayerManagerControl"] + a, stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL).stdout.decode("utf-8", "replace")
-    except Exception:
-        return ""
-
-def f_xy(t, k):
-    m = re.search(k + r"\D*x=(-?\d+),\s*y=(-?\d+)", t)
-    return [int(m.group(1)), int(m.group(2))] if m else None
-
-def f_reg(t, k):
-    m = re.search(k + r"\D*x=(-?\d+),\s*y=(-?\d+),\s*w=(\d+),\s*h=(\d+)", t)
-    return [int(m.group(i)) for i in range(1, 5)] if m else None
-
-def f_ids(t, k):
-    m = re.search(k + r"\s*(.*)", t)
-    return re.findall(r"(\d+)\(0x[0-9a-fA-F]+\)", m.group(1)) if m else []
-
-scr = lmc(["get", "screen", "0"])
-sw_sh = f_xy(scr, "resolution:") or [0, 0]
-LW = LH = 0; order = []; layers = []
-for lid in f_ids(scr, "layer render order:"):
-    lt = lmc(["get", "layer", lid]); o = f_ids(lt, "surface render order:")
-    lsz = f_xy(lt, "original size:")
-    layers.append({"id": lid, "size": lsz, "surfaces": o})
-    if o and not order:
-        LW, LH = lsz or sw_sh; order = o
-surfs = []
-for sid in order:
-    st = lmc(["get", "surface", sid])
-    v = re.search(r"visibility:\s*(\d+)", st)
-    surfs.append({
-        "sid": sid,
-        "visible": not (v and v.group(1) == "0"),
-        "src": f_reg(st, "source region:"),
-        "dst": f_reg(st, "destination region:"),
-        "orig": f_xy(st, "original size:"),
-    })
-print(json.dumps({"sw": sw_sh[0], "sh": sw_sh[1], "lw": LW, "lh": LH,
-                  "layers": layers, "surfaces": surfs}))
 '''
 
 
@@ -632,11 +319,10 @@ class MIBAgentService:
         self._ps_ssh = None
         self._ps_tunnel_chan = None
         self._ps_lock = threading.RLock()
-        # ── 라이브 미러 스트리밍 상태 ──
+        # ── 라이브 미러 스트리밍 상태 (실화면 모드) ──
         # 전용 SSH exec 채널에서 device 스트리머(python3)를 상주시키고, 리더 스레드가
-        # MIBF 프레임을 받아 BGR→JPEG로 변환해 최신 1장을 보관. main.py WS 루프는
-        # get_live_frame()으로 최신본을 꺼내 보낸다(프레임당 SCP/페이싱 제거).
-        # 라이브는 저해상도/저화질로 충분(조작용); 풀해상도 _screencap_hu는 이미지비교용으로 유지.
+        # MIBP 프레임(dump screen PNG)을 받아 JPEG로 변환해 최신 1장을 보관.
+        # main.py WS 루프는 get_live_frame()으로 최신본을 꺼내 보낸다.
         # 라이브는 전용 SSH 연결을 쓴다 — 풀해상도 screencap이 공유 SSH를 리셋해도
         # 주 화면(라이브)이 끊기지 않도록 격리.
         self._live_ssh = None
@@ -653,18 +339,7 @@ class MIBAgentService:
                 return int(os.environ.get(name) or default)
             except Exception:
                 return default
-        # 타깃 가로 해상도(다운스케일). 세로(_live_h)는 0=화면비율 자동(인치별 자동 적응).
-        # 작을수록 device python 다운스케일이 빨라져 fps↑(해상도↑=fps↓ 트레이드오프).
-        self._live_w = _env_int_def("MIB_LIVE_W", 832)  # 640*1.3 (가독성↑, fps 약간↓)
-        self._live_h = _env_int_def("MIB_LIVE_H", 0)  # 0 → TH = TW*SH/SW 자동
         self._live_jpeg_q = _env_int_def("MIB_LIVE_JPEG_Q", 60)
-        # 맵 합성 게이트 (live_stream_mixin과 동일) — 맵-영역이 "대부분 구멍(검정)"일 때만
-        # 맵 합성. 홈은 진짜 구멍이라 ≤8 비율 ~98%, Dial/차량뷰는 ~5%↓라 게이트로 분리.
-        self._map_key_t = _env_int_def("MAP_KEY_T", 2)
-        try:
-            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.8)
-        except Exception:
-            self._map_hole_gate = 0.8
         self._key_overrides: dict[str, dict] = dict(key_overrides or {})
         # 캡처에서 PNG 실제 크기와 _res_x/_res_y가 다를 때 자동 정정 + 영구 저장 콜백.
         # 시그니처: callback("WxH"). DeviceManager가 dev.info 갱신과 파일 저장을 담당.
@@ -685,22 +360,6 @@ class MIBAgentService:
         self._screen_fail_count: dict[int, int] = {i: 0 for i in self._screen_indices}
         self._screen_disabled: set[int] = set()
         self._screen_fail_threshold = 3  # 3회 연속 실패하면 해당 인덱스 dump 시도 중단
-        # 레이어 칼리브레이션 오버라이드 — 자동 장면 판정(HMI/MAP 선택)이 빗나가는 모델에서
-        # 사용자가 서피스를 직접 지정. dev.info["live_scene"]에 영구 저장되고 연결 시 재적용.
-        self._live_hmi_sid: str = ""      # "" = 자동
-        self._live_map_sid: str = ""      # "" = 자동, "none" = 맵 합성 안 함
-        self._live_gate_override: Optional[float] = None  # None = 자동(0.8/backdrop 0.55)
-        # 미러 방식: "" = 서피스 합성(기본, 빠름) / "screen" = 실화면 dump(정확, PNG 인코딩
-        # 비용으로 fps 하락 — 소형 패널은 ~6fps 실측이라 실용적, MQB 권장).
-        self._live_mode: str = ""
-        # 실화면 참조 마스크(chrome mask) — HMI 덤프의 '검정'은 투명 구멍과 진짜 검정 UI
-        # (내비 상단바/아이콘)를 구분할 수 없다(24bpp, 알파 소실). weston이 알파로 합성한
-        # 실화면 스크린샷에서 비검정인 자리만 구멍으로 허용해 고스트/비침을 제거한다.
-        # 장면 변화 시에만 갱신(스크린샷 ~1s 부하). None = 마스크 없음(순수 black-key).
-        self._hole_allow = None           # np.ndarray(bool, th×tw) — True=맵 합성 허용
-        self._hole_basis_h: float = -1.0  # 마스크 갱신 당시의 원시 hole 비율(장면 변화 감지용)
-        self._hole_mask_ts: float = 0.0
-        self._hole_mask_inflight = False
 
     # ------------------------------------------------------------------
     # Basic accessors
@@ -1663,64 +1322,6 @@ class MIBAgentService:
     def get_touch_scale(self) -> tuple:
         return (self._touch_x_scale, self._touch_y_scale)
 
-    # ------------------------------------------------------------------
-    # 레이어 칼리브레이션 (라이브 장면 오버라이드)
-    # ------------------------------------------------------------------
-    def set_live_scene(self, hmi_sid=None, map_sid=None, gate=None, mode=None) -> None:
-        """라이브 합성 장면 오버라이드 설정. 다음 start_live_stream부터 적용.
-
-        hmi_sid: HMI 서피스 id 강제 ("" = 자동)
-        map_sid: 맵 서피스 id 강제 / "none" = 맵 합성 안 함 ("" = 자동)
-        gate: 맵 합성 구멍 비율 임계치 0~1 (None/범위 밖 = 자동)
-        mode: "" = 서피스 합성(기본) / "screen" = 실화면 dump 스트리밍
-        """
-        self._live_hmi_sid = str(hmi_sid or "").strip()
-        self._live_map_sid = str(map_sid or "").strip()
-        g = None
-        try:
-            if gate not in (None, ""):
-                gf = float(gate)
-                if 0 < gf <= 1:
-                    g = gf
-        except Exception:
-            g = None
-        self._live_gate_override = g
-        m = str(mode or "").strip().lower()
-        self._live_mode = m if m in ("screen",) else ""
-        logger.info("MIB live scene overrides: hmi=%s map=%s gate=%s mode=%s",
-                    self._live_hmi_sid or "-", self._live_map_sid or "-",
-                    self._live_gate_override, self._live_mode or "surface")
-
-    def get_live_scene(self) -> dict:
-        return {
-            "hmi_sid": self._live_hmi_sid,
-            "map_sid": self._live_map_sid,
-            "gate": self._live_gate_override,
-            "mode": self._live_mode,
-        }
-
-    def probe_live_scene(self, timeout: float = 10.0) -> dict:
-        """디바이스 장면(레이어/서피스 지오메트리)을 1회 조회 — 칼리브레이션 UI용.
-
-        입력 전용 SSH 세션 사용(캡처/라이브와 독립). 반환: sw/sh, lw/lh, layers, surfaces.
-        """
-        import json as _json
-        with self._input_ssh_lock:
-            ssh = self._get_input_ssh()
-            stdin, stdout, stderr = ssh.exec_command("python3 -u -", timeout=timeout)
-            try:
-                stdin.write(_MIB_SCENE_PROBE)
-                stdin.channel.shutdown_write()
-            except Exception:
-                pass
-            out = stdout.read().decode("utf-8", "replace")
-            err = stderr.read().decode("utf-8", "replace")
-        for line in reversed(out.strip().splitlines()):
-            line = line.strip()
-            if line.startswith("{"):
-                return _json.loads(line)
-        raise RuntimeError(f"scene probe failed: stdout={out.strip()[:200]!r} stderr={err.strip()[:200]!r}")
-
     def _touch_press(self, x: int, y: int) -> None:
         self._ksend(self._touch_frame(x, y, 0xFD))
 
@@ -2594,30 +2195,18 @@ class MIBAgentService:
                 return False
             chan = transport.open_session()
             chan.exec_command("python3 -u -")
-            if self._live_mode == "screen":
-                # 실화면 모드 — 합성 결과(dump screen PNG)를 그대로 스트리밍
-                script = _MIB_SCREEN_STREAMER
-                reader = self._live_reader_screen
-            else:
-                script = (_MIB_LIVE_STREAMER
-                          .replace("__TW__", str(self._live_w))
-                          .replace("__TH__", str(self._live_h))
-                          .replace("__HMI_OVR__", self._live_hmi_sid)
-                          .replace("__MAP_OVR__", self._live_map_sid)
-                          .replace("__GATE_OVR__", str(
-                              self._live_gate_override
-                              if self._live_gate_override is not None else -1.0)))
-                reader = self._live_reader
-            chan.sendall(script.encode("utf-8"))
+            # 실화면 모드 — 컴포지터가 알파·z순서 룰로 합성한 최종 화면(dump screen PNG)을
+            # 그대로 스트리밍. 서피스 합성(black-key)은 알파 소실로 겹침/고스트/블링킹이
+            # 원리적으로 불가피해 전 패널 실화면으로 통일함.
+            chan.sendall(_MIB_SCREEN_STREAMER.encode("utf-8"))
             chan.shutdown_write()  # 스트리머는 stdin을 읽지 않음 → 즉시 EOF
-            t = threading.Thread(target=reader, args=(chan,), daemon=True)
+            t = threading.Thread(target=self._live_reader_screen, args=(chan,), daemon=True)
             with self._live_lock:
                 self._live_ssh = ssh
                 self._live_chan = chan
                 self._live_thread = t
             t.start()
-            logger.info("MIB live stream started (%dx%d, q=%d)",
-                        self._live_w, self._live_h, self._live_jpeg_q)
+            logger.info("MIB live stream started (screen mode, q=%d)", self._live_jpeg_q)
             return True
         except Exception as e:
             logger.warning("MIB live stream start failed: %r", e)
@@ -2630,30 +2219,6 @@ class MIBAgentService:
                 self._live_chan = None
                 self._live_thread = None
             return False
-
-    def _refresh_hole_mask(self, tw: int, th: int, basis_h: float) -> None:
-        """실화면(weston 알파 합성 결과) 1장을 받아 구멍-허용 마스크 재계산.
-
-        실화면에서 비검정 = 그 자리에 실제로 맵이 보임 = 구멍 허용.
-        실화면에서 검정 = 진짜 검정 UI(상단바/아이콘/메뉴 배경) = 맵 합성 금지.
-        공유 SSH를 쓰므로(_screencap_hu) 장면 변화 시에만 호출된다(~1s 부하).
-        """
-        try:
-            import numpy as np
-            from PIL import Image
-            png = self.screencap_bytes("HU", "png")
-            img = Image.open(io.BytesIO(png)).convert("RGB").resize((tw, th), Image.NEAREST)
-            arr = np.asarray(img)
-            allow = arr.max(axis=2) > (self._map_key_t + 8)
-            self._hole_allow = allow
-            self._hole_basis_h = basis_h
-            self._hole_mask_ts = time.time()
-            logger.info("MIB live: chrome mask 갱신 (구멍 허용 %.0f%%)", 100.0 * float(allow.mean()))
-        except Exception as e:
-            logger.debug("MIB live chrome mask refresh failed: %s", e)
-            self._hole_mask_ts = time.time()  # 실패 백오프(3s) — 스팸 방지
-        finally:
-            self._hole_mask_inflight = False
 
     def _live_reader_screen(self, chan) -> None:
         """실화면 모드 리더 — MIBP 프레임(완성 PNG)을 받아 JPEG 변환만 수행.
@@ -2701,7 +2266,7 @@ class MIBAgentService:
                     break
                 png = buf[idx + HDR: total]
                 buf = buf[total:]
-                # 실제 화면 해상도로 등록 해상도 1회 보정 (터치 좌표 일치, MIBF와 동일)
+                # 실제 화면 해상도로 등록 해상도 1회 보정 (프론트 터치 좌표 매핑 일치)
                 if not self._live_res_synced and sw > 0 and sh > 0:
                     self._live_res_synced = True
                     try:
@@ -2720,151 +2285,6 @@ class MIBAgentService:
                 except Exception:
                     continue
         logger.info("MIB live reader(screen) exited")
-
-    def _live_reader(self, chan) -> None:
-        """채널에서 MIBF 프레임(HMI + 맵 따로)을 파싱 → numpy black-key 합성 → JPEG.
-
-        프레임 형식: b"MIBF" + struct('<HHhhHH', tw, th, mx, my, mw, mh)
-                     + HMI(tw*th*3 BGR) + MAP(mw*mh*3 BGR)
-        합성: HMI를 베이스로, 맵-사각형 안에서 HMI가 (거의) 검정인 곳(=투명 구멍)에만 맵을 표시.
-              팝업/메뉴가 맵 위로 뜨면 그 영역은 HMI(불투명)라 맵이 가리지 않는다.
-        """
-        from PIL import Image
-        import numpy as np
-        HDR = 20  # b"MIBF"(4) + '<HHhhHHHH'(16): tw,th,mx,my,mw,mh,sw,sh
-        buf = b""
-        # 맵 합성 on/off 히스테리시스 — hole 비율이 게이트 경계에 걸리면 프레임마다
-        # 합성이 켜졌다 꺼졌다 하며 화면이 심하게 깜빡인다. on은 게이트 초과 2프레임,
-        # off는 (게이트-0.1) 미만 3프레임 연속일 때만 전환, 중간 밴드에서는 상태 유지.
-        map_on = False
-        on_cnt = 0
-        off_cnt = 0
-        # HMI 덤프 글리치 필터 — GPU 버퍼 스왑과 경합해 HMI 덤프가 단발성 전체-검정으로
-        # 떨어지면 그 프레임은 전부 구멍(=맵 전체 화면)이 되어 HMI↔MAP이 프레임 단위로
-        # 번갈아 보인다(블링킹). 직전 정상 프레임 대비 hole이 급등한 프레임은 버린다.
-        prev_h: Optional[float] = None
-        glitch_cnt = 0
-        try:
-            chan.settimeout(5.0)
-        except Exception:
-            pass
-        while not self._live_stop.is_set():
-            try:
-                # 스트리머 stderr(scene 판정 진단: hmi/cands 등)를 로그로 회수
-                while chan.recv_stderr_ready():
-                    err = chan.recv_stderr(4096)
-                    if err:
-                        logger.info("MIB streamer: %s",
-                                    err.decode("utf-8", "replace").strip())
-            except Exception:
-                pass
-            try:
-                data = chan.recv(262144)
-            except Exception:
-                break
-            if not data:
-                break  # 채널 닫힘 → 스트리머 종료
-            buf += data
-            while True:
-                idx = buf.find(b"MIBF")
-                if idx < 0:
-                    if len(buf) > (1 << 23):
-                        buf = buf[-8:]
-                    break
-                if len(buf) < idx + HDR:
-                    break
-                tw, th, mx, my, mw, mh, sw, sh = struct.unpack("<HHhhHHHH", buf[idx + 4: idx + HDR])
-                # 실제 화면 해상도로 등록 해상도 1회 보정 — 프론트 터치 좌표 매핑(deviceRes)이
-                # 라이브 이미지가 나타내는 좌표 공간과 일치하도록(인치별 자동).
-                if not self._live_res_synced and sw > 0 and sh > 0:
-                    self._live_res_synced = True
-                    try:
-                        if self._maybe_autoupdate_resolution(sw, sh):
-                            logger.info("MIB live: 등록 해상도 보정 → %dx%d", sw, sh)
-                    except Exception as e:
-                        logger.debug("MIB live resolution sync failed: %s", e)
-                hmi_len = tw * th * 3
-                map_len = mw * mh * 3
-                total = idx + HDR + hmi_len + map_len
-                if len(buf) < total:
-                    break
-                hmi_bytes = buf[idx + HDR: idx + HDR + hmi_len]
-                map_bytes = buf[idx + HDR + hmi_len: total]
-                buf = buf[total:]
-                if len(hmi_bytes) != hmi_len:
-                    continue
-                try:
-                    comp = np.frombuffer(hmi_bytes, np.uint8).reshape(th, tw, 3).copy()
-                    if mw > 0 and mh > 0 and len(map_bytes) == map_len:
-                        x0 = max(0, mx); y0 = max(0, my)
-                        reg = comp[y0:y0 + mh, x0:x0 + mw]
-                        rh, rw = reg.shape[0], reg.shape[1]
-                        if rh > 0 and rw > 0:
-                            mp = np.frombuffer(map_bytes, np.uint8).reshape(mh, mw, 3)[:rh, :rw]
-                            hole = reg.max(axis=2) <= self._map_key_t  # HMI가 (거의) 검정 = 투명 구멍
-                            # 맵-영역이 대부분 구멍일 때만 맵 합성(홈). Dial/차량뷰처럼 불투명
-                            # 콘텐츠가 채운 화면은 검정비율이 낮아 맵을 안 깐다(비침 방지).
-                            # 단 맵이 프레임 전체를 덮는 backdrop 모델(MQB 등)은 불투명 크롬이
-                            # 섞여 비율이 낮아지므로 device select_map과 같은 0.55로 완화.
-                            # 사용자 칼리브레이션 게이트가 있으면 그 값을 그대로 사용(완화 없음).
-                            if self._live_gate_override is not None:
-                                gate = self._live_gate_override
-                            else:
-                                gate = self._map_hole_gate
-                                if mw * mh >= tw * th * 0.9:
-                                    gate = min(gate, 0.55)
-                            h = float(hole.mean())
-                            # 글리치 드랍: 직전 정상 프레임(hole<0.85)에서 갑자기 전면 구멍
-                            # (hole>0.97)으로 튄 프레임은 HMI 덤프 실패(전체 검정)로 간주하고
-                            # 버림(직전 JPEG 유지). 5프레임 연속이면 진짜 풀맵 전환으로 수용.
-                            if h > 0.97 and prev_h is not None and prev_h < 0.85:
-                                glitch_cnt += 1
-                                if glitch_cnt <= 4:
-                                    continue
-                            else:
-                                glitch_cnt = 0
-                            prev_h = h
-                            # 히스테리시스 — 경계에서 프레임 단위 on/off 반복(블링킹) 방지
-                            if h > gate:
-                                on_cnt += 1; off_cnt = 0
-                            elif h < max(0.0, gate - 0.1):
-                                off_cnt += 1; on_cnt = 0
-                            else:
-                                on_cnt = 0; off_cnt = 0  # 중간 밴드: 상태 유지
-                            if not map_on and on_cnt >= 2:
-                                map_on = True
-                            elif map_on and off_cnt >= 3:
-                                map_on = False
-                            if map_on:
-                                # 실화면 참조 마스크 적용 — 실화면에서도 검정인 자리(상단바 등
-                                # 진짜 검정 UI)는 구멍에서 제외해 맵이 뚫고 나오지 않게 한다.
-                                allow = self._hole_allow
-                                if allow is not None and allow.shape == (th, tw):
-                                    hole &= allow[y0:y0 + hole.shape[0], x0:x0 + hole.shape[1]]
-                                reg[hole] = mp[hole]
-                            # 마스크 갱신 트리거 — 최초/장면 변화(원시 hole 비율 급변)/노후(20s).
-                            # 3s 최소 간격(실패 백오프 겸용), 단일 비행.
-                            nowt = time.time()
-                            if (map_on and not self._hole_mask_inflight
-                                    and nowt - self._hole_mask_ts > 3.0
-                                    and (self._hole_allow is None
-                                         or abs(h - self._hole_basis_h) > 0.06
-                                         or nowt - self._hole_mask_ts > 20.0)):
-                                self._hole_mask_inflight = True
-                                threading.Thread(
-                                    target=self._refresh_hole_mask,
-                                    args=(tw, th, h), daemon=True,
-                                ).start()
-                    img = Image.fromarray(comp[:, :, ::-1], "RGB")  # BGR→RGB
-                    bio = io.BytesIO()
-                    img.save(bio, format="JPEG", quality=self._live_jpeg_q)
-                    jpg = bio.getvalue()
-                    with self._live_lock:
-                        self._latest_live_jpeg = jpg
-                        self._live_frame_id += 1
-                except Exception:
-                    continue
-        logger.info("MIB live reader exited")
 
     def get_live_frame(self) -> tuple[Optional[bytes], int]:
         """(최신 JPEG bytes, frame_id). 아직 없으면 (None, 0)."""

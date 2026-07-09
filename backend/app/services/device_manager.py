@@ -3129,17 +3129,6 @@ class DeviceManager:
                         svc.set_touch_scale(_txs, _tys)
                     except Exception as e:
                         logger.warning("MIB touch scale apply failed: %s", e)
-                # 저장된 레이어 칼리브레이션(라이브 장면 오버라이드) 적용
-                _ls = dev.info.get("live_scene")
-                if isinstance(_ls, dict) and (
-                    _ls.get("hmi_sid") or _ls.get("map_sid")
-                    or _ls.get("gate") is not None or _ls.get("mode")
-                ):
-                    try:
-                        svc.set_live_scene(_ls.get("hmi_sid"), _ls.get("map_sid"),
-                                           _ls.get("gate"), _ls.get("mode"))
-                    except Exception as e:
-                        logger.warning("MIB live scene apply failed: %s", e)
                 ok = await svc.async_connect()
                 if ok:
                     self._mib_conns[dev.id] = svc

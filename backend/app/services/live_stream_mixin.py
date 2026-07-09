@@ -1,11 +1,12 @@
 """라이브 미러 스트리밍 공용 믹스인 — MIB/ICAS 등 weston+LayerManagerControl 플랫폼 공유.
 
-weston screen dump은 PNG 인코딩 때문에 0.63s/frame(1.6fps 천장)이라 라이브에 부적합.
-surface를 무압축 BMP로 dump(~20ms)해서, 연결 시 `LayerManagerControl get scene`을 파싱해
-HMI(전체화면 dest 서피스)+MAP(최대 면적의 비검정 서브 서피스)을 자동 식별(인치 무관).
-device엔 PIL/numpy가 없어 순수 stdlib로 nearest 다운스케일만 하고 HMI/MAP을 따로 송출:
-  b"MIBF" + struct('<HHhhHHHH', tw, th, mx, my, mw, mh, sw, sh) + HMI(tw*th*3 BGR) + MAP(mw*mh*3 BGR)
-백엔드(이 믹스인)가 numpy black-key 합성(HMI가 검정=투명인 곳에만 MAP) 후 JPEG.
+실화면(screen dump) 방식: 컴포지터가 z순서+픽셀알파 룰로 합성한 최종 화면을
+`LayerManagerControl dump screen 0`(항상 PNG)으로 읽어 그대로 송출한다.
+과거의 서피스 합성(black-key) 방식은 24bpp 덤프에서 알파가 소실되어 '진짜 검정 UI'와
+'투명 구멍'을 원리적으로 구분할 수 없었고(겹침/고스트/블링킹), 전 패널 실화면으로 통일했다.
+대가는 fps — PNG 인코딩이 해상도에 비례(800x480 실측 ~165ms=~6fps, 1560x878 실측 ~0.63s).
+
+프레임 형식: b"MIBP" + struct('<IHH', png_len, sw, sh) + PNG bytes
 
 사용 서비스 요구사항:
   - self._new_ssh(): paramiko SSHClient 생성+연결
@@ -28,12 +29,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# __TW__ / __TH__(0=화면비율 자동)는 start_live_stream에서 .replace()로 주입.
+# 실화면 스트리머 — dump screen(비동기 PNG 기록)을 반복하며 완성 프레임을 stdout으로 송출.
 _LIVE_STREAMER = r'''
 import sys, os, time, struct, subprocess, re
 os.environ["XDG_RUNTIME_DIR"] = "/run/platform/weston"
-TW = __TW__
-TH_OVR = __TH__
 
 def lmc(a):
     try:
@@ -42,224 +41,47 @@ def lmc(a):
     except Exception:
         return ""
 
-def f_xy(t, k):
-    m = re.search(k + r"\D*x=(-?\d+),\s*y=(-?\d+)", t)
-    return (int(m.group(1)), int(m.group(2))) if m else None
-
-def f_reg(t, k):
-    m = re.search(k + r"\D*x=(-?\d+),\s*y=(-?\d+),\s*w=(\d+),\s*h=(\d+)", t)
-    return tuple(int(m.group(i)) for i in range(1, 5)) if m else None
-
-def f_ids(t, k):
-    m = re.search(k + r"\s*(.*)", t)
-    return re.findall(r"(\d+)\(0x[0-9a-fA-F]+\)", m.group(1)) if m else []
-
-def parse(b):
-    off = struct.unpack("<I", b[10:14])[0]
-    w = struct.unpack("<i", b[18:22])[0]; h = struct.unpack("<i", b[22:26])[0]
-    px = struct.unpack("<H", b[28:30])[0] // 8
-    return b, w, abs(h), off, ((w * px + 3) & ~3), px
-
-def dump(sid, path, timeout=2.0):
-    try: os.remove(path)
-    except OSError: pass
-    subprocess.run(["LayerManagerControl", "dump", "surface", sid, "to", path],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    dec = None; t0 = time.time()
-    while time.time() - t0 < timeout:
-        try: sz = os.path.getsize(path)
-        except OSError: sz = 0
-        if sz >= 6 and dec is None:
-            with open(path, "rb") as f:
-                f.seek(2); dec = struct.unpack("<I", f.read(4))[0]
-        if dec and sz >= dec:
-            with open(path, "rb") as f: return f.read()
-        time.sleep(0.003)
-    return None
-
-def mostly_black(bm, samples=2048):
-    data, w, h, off, stride, px = bm
-    end = off + stride * h; step = max(px, ((end - off) // samples // px or 1) * px); i = off
-    while i + 3 <= end:
-        if data[i] > 16 or data[i + 1] > 16 or data[i + 2] > 16:
-            return False
-        i += step
-    return True
-
-def region(bm, sx, sy, sw, sh, dw, dh):
-    data, w, h, off, stride, px = bm
-    cols = [(sx + dx * sw // dw) * px for dx in range(dw)]
-    rows = []
-    for dy in range(dh):
-        rb = off + (h - 1 - (sy + dy * sh // dh)) * stride
-        rows.append(b"".join(data[rb + c: rb + c + 3] for c in cols))
-    return rows
-
-# ── scene 파싱: HMI(전체화면) + MAP(최대 면적 비검정 서브 서피스) 자동 식별 ──
-scr = lmc(["get", "screen", "0"])
-SW, SH = f_xy(scr, "resolution:") or (1560, 878)
-TH = TH_OVR if TH_OVR > 0 else max(1, round(TW * SH / SW))
-LW = LH = 0; order = []
-for lid in f_ids(scr, "layer render order:"):
-    lt = lmc(["get", "layer", lid]); o = f_ids(lt, "surface render order:")
-    if o:
-        LW, LH = f_xy(lt, "original size:") or (SW, SH); order = o; break
-if not order:
-    LW, LH = SW, SH
-
-def clip_to_layer(src, dst):
-    # dst가 레이어를 벗어나는 서피스(예: 800x480 레이어에 1280x640 backdrop 맵)는
-    # 보이는 부분만 유효 — dst를 레이어로 클립하고 src도 비례 보정.
-    x0, y0, dw, dh = dst
-    cx0 = max(0, x0); cy0 = max(0, y0)
-    cx1 = min(LW, x0 + dw); cy1 = min(LH, y0 + dh)
-    cw = cx1 - cx0; ch = cy1 - cy0
-    if cw <= 0 or ch <= 0:
-        return None
-    if cw == dw and ch == dh:
-        return src, dst
-    sx, sy, sw, sh = src
-    return ((sx + sw * (cx0 - x0) // dw, sy + sh * (cy0 - y0) // dh,
-             max(1, sw * cw // dw), max(1, sh * ch // dh)),
-            (cx0, cy0, cw, ch))
-
-hmi = None; cands = []; hmi_cands = []
-for sid in order:
-    st = lmc(["get", "surface", sid]); v = re.search(r"visibility:\s*(\d+)", st)
-    if v and v.group(1) == "0":
-        continue
-    src = f_reg(st, "source region:"); dst = f_reg(st, "destination region:")
-    osz = f_xy(st, "original size:")
-    if not src or not dst:
-        continue
-    if osz and osz[0] * osz[1] < 64 * 64:   # cursor/system surface 제외
-        continue
-    # HMI = dst가 레이어와 '정확히' 일치(±5%)하는 풀스크린 + orig도 레이어와 유사(±20%)한
-    # 1:1 렌더 서피스만. 레이어보다 큰 dst(MQB 800x480처럼 backdrop 맵이 1280x640으로
-    # 깔리는 모델)는 맵 후보 — 클립해서 cands로. orig가 레이어와 크게 다른 서피스(예: MQB
-    # nav가 dst를 풀스크린으로 바꿔도 orig는 1280x640)는 dst가 풀스크린이어도 맵 후보.
-    if (dst[0] == 0 and dst[1] == 0 and LW * 0.95 <= dst[2] <= LW * 1.05
-            and LH * 0.95 <= dst[3] <= LH * 1.05
-            and (not osz or (LW * 0.8 <= osz[0] <= LW * 1.2
-                             and LH * 0.8 <= osz[1] <= LH * 1.2))):
-        hmi_cands.append((sid, src))
-    else:
-        c = clip_to_layer(src, dst)
-        if c:
-            cands.append((sid, c[0], c[1]))
-# HMI 후보가 여럿이면(black 베이스 서피스 + 진짜 크롬 공존 모델) 비검정 중 마지막(최상위) 선택.
-for sid, src in hmi_cands:
-    b = dump(sid, "/tmp/_mlhpick.bmp")
-    if b is not None and not mostly_black(parse(b)):
-        hmi = (sid, src)
-if hmi is None and hmi_cands:
-    hmi = hmi_cands[-1]
-def hole_frac(hp, dst, T=2):
-    # 0x10(HMI)의 dst(layer좌표) 영역에서 검정(=투명 구멍) 픽셀 비율. 맵은 이 비율이 높은 자리.
-    data, w, h, off, stride, px = hp
-    x0, y0, rw, rh = dst
-    gx = max(1, rw // 120); gy = max(1, rh // 120)
-    cnt = tot = 0; yy = y0
-    while yy < y0 + rh:
-        if 0 <= yy < h:
-            rb = off + (h - 1 - yy) * stride; xx = x0
-            while xx < x0 + rw:
-                if 0 <= xx < w:
-                    o = rb + xx * px
-                    if o + 3 <= len(data):
-                        tot += 1
-                        if max(data[o], data[o + 1], data[o + 2]) <= T:
-                            cnt += 1
-                xx += gx
-        yy += gy
-    return (cnt / tot) if tot else 0.0
-
-def select_map(prev=None):
-    # 맵 = 0x10의 '구멍(검정)'이 가장 많이 겹치는 후보(투명 뒤 backdrop). 면적 휴리스틱 폐기.
-    # 구멍 비율이 낮으면(맵 없는 화면) None → 맵 합성 안 함(비침 방지). 화면 전환마다 재선택.
-    if hmi is None:
-        return None
-    hb = dump(hmi[0], "/tmp/_mlhsel.bmp")
-    if hb is None:
-        return prev   # HMI dump 일시 실패 시 직전 선택 유지 (블링킹 방지)
-    hp = parse(hb); best = None; bestf = 0.55
-    # 히스테리시스: 직전 선택이 여전히 0.43 이상이면 유지 — 임계 경계에서
-    # 2초마다 선택↔해제가 반복되며 맵이 깜빡이는 것을 방지.
-    if prev is not None:
-        f = hole_frac(hp, prev[2])
-        if f > 0.43:
-            return prev
-    for sid, src, dst in cands:
-        bm = dump(sid, "/tmp/_mlsel.bmp")
-        if bm is None or mostly_black(parse(bm)):
-            continue
-        f = hole_frac(hp, dst)
-        if f > bestf:
-            bestf = f; best = (sid, src, dst)
-    return best
-
-def map_rect(ms):
-    if not ms:
-        return 0, 0, 0, 0
-    md = ms[2]
-    return (md[0] * TW // LW, md[1] * TH // LH,
-            max(1, md[2] * TW // LW), max(1, md[3] * TH // LH))
-
-sys.stderr.write("LIVE hmi=%s hmi_cands=%s cands=%s TW=%d TH=%d LW=%d LH=%d\n"
-                 % (hmi[0] if hmi else None, [c[0] for c in hmi_cands],
-                    [(c[0], c[2]) for c in cands], TW, TH, LW, LH))
+m = re.search(r"resolution:\D*x=(\d+),\s*y=(\d+)", lmc(["get", "screen", "0"]))
+SW, SH = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+sys.stderr.write("LIVESCR screen mode SW=%d SH=%d\n" % (SW, SH))
 sys.stderr.flush()
-
 out = sys.stdout.buffer
-HMI_BMP, MAP_BMP = "/tmp/_mlhmi.bmp", "/tmp/_mlmap.bmp"
-mapsel = None; sel_t = -999.0
-last_map = (0, 0, 0, 0, b"")   # 직전 성공 맵 프레임 (dump 일시 실패 시 재사용 — 블링킹 방지)
+P = "/tmp/_mlscr.png"
 while True:
     try:
-        if hmi is None:
-            time.sleep(0.2); continue
-        now = time.time()
-        if now - sel_t > 2.0:   # 2초마다 맵 재선택(화면 전환 적응; 맵 없는 화면이면 None)
-            mapsel = select_map(mapsel); sel_t = now
-            # 지오메트리 재조회 — src/dst가 런타임에 바뀌는 서피스(MQB nav의 dst가
-            # backdrop↔풀스크린으로 변함) 적응. 스트림 재시작 없이 크롭/배치 추종.
-            st = lmc(["get", "surface", hmi[0]]); s = f_reg(st, "source region:")
-            if s:
-                hmi = (hmi[0], s)
-            if mapsel is not None:
-                st = lmc(["get", "surface", mapsel[0]])
-                s = f_reg(st, "source region:"); d = f_reg(st, "destination region:")
-                if s and d:
-                    c = clip_to_layer(s, d)
-                    mapsel = (mapsel[0], c[0], c[1]) if c else None
-        hb = dump(hmi[0], HMI_BMP)
-        if hb is None:
-            time.sleep(0.05); continue
-        hp = parse(hb); hs = hmi[1]
-        hbytes = b"".join(region(hp, hs[0], hs[1], hs[2], hs[3], TW, TH))
-        mx, my, mw, mh = map_rect(mapsel)
-        mbytes = b""
-        if mapsel and mw > 0 and mh > 0:
-            mb = dump(mapsel[0], MAP_BMP)
-            if mb is not None:
-                mp = parse(mb); ms = mapsel[1]
-                mbytes = b"".join(region(mp, ms[0], ms[1], ms[2], ms[3], mw, mh))
-                last_map = (mx, my, mw, mh, mbytes)
-            elif last_map[4] and last_map[0:4] == (mx, my, mw, mh):
-                mbytes = last_map[4]   # 같은 지오메트리의 직전 프레임 재사용
-        cmw, cmh = (mw, mh) if mbytes else (0, 0)
-        # SW,SH(실제 화면 해상도)도 보고 → 백엔드가 등록 해상도를 보정(터치 좌표 일치).
-        out.write(b"MIBF" + struct.pack("<HHhhHHHH", TW, TH, mx, my, cmw, cmh, SW, SH) + hbytes + mbytes)
+        try:
+            os.remove(P)
+        except OSError:
+            pass
+        subprocess.run(["LayerManagerControl", "dump", "screen", "0", "to", P],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # PNG 완성 대기 — dump는 비동기 기록: 크기 안정화 + IEND(마지막 청크) 확인
+        data = None; t0 = time.time(); last = -1
+        while time.time() - t0 < 3.0:
+            try:
+                sz = os.path.getsize(P)
+            except OSError:
+                sz = 0
+            if sz > 12 and sz == last:
+                with open(P, "rb") as f:
+                    b = f.read()
+                if b[-8:-4] == b"IEND":
+                    data = b; break
+            last = sz
+            time.sleep(0.02)
+        if not data:
+            time.sleep(0.1); continue
+        out.write(b"MIBP" + struct.pack("<IHH", len(data), SW, SH) + data)
         out.flush()
     except (BrokenPipeError, IOError):
         break
     except Exception:
-        time.sleep(0.05)
+        time.sleep(0.1)
 '''
 
 
 class LiveStreamMixin:
-    """surface 합성 라이브 스트리밍 — 캡처/디코드/합성 공용. 터치/해상도 정책은 서비스별."""
+    """실화면(screen dump) 라이브 스트리밍 — 캡처/전송 공용. 터치/해상도 정책은 서비스별."""
 
     def _init_live_stream(self) -> None:
         # 라이브는 전용 SSH 연결을 쓴다 — 풀해상도 screencap이 공유 SSH를 리셋해도 안 끊기게 격리.
@@ -287,18 +109,7 @@ class LiveStreamMixin:
                     except Exception:
                         pass
             return d
-        # 타깃 가로(다운스케일). 세로=0이면 화면비율 자동(인치별 적응). LIVE_*(공용)/MIB_LIVE_*(호환).
-        self._live_w = _ei(["LIVE_W", "MIB_LIVE_W"], 832)  # 640*1.3 (가독성↑, fps 약간↓)
-        self._live_h = _ei(["LIVE_H", "MIB_LIVE_H"], 0)
         self._live_jpeg_q = _ei(["LIVE_JPEG_Q", "MIB_LIVE_JPEG_Q"], 60)
-        # 맵 합성 게이트: HMI 맵-영역이 "대부분 구멍(검정)"일 때만 맵을 합성한다.
-        # 알파가 없어 '투명 구멍'과 '불투명 어두운 콘텐츠'를 픽셀값으로 근사 —
-        # 홈은 진짜 구멍이라 ≤8 비율 ~98%, Dial/차량뷰는 ~5% 이하라 게이트로 분리됨.
-        self._map_key_t = _ei(["MAP_KEY_T"], 2)          # 검정 판정 임계(정확한 검정=진짜 구멍)
-        try:
-            self._map_hole_gate = float(os.environ.get("MAP_HOLE_GATE") or 0.8)
-        except Exception:
-            self._map_hole_gate = 0.8                      # 맵-영역 검정비율 컷오프(홈 98% vs 콘텐츠 <50%)
 
     def is_live_running(self) -> bool:
         t = getattr(self, "_live_thread", None)
@@ -330,10 +141,7 @@ class LiveStreamMixin:
                 return False
             chan = transport.open_session()
             chan.exec_command("python3 -u -")
-            script = (_LIVE_STREAMER
-                      .replace("__TW__", str(self._live_w))
-                      .replace("__TH__", str(self._live_h)))
-            chan.sendall(script.encode("utf-8"))
+            chan.sendall(_LIVE_STREAMER.encode("utf-8"))
             chan.shutdown_write()  # 스트리머는 stdin을 읽지 않음 → 즉시 EOF
             t = threading.Thread(target=self._live_reader, args=(chan,), daemon=True)
             with self._live_lock:
@@ -341,8 +149,8 @@ class LiveStreamMixin:
                 self._live_chan = chan
                 self._live_thread = t
             t.start()
-            logger.info("%s live stream started (%dx%d, q=%d)",
-                        self._live_label, self._live_w, self._live_h, self._live_jpeg_q)
+            logger.info("%s live stream started (screen mode, q=%d)",
+                        self._live_label, self._live_jpeg_q)
             return True
         except Exception as e:
             logger.warning("%s live stream start failed: %r", self._live_label, e)
@@ -358,34 +166,21 @@ class LiveStreamMixin:
             return False
 
     def _live_reader(self, chan) -> None:
-        """채널에서 MIBF 프레임(HMI + 맵 따로)을 파싱 → numpy black-key 합성 → JPEG.
+        """MIBP 프레임(완성 PNG)을 받아 JPEG 변환만 수행.
 
-        프레임: b"MIBF" + struct('<HHhhHHHH', tw,th,mx,my,mw,mh,sw,sh) + HMI(BGR) + MAP(BGR)
-        합성: HMI 베이스, 맵-사각형 내 HMI가 (거의) 검정인 곳(=투명 구멍)에만 맵.
-              팝업/메뉴가 맵 위로 뜨면 그 영역은 HMI(불투명)라 맵이 가리지 않는다.
+        합성/black-key 없음 — 컴포지터가 이미 알파·z순서 룰로 합성한 화면을 그대로 표시.
+        프레임 형식: b"MIBP" + struct('<IHH', png_len, sw, sh) + PNG bytes
         """
         from PIL import Image
-        import numpy as np
-        HDR = 20  # b"MIBF"(4) + '<HHhhHHHH'(16): tw,th,mx,my,mw,mh,sw,sh
+        HDR = 12  # b"MIBP"(4) + '<IHH'(8)
         buf = b""
-        # 맵 합성 on/off 히스테리시스 — hole 비율이 게이트 경계에 걸리면 프레임마다
-        # 합성이 켜졌다 꺼졌다 하며 화면이 심하게 깜빡인다. on은 게이트 초과 2프레임,
-        # off는 (게이트-0.1) 미만 3프레임 연속일 때만 전환, 중간 밴드에서는 상태 유지.
-        map_on = False
-        on_cnt = 0
-        off_cnt = 0
-        # HMI 덤프 글리치 필터 — GPU 버퍼 스왑과 경합해 HMI 덤프가 단발성 전체-검정으로
-        # 떨어지면 그 프레임은 전부 구멍(=맵 전체 화면)이 되어 HMI↔MAP이 프레임 단위로
-        # 번갈아 보인다(블링킹). 직전 정상 프레임 대비 hole이 급등한 프레임은 버린다.
-        prev_h: Optional[float] = None
-        glitch_cnt = 0
         try:
             chan.settimeout(5.0)
         except Exception:
             pass
         while not self._live_stop.is_set():
             try:
-                # 스트리머 stderr(scene 판정 진단: hmi/cands 등)를 로그로 회수
+                # 스트리머 stderr(진단)를 로그로 회수
                 while chan.recv_stderr_ready():
                     err = chan.recv_stderr(4096)
                     if err:
@@ -401,14 +196,22 @@ class LiveStreamMixin:
                 break  # 채널 닫힘 → 스트리머 종료
             buf += data
             while True:
-                idx = buf.find(b"MIBF")
+                idx = buf.find(b"MIBP")
                 if idx < 0:
                     if len(buf) > (1 << 23):
                         buf = buf[-8:]
                     break
                 if len(buf) < idx + HDR:
                     break
-                tw, th, mx, my, mw, mh, sw, sh = struct.unpack("<HHhhHHHH", buf[idx + 4: idx + HDR])
+                png_len, sw, sh = struct.unpack("<IHH", buf[idx + 4: idx + HDR])
+                if png_len <= 0 or png_len > (1 << 23):
+                    buf = buf[idx + 4:]  # 손상 헤더 — 매직 재탐색
+                    continue
+                total = idx + HDR + png_len
+                if len(buf) < total:
+                    break
+                png = buf[idx + HDR: total]
+                buf = buf[total:]
                 # (MIB) 실제 화면해상도로 등록 해상도 1회 보정 — 프론트 터치 매핑 일치용.
                 # ICAS 등 자체 터치 캘리브레이션 플랫폼은 _live_sync_res=False라 건너뜀.
                 if (self._live_sync_res and not self._live_res_synced and sw > 0 and sh > 0):
@@ -421,57 +224,8 @@ class LiveStreamMixin:
                                             self._live_label, sw, sh)
                         except Exception as e:
                             logger.debug("%s live resolution sync failed: %s", self._live_label, e)
-                hmi_len = tw * th * 3
-                map_len = mw * mh * 3
-                total = idx + HDR + hmi_len + map_len
-                if len(buf) < total:
-                    break
-                hmi_bytes = buf[idx + HDR: idx + HDR + hmi_len]
-                map_bytes = buf[idx + HDR + hmi_len: total]
-                buf = buf[total:]
-                if len(hmi_bytes) != hmi_len:
-                    continue
                 try:
-                    comp = np.frombuffer(hmi_bytes, np.uint8).reshape(th, tw, 3).copy()
-                    if mw > 0 and mh > 0 and len(map_bytes) == map_len:
-                        x0 = max(0, mx); y0 = max(0, my)
-                        reg = comp[y0:y0 + mh, x0:x0 + mw]
-                        rh, rw = reg.shape[0], reg.shape[1]
-                        if rh > 0 and rw > 0:
-                            mp = np.frombuffer(map_bytes, np.uint8).reshape(mh, mw, 3)[:rh, :rw]
-                            hole = reg.max(axis=2) <= self._map_key_t  # HMI가 (거의) 검정 = 투명 구멍
-                            # 맵-영역이 대부분 구멍일 때만 맵 합성(홈). Dial/차량뷰처럼 불투명
-                            # 콘텐츠가 채운 화면은 검정비율이 낮아 맵을 안 깐다(비침 방지).
-                            # 단 맵이 프레임 전체를 덮는 backdrop 모델(MQB 등)은 불투명 크롬이
-                            # 섞여 비율이 낮아지므로 device select_map과 같은 0.55로 완화.
-                            gate = self._map_hole_gate
-                            if mw * mh >= tw * th * 0.9:
-                                gate = min(gate, 0.55)
-                            h = float(hole.mean())
-                            # 글리치 드랍: 직전 정상 프레임(hole<0.85)에서 갑자기 전면 구멍
-                            # (hole>0.97)으로 튄 프레임은 HMI 덤프 실패(전체 검정)로 간주하고
-                            # 버림(직전 JPEG 유지). 5프레임 연속이면 진짜 풀맵 전환으로 수용.
-                            if h > 0.97 and prev_h is not None and prev_h < 0.85:
-                                glitch_cnt += 1
-                                if glitch_cnt <= 4:
-                                    continue
-                            else:
-                                glitch_cnt = 0
-                            prev_h = h
-                            # 히스테리시스 — 경계에서 프레임 단위 on/off 반복(블링킹) 방지
-                            if h > gate:
-                                on_cnt += 1; off_cnt = 0
-                            elif h < max(0.0, gate - 0.1):
-                                off_cnt += 1; on_cnt = 0
-                            else:
-                                on_cnt = 0; off_cnt = 0  # 중간 밴드: 상태 유지
-                            if not map_on and on_cnt >= 2:
-                                map_on = True
-                            elif map_on and off_cnt >= 3:
-                                map_on = False
-                            if map_on:
-                                reg[hole] = mp[hole]
-                    img = Image.fromarray(comp[:, :, ::-1], "RGB")  # BGR→RGB
+                    img = Image.open(io.BytesIO(png)).convert("RGB")
                     bio = io.BytesIO()
                     img.save(bio, format="JPEG", quality=self._live_jpeg_q)
                     jpg = bio.getvalue()
