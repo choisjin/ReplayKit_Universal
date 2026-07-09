@@ -594,7 +594,20 @@ async def websocket_screen_mirror(websocket: WebSocket):
 
     # scrcpy 제거 — 항상 JPEG screencap 사용
     h264_mode = False
-    recv_task = None
+
+    # 클라이언트 disconnect 감시 — 장치 미연결/삭제 대기 분기는 send 없이 sleep만
+    # 반복하므로 소켓 끊김을 영원히 감지 못한다(경고 로그 무한 스팸). 백그라운드
+    # receive 로 disconnect 프레임을 잡아 루프 종료 신호로 쓴다.
+    async def _watch_client_disconnect():
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    return
+        except Exception:
+            return
+
+    recv_task = asyncio.create_task(_watch_client_disconnect())
 
     # ADB 라이브 미러링 전략:
     #   - 즉시: screencap PNG 폴링으로 화면을 띄움 (사용자 대기시간 0초)
@@ -636,6 +649,8 @@ async def websocket_screen_mirror(websocket: WebSocket):
     _ssh_seen_input_ts = -1.0
     # MIB 라이브 스트리밍: 마지막으로 보낸 프레임 id (중복 송신 방지)
     live_last_frame_id = -1
+    # not-ready 경고(웹캠/비전캠) 쓰로틀 — 0.3s 루프에서 매번 찍으면 로그 스팸
+    _not_ready_last_warn = 0.0
     # BMW 스크린세이버(대기화면) 라벨 상태 — 변할 때만 screen_state 메시지 송신
     bmw_last_ss: Optional[bool] = None
 
@@ -667,6 +682,18 @@ async def websocket_screen_mirror(websocket: WebSocket):
         await websocket.send_json({"mode": "jpeg"})
 
         while True:
+            # 클라이언트가 끊겼으면(대기 분기는 send 부재로 자체 감지 불가) 즉시 종료.
+            if recv_task.done():
+                logger.info("Screen mirror client disconnected (recv watcher)")
+                break
+            # 관리 목록에서 디바이스가 삭제됐으면 스트림 종료 — 아니면 not-ready
+            # 분기가 존재하지 않는 장치를 상대로 영원히 돈다.
+            if dev is not None and device_manager.get_device(target_device_id) is None:
+                logger.info(
+                    "Screen mirror: device %s removed — closing stream",
+                    target_device_id,
+                )
+                break
             try:
                 # 매 프레임마다 최신 서비스 인스턴스 조회 (재연결 대응)
                 # HKMC5thWide 디바이스는 별도 service에서 조회 — 같은 _label/분기로 처리.
@@ -887,8 +914,14 @@ async def websocket_screen_mirror(websocket: WebSocket):
                             await asyncio.sleep(0.3)
                             continue
                     else:
-                        logger.warning("VisionCam not ready: cam=%s connected=%s",
-                                       cam is not None, cam.IsConnected() if cam else "no_cam")
+                        _now = asyncio.get_event_loop().time()
+                        if _now - _not_ready_last_warn >= 5.0:
+                            _not_ready_last_warn = _now
+                            logger.warning(
+                                "VisionCam not ready: cam=%s connected=%s",
+                                cam is not None,
+                                cam.IsConnected() if cam else "no_cam",
+                            )
                         await asyncio.sleep(0.3)
                         continue
                 elif is_webcam:
@@ -905,8 +938,14 @@ async def websocket_screen_mirror(websocket: WebSocket):
                             await asyncio.sleep(0.3)
                             continue
                     else:
-                        logger.warning("Webcam not ready: cam=%s connected=%s",
-                                       cam is not None, cam.IsConnected() if cam else "no_cam")
+                        _now = asyncio.get_event_loop().time()
+                        if _now - _not_ready_last_warn >= 5.0:
+                            _not_ready_last_warn = _now
+                            logger.warning(
+                                "Webcam not ready: cam=%s connected=%s",
+                                cam is not None,
+                                cam.IsConnected() if cam else "no_cam",
+                            )
                         await asyncio.sleep(0.3)
                         continue
                 elif is_wincontrol:
