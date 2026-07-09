@@ -213,9 +213,13 @@ def _spawn_ffmpeg_writer(
     종료 시 stdin을 닫으면 ffmpeg가 flush 후 +faststart moov atom을 작성한다.
 
     audio_device: Windows dshow 오디오 장치 식별자(표시명 또는 @device_ alternative name).
-    주어지면 마이크 입력을 두 번째 입력으로 붙여 AAC 로 함께 먹싱한다. 양쪽 입력 모두
-    -use_wallclock_as_timestamps 1 로 같은 벽시계 기준 PTS 를 쓰고, -copyts 로 그 공통
-    기준을 출력까지 보존해야 A/V 싱크가 맞는다 (아래 cmd 주석 참조).
+    주어지면 마이크 입력을 두 번째 입력으로 붙여 AAC 로 함께 먹싱한다.
+    타임스탬프 설계: 영상 = 벽시계 VFR(1ms 해상도), 오디오 = 샘플카운트 연속 타임라인.
+    오디오에 wallclock 을 쓰면 안 된다 — 읽기 시점 스탬프는 지터/점프로 non-monotonic
+    DTS 를 유발해 트랙이 붕괴한다(실측: +5.4s 점프 → dts=prev+1 체인 → 오디오 압축,
+    플레이어 타임라인 점프). 마이크는 샘플레이트 자체가 정확한 하드웨어 클럭이므로
+    asetpts=N/SR/TB 로 0-기준 연속 PTS 를 만들면 길이가 실시간과 1:1 로 맞는다.
+    양쪽 다 각자 첫 패킷 기준 0-정규화되며 시작 오프셋은 실측 수십 ms 수준.
     -shortest: 영상(stdin) EOF 후 라이브 오디오 입력이 ffmpeg 를 붙잡고 있지 않게 종료 트리거.
     장치 유효성은 호출 전에 _probe_audio_device 로 확인할 것 — ffmpeg 는 입력을 순차로
     열기 때문에 여기서 스폰 직후 생존 확인을 해도 dshow 오픈 실패를 감지할 수 없다.
@@ -237,13 +241,21 @@ def _spawn_ffmpeg_writer(
         "-vcodec", "rawvideo",
         "-s", f"{int(width)}x{int(height)}",
         "-pix_fmt", "bgr24",
+        # -framerate 1000: rawvideo 입력의 stream timebase 를 1/1000 로 세분화.
+        # 기본(1/25)이면 wallclock PTS 가 40ms 격자로 양자화되고, 25fps 넘는 카메라
+        # (예: 30fps)는 같은 틱에 떨어진 프레임을 -vsync vfr 이 중복으로 드롭한다
+        # (실측: 30fps 카메라 → 25fps 격자 + 매초 5프레임 유실).
+        "-framerate", "1000",
         "-use_wallclock_as_timestamps", "1",
         "-i", "-",  # stdin
     ]
     if audio_device:
         cmd += [
             "-f", "dshow",
-            "-use_wallclock_as_timestamps", "1",
+            # 주의: 오디오에 -use_wallclock_as_timestamps 를 쓰지 말 것 — 읽기 시점
+            # 벽시계 스탬프는 지터/점프(실측 +5.4s)로 non-monotonic DTS 를 만들어
+            # muxer 의 dts=prev+1 강제 체인 → 오디오 트랙 붕괴(배속/타임라인 점프)로
+            # 이어진다. PTS 는 아래 asetpts 가 샘플카운트로 다시 만든다.
             "-thread_queue_size", "1024",
             "-audio_buffer_size", "80",  # ms — 기본(500ms)은 A/V 오프셋이 커짐
             "-i", f"audio={audio_device}",
@@ -255,27 +267,21 @@ def _spawn_ffmpeg_writer(
         "-crf", "23",
         "-pix_fmt", "yuv420p",
         "-vsync", "vfr",
+        # 인코더 timebase 를 명시하지 않으면 ffmpeg 가 probe 에서 감지한 평균 fps 의
+        # 역수를 쓰므로 PTS 가 그 격자로 재양자화되어 프레임 드롭/CFR 화가 재발한다.
+        "-enc_time_base:v", "1:1000",
     ]
     if audio_device:
-        # A/V 타임스탬프 기준 통일 — -copyts 가 없으면 ffmpeg 는 입력별로 start_time 을
-        # 빼서 0-기준으로 정규화하는데, 라이브 오디오 캡처 입력은 start_time 이 잡히지
-        # 않아 epoch 절대 타임스탬프(µs)가 출력에 그대로 새고 비디오만 0-기준이 된다.
-        # → 결과 mp4 의 duration 이 수십만 시간으로 튀고, 플레이어가 오디오 클럭에 영상을
-        #   맞추려다 배속 재생/싱크 붕괴처럼 보이며, muxer 가 interleave 대기로 stdin 을
-        #   막아 프레임까지 대량 유실된다 (오디오 켰을 때만 발생하던 증상의 원인).
-        # -copyts: 양쪽 입력의 벽시계 PTS 를 정규화 없이 그대로 통과 (공통 기준 유지)
-        # -avoid_negative_ts make_zero: muxer 가 모든 스트림을 동일 오프셋으로 0점 이동
-        #   → 상대 정렬(진짜 벽시계 싱크)은 보존한 채 파일은 0초에서 시작.
-        # aresample=async=1000: 캡처 지터로 오디오 PTS 가 샘플 연속성과 어긋날 때
-        #   삽입/드롭으로 보정 (버스트 수신 시 Non-monotonic DTS → 오디오 트랙 붕괴 방지).
+        # asetpts=N/SR/TB: 오디오 PTS 를 캡처 스탬프 대신 누적 샘플수/샘플레이트로
+        # 재생성 — 마이크 하드웨어 클럭 기준의 끊김 없는 0-기준 타임라인이 되어
+        # 길이가 실시간과 1:1. 영상(wallclock, 0-정규화)과의 시작 오프셋은 두 입력이
+        # 모두 ffmpeg 기동 시 열리므로 실측 수십 ms 수준(립싱크 허용 범위).
         cmd += [
             "-map", "1:a",
-            "-af", "aresample=async=1000",
+            "-af", "asetpts=N/SR/TB",
             "-c:a", "aac",
             "-b:a", "128k",
             "-shortest",
-            "-copyts",
-            "-avoid_negative_ts", "make_zero",
         ]
     else:
         cmd += ["-an"]
