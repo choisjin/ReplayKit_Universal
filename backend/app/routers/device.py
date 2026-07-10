@@ -443,6 +443,14 @@ async def scan_ports():
         tasks["bench_devices"] = asyncio.ensure_future(dm.scan_bench(host=bench_host, port=bench_port))
     if _enabled("vision_camera"):
         tasks["vision_cameras"] = asyncio.ensure_future(dm.scan_vision_cameras())
+    if _enabled("vector"):
+        # Vector-Hardware(VN1630A 등) CAN 채널 열거 — CANoe_Ctrl 등록용.
+        async def _scan_vector():
+            from ..services.module_service import _get_module_executor
+            loop = asyncio.get_event_loop()
+            executor = _get_module_executor("CANoe_Ctrl")
+            return await loop.run_in_executor(executor, _list_vector_channels_blocking)
+        tasks["vector"] = asyncio.ensure_future(_scan_vector())
     if _enabled("webcam"):
         async def _scan_webcams():
             from ..plugins.WebcamDevice import WebcamDevice
@@ -559,6 +567,7 @@ async def scan_ports():
         "scar_devices": [],
         "radmoon_devices": [],
         "ssh_hosts": [],
+        "vector": {"ok": False, "driver_missing": False, "channels": [], "error": None},
         "custom_results": [],
     }
     for key, result in zip(all_keys, results):
@@ -2259,6 +2268,10 @@ _CAN_FD_COMBOS = [
     (500000, 4000000), (500000, 8000000),
     (250000, 2000000), (1000000, 5000000), (1000000, 2000000),
 ]
+# 자동 추천 시 Classic 과 함께 항상 시도할 FD 후보 (시간 절약 위해 흔한 조합만)
+_CAN_FD_SCAN_COMBOS = [
+    (500000, 2000000), (500000, 5000000), (500000, 1000000), (250000, 2000000),
+]
 
 
 def _vector_open_count(channel: int, app_name: str, bitrate: int,
@@ -2272,7 +2285,8 @@ def _vector_open_count(channel: int, app_name: str, bitrate: int,
     channel_index 가 주어지면 스캔으로 찾은 전역 채널을 app_name 없이 직접 연다.
     """
     import time as _t
-    r: dict = {"opened": False, "frames": 0, "error": None, "driver_missing": False}
+    r: dict = {"opened": False, "frames": 0, "valid_frames": 0, "error_frames": 0,
+               "fd_frames": 0, "unique_ids": 0, "error": None, "driver_missing": False}
 
     try:
         from can.interfaces.vector import VectorBus
@@ -2316,16 +2330,35 @@ def _vector_open_count(channel: int, app_name: str, bitrate: int,
         return r
 
     try:
-        count = 0
+        # 유효(비-에러) 데이터 프레임만 세고, 에러 프레임/FD 프레임/고유 ID 를 분리 집계한다.
+        # 틀린 bitrate 는 대부분 에러/쓰레기 프레임을 만들므로 개수만으로는 판별 불가 →
+        # 유효 프레임 + ID 반복성(고유 ID 대비 총량)으로 진짜 트래픽인지 가린다.
+        valid = 0
+        errors = 0
+        fd = 0
+        ids: set = set()
         end = _t.monotonic() + max(0.2, float(duration_s))
         while _t.monotonic() < end:
             try:
                 m = bus.recv(timeout=0.2)
             except Exception:
                 m = None
-            if m is not None:
-                count += 1
-        r["frames"] = count
+            if m is None:
+                continue
+            if getattr(m, "is_error_frame", False):
+                errors += 1
+                continue
+            if getattr(m, "is_remote_frame", False):
+                continue
+            valid += 1
+            ids.add(getattr(m, "arbitration_id", -1))
+            if getattr(m, "is_fd", False):
+                fd += 1
+        r["valid_frames"] = valid
+        r["error_frames"] = errors
+        r["fd_frames"] = fd
+        r["unique_ids"] = len(ids)
+        r["frames"] = valid  # headline = 유효 프레임
     finally:
         try:
             if bus is not None:
@@ -2349,28 +2382,43 @@ def _test_can_channel_blocking(channel: int, app_name: str, bitrate: int,
     return {
         "success": bool(r["opened"]),
         "opened": bool(r["opened"]),
-        "frames": int(r["frames"]),
+        "frames": int(r["frames"]),          # 유효(비-에러) 프레임
+        "valid_frames": int(r["valid_frames"]),
+        "error_frames": int(r["error_frames"]),
+        "fd_frames": int(r["fd_frames"]),
+        "unique_ids": int(r["unique_ids"]),
         "error": r["error"],
     }
 
 
 def _scan_can_channel_blocking(channel: int, app_name: str, is_fd: bool,
                                duration_s: float, channel_index: Optional[int] = None) -> dict:
-    """여러 속도 후보를 순차로 열어 프레임이 가장 많이 잡히는 조합을 추천한다."""
-    results: list = []
-    if is_fd:
-        combos = _CAN_FD_COMBOS
-    else:
-        combos = [(br, None) for br in _CAN_CLASSIC_BITRATES]
+    """여러 속도 후보(Classic + FD)를 순차로 열어 '진짜 트래픽'이 잡히는 조합을 추천.
 
-    for br, dbr in combos:
-        r = _vector_open_count(channel, app_name, br, dbr, is_fd, duration_s,
+    핵심: 틀린 bitrate 도 에러/쓰레기 프레임 때문에 개수가 0이 아니고, 오히려 더 빠른
+    잘못된 속도(예: 1000k on 500k bus)가 개수는 더 많을 수 있다. 따라서:
+      - 에러 프레임은 제외하고 '유효 프레임'만 센다.
+      - 유효 프레임이 소수의 ID를 반복(진짜 트래픽)하는지(valid >= 2*unique_ids) 확인.
+      - 실제 FD 프레임(is_fd=True)이 관측될 때만 FD 로 추천.
+    """
+    # Classic + FD 후보를 항상 함께 스윕 (CAN FD 토글과 무관하게 FD 도 시도)
+    combos = [(br, None, False) for br in _CAN_CLASSIC_BITRATES]
+    combos += [(arb, dbr, True) for (arb, dbr) in _CAN_FD_SCAN_COMBOS]
+
+    results: list = []
+    for br, dbr, fd in combos:
+        r = _vector_open_count(channel, app_name, br, dbr, fd, duration_s,
                                channel_index=channel_index)
         results.append({
             "bitrate": br,
             "data_bitrate": dbr,
+            "is_fd": fd,
             "opened": bool(r["opened"]),
-            "frames": int(r["frames"]),
+            "frames": int(r["frames"]),          # 유효(비-에러) 프레임
+            "valid_frames": int(r["valid_frames"]),
+            "error_frames": int(r["error_frames"]),
+            "fd_frames": int(r["fd_frames"]),
+            "unique_ids": int(r["unique_ids"]),
             "error": r["error"],
         })
         # 드라이버 미설치 등 치명적 오류면 스윕 중단 (나머지도 전부 실패할 것)
@@ -2378,13 +2426,27 @@ def _scan_can_channel_blocking(channel: int, app_name: str, is_fd: bool,
             return {"ok": False, "is_fd": is_fd, "results": results,
                     "recommended": None, "error": r["error"]}
 
-    # 추천: 프레임>0 중 최다 수신. 동률이면 후보 리스트 앞쪽(더 흔한 값) 우선.
-    scored = [x for x in results if x["frames"] > 0]
+    def _is_real(x: dict) -> bool:
+        # 진짜 트래픽: 유효 프레임이 충분하고, 소수 ID를 반복하며(평균 2회 이상),
+        # 에러 프레임이 유효 프레임보다 많지 않다.
+        v = x["valid_frames"]; u = x["unique_ids"]; e = x["error_frames"]
+        return v >= 8 and u >= 1 and v >= 2 * u and e <= v
+
+    real = [x for x in results if _is_real(x)]
+    # 실제 FD 프레임이 관측된 후보 → FD 버스로 판정
+    fd_real = [x for x in real if x["fd_frames"] >= 5]
+
     recommended = None
-    if scored:
-        best = max(scored, key=lambda x: x["frames"])
+    if fd_real:
+        best = max(fd_real, key=lambda x: (x["fd_frames"], x["valid_frames"]))
         recommended = {"bitrate": best["bitrate"], "data_bitrate": best["data_bitrate"],
-                       "frames": best["frames"]}
+                       "is_fd": True, "frames": best["valid_frames"]}
+    else:
+        classic_real = [x for x in real if not x["is_fd"]]
+        if classic_real:
+            best = max(classic_real, key=lambda x: x["valid_frames"])
+            recommended = {"bitrate": best["bitrate"], "data_bitrate": None,
+                           "is_fd": False, "frames": best["valid_frames"]}
 
     return {"ok": True, "is_fd": is_fd, "results": results,
             "recommended": recommended, "error": None}
@@ -2456,7 +2518,7 @@ async def scan_can_channel(req: ScanCanChannelRequest):
     import functools
     from ..services.module_service import _get_module_executor
 
-    n_candidates = len(_CAN_FD_COMBOS) if req.is_fd else len(_CAN_CLASSIC_BITRATES)
+    n_candidates = len(_CAN_CLASSIC_BITRATES) + len(_CAN_FD_SCAN_COMBOS)
     loop = asyncio.get_event_loop()
     executor = _get_module_executor("CANoe_Ctrl")
     fn = functools.partial(

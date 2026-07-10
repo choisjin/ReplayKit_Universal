@@ -327,14 +327,16 @@ export default function DevicePage() {
   const [forceIpLoading, setForceIpLoading] = useState(false);
   // CANoe 채널 테스트: 행 키(`${fieldName}:${idx}`) → 로딩/결과
   const [canTestLoading, setCanTestLoading] = useState<Record<string, boolean>>({});
-  const [canTestResult, setCanTestResult] = useState<Record<string, { ok: boolean; frames: number; error?: string | null; opened?: boolean }>>({});
+  const [canTestResult, setCanTestResult] = useState<Record<string, { ok: boolean; frames: number; error?: string | null; opened?: boolean; error_frames?: number; fd_frames?: number }>>({});
   // CANoe 자동 추천 스윕: 행 키 → 로딩/결과
   const [canScanLoading, setCanScanLoading] = useState<Record<string, boolean>>({});
-  const [canScanResult, setCanScanResult] = useState<Record<string, { ok: boolean; is_fd?: boolean; results: { bitrate: number; data_bitrate: number | null; opened: boolean; frames: number; error?: string | null }[]; recommended?: { bitrate: number; data_bitrate: number | null; frames: number } | null; error?: string | null }>>({});
+  const [canScanResult, setCanScanResult] = useState<Record<string, { ok: boolean; is_fd?: boolean; results: { bitrate: number; data_bitrate: number | null; is_fd?: boolean; opened: boolean; frames: number; valid_frames?: number; error_frames?: number; fd_frames?: number; error?: string | null }[]; recommended?: { bitrate: number; data_bitrate: number | null; is_fd?: boolean; frames: number } | null; error?: string | null }>>({});
   // Vector 하드웨어 채널 스캔: object_list 필드명 → 로딩/결과
   type VectorChannel = { name: string; channel_index: number; hw_channel: number; serial: number; hw_type: string; transceiver: string; is_on_bus: boolean; supports_fd: boolean };
   const [vectorScanLoading, setVectorScanLoading] = useState<Record<string, boolean>>({});
   const [vectorChannels, setVectorChannels] = useState<Record<string, VectorChannel[]>>({});
+  // 일반 보조디바이스 스캔에 통합된 Vector 채널 결과
+  const [scannedVector, setScannedVector] = useState<{ ok: boolean; driver_missing: boolean; channels: VectorChannel[]; error?: string | null }>({ ok: false, driver_missing: false, channels: [] });
   const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'bmw_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
   // BMW RSE Agent 전용 — 캡처 백엔드(adb screencap vs WebOS 컴포지터) + 해상도 fallback
   const [bmwCaptureBackend, setBmwCaptureBackend] = useState<'auto' | 'adb' | 'webos'>('auto');
@@ -644,6 +646,7 @@ export default function DevicePage() {
     setScannedRadmoon([]);
     setScannedSsh([]);
     setScannedCustom([]);
+    setScannedVector({ ok: false, driver_missing: false, channels: [] });
     setHasScanned(false);
     if (category === 'auxiliary') {
       deviceApi.listModules().then(res => setModules((res.data.modules || []).sort((a: ModuleInfo, b: ModuleInfo) => (a.label || a.name || '').localeCompare(b.label || b.name || '')))).catch(() => {});
@@ -669,6 +672,7 @@ export default function DevicePage() {
       setScannedRadmoon(res.data.radmoon_devices || []);
       setScannedSsh(res.data.ssh_hosts || []);
       setScannedCustom(res.data.custom_results || []);
+      setScannedVector(res.data.vector || { ok: false, driver_missing: false, channels: [] });
       setPcInterfaces(ifRes.data.interfaces || []);
       setHasScanned(true);
     } catch {
@@ -1365,11 +1369,13 @@ export default function DevicePage() {
           channel_index: item.channel_index != null && item.channel_index !== '' ? Number(item.channel_index) : null,
         });
         const d = res.data || {};
-        setCanTestResult(prev => ({ ...prev, [key]: { ok: !!d.ok, frames: Number(d.frames || 0), error: d.error, opened: !!d.opened } }));
+        setCanTestResult(prev => ({ ...prev, [key]: { ok: !!d.ok, frames: Number(d.frames || 0), error: d.error, opened: !!d.opened, error_frames: Number(d.error_frames || 0), fd_frames: Number(d.fd_frames || 0) } }));
         if (!d.ok) {
           message.error(`CH${item.channel} 테스트 실패: ${d.error || '알 수 없는 오류'}`);
         } else if (Number(d.frames || 0) > 0) {
-          message.success(`CH${item.channel} 정상 — ${d.frames} 프레임 수신 (속도 일치)`);
+          message.success(`CH${item.channel} 정상 — 유효 ${d.frames} 프레임${Number(d.error_frames || 0) > 0 ? ` (에러 ${d.error_frames})` : ''}${Number(d.fd_frames || 0) > 0 ? ' · FD' : ''}`);
+        } else if (Number(d.error_frames || 0) > 0) {
+          message.warning(`CH${item.channel} 유효 프레임 0 · 에러 프레임 ${d.error_frames} — 속도 불일치 가능성`);
         } else {
           message.warning(`CH${item.channel} 채널은 열렸으나 수신 프레임 없음 — 버스 idle 또는 속도 불일치`);
         }
@@ -1401,9 +1407,9 @@ export default function DevicePage() {
         if (!d.ok) {
           message.error(`CH${item.channel} 자동 추천 실패: ${d.error || '알 수 없는 오류'}`);
         } else if (d.recommended) {
-          message.success(`CH${item.channel} 추천: ${(d.recommended.bitrate / 1000)}k${d.recommended.data_bitrate ? ` / ${d.recommended.data_bitrate / 1000000}M` : ''} (${d.recommended.frames} 프레임)`);
+          message.success(`CH${item.channel} 추천: ${d.recommended.is_fd ? 'FD ' : ''}${(d.recommended.bitrate / 1000)}k${d.recommended.data_bitrate ? ` / ${d.recommended.data_bitrate / 1000000}M` : ''} (유효 ${d.recommended.frames} 프레임)`);
         } else {
-          message.warning(`CH${item.channel} 어떤 속도에서도 프레임 미수신 — 버스 연결/전원을 확인하세요`);
+          message.warning(`CH${item.channel} 진짜 트래픽 미검출 — 버스 연결/전원 또는 채널 점유 확인`);
         }
       } catch (e: any) {
         const emsg = e?.response?.data?.detail || e?.message || String(e);
@@ -1414,10 +1420,15 @@ export default function DevicePage() {
       }
     };
 
-    // 추천값을 해당 행에 적용 (bitrate/data_bitrate 채움)
-    const applyScanReco = (idx: number, reco: { bitrate: number; data_bitrate: number | null }) => {
+    // 추천값을 해당 행에 적용 (bitrate/data_bitrate/CAN FD 채움)
+    const applyScanReco = (idx: number, reco: { bitrate: number; data_bitrate: number | null; is_fd?: boolean }) => {
       const next = items.map((it, i) => i === idx
-        ? { ...it, bitrate: String(reco.bitrate), data_bitrate: reco.data_bitrate == null ? 'None' : String(reco.data_bitrate) }
+        ? {
+            ...it,
+            bitrate: String(reco.bitrate),
+            is_fd: reco.is_fd ? 'True' : 'False',
+            data_bitrate: reco.data_bitrate == null ? 'None' : String(reco.data_bitrate),
+          }
         : it);
       update(next);
       message.success('추천 속도를 적용했습니다');
@@ -1595,8 +1606,10 @@ export default function DevicePage() {
             }}>
               {testResult.ok
                 ? (testResult.frames > 0
-                    ? `✓ 정상 — ${testResult.frames} 프레임 수신 (속도 일치)`
-                    : '⚠ 채널은 열렸으나 수신 프레임 없음 — 버스 idle 또는 속도 불일치')
+                    ? `✓ 정상 — 유효 ${testResult.frames} 프레임${(testResult.error_frames ?? 0) > 0 ? ` (에러 ${testResult.error_frames})` : ''}${(testResult.fd_frames ?? 0) > 0 ? ' · FD' : ''} — 속도 일치`
+                    : ((testResult.error_frames ?? 0) > 0
+                        ? `⚠ 유효 0 · 에러 ${testResult.error_frames} 프레임 — 속도 불일치 가능성`
+                        : '⚠ 채널은 열렸으나 수신 프레임 없음 — 버스 idle 또는 속도 불일치'))
                 : `✗ ${testResult.error || '테스트 실패'}`}
             </div>
           )}
@@ -1616,9 +1629,9 @@ export default function DevicePage() {
                   {scanResult.recommended ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                       <span style={{ color: '#389e0d', fontWeight: 600 }}>
-                        ★ 추천: {scanResult.recommended.bitrate / 1000}k
+                        ★ 추천: {scanResult.recommended.is_fd ? 'FD ' : ''}{scanResult.recommended.bitrate / 1000}k
                         {scanResult.recommended.data_bitrate ? ` / ${scanResult.recommended.data_bitrate / 1000000}M` : ''}
-                        {' '}({scanResult.recommended.frames} 프레임)
+                        {' '}(유효 {scanResult.recommended.frames} 프레임)
                       </span>
                       <Button size="small" type="primary" onClick={() => applyScanReco(idx, scanResult.recommended!)}>
                         적용
@@ -1632,18 +1645,23 @@ export default function DevicePage() {
                   {scanResult.results.map((rr, ri) => {
                     const isReco = scanResult.recommended
                       && rr.bitrate === scanResult.recommended.bitrate
-                      && rr.data_bitrate === scanResult.recommended.data_bitrate;
+                      && rr.data_bitrate === scanResult.recommended.data_bitrate
+                      && !!rr.is_fd === !!scanResult.recommended.is_fd;
+                    const valid = rr.valid_frames ?? rr.frames;
+                    const errs = rr.error_frames ?? 0;
                     return (
                       <div key={ri} style={{
                         display: 'flex', justifyContent: 'space-between',
-                        color: rr.frames > 0 ? '#389e0d' : (rr.opened ? '#999' : '#cf1322'),
+                        color: valid > 0 ? '#389e0d' : (rr.opened ? '#999' : '#cf1322'),
                         fontWeight: isReco ? 600 : 400,
                       }}>
                         <span>
-                          {rr.bitrate / 1000}k{rr.data_bitrate ? ` / ${rr.data_bitrate / 1000000}M` : ''}
+                          {rr.is_fd ? 'FD ' : ''}{rr.bitrate / 1000}k{rr.data_bitrate ? ` / ${rr.data_bitrate / 1000000}M` : ''}
                         </span>
                         <span>
-                          {rr.opened ? `${rr.frames} 프레임` : (rr.error ? '열기 실패' : '—')}
+                          {rr.opened
+                            ? `유효 ${valid}${errs > 0 ? ` · 에러 ${errs}` : ''}${(rr.fd_frames ?? 0) > 0 ? ' · FD' : ''}`
+                            : (rr.error ? '열기 실패' : '—')}
                         </span>
                       </div>
                     );
@@ -2366,6 +2384,58 @@ export default function DevicePage() {
                                     {w.width > 0 && <Tag style={{ marginLeft: 6 }}>{w.width}×{w.height}</Tag>}
                                     {dup && <Tag color="default" style={{ marginLeft: 6 }}>{t('device.alreadyRegistered')}</Tag>}
                                     {busy && <Tag color="orange" style={{ marginLeft: 6 }}>{t('device.webcamInUseByRecording')}</Tag>}
+                                  </div>
+                                </List.Item>
+                              );
+                            }}
+                          />
+                        ),
+                      });
+                    }
+
+                    if (scanItemCategory('vector') === modalCategory && (scannedVector.channels.length > 0 || scannedVector.driver_missing)) {
+                      scanTabs.push({
+                        key: 'vector',
+                        label: <span>Vector-Hardware <Tag style={{ marginLeft: 3 }}>{scannedVector.channels.length}</Tag></span>,
+                        children: scannedVector.driver_missing ? (
+                          <div style={{ fontSize: 12, color: '#cf1322', padding: 8 }}>
+                            {scannedVector.error || 'Vector XL Driver Library(vxlapi64.dll)가 설치되어 있지 않습니다.'}
+                          </div>
+                        ) : (
+                          <List
+                            size="small"
+                            bordered
+                            dataSource={scannedVector.channels}
+                            pagination={scannedVector.channels.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
+                            renderItem={(ch) => {
+                              const canoe = allDevices.find(x => x.type === 'module' && x.info?.module === 'CANoe_Ctrl' && ((x.info?.connect_type as string) || 'none') === 'none');
+                              const prev: any[] = Array.isArray(canoe?.info?.device_info) ? (canoe!.info!.device_info as any[]) : [];
+                              const already = prev.some((c: any) => Number(c.channel_index) === ch.channel_index);
+                              const doAdd = async () => {
+                                try {
+                                  const merged = [...prev, {
+                                    channel_index: ch.channel_index, channel_name: ch.name,
+                                    app_name: '', bitrate: 500000, data_bitrate: null, is_fd: false,
+                                  }];
+                                  await connectDevice('module', 'CANoe_Ctrl', undefined, 'CANoe_Ctrl', 'auxiliary', 'CANoe_Ctrl', 'none', { device_info: merged });
+                                  message.success(`Vector 채널 추가: ${ch.name} (기본 500k, 필요 시 테스트/자동추천으로 조정)`);
+                                  closeAddModal();
+                                } catch (e: any) {
+                                  message.error(e.response?.data?.detail || 'Connect failed');
+                                }
+                              };
+                              return (
+                                <List.Item actions={[
+                                  already
+                                    ? <Tag color="success">추가됨</Tag>
+                                    : <Button size="small" type="primary" loading={connecting} onClick={doAdd}>{t('common.add')}</Button>,
+                                ]}>
+                                  <div>
+                                    <Tag color="cyan">Vector</Tag>
+                                    <strong>{ch.name}</strong>
+                                    <Tag style={{ marginLeft: 6 }}>idx {ch.channel_index}</Tag>
+                                    {ch.supports_fd && <Tag color="blue" style={{ marginLeft: 4 }}>FD</Tag>}
+                                    {ch.is_on_bus && <Tag color="green" style={{ marginLeft: 4 }}>on-bus</Tag>}
                                   </div>
                                 </List.Item>
                               );
@@ -3320,6 +3390,7 @@ export default function DevicePage() {
             { key: 'dlt',            label: 'DLT',            proto: 'TCP',      editablePorts: false },
             { key: 'bench',          label: 'WoohyunBench',   proto: 'UDP',      editablePorts: false },
             { key: 'vision_camera',  label: 'Vision Camera',  proto: 'GigE',     editablePorts: false },
+            { key: 'vector',         label: 'Vector-Hardware',proto: 'XL',       editablePorts: false },
             { key: 'webcam',         label: 'Webcam',         proto: 'USB',      editablePorts: false },
             { key: 'ssh',            label: 'SSH',            proto: 'TCP',      editablePorts: false },
             { key: 'smartbench',     label: 'SmartBench',     proto: 'TCP',      editablePorts: false },
