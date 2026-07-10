@@ -1262,12 +1262,17 @@ class MIBAgentService:
     # Touch (press/drag/release) — ref RemoteController.excutecmdTouch*
     # ------------------------------------------------------------------
     def _touch_frame(self, x: int, y: int, end_byte: int) -> str:
-        # MIB 터치 디지타이저 = 화면 / max(2, mult),  mult = int(res/1023)+1.
-        # 실측: 폭<2046(mult≤2)은 ÷2, 폭 2240(15", mult=3)은 ÷3 (frontend 1420→screen 2160 데이터).
-        #       높이<1023(mult=1)도 floor 2로 ÷2 (10.4" 878 검증). mult=1을 그대로 ÷1하면 2배 어긋남.
+        # MIB 터치 스케일 = 화면 / mult,  mult = int(res/1023)+1 (축별 독립).
+        # 시료 firmware 확정(set_resolution.sh + touch_event.sh + 프로토콜 분석):
+        #   - ksend 좌표는 축당 10비트(0~1023)라 mult는 화면좌표를 1023 범위에 맞추는 분주비.
+        #   - touch_event.sh 공식 주석: 10"(1560x878)=X/2·Y/1, 15"(2240x1260)=X/3·Y/2,
+        #     8"MQB(800x480)=X/1·Y/1 → 전부 축별 int(res/1023)+1 과 일치.
+        #   - touch-app SetFakeResolution(%.6f) = 1/mult.
+        # 과거 max(2, mult) 플로어는 800x480/1280x640/1560x878 축에서 잘못 ÷2를 강제(MQB
+        # 좌상단 1/4 버그의 원인)해 제거. _x_mult/_y_mult 는 이미 ≥1이라 max(1,..)은 방어용.
         # 화면좌표를 디지타이저 좌표로 변환 후 mult=1로 인코딩(참조의 ÷mult 사전클램프 버그 회피).
-        dvx = max(2, self._x_mult)
-        dvy = max(2, self._y_mult)
+        dvx = max(1, self._x_mult)
+        dvy = max(1, self._y_mult)
         xs = self._touch_x_scale if self._touch_x_scale is not None else (1.0 / dvx)
         ys = self._touch_y_scale if self._touch_y_scale is not None else (1.0 / dvy)
         dx = int(round(int(x) * xs)) + self._touch_x_offset
