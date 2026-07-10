@@ -1131,6 +1131,7 @@ class DLTLogging:
         # (재생 중 "서버 연결 중..." 배너 깜빡임의 원인). append-only 로그이므로
         # 직전에 검사한 지점(scanned) 이후 새 라인만 검사해도 결과가 동일하다.
         scanned = self._clear_base
+        start = time.monotonic()
 
         for attempt in range(1, max_retries + 1):
             with self._lock:
@@ -1148,7 +1149,12 @@ class DLTLogging:
             if attempt < max_retries:
                 logger.info("[DLTLogging] ExpectFound: '%s' not found, retry %d/%d (next in %.1fs)",
                             keyword, attempt, max_retries, interval)
-                time.sleep(interval)
+                # 다음 체크 예정 시각까지만 대기 — 스캔에 쓴 시간을 interval에서 차감해
+                # 전체 wall-clock이 timeout(총 대기 시간)에 수렴하게 한다. (스캔 시간이
+                # 매 회차 위에 더해져 timeout을 초과하던 문제 수정.)
+                remaining = (start + attempt * interval) - time.monotonic()
+                if remaining > 0:
+                    time.sleep(remaining)
 
         logger.info("[DLTLogging] ExpectFound FAIL: '%s' not found after %d retries (%.0fs)",
                     keyword, max_retries, timeout_sec)
@@ -1177,6 +1183,7 @@ class DLTLogging:
         # 새 라인만 확인해도 "한 번이라도 나타나면 FAIL" 판정이 동일하다. 전체 재스캔의
         # GIL 점유(이벤트 루프 굶김)를 제거한다.
         scanned = self._clear_base
+        start = time.monotonic()
 
         for attempt in range(1, max_retries + 1):
             with self._lock:
@@ -1194,7 +1201,11 @@ class DLTLogging:
             if attempt < max_retries:
                 logger.info("[DLTLogging] ExpectNotFound: '%s' absent, check %d/%d (next in %.1fs)",
                             keyword, attempt, max_retries, interval)
-                time.sleep(interval)
+                # 다음 체크 예정 시각까지만 대기 — 스캔 시간을 interval에서 차감해
+                # 전체 wall-clock이 timeout(총 대기 시간)에 수렴하게 한다.
+                remaining = (start + attempt * interval) - time.monotonic()
+                if remaining > 0:
+                    time.sleep(remaining)
 
         logger.info("[DLTLogging] ExpectNotFound PASS: '%s' not found after %d checks (%.0fs)",
                     keyword, max_retries, timeout_sec)

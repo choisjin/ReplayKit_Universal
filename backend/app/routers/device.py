@@ -2240,6 +2240,128 @@ async def mib_detect_resolution(req: MibDetectResolutionRequest):
     }
 
 
+class TestCanChannelRequest(BaseModel):
+    """CANoe_Ctrl 수동 등록 시 채널별 bitrate/data_bitrate 사용 가능 여부 테스트."""
+    channel: int = 0
+    app_name: str = "CANoe"
+    bitrate: int = 500000
+    data_bitrate: Optional[int] = None
+    is_fd: bool = False
+    duration_s: float = 2.0
+
+
+def _test_can_channel_blocking(channel: int, app_name: str, bitrate: int,
+                               data_bitrate: Optional[int], is_fd: bool,
+                               duration_s: float) -> dict:
+    """단일 CAN 채널을 listen-only(수신 전용)로 열어 프레임 수신 여부를 확인한다.
+
+    listen_only=True 는 버스에 ACK 를 보내지 않으므로 실차 버스를 방해하지 않는다.
+    - 채널 open 실패 → bitrate/드라이버/채널 할당 문제 (success=False, error).
+    - open 성공 + frames>0 → bitrate/data_bitrate 가 실제 버스와 일치 (디코딩 성공).
+    - open 성공 + frames==0 → 버스가 idle 이거나 속도 불일치 (판정 보류, warning).
+    """
+    import time as _t
+    result: dict = {"success": False, "opened": False, "frames": 0, "error": None}
+
+    try:
+        from can.interfaces.vector import VectorBus
+    except Exception as e:  # pragma: no cover - 환경 의존
+        result["error"] = f"python-can Vector 인터페이스 로드 실패: {e}"
+        return result
+
+    bus = None
+    try:
+        kwargs = dict(
+            channel=channel, app_name=app_name, bitrate=bitrate,
+            fd=bool(is_fd), listen_only=True, receive_own_messages=False,
+        )
+        if is_fd:
+            # CANoe_Ctrl.__init__ 의 FD 타이밍 값과 동일하게 맞춤
+            kwargs.update(data_bitrate=data_bitrate, sjw_abr=2, tseg1_abr=6, tseg2_abr=3)
+        try:
+            bus = VectorBus(**kwargs)
+        except TypeError:
+            # 일부 python-can 버전은 listen_only 미지원 → 폴백
+            kwargs.pop("listen_only", None)
+            bus = VectorBus(**kwargs)
+        result["opened"] = True
+    except Exception as e:
+        msg = str(e)
+        low = msg.lower()
+        if "has not been loaded" in low or "vxlapi" in low:
+            result["error"] = ("Vector XL Driver Library(vxlapi64.dll)가 설치되어 있지 않습니다. "
+                               "Vector XL Driver Library 또는 CANoe 를 설치하세요.")
+        else:
+            result["error"] = f"채널 열기 실패: {msg}"
+        return result
+
+    try:
+        count = 0
+        end = _t.monotonic() + max(0.2, float(duration_s))
+        while _t.monotonic() < end:
+            try:
+                m = bus.recv(timeout=0.2)
+            except Exception:
+                m = None
+            if m is not None:
+                count += 1
+        result["frames"] = count
+        result["success"] = True
+    finally:
+        try:
+            if bus is not None:
+                bus.shutdown()
+        except Exception:
+            pass
+    return result
+
+
+@router.post("/test-can-channel")
+async def test_can_channel(req: TestCanChannelRequest):
+    """CANoe_Ctrl 채널의 bitrate/data_bitrate 가 실제 버스에서 통신 가능한지 테스트.
+
+    listen-only 모드로 열어 지정 시간 동안 프레임을 세어 반환한다.
+    CANoe_Ctrl 전용 단일 스레드 executor 에서 열기+수신+종료를 모두 수행해
+    Vector 핸들을 동일 스레드에서 생성/사용/해제한다.
+    """
+    import asyncio
+    import functools
+    from ..services.module_service import _get_module_executor
+
+    if req.is_fd and not req.data_bitrate:
+        raise HTTPException(status_code=400,
+                            detail="CAN FD 채널은 data_bitrate 가 필요합니다.")
+
+    loop = asyncio.get_event_loop()
+    executor = _get_module_executor("CANoe_Ctrl")
+    fn = functools.partial(
+        _test_can_channel_blocking,
+        req.channel, req.app_name, req.bitrate, req.data_bitrate,
+        bool(req.is_fd), req.duration_s,
+    )
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(executor, fn),
+            timeout=max(5.0, req.duration_s + 8.0),
+        )
+    except asyncio.TimeoutError:
+        return {"ok": False, "success": False, "frames": 0,
+                "error": "테스트 시간 초과 (다른 CANoe 작업이 실행 중일 수 있음)"}
+
+    ok = bool(result.get("success"))
+    return {
+        "ok": ok,
+        "success": ok,
+        "opened": bool(result.get("opened")),
+        "frames": int(result.get("frames") or 0),
+        "error": result.get("error"),
+        "channel": req.channel,
+        "bitrate": req.bitrate,
+        "data_bitrate": req.data_bitrate,
+        "is_fd": bool(req.is_fd),
+    }
+
+
 class UpdateHkmcKeysRequest(BaseModel):
     device_id: str
     keys: dict[str, dict]  # name → {cmd?, key?, dial?, visible?}

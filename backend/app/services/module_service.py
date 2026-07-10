@@ -272,6 +272,7 @@ def list_available_modules() -> list[dict]:
         {"name": "CANoe_Ctrl", "label": "CANoe_Ctrl (Vector HW)", "connect_type": "none",
          "connect_fields": [
              {"name": "device_info", "label": "채널 구성", "type": "object_list",
+              "row_test": "canoe_channel",
               "default_items": [
                   {"channel": 0, "app_name": "CANoe", "bitrate": 500000, "data_bitrate": None, "is_fd": False},
               ],

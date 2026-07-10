@@ -31,6 +31,8 @@ interface ConnectField {
   // select 타입 전용: 정적 options 대신 이 백엔드 endpoint 에서 옵션을 live 조회.
   // 예: SCAR 의 '/api/device/scar/versions' → {ok, versions:[...]}. 실패 시 자유 입력 폴백.
   options_endpoint?: string;
+  // object_list 전용: 각 row에 테스트 버튼 노출 (예: 'canoe_channel' → CAN 채널 통신 테스트)
+  row_test?: string;
 }
 
 interface ModuleInfo {
@@ -323,6 +325,9 @@ export default function DevicePage() {
   const [forceIpSubnet, setForceIpSubnet] = useState('255.255.255.0');
   const [forceIpGateway, setForceIpGateway] = useState('0.0.0.0');
   const [forceIpLoading, setForceIpLoading] = useState(false);
+  // CANoe 채널 테스트: 행 키(`${fieldName}:${idx}`) → 로딩/결과
+  const [canTestLoading, setCanTestLoading] = useState<Record<string, boolean>>({});
+  const [canTestResult, setCanTestResult] = useState<Record<string, { ok: boolean; frames: number; error?: string | null; opened?: boolean }>>({});
   const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'bmw_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
   // BMW RSE Agent 전용 — 캡처 백엔드(adb screencap vs WebOS 컴포지터) + 해상도 fallback
   const [bmwCaptureBackend, setBmwCaptureBackend] = useState<'auto' | 'adb' | 'webos'>('auto');
@@ -1330,22 +1335,66 @@ export default function DevicePage() {
       update(next);
     };
 
+    // CANoe 채널 통신 테스트 (listen-only): bitrate/data_bitrate 사용 가능 여부 확인
+    const testCanRow = async (item: Record<string, any>, idx: number) => {
+      const key = `${f.name}:${idx}`;
+      const isFd = String(item.is_fd) === 'true' || item.is_fd === true;
+      const dataBitrate = item.data_bitrate == null || String(item.data_bitrate) === 'None' || String(item.data_bitrate) === ''
+        ? null : Number(item.data_bitrate);
+      if (isFd && !dataBitrate) {
+        message.warning('CAN FD 채널은 Data Bitrate 를 선택하세요');
+        return;
+      }
+      setCanTestLoading(prev => ({ ...prev, [key]: true }));
+      setCanTestResult(prev => { const n = { ...prev }; delete n[key]; return n; });
+      try {
+        const res = await deviceApi.testCanChannel({
+          channel: Number(item.channel ?? 0),
+          app_name: String(item.app_name ?? 'CANoe'),
+          bitrate: Number(item.bitrate ?? 500000),
+          data_bitrate: isFd ? dataBitrate : null,
+          is_fd: isFd,
+          duration_s: 2.0,
+        });
+        const d = res.data || {};
+        setCanTestResult(prev => ({ ...prev, [key]: { ok: !!d.ok, frames: Number(d.frames || 0), error: d.error, opened: !!d.opened } }));
+        if (!d.ok) {
+          message.error(`CH${item.channel} 테스트 실패: ${d.error || '알 수 없는 오류'}`);
+        } else if (Number(d.frames || 0) > 0) {
+          message.success(`CH${item.channel} 정상 — ${d.frames} 프레임 수신 (속도 일치)`);
+        } else {
+          message.warning(`CH${item.channel} 채널은 열렸으나 수신 프레임 없음 — 버스 idle 또는 속도 불일치`);
+        }
+      } catch (e: any) {
+        const emsg = e?.response?.data?.detail || e?.message || String(e);
+        setCanTestResult(prev => ({ ...prev, [key]: { ok: false, frames: 0, error: emsg } }));
+        message.error(`테스트 요청 실패: ${emsg}`);
+      } finally {
+        setCanTestLoading(prev => ({ ...prev, [key]: false }));
+      }
+    };
+
     return (
       <div style={{ border: '1px solid #e0e0e0', borderRadius: 4, padding: 6, background: '#fafafa' }}>
         {items.length === 0 && (
           <div style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>채널 없음 — 추가 버튼으로 등록하세요</div>
         )}
-        {items.map((item, idx) => (
+        {items.map((item, idx) => {
+        const rowKey = `${f.name}:${idx}`;
+        const testResult = canTestResult[rowKey];
+        return (
           <div key={idx} style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${itemFields.length}, minmax(0, 1fr)) auto`,
-            gap: 4,
-            alignItems: 'end',
             marginBottom: 4,
             padding: 4,
             background: '#fff',
             border: '1px solid #eee',
             borderRadius: 3,
+          }}>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${itemFields.length}, minmax(0, 1fr)) auto`,
+            gap: 4,
+            alignItems: 'end',
           }}>
             {itemFields.map(sf => (
               <div key={sf.name} style={{ minWidth: 0 }}>
@@ -1375,15 +1424,46 @@ export default function DevicePage() {
                 )}
               </div>
             ))}
-            <Button
-              size="small"
-              danger
-              icon={<DeleteOutlined />}
-              onClick={() => removeItem(idx)}
-              title="이 행 제거"
-            />
+            <div style={{ display: 'flex', gap: 4, alignItems: 'end' }}>
+              {f.row_test === 'canoe_channel' && (
+                <Button
+                  size="small"
+                  icon={<ApiOutlined />}
+                  loading={!!canTestLoading[rowKey]}
+                  onClick={() => testCanRow(item, idx)}
+                  title="이 채널의 속도로 통신 가능한지 테스트 (listen-only)"
+                >
+                  테스트
+                </Button>
+              )}
+              <Button
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => removeItem(idx)}
+                title="이 행 제거"
+              />
+            </div>
           </div>
-        ))}
+          {f.row_test === 'canoe_channel' && testResult && (
+            <div style={{
+              fontSize: 11,
+              marginTop: 3,
+              padding: '2px 6px',
+              borderRadius: 3,
+              background: testResult.ok ? (testResult.frames > 0 ? '#f6ffed' : '#fffbe6') : '#fff1f0',
+              color: testResult.ok ? (testResult.frames > 0 ? '#389e0d' : '#d48806') : '#cf1322',
+              border: `1px solid ${testResult.ok ? (testResult.frames > 0 ? '#b7eb8f' : '#ffe58f') : '#ffa39e'}`,
+            }}>
+              {testResult.ok
+                ? (testResult.frames > 0
+                    ? `✓ 정상 — ${testResult.frames} 프레임 수신 (속도 일치)`
+                    : '⚠ 채널은 열렸으나 수신 프레임 없음 — 버스 idle 또는 속도 불일치')
+                : `✗ ${testResult.error || '테스트 실패'}`}
+            </div>
+          )}
+          </div>
+        );})}
         <Button size="small" icon={<PlusOutlined />} onClick={addItem} style={{ marginTop: 2 }}>
           채널 추가
         </Button>

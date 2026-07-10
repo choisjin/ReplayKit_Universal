@@ -39,6 +39,9 @@ export const deviceApi = {
     api.post('/device/mib-keys', { device_id: deviceId, keys }),
   detectMibResolution: (deviceId: string) =>
     api.post('/device/mib/detect_resolution', { device_id: deviceId }),
+  // CANoe_Ctrl 수동 등록 시 채널별 bitrate/data_bitrate 사용 가능 여부 테스트 (listen-only)
+  testCanChannel: (payload: { channel: number; app_name?: string; bitrate: number; data_bitrate?: number | null; is_fd: boolean; duration_s?: number }) =>
+    api.post('/device/test-can-channel', payload),
   disconnect: (deviceId: string) => api.post('/device/disconnect', { address: deviceId }),
   updateDevice: (device_id: string, updates: Record<string, any>) =>
     api.post('/device/update', { device_id, ...updates }),
