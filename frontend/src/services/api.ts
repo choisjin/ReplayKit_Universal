@@ -40,11 +40,13 @@ export const deviceApi = {
   detectMibResolution: (deviceId: string) =>
     api.post('/device/mib/detect_resolution', { device_id: deviceId }),
   // CANoe_Ctrl 수동 등록 시 채널별 bitrate/data_bitrate 사용 가능 여부 테스트 (listen-only)
-  testCanChannel: (payload: { channel: number; app_name?: string; bitrate: number; data_bitrate?: number | null; is_fd: boolean; duration_s?: number }) =>
+  testCanChannel: (payload: { channel: number; app_name?: string; bitrate: number; data_bitrate?: number | null; is_fd: boolean; duration_s?: number; channel_index?: number | null }) =>
     api.post('/device/test-can-channel', payload),
   // 여러 속도 후보를 순차 시도해 최적 bitrate/data_bitrate 자동 추천 (listen-only)
-  scanCanChannel: (payload: { channel: number; app_name?: string; is_fd: boolean; duration_s?: number }) =>
+  scanCanChannel: (payload: { channel: number; app_name?: string; is_fd: boolean; duration_s?: number; channel_index?: number | null }) =>
     api.post('/device/scan-can-channel', payload),
+  // 장치 관리자의 Vector-Hardware(VN1630A 등) 채널 자동 열거 → 사용자가 선택
+  listVectorChannels: () => api.get('/device/vector/channels'),
   disconnect: (deviceId: string) => api.post('/device/disconnect', { address: deviceId }),
   updateDevice: (device_id: string, updates: Record<string, any>) =>
     api.post('/device/update', { device_id, ...updates }),

@@ -331,6 +331,10 @@ export default function DevicePage() {
   // CANoe 자동 추천 스윕: 행 키 → 로딩/결과
   const [canScanLoading, setCanScanLoading] = useState<Record<string, boolean>>({});
   const [canScanResult, setCanScanResult] = useState<Record<string, { ok: boolean; is_fd?: boolean; results: { bitrate: number; data_bitrate: number | null; opened: boolean; frames: number; error?: string | null }[]; recommended?: { bitrate: number; data_bitrate: number | null; frames: number } | null; error?: string | null }>>({});
+  // Vector 하드웨어 채널 스캔: object_list 필드명 → 로딩/결과
+  type VectorChannel = { name: string; channel_index: number; hw_channel: number; serial: number; hw_type: string; transceiver: string; is_on_bus: boolean; supports_fd: boolean };
+  const [vectorScanLoading, setVectorScanLoading] = useState<Record<string, boolean>>({});
+  const [vectorChannels, setVectorChannels] = useState<Record<string, VectorChannel[]>>({});
   const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'bmw_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
   // BMW RSE Agent 전용 — 캡처 백엔드(adb screencap vs WebOS 컴포지터) + 해상도 fallback
   const [bmwCaptureBackend, setBmwCaptureBackend] = useState<'auto' | 'adb' | 'webos'>('auto');
@@ -1358,6 +1362,7 @@ export default function DevicePage() {
           data_bitrate: isFd ? dataBitrate : null,
           is_fd: isFd,
           duration_s: 2.0,
+          channel_index: item.channel_index != null && item.channel_index !== '' ? Number(item.channel_index) : null,
         });
         const d = res.data || {};
         setCanTestResult(prev => ({ ...prev, [key]: { ok: !!d.ok, frames: Number(d.frames || 0), error: d.error, opened: !!d.opened } }));
@@ -1389,6 +1394,7 @@ export default function DevicePage() {
           app_name: String(item.app_name ?? 'CANoe'),
           is_fd: isFd,
           duration_s: 1.2,
+          channel_index: item.channel_index != null && item.channel_index !== '' ? Number(item.channel_index) : null,
         });
         const d = res.data || {};
         setCanScanResult(prev => ({ ...prev, [key]: d }));
@@ -1417,10 +1423,82 @@ export default function DevicePage() {
       message.success('추천 속도를 적용했습니다');
     };
 
+    // 장치 관리자의 Vector 하드웨어 채널을 스캔 (사용자가 선택)
+    const scanVectorHw = async () => {
+      setVectorScanLoading(prev => ({ ...prev, [f.name]: true }));
+      try {
+        const res = await deviceApi.listVectorChannels();
+        const d = res.data || {};
+        if (!d.ok) {
+          setVectorChannels(prev => ({ ...prev, [f.name]: [] }));
+          message.error(d.error || 'Vector 채널을 찾지 못했습니다');
+          return;
+        }
+        const chs: VectorChannel[] = d.channels || [];
+        setVectorChannels(prev => ({ ...prev, [f.name]: chs }));
+        if (chs.length === 0) message.warning('감지된 Vector CAN 채널이 없습니다');
+        else message.success(`${chs.length}개 Vector 채널 감지`);
+      } catch (e: any) {
+        const emsg = e?.response?.data?.detail || e?.message || String(e);
+        message.error(`Vector 스캔 실패: ${emsg}`);
+      } finally {
+        setVectorScanLoading(prev => ({ ...prev, [f.name]: false }));
+      }
+    };
+
+    // 스캔된 채널을 새 행으로 추가 (channel_index 로 물리 채널 직접 지정)
+    const addChannelFromScan = (ch: VectorChannel) => {
+      if (items.some(it => Number(it.channel_index) === ch.channel_index)) {
+        message.info('이미 추가된 채널입니다');
+        return;
+      }
+      const proto = f.default_items?.[0] ? { ...f.default_items[0] } : {};
+      update([...items, {
+        ...proto,
+        channel_index: ch.channel_index,
+        channel_name: ch.name,
+        app_name: '',
+        is_fd: ch.supports_fd ? String(proto.is_fd ?? 'False') : 'False',
+      }]);
+      message.success(`채널 추가: ${ch.name}`);
+    };
+
+    const scannedVec = vectorChannels[f.name];
+
     return (
       <div style={{ border: '1px solid #e0e0e0', borderRadius: 4, padding: 6, background: '#fafafa' }}>
+        {f.row_test === 'canoe_channel' && (
+          <div style={{ marginBottom: 6 }}>
+            <Button
+              size="small"
+              icon={<WifiOutlined />}
+              loading={!!vectorScanLoading[f.name]}
+              onClick={scanVectorHw}
+            >
+              Vector 장치 스캔
+            </Button>
+            {scannedVec && scannedVec.length > 0 && (
+              <div style={{ marginTop: 4, border: '1px solid #e6f4ff', borderRadius: 3, background: '#f0f8ff', padding: 4 }}>
+                <div style={{ fontSize: 10, color: '#888', marginBottom: 2 }}>감지된 채널 — 선택해 추가</div>
+                {scannedVec.map((ch) => {
+                  const added = items.some(it => Number(it.channel_index) === ch.channel_index);
+                  return (
+                    <div key={ch.channel_index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, padding: '1px 0' }}>
+                      <span>
+                        {ch.name} <span style={{ color: '#999' }}>(idx {ch.channel_index}{ch.supports_fd ? ', FD' : ''}{ch.is_on_bus ? ', on-bus' : ''})</span>
+                      </span>
+                      <Button size="small" type="link" disabled={added} onClick={() => addChannelFromScan(ch)}>
+                        {added ? '추가됨' : '추가'}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
         {items.length === 0 && (
-          <div style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>채널 없음 — 추가 버튼으로 등록하세요</div>
+          <div style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>채널 없음 — 추가 버튼 또는 Vector 장치 스캔으로 등록하세요</div>
         )}
         {items.map((item, idx) => {
         const rowKey = `${f.name}:${idx}`;
@@ -1434,6 +1512,11 @@ export default function DevicePage() {
             border: '1px solid #eee',
             borderRadius: 3,
           }}>
+          {item.channel_index != null && item.channel_index !== '' && (
+            <div style={{ fontSize: 10, color: '#1677ff', marginBottom: 2 }}>
+              🔌 {item.channel_name || `Vector ch idx ${item.channel_index}`} <span style={{ color: '#999' }}>(스캔 선택 — app_name 무시)</span>
+            </div>
+          )}
           <div style={{
             display: 'grid',
             gridTemplateColumns: `repeat(${itemFields.length}, minmax(0, 1fr)) auto`,

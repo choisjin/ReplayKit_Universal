@@ -2248,6 +2248,7 @@ class TestCanChannelRequest(BaseModel):
     data_bitrate: Optional[int] = None
     is_fd: bool = False
     duration_s: float = 2.0
+    channel_index: Optional[int] = None  # 스캔 선택 채널이면 전역 인덱스로 직접 오픈
 
 
 # 자동 추천 스윕 후보값 (일반적인 자동차 CAN 속도 순으로 정렬 — 앞쪽이 더 흔함)
@@ -2262,12 +2263,13 @@ _CAN_FD_COMBOS = [
 
 def _vector_open_count(channel: int, app_name: str, bitrate: int,
                        data_bitrate: Optional[int], is_fd: bool,
-                       duration_s: float) -> dict:
+                       duration_s: float, channel_index: Optional[int] = None) -> dict:
     """단일 (bitrate, data_bitrate) 조합으로 listen-only 오픈 후 프레임 수를 센다.
 
     반환: {opened, frames, error, driver_missing}
     listen_only=True 는 버스에 ACK/에러프레임을 보내지 않아 실차 버스를 방해하지 않는다.
     driver_missing=True 면 vxlapi64.dll 미설치 → 스윕 전체를 중단해야 함.
+    channel_index 가 주어지면 스캔으로 찾은 전역 채널을 app_name 없이 직접 연다.
     """
     import time as _t
     r: dict = {"opened": False, "frames": 0, "error": None, "driver_missing": False}
@@ -2281,10 +2283,17 @@ def _vector_open_count(channel: int, app_name: str, bitrate: int,
 
     bus = None
     try:
-        kwargs = dict(
-            channel=channel, app_name=app_name, bitrate=bitrate,
-            fd=bool(is_fd), listen_only=True, receive_own_messages=False,
-        )
+        if channel_index is not None:
+            # 스캔 선택 채널: 전역 channel_index 로 직접 오픈 (app_name/Hardware Config 무관)
+            kwargs = dict(
+                channel=0, channel_index=int(channel_index), app_name=None, bitrate=bitrate,
+                fd=bool(is_fd), listen_only=True, receive_own_messages=False,
+            )
+        else:
+            kwargs = dict(
+                channel=channel, app_name=app_name, bitrate=bitrate,
+                fd=bool(is_fd), listen_only=True, receive_own_messages=False,
+            )
         if is_fd:
             # CANoe_Ctrl.__init__ 의 FD 타이밍 값과 동일하게 맞춤
             kwargs.update(data_bitrate=data_bitrate, sjw_abr=2, tseg1_abr=6, tseg2_abr=3)
@@ -2328,14 +2337,15 @@ def _vector_open_count(channel: int, app_name: str, bitrate: int,
 
 def _test_can_channel_blocking(channel: int, app_name: str, bitrate: int,
                                data_bitrate: Optional[int], is_fd: bool,
-                               duration_s: float) -> dict:
+                               duration_s: float, channel_index: Optional[int] = None) -> dict:
     """단일 CAN 채널을 listen-only 로 열어 프레임 수신 여부를 확인한다.
 
     - 채널 open 실패 → bitrate/드라이버/채널 할당 문제 (success=False, error).
     - open 성공 + frames>0 → bitrate/data_bitrate 가 실제 버스와 일치 (디코딩 성공).
     - open 성공 + frames==0 → 버스가 idle 이거나 속도 불일치 (판정 보류, warning).
     """
-    r = _vector_open_count(channel, app_name, bitrate, data_bitrate, is_fd, duration_s)
+    r = _vector_open_count(channel, app_name, bitrate, data_bitrate, is_fd, duration_s,
+                           channel_index=channel_index)
     return {
         "success": bool(r["opened"]),
         "opened": bool(r["opened"]),
@@ -2345,7 +2355,7 @@ def _test_can_channel_blocking(channel: int, app_name: str, bitrate: int,
 
 
 def _scan_can_channel_blocking(channel: int, app_name: str, is_fd: bool,
-                               duration_s: float) -> dict:
+                               duration_s: float, channel_index: Optional[int] = None) -> dict:
     """여러 속도 후보를 순차로 열어 프레임이 가장 많이 잡히는 조합을 추천한다."""
     results: list = []
     if is_fd:
@@ -2354,7 +2364,8 @@ def _scan_can_channel_blocking(channel: int, app_name: str, is_fd: bool,
         combos = [(br, None) for br in _CAN_CLASSIC_BITRATES]
 
     for br, dbr in combos:
-        r = _vector_open_count(channel, app_name, br, dbr, is_fd, duration_s)
+        r = _vector_open_count(channel, app_name, br, dbr, is_fd, duration_s,
+                               channel_index=channel_index)
         results.append({
             "bitrate": br,
             "data_bitrate": dbr,
@@ -2400,7 +2411,7 @@ async def test_can_channel(req: TestCanChannelRequest):
     fn = functools.partial(
         _test_can_channel_blocking,
         req.channel, req.app_name, req.bitrate, req.data_bitrate,
-        bool(req.is_fd), req.duration_s,
+        bool(req.is_fd), req.duration_s, req.channel_index,
     )
     try:
         result = await asyncio.wait_for(
@@ -2431,6 +2442,7 @@ class ScanCanChannelRequest(BaseModel):
     app_name: str = "CANoe"
     is_fd: bool = False
     duration_s: float = 1.2  # 후보 하나당 수신 관찰 시간
+    channel_index: Optional[int] = None  # 스캔 선택 채널이면 전역 인덱스로 직접 오픈
 
 
 @router.post("/scan-can-channel")
@@ -2449,7 +2461,7 @@ async def scan_can_channel(req: ScanCanChannelRequest):
     executor = _get_module_executor("CANoe_Ctrl")
     fn = functools.partial(
         _scan_can_channel_blocking,
-        req.channel, req.app_name, bool(req.is_fd), req.duration_s,
+        req.channel, req.app_name, bool(req.is_fd), req.duration_s, req.channel_index,
     )
     try:
         result = await asyncio.wait_for(
@@ -2462,6 +2474,87 @@ async def scan_can_channel(req: ScanCanChannelRequest):
                 "error": "스캔 시간 초과 (다른 CANoe 작업이 실행 중일 수 있음)"}
 
     result["channel"] = req.channel
+    return result
+
+
+def _list_vector_channels_blocking() -> dict:
+    """설치된 Vector XL 드라이버로 하드웨어 CAN 채널을 열거한다.
+
+    반환: {ok, driver_missing, channels:[{name, channel_index, hw_channel, serial,
+           hw_type, transceiver, is_on_bus, supports_fd}], error}
+    vxlapi64.dll 미설치면 driver_missing=True 로 graceful 반환(스캔 목록 빔).
+    """
+    result: dict = {"ok": False, "driver_missing": False, "channels": [], "error": None}
+    try:
+        from can.interfaces.vector import canlib as _vc
+    except Exception as e:
+        result["driver_missing"] = True
+        result["error"] = f"python-can Vector 인터페이스 로드 실패: {e}"
+        return result
+
+    # xldriver 가 None 이면 XL Driver Library(vxlapi64.dll) 미설치
+    if getattr(_vc, "xldriver", None) is None:
+        result["driver_missing"] = True
+        result["error"] = ("Vector XL Driver Library(vxlapi64.dll)가 설치되어 있지 않습니다. "
+                           "Vector XL Driver Library 또는 CANoe 를 설치하세요.")
+        return result
+
+    try:
+        from can.interfaces.vector import xldefine as _xd
+        configs = _vc.get_channel_configs()
+    except Exception as e:
+        result["error"] = f"채널 열거 실패: {e}"
+        return result
+
+    channels: list = []
+    for cc in configs:
+        # CAN 지원 채널만 (LIN/FlexRay 등 제외)
+        try:
+            if not (cc.channel_bus_capabilities & _xd.XL_BusCapabilities.XL_BUS_ACTIVE_CAP_CAN):
+                continue
+        except Exception:
+            pass
+        try:
+            supports_fd = bool(cc.channel_capabilities
+                               & _xd.XL_ChannelCapabilities.XL_CHANNEL_FLAG_CANFD_ISO_SUPPORT)
+        except Exception:
+            supports_fd = False
+        channels.append({
+            "name": getattr(cc, "name", ""),
+            "channel_index": int(getattr(cc, "channel_index", -1)),
+            "hw_channel": int(getattr(cc, "hw_channel", -1)),
+            "serial": int(getattr(cc, "serial_number", 0)),
+            "hw_type": str(getattr(cc, "hw_type", "")),
+            "transceiver": getattr(cc, "transceiver_name", ""),
+            "is_on_bus": bool(getattr(cc, "is_on_bus", False)),
+            "supports_fd": supports_fd,
+        })
+
+    result["ok"] = True
+    result["channels"] = channels
+    return result
+
+
+@router.get("/vector/channels")
+async def vector_channels():
+    """장치 관리자의 Vector-Hardware(예: VN1630A) 채널을 자동 열거.
+
+    사용자가 스캔 결과에서 채널을 선택해 CANoe_Ctrl 채널로 등록하도록 한다.
+    드라이버 호출은 CANoe_Ctrl 전용 스레드에서 수행.
+    """
+    import asyncio
+    from ..services.module_service import _get_module_executor
+
+    loop = asyncio.get_event_loop()
+    executor = _get_module_executor("CANoe_Ctrl")
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(executor, _list_vector_channels_blocking),
+            timeout=15.0,
+        )
+    except asyncio.TimeoutError:
+        return {"ok": False, "driver_missing": False, "channels": [],
+                "error": "채널 열거 시간 초과"}
     return result
 
 

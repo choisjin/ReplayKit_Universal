@@ -81,13 +81,22 @@ class CANoe_Ctrl:
         self.bus = []
         dev_dict = _normalize_device_info(device_info)
         for rp in range(0, len(dev_dict)):
-            if dev_dict[rp]['is_fd'] is False:
-                self.bus.append(VectorBus(channel=dev_dict[rp]['channel'], app_name=dev_dict[rp]['app_name'],
-                                          bitrate=dev_dict[rp]['bitrate'], data_bitrate=dev_dict[rp]['data_bitrate'],
+            row = dev_dict[rp]
+            # 스캔으로 선택된 채널이면 전역 channel_index 로 직접 오픈 (app_name/Hardware Config 무관).
+            # 없으면 기존 방식(app_name + 채널 인덱스)으로 오픈.
+            ci = row.get('channel_index', None)
+            if ci is not None and ci != '':
+                open_kwargs = dict(channel=0, channel_index=int(ci), app_name=None)
+            else:
+                open_kwargs = dict(channel=row['channel'], app_name=row.get('app_name', 'CANoe'))
+
+            if not row.get('is_fd'):
+                self.bus.append(VectorBus(**open_kwargs,
+                                          bitrate=row['bitrate'], data_bitrate=row.get('data_bitrate'),
                                           fd=False, receive_own_messages=True))
             else:
-                self.bus.append(VectorBus(channel=dev_dict[rp]['channel'], app_name=dev_dict[rp]['app_name'],
-                                          bitrate=dev_dict[rp]['bitrate'], data_bitrate=dev_dict[rp]['data_bitrate'],
+                self.bus.append(VectorBus(**open_kwargs,
+                                          bitrate=row['bitrate'], data_bitrate=row.get('data_bitrate'),
                                           sjw_abr=2, tseg1_abr=6, tseg2_abr=3, rx_queue_size=2 ** 16,
                                           receive_own_messages=True))
         self.CANoe_logger = None
