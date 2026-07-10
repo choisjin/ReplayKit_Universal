@@ -42,6 +42,9 @@ export const deviceApi = {
   // CANoe_Ctrl 수동 등록 시 채널별 bitrate/data_bitrate 사용 가능 여부 테스트 (listen-only)
   testCanChannel: (payload: { channel: number; app_name?: string; bitrate: number; data_bitrate?: number | null; is_fd: boolean; duration_s?: number }) =>
     api.post('/device/test-can-channel', payload),
+  // 여러 속도 후보를 순차 시도해 최적 bitrate/data_bitrate 자동 추천 (listen-only)
+  scanCanChannel: (payload: { channel: number; app_name?: string; is_fd: boolean; duration_s?: number }) =>
+    api.post('/device/scan-can-channel', payload),
   disconnect: (deviceId: string) => api.post('/device/disconnect', { address: deviceId }),
   updateDevice: (device_id: string, updates: Record<string, any>) =>
     api.post('/device/update', { device_id, ...updates }),

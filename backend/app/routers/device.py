@@ -2250,24 +2250,34 @@ class TestCanChannelRequest(BaseModel):
     duration_s: float = 2.0
 
 
-def _test_can_channel_blocking(channel: int, app_name: str, bitrate: int,
-                               data_bitrate: Optional[int], is_fd: bool,
-                               duration_s: float) -> dict:
-    """단일 CAN 채널을 listen-only(수신 전용)로 열어 프레임 수신 여부를 확인한다.
+# 자동 추천 스윕 후보값 (일반적인 자동차 CAN 속도 순으로 정렬 — 앞쪽이 더 흔함)
+_CAN_CLASSIC_BITRATES = [500000, 250000, 125000, 1000000]
+# FD 후보: (arbitration bitrate, data bitrate) — 프레임 디코딩엔 둘 다 일치해야 함
+_CAN_FD_COMBOS = [
+    (500000, 2000000), (500000, 5000000), (500000, 1000000),
+    (500000, 4000000), (500000, 8000000),
+    (250000, 2000000), (1000000, 5000000), (1000000, 2000000),
+]
 
-    listen_only=True 는 버스에 ACK 를 보내지 않으므로 실차 버스를 방해하지 않는다.
-    - 채널 open 실패 → bitrate/드라이버/채널 할당 문제 (success=False, error).
-    - open 성공 + frames>0 → bitrate/data_bitrate 가 실제 버스와 일치 (디코딩 성공).
-    - open 성공 + frames==0 → 버스가 idle 이거나 속도 불일치 (판정 보류, warning).
+
+def _vector_open_count(channel: int, app_name: str, bitrate: int,
+                       data_bitrate: Optional[int], is_fd: bool,
+                       duration_s: float) -> dict:
+    """단일 (bitrate, data_bitrate) 조합으로 listen-only 오픈 후 프레임 수를 센다.
+
+    반환: {opened, frames, error, driver_missing}
+    listen_only=True 는 버스에 ACK/에러프레임을 보내지 않아 실차 버스를 방해하지 않는다.
+    driver_missing=True 면 vxlapi64.dll 미설치 → 스윕 전체를 중단해야 함.
     """
     import time as _t
-    result: dict = {"success": False, "opened": False, "frames": 0, "error": None}
+    r: dict = {"opened": False, "frames": 0, "error": None, "driver_missing": False}
 
     try:
         from can.interfaces.vector import VectorBus
     except Exception as e:  # pragma: no cover - 환경 의존
-        result["error"] = f"python-can Vector 인터페이스 로드 실패: {e}"
-        return result
+        r["error"] = f"python-can Vector 인터페이스 로드 실패: {e}"
+        r["driver_missing"] = True
+        return r
 
     bus = None
     try:
@@ -2284,16 +2294,17 @@ def _test_can_channel_blocking(channel: int, app_name: str, bitrate: int,
             # 일부 python-can 버전은 listen_only 미지원 → 폴백
             kwargs.pop("listen_only", None)
             bus = VectorBus(**kwargs)
-        result["opened"] = True
+        r["opened"] = True
     except Exception as e:
         msg = str(e)
         low = msg.lower()
         if "has not been loaded" in low or "vxlapi" in low:
-            result["error"] = ("Vector XL Driver Library(vxlapi64.dll)가 설치되어 있지 않습니다. "
-                               "Vector XL Driver Library 또는 CANoe 를 설치하세요.")
+            r["error"] = ("Vector XL Driver Library(vxlapi64.dll)가 설치되어 있지 않습니다. "
+                          "Vector XL Driver Library 또는 CANoe 를 설치하세요.")
+            r["driver_missing"] = True
         else:
-            result["error"] = f"채널 열기 실패: {msg}"
-        return result
+            r["error"] = f"채널 열기 실패: {msg}"
+        return r
 
     try:
         count = 0
@@ -2305,15 +2316,67 @@ def _test_can_channel_blocking(channel: int, app_name: str, bitrate: int,
                 m = None
             if m is not None:
                 count += 1
-        result["frames"] = count
-        result["success"] = True
+        r["frames"] = count
     finally:
         try:
             if bus is not None:
                 bus.shutdown()
         except Exception:
             pass
-    return result
+    return r
+
+
+def _test_can_channel_blocking(channel: int, app_name: str, bitrate: int,
+                               data_bitrate: Optional[int], is_fd: bool,
+                               duration_s: float) -> dict:
+    """단일 CAN 채널을 listen-only 로 열어 프레임 수신 여부를 확인한다.
+
+    - 채널 open 실패 → bitrate/드라이버/채널 할당 문제 (success=False, error).
+    - open 성공 + frames>0 → bitrate/data_bitrate 가 실제 버스와 일치 (디코딩 성공).
+    - open 성공 + frames==0 → 버스가 idle 이거나 속도 불일치 (판정 보류, warning).
+    """
+    r = _vector_open_count(channel, app_name, bitrate, data_bitrate, is_fd, duration_s)
+    return {
+        "success": bool(r["opened"]),
+        "opened": bool(r["opened"]),
+        "frames": int(r["frames"]),
+        "error": r["error"],
+    }
+
+
+def _scan_can_channel_blocking(channel: int, app_name: str, is_fd: bool,
+                               duration_s: float) -> dict:
+    """여러 속도 후보를 순차로 열어 프레임이 가장 많이 잡히는 조합을 추천한다."""
+    results: list = []
+    if is_fd:
+        combos = _CAN_FD_COMBOS
+    else:
+        combos = [(br, None) for br in _CAN_CLASSIC_BITRATES]
+
+    for br, dbr in combos:
+        r = _vector_open_count(channel, app_name, br, dbr, is_fd, duration_s)
+        results.append({
+            "bitrate": br,
+            "data_bitrate": dbr,
+            "opened": bool(r["opened"]),
+            "frames": int(r["frames"]),
+            "error": r["error"],
+        })
+        # 드라이버 미설치 등 치명적 오류면 스윕 중단 (나머지도 전부 실패할 것)
+        if r["driver_missing"]:
+            return {"ok": False, "is_fd": is_fd, "results": results,
+                    "recommended": None, "error": r["error"]}
+
+    # 추천: 프레임>0 중 최다 수신. 동률이면 후보 리스트 앞쪽(더 흔한 값) 우선.
+    scored = [x for x in results if x["frames"] > 0]
+    recommended = None
+    if scored:
+        best = max(scored, key=lambda x: x["frames"])
+        recommended = {"bitrate": best["bitrate"], "data_bitrate": best["data_bitrate"],
+                       "frames": best["frames"]}
+
+    return {"ok": True, "is_fd": is_fd, "results": results,
+            "recommended": recommended, "error": None}
 
 
 @router.post("/test-can-channel")
@@ -2360,6 +2423,46 @@ async def test_can_channel(req: TestCanChannelRequest):
         "data_bitrate": req.data_bitrate,
         "is_fd": bool(req.is_fd),
     }
+
+
+class ScanCanChannelRequest(BaseModel):
+    """채널의 최적 bitrate/data_bitrate 자동 추천 스윕."""
+    channel: int = 0
+    app_name: str = "CANoe"
+    is_fd: bool = False
+    duration_s: float = 1.2  # 후보 하나당 수신 관찰 시간
+
+
+@router.post("/scan-can-channel")
+async def scan_can_channel(req: ScanCanChannelRequest):
+    """여러 속도 후보를 순차로 시도해 프레임이 가장 많이 잡히는 조합을 추천.
+
+    listen-only 로만 열어 실차 버스를 방해하지 않는다. 후보 개수 × duration_s
+    만큼 시간이 걸리므로 timeout 을 넉넉히 잡는다.
+    """
+    import asyncio
+    import functools
+    from ..services.module_service import _get_module_executor
+
+    n_candidates = len(_CAN_FD_COMBOS) if req.is_fd else len(_CAN_CLASSIC_BITRATES)
+    loop = asyncio.get_event_loop()
+    executor = _get_module_executor("CANoe_Ctrl")
+    fn = functools.partial(
+        _scan_can_channel_blocking,
+        req.channel, req.app_name, bool(req.is_fd), req.duration_s,
+    )
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(executor, fn),
+            # 후보당 (관찰시간 + open/close 오버헤드 ~1.5s) + 여유
+            timeout=max(15.0, n_candidates * (req.duration_s + 1.5) + 5.0),
+        )
+    except asyncio.TimeoutError:
+        return {"ok": False, "results": [], "recommended": None,
+                "error": "스캔 시간 초과 (다른 CANoe 작업이 실행 중일 수 있음)"}
+
+    result["channel"] = req.channel
+    return result
 
 
 class UpdateHkmcKeysRequest(BaseModel):

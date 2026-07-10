@@ -328,6 +328,9 @@ export default function DevicePage() {
   // CANoe 채널 테스트: 행 키(`${fieldName}:${idx}`) → 로딩/결과
   const [canTestLoading, setCanTestLoading] = useState<Record<string, boolean>>({});
   const [canTestResult, setCanTestResult] = useState<Record<string, { ok: boolean; frames: number; error?: string | null; opened?: boolean }>>({});
+  // CANoe 자동 추천 스윕: 행 키 → 로딩/결과
+  const [canScanLoading, setCanScanLoading] = useState<Record<string, boolean>>({});
+  const [canScanResult, setCanScanResult] = useState<Record<string, { ok: boolean; is_fd?: boolean; results: { bitrate: number; data_bitrate: number | null; opened: boolean; frames: number; error?: string | null }[]; recommended?: { bitrate: number; data_bitrate: number | null; frames: number } | null; error?: string | null }>>({});
   const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'bmw_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
   // BMW RSE Agent 전용 — 캡처 백엔드(adb screencap vs WebOS 컴포지터) + 해상도 fallback
   const [bmwCaptureBackend, setBmwCaptureBackend] = useState<'auto' | 'adb' | 'webos'>('auto');
@@ -1374,6 +1377,46 @@ export default function DevicePage() {
       }
     };
 
+    // CANoe 자동 추천: 여러 속도 후보를 순차 시도 → 최적값 추천
+    const scanCanRow = async (item: Record<string, any>, idx: number) => {
+      const key = `${f.name}:${idx}`;
+      const isFd = String(item.is_fd) === 'true' || item.is_fd === true;
+      setCanScanLoading(prev => ({ ...prev, [key]: true }));
+      setCanScanResult(prev => { const n = { ...prev }; delete n[key]; return n; });
+      try {
+        const res = await deviceApi.scanCanChannel({
+          channel: Number(item.channel ?? 0),
+          app_name: String(item.app_name ?? 'CANoe'),
+          is_fd: isFd,
+          duration_s: 1.2,
+        });
+        const d = res.data || {};
+        setCanScanResult(prev => ({ ...prev, [key]: d }));
+        if (!d.ok) {
+          message.error(`CH${item.channel} 자동 추천 실패: ${d.error || '알 수 없는 오류'}`);
+        } else if (d.recommended) {
+          message.success(`CH${item.channel} 추천: ${(d.recommended.bitrate / 1000)}k${d.recommended.data_bitrate ? ` / ${d.recommended.data_bitrate / 1000000}M` : ''} (${d.recommended.frames} 프레임)`);
+        } else {
+          message.warning(`CH${item.channel} 어떤 속도에서도 프레임 미수신 — 버스 연결/전원을 확인하세요`);
+        }
+      } catch (e: any) {
+        const emsg = e?.response?.data?.detail || e?.message || String(e);
+        setCanScanResult(prev => ({ ...prev, [key]: { ok: false, results: [], error: emsg } }));
+        message.error(`자동 추천 요청 실패: ${emsg}`);
+      } finally {
+        setCanScanLoading(prev => ({ ...prev, [key]: false }));
+      }
+    };
+
+    // 추천값을 해당 행에 적용 (bitrate/data_bitrate 채움)
+    const applyScanReco = (idx: number, reco: { bitrate: number; data_bitrate: number | null }) => {
+      const next = items.map((it, i) => i === idx
+        ? { ...it, bitrate: String(reco.bitrate), data_bitrate: reco.data_bitrate == null ? 'None' : String(reco.data_bitrate) }
+        : it);
+      update(next);
+      message.success('추천 속도를 적용했습니다');
+    };
+
     return (
       <div style={{ border: '1px solid #e0e0e0', borderRadius: 4, padding: 6, background: '#fafafa' }}>
         {items.length === 0 && (
@@ -1382,6 +1425,7 @@ export default function DevicePage() {
         {items.map((item, idx) => {
         const rowKey = `${f.name}:${idx}`;
         const testResult = canTestResult[rowKey];
+        const scanResult = canScanResult[rowKey];
         return (
           <div key={idx} style={{
             marginBottom: 4,
@@ -1426,15 +1470,26 @@ export default function DevicePage() {
             ))}
             <div style={{ display: 'flex', gap: 4, alignItems: 'end' }}>
               {f.row_test === 'canoe_channel' && (
-                <Button
-                  size="small"
-                  icon={<ApiOutlined />}
-                  loading={!!canTestLoading[rowKey]}
-                  onClick={() => testCanRow(item, idx)}
-                  title="이 채널의 속도로 통신 가능한지 테스트 (listen-only)"
-                >
-                  테스트
-                </Button>
+                <>
+                  <Button
+                    size="small"
+                    icon={<ApiOutlined />}
+                    loading={!!canTestLoading[rowKey]}
+                    onClick={() => testCanRow(item, idx)}
+                    title="이 채널의 속도로 통신 가능한지 테스트 (listen-only)"
+                  >
+                    테스트
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<SearchOutlined />}
+                    loading={!!canScanLoading[rowKey]}
+                    onClick={() => scanCanRow(item, idx)}
+                    title="여러 속도를 자동으로 시도해 최적값 추천 (listen-only)"
+                  >
+                    자동 추천
+                  </Button>
+                </>
               )}
               <Button
                 size="small"
@@ -1460,6 +1515,58 @@ export default function DevicePage() {
                     ? `✓ 정상 — ${testResult.frames} 프레임 수신 (속도 일치)`
                     : '⚠ 채널은 열렸으나 수신 프레임 없음 — 버스 idle 또는 속도 불일치')
                 : `✗ ${testResult.error || '테스트 실패'}`}
+            </div>
+          )}
+          {f.row_test === 'canoe_channel' && scanResult && (
+            <div style={{
+              fontSize: 11,
+              marginTop: 3,
+              padding: '4px 6px',
+              borderRadius: 3,
+              background: '#fafafa',
+              border: '1px solid #eee',
+            }}>
+              {!scanResult.ok ? (
+                <div style={{ color: '#cf1322' }}>✗ {scanResult.error || '자동 추천 실패'}</div>
+              ) : (
+                <>
+                  {scanResult.recommended ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span style={{ color: '#389e0d', fontWeight: 600 }}>
+                        ★ 추천: {scanResult.recommended.bitrate / 1000}k
+                        {scanResult.recommended.data_bitrate ? ` / ${scanResult.recommended.data_bitrate / 1000000}M` : ''}
+                        {' '}({scanResult.recommended.frames} 프레임)
+                      </span>
+                      <Button size="small" type="primary" onClick={() => applyScanReco(idx, scanResult.recommended!)}>
+                        적용
+                      </Button>
+                    </div>
+                  ) : (
+                    <div style={{ color: '#d48806', marginBottom: 4 }}>
+                      ⚠ 어떤 속도에서도 프레임 미수신 — 버스 연결/전원 확인
+                    </div>
+                  )}
+                  {scanResult.results.map((rr, ri) => {
+                    const isReco = scanResult.recommended
+                      && rr.bitrate === scanResult.recommended.bitrate
+                      && rr.data_bitrate === scanResult.recommended.data_bitrate;
+                    return (
+                      <div key={ri} style={{
+                        display: 'flex', justifyContent: 'space-between',
+                        color: rr.frames > 0 ? '#389e0d' : (rr.opened ? '#999' : '#cf1322'),
+                        fontWeight: isReco ? 600 : 400,
+                      }}>
+                        <span>
+                          {rr.bitrate / 1000}k{rr.data_bitrate ? ` / ${rr.data_bitrate / 1000000}M` : ''}
+                        </span>
+                        <span>
+                          {rr.opened ? `${rr.frames} 프레임` : (rr.error ? '열기 실패' : '—')}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
             </div>
           )}
           </div>
