@@ -453,9 +453,6 @@ export default function DevicePage() {
   // MIB 수정 모달 전용 — 해상도("WxH") + 자동 감지 로딩 상태
   const [editMibResolution, setEditMibResolution] = useState<string>('');
   const [detectingMibRes, setDetectingMibRes] = useState(false);
-  // MIB 터치 디지타이저 스케일 override (패널 고유값, 빈 문자열 = 기본 1/2)
-  const [editTouchXScale, setEditTouchXScale] = useState<string>('');
-  const [editTouchYScale, setEditTouchYScale] = useState<string>('');
 
   // Scan settings modal
   const [scanSettingsOpen, setScanSettingsOpen] = useState(false);
@@ -1035,14 +1032,6 @@ export default function DevicePage() {
     } else {
       setEditMibResolution('');
     }
-    // MIB 터치 스케일 초기값 (저장된 override 없으면 빈 문자열 = 기본 1/2)
-    if (dev.type === 'mib_agent') {
-      setEditTouchXScale(dev.info?.touch_x_scale != null ? String(dev.info.touch_x_scale) : '');
-      setEditTouchYScale(dev.info?.touch_y_scale != null ? String(dev.info.touch_y_scale) : '');
-    } else {
-      setEditTouchXScale('');
-      setEditTouchYScale('');
-    }
     setEditModalOpen(true);
   };
 
@@ -1106,22 +1095,6 @@ export default function DevicePage() {
             : '');
         if (newRes && newRes !== oldRes) {
           updates.extra_fields = { ...(updates.extra_fields || {}), resolution: newRes };
-        }
-        // 터치 스케일 변경 감지 — 빈 문자열은 override 해제(기본 1/2 복귀) = null 전달
-        const oldTx = editDevice.info?.touch_x_scale != null ? String(editDevice.info.touch_x_scale) : '';
-        const oldTy = editDevice.info?.touch_y_scale != null ? String(editDevice.info.touch_y_scale) : '';
-        const newTx = editTouchXScale.trim();
-        const newTy = editTouchYScale.trim();
-        if (newTx !== oldTx || newTy !== oldTy) {
-          const toNum = (s: string) => {
-            const v = parseFloat(s);
-            return s && isFinite(v) && v > 0 ? v : null;
-          };
-          updates.extra_fields = {
-            ...(updates.extra_fields || {}),
-            touch_x_scale: toNum(newTx),
-            touch_y_scale: toNum(newTy),
-          };
         }
       }
       await deviceApi.updateDevice(editDevice.id, updates);
@@ -2992,27 +2965,7 @@ export default function DevicePage() {
                 </Space.Compact>
                 <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
                   자동 감지: 디바이스를 1회 캡처해 PNG 실제 크기를 읽어 자동 저장. 첫 캡처 시에도 자동 보정.
-                </div>
-                <div style={{ marginTop: 8 }}>
-                  <span style={{ fontSize: 11, color: '#888' }}>터치 스케일 (X / Y):</span>
-                  <Space.Compact style={{ width: '100%' }}>
-                    <Input
-                      style={{ flex: 1 }}
-                      placeholder="X (비우면 기본 0.5)"
-                      value={editTouchXScale}
-                      onChange={(e) => setEditTouchXScale(e.target.value)}
-                    />
-                    <Input
-                      style={{ flex: 1 }}
-                      placeholder="Y (비우면 기본 0.5)"
-                      value={editTouchYScale}
-                      onChange={(e) => setEditTouchYScale(e.target.value)}
-                    />
-                  </Space.Compact>
-                  <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
-                    패널 디지타이저 고유값 — 탭 반응이 클릭한 곳의 좌상단 절반 지점이면 X/Y 모두 1.
-                    저장 즉시 반영(재연결 불필요), 비우면 기본(화면×0.5) 복귀.
-                  </div>
+                  터치 스케일은 해상도에서 축별 자동 산출됩니다.
                 </div>
               </div>
             )}
