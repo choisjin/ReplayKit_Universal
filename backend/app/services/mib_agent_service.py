@@ -1319,18 +1319,16 @@ class MIBAgentService:
     # Touch (press/drag/release) — ref RemoteController.excutecmdTouch*
     # ------------------------------------------------------------------
     def _touch_frame(self, x: int, y: int, end_byte: int) -> str:
-        # ★ 축 비대칭 모델 (13.1" VW_EU 실측 확정, 2026-07). 인코딩상 px=다바이트(큰 범위),
-        # py=10비트(0~1023)라 X/Y가 근본적으로 다르게 처리된다:
-        #   - X: 프론트(dst=미러) 좌표를 HMI 소스좌표로 환산 후 mult로 압축해 전송.
-        #        xs = src_x / (dst_x × mult),  mult = int(max(src_w,src_h)/1023)+1.
-        #        디바이스가 px를 ×mult·src→dst 매핑으로 복원(실측: 활성 X = px 복원값).
-        #   - Y: 디바이스가 py를 디스플레이 좌표로 1:1 사용 → 화면 좌표 그대로 전송(ys=1.0).
-        #        실측: digitizer_y == 활성 display_y (205→205, 332→333). src/mult 압축 아님.
-        # 검증: scale_y=1.0이면 Y 정확, scale_x=1.0이면 X 깨짐(=X는 0.389 압축 필요). MQB
-        # (src=dst=800×480, mult=1)도 이 규칙에 부합(xs=1.0, ys=1.0). src 미검출=네이티브(src=dst).
-        src_x = self._touch_src_x or self._res_x
-        mult = max(1, int(max(src_x, self._touch_src_y or self._res_y) / 1023) + 1)
-        xs = self._touch_x_scale if self._touch_x_scale is not None else (src_x / (self._res_x * mult))
+        # ★ 축 비대칭 모델 (13.1" VW_EU + MQB 디버그로그 실측 확정, 2026-07).
+        # 터치는 src/fake-resolution(2240×1260)과 무관하게 **디스플레이(dst=self._res) 좌표 기반**.
+        # 인코딩상 px=다바이트(큰 범위)·py=10비트(0~1023)라 X/Y가 다르게 처리된다:
+        #   - X: xs = 1/mult_x,  mult_x = int(dst_x/1023)+1.  디바이스가 digitizer_x를 ×mult_x로 복원.
+        #        실측: digitizer_x 107→활성230, 240→활성497 = ×2.0(정수). 1920→mult2→xs0.5.
+        #   - Y: ys = 1.0.  디바이스가 py를 디스플레이 y로 1:1 사용. 실측: digitizer_y 205→205, 332→333.
+        # 검증: MQB(800×480)→mult_x=int(800/1023)+1=1→xs1.0·ys1.0(실기 정상 일치).
+        # (구 src 기반 xs=src_x/(dst_x×mult)=0.389는 오답이었음 — 13.1"는 dst 기반 0.5가 정답.)
+        mult_x = max(1, int(self._res_x / 1023) + 1)
+        xs = self._touch_x_scale if self._touch_x_scale is not None else (1.0 / mult_x)
         ys = self._touch_y_scale if self._touch_y_scale is not None else 1.0
         dx = int(round(int(x) * xs)) + self._touch_x_offset
         dy = int(round(int(y) * ys)) + self._touch_y_offset
@@ -1406,17 +1404,15 @@ class MIBAgentService:
             self.sweep_touch_dst(x, y)
             return
         # 좌표 매핑 지상 검증용 디버그 — 입력(미러/dst 좌표) → 계산된 digitizer 출력.
-        _sx = self._touch_src_x or self._res_x
-        _sy = self._touch_src_y or self._res_y
-        _m = max(1, int(max(_sx, _sy) / 1023) + 1)
-        _xs = self._touch_x_scale if self._touch_x_scale is not None else (_sx / (self._res_x * _m))
+        _mx = max(1, int(self._res_x / 1023) + 1)
+        _xs = self._touch_x_scale if self._touch_x_scale is not None else (1.0 / _mx)
         _ys = self._touch_y_scale if self._touch_y_scale is not None else 1.0
         _ax = min(max(0, int(round(x * _xs)) + self._touch_x_offset), max(1, int(self._res_x * _xs)))
         _ay = min(max(0, int(round(y * _ys)) + self._touch_y_offset), 1023, max(1, int(self._res_y * _ys)))
         logger.info(
-            "MIB tap MAP: in=(%d,%d) dst=%dx%d src=%dx%d mult=%d scale=(%.5f,%.5f) "
+            "MIB tap MAP: in=(%d,%d) dst=%dx%d mult_x=%d scale=(%.5f,%.5f) "
             "off=(%d,%d) → digitizer=(%d,%d)",
-            x, y, self._res_x, self._res_y, _sx, _sy, _m, _xs, _ys,
+            x, y, self._res_x, self._res_y, _mx, _xs, _ys,
             self._touch_x_offset, self._touch_y_offset, _ax, _ay,
         )
         self._touch_press(x, y)
