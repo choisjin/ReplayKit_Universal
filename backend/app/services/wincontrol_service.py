@@ -10,6 +10,7 @@ import contextlib
 import ctypes
 import io
 import logging
+import os
 import sys
 import threading
 import time
@@ -250,21 +251,29 @@ class WinControlService:
         """주어진 조건과 일치하는 첫 번째 윈도우 정보 반환.
 
         매칭 규칙:
-          - exe_path: 절대 경로 정확 일치 (대소문자 무시)
+          - exe_path: 절대 경로 일치, 실패 시 파일명(basename) 일치로 폴백 (대소문자 무시)
           - process_name: 파일명 정확 일치 (대소문자 무시)
           - title_pattern: 부분 문자열 일치 (대소문자 무시)
           - class_name: 정확 일치
         지정된 필드만 사용 (빈 값은 무시). 모두 빈 값이면 None.
+
+        exe_path 를 절대경로 완전일치로만 필터링하면, 시나리오를 내보내 다른 PC 에서
+        재생할 때 녹화 PC 의 절대 경로(사용자 폴더/설치 위치 상이)와 어긋나 실행 중인
+        창도 매칭에서 탈락한다. 파일명(basename)이 같으면 매칭을 허용해 이식성 확보.
         """
         if not _WIN32_AVAILABLE or not (process_name or exe_path or title_pattern or class_name):
             return None
         exe_path_norm = (exe_path or "").strip().lower()
+        exe_base_norm = os.path.basename(exe_path_norm) if exe_path_norm else ""
         proc_name_norm = (process_name or "").strip().lower()
         title_norm = (title_pattern or "").strip().lower()
         cls_norm = (class_name or "").strip()
         for w in self._enum_windows():
-            if exe_path_norm and (w.get("exe_path") or "").lower() != exe_path_norm:
-                continue
+            if exe_path_norm:
+                w_exe = (w.get("exe_path") or "").lower()
+                # 절대경로 완전일치 실패 시 basename 폴백 — 다른 PC 에서도 같은 exe 매칭.
+                if w_exe != exe_path_norm and os.path.basename(w_exe) != exe_base_norm:
+                    continue
             if proc_name_norm and (w.get("name") or "").lower() != proc_name_norm:
                 continue
             if title_norm and title_norm not in (w.get("title") or "").lower():
@@ -420,8 +429,21 @@ class WinControlService:
                 self.launch_uwp(aumid)
                 launched_what = f"AUMID={aumid}"
             elif exe_path:
+                # 다른 PC 에서 재생 시 흔한 실패: 시나리오에 박힌 절대 경로가 이 PC 엔 없음
+                # (사용자 폴더/설치 위치 상이). raw WinError 2 대신 실행 가능한 안내로 교체.
+                if not os.path.exists(exe_path):
+                    _base = os.path.basename(exe_path) or exe_path
+                    raise RuntimeError(
+                        f"대상 실행 파일을 이 PC 에서 찾을 수 없습니다 — '{exe_path}'. "
+                        f"공유된 시나리오에 녹화 PC 의 절대 경로가 저장되어 있어 경로가 다릅니다. "
+                        f"대상 앱('{_base}')을 이 PC 에서 직접 실행한 뒤 재생하거나, "
+                        f"스텝 params 의 exe_path 를 이 PC 의 실제 경로로 수정하세요."
+                    )
                 self.launch_process(exe_path)
                 launched_what = exe_path
+        except RuntimeError:
+            # 위에서 만든 안내 메시지는 그대로 전달 (이중 래핑 방지).
+            raise
         except Exception as e:
             raise RuntimeError(f"WinControl: failed to launch ({launched_what or aumid or exe_path!r}): {e}")
 
@@ -793,7 +815,17 @@ class WinControlService:
                 if aumid:
                     self.launch_uwp(aumid)
                 else:
+                    # 다른 PC 재생 시 절대 경로 부재 — raw WinError 2 대신 실행 가능한 안내.
+                    if not os.path.exists(exe_path):
+                        _base = os.path.basename(exe_path) or exe_path
+                        raise RuntimeError(
+                            f"대상 실행 파일을 이 PC 에서 찾을 수 없습니다 — '{exe_path}'. "
+                            f"대상 앱('{_base}')을 이 PC 에서 직접 실행한 뒤 재생하거나, "
+                            f"스텝 params 의 exe_path 를 이 PC 의 실제 경로로 수정하세요."
+                        )
                     self.launch_process(exe_path)
+            except RuntimeError:
+                raise
             except Exception as e:
                 raise RuntimeError(f"capture_window_by_match: launch failed: {e}")
             deadline = time.monotonic() + max(0.5, wait_seconds)
