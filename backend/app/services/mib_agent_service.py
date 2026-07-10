@@ -1406,6 +1406,20 @@ class MIBAgentService:
         if os.environ.get("MIB_TOUCH_DST_SWEEP", "").strip() in ("1", "true", "yes"):
             self.sweep_touch_dst(x, y)
             return
+        # 좌표 매핑 지상 검증용 디버그 — 입력(미러/dst 좌표) → 계산된 digitizer 출력.
+        _sx = self._touch_src_x or self._res_x
+        _sy = self._touch_src_y or self._res_y
+        _m = max(1, int(max(_sx, _sy) / 1023) + 1)
+        _xs = self._touch_x_scale if self._touch_x_scale is not None else (_sx / (self._res_x * _m))
+        _ys = self._touch_y_scale if self._touch_y_scale is not None else (_sy / (self._res_y * _m))
+        logger.info(
+            "MIB tap MAP: in=(%d,%d) dst=%dx%d src=%dx%d mult=%d scale=(%.5f,%.5f) "
+            "off=(%d,%d) → digitizer=(%d,%d)",
+            x, y, self._res_x, self._res_y, _sx, _sy, _m, _xs, _ys,
+            self._touch_x_offset, self._touch_y_offset,
+            int(round(x * _xs)) + self._touch_x_offset,
+            int(round(y * _ys)) + self._touch_y_offset,
+        )
         self._touch_press(x, y)
         if dp > 0:
             time.sleep(dp)
