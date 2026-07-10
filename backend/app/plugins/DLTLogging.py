@@ -1126,17 +1126,24 @@ class DLTLogging:
         max_retries = max(1, int(max_retries))
         interval = timeout_sec / max_retries
 
+        # 증분 스캔: 매 재시도마다 clear_base 전체를 재스캔하면 누적 로그가 커질수록
+        # 순수 파이썬 매칭이 GIL을 오래 점유해 이벤트 루프(/api/health)를 굶긴다
+        # (재생 중 "서버 연결 중..." 배너 깜빡임의 원인). append-only 로그이므로
+        # 직전에 검사한 지점(scanned) 이후 새 라인만 검사해도 결과가 동일하다.
+        scanned = self._clear_base
+
         for attempt in range(1, max_retries + 1):
             with self._lock:
                 total = self._total_count
 
-            for line in self._iter_abs_range(self._clear_base, total):
+            for line in self._iter_abs_range(scanned, total):
                 matched = self._match_phys_line(keyword, line)
                 if matched is not None:
                     summary = matched[:120]
                     logger.info("[DLTLogging] ExpectFound PASS: '%s' → attempt %d/%d — %s",
                                 keyword, attempt, max_retries, summary)
                     return f"PASS: 발견 ({attempt}회차) — {summary}"
+            scanned = total
 
             if attempt < max_retries:
                 logger.info("[DLTLogging] ExpectFound: '%s' not found, retry %d/%d (next in %.1fs)",
@@ -1166,17 +1173,23 @@ class DLTLogging:
         max_retries = max(1, int(max_retries))
         interval = timeout_sec / max_retries
 
+        # 증분 스캔: ExpectFound와 동일 — append-only 로그이므로 직전 검사 지점 이후
+        # 새 라인만 확인해도 "한 번이라도 나타나면 FAIL" 판정이 동일하다. 전체 재스캔의
+        # GIL 점유(이벤트 루프 굶김)를 제거한다.
+        scanned = self._clear_base
+
         for attempt in range(1, max_retries + 1):
             with self._lock:
                 total = self._total_count
 
-            for line in self._iter_abs_range(self._clear_base, total):
+            for line in self._iter_abs_range(scanned, total):
                 matched = self._match_phys_line(keyword, line)
                 if matched is not None:
                     summary = matched[:120]
                     logger.info("[DLTLogging] ExpectNotFound FAIL: '%s' → found at attempt %d/%d — %s",
                                 keyword, attempt, max_retries, summary)
                     return f"FAIL: 발견 ({attempt}회차) — {summary}"
+            scanned = total
 
             if attempt < max_retries:
                 logger.info("[DLTLogging] ExpectNotFound: '%s' absent, check %d/%d (next in %.1fs)",
