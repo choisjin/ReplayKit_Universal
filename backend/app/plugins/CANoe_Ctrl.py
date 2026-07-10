@@ -95,10 +95,18 @@ class CANoe_Ctrl:
                                           bitrate=row['bitrate'], data_bitrate=row.get('data_bitrate'),
                                           fd=False, receive_own_messages=True))
             else:
-                self.bus.append(VectorBus(**open_kwargs,
-                                          bitrate=row['bitrate'], data_bitrate=row.get('data_bitrate'),
-                                          sjw_abr=2, tseg1_abr=6, tseg2_abr=3, rx_queue_size=2 ** 16,
-                                          receive_own_messages=True))
+                # 실제 CAN FD 로 오픈. from_sample_point(80MHz) 타이밍을 전달하면
+                # python-can 이 timing 이 BitTimingFd 인 것을 보고 FD 모드로 연다.
+                # (과거엔 fd=True 누락으로 사실상 classic 오픈 + 고정 세그먼트가 5M 등에서 실패)
+                from can import BitTimingFd
+                _dbr = row.get('data_bitrate') or row['bitrate']
+                _timing = BitTimingFd.from_sample_point(
+                    f_clock=80_000_000,
+                    nom_bitrate=int(row['bitrate']), nom_sample_point=80.0,
+                    data_bitrate=int(_dbr), data_sample_point=80.0,
+                )
+                self.bus.append(VectorBus(**open_kwargs, timing=_timing,
+                                          rx_queue_size=2 ** 16, receive_own_messages=True))
         self.CANoe_logger = None
         self.CANoe_logger_full = None
         self.CANoe_recv = None

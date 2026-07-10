@@ -333,7 +333,7 @@ export default function DevicePage() {
   const [canTestResult, setCanTestResult] = useState<Record<string, { ok: boolean; frames: number; error?: string | null; opened?: boolean; error_frames?: number; fd_frames?: number }>>({});
   // CANoe 자동 추천 스윕: 행 키 → 로딩/결과
   const [canScanLoading, setCanScanLoading] = useState<Record<string, boolean>>({});
-  const [canScanResult, setCanScanResult] = useState<Record<string, { ok: boolean; is_fd?: boolean; results: { bitrate: number; data_bitrate: number | null; is_fd?: boolean; opened: boolean; frames: number; valid_frames?: number; error_frames?: number; fd_frames?: number; error?: string | null }[]; recommended?: { bitrate: number; data_bitrate: number | null; is_fd?: boolean; frames: number } | null; error?: string | null }>>({});
+  const [canScanResult, setCanScanResult] = useState<Record<string, { ok: boolean; is_fd?: boolean; results: { bitrate: number; data_bitrate: number | null; is_fd?: boolean; opened: boolean; frames: number; valid_frames?: number; error_frames?: number; fd_frames?: number; error?: string | null }[]; recommended?: { bitrate: number; data_bitrate: number | null; is_fd?: boolean; frames: number } | null; hint?: string | null; error?: string | null }>>({});
   // Vector 하드웨어 채널 스캔: object_list 필드명 → 로딩/결과
   type VectorChannel = { name: string; channel_index: number; hw_channel: number; serial: number; hw_type: string; transceiver: string; is_on_bus: boolean; supports_fd: boolean };
   const [vectorScanLoading, setVectorScanLoading] = useState<Record<string, boolean>>({});
@@ -1418,7 +1418,7 @@ export default function DevicePage() {
         } else if (d.recommended) {
           message.success(`${chLabelOf(item)} 추천: ${d.recommended.is_fd ? 'FD ' : ''}${(d.recommended.bitrate / 1000)}k${d.recommended.data_bitrate ? ` / ${d.recommended.data_bitrate / 1000000}M` : ''} (유효 ${d.recommended.frames} 프레임)`);
         } else {
-          message.warning(`${chLabelOf(item)} 진짜 트래픽 미검출 — 버스 연결/전원 또는 채널 점유 확인`);
+          message.warning(`${chLabelOf(item)} 추천 실패 — ${d.hint || '진짜 트래픽 미검출'}`);
         }
       } catch (e: any) {
         const emsg = e?.response?.data?.detail || e?.message || String(e);
@@ -1652,7 +1652,7 @@ export default function DevicePage() {
                     </div>
                   ) : (
                     <div style={{ color: '#d48806', marginBottom: 4 }}>
-                      ⚠ 어떤 속도에서도 프레임 미수신 — 버스 연결/전원 확인
+                      ⚠ {scanResult.hint || '진짜 트래픽 미검출 — 버스 연결/전원 확인'}
                     </div>
                   )}
                   {scanResult.results.map((rr, ri) => {

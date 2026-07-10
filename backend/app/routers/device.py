@@ -2297,26 +2297,31 @@ def _vector_open_count(channel: int, app_name: str, bitrate: int,
 
     bus = None
     try:
+        # channel_index 가 있으면 스캔 선택 채널을 전역 인덱스로 직접 오픈 (app_name 무관)
         if channel_index is not None:
-            # 스캔 선택 채널: 전역 channel_index 로 직접 오픈 (app_name/Hardware Config 무관)
-            kwargs = dict(
-                channel=0, channel_index=int(channel_index), app_name=None, bitrate=bitrate,
-                fd=bool(is_fd), listen_only=True, receive_own_messages=False,
-            )
+            base = dict(channel=0, channel_index=int(channel_index), app_name=None)
         else:
-            kwargs = dict(
-                channel=channel, app_name=app_name, bitrate=bitrate,
-                fd=bool(is_fd), listen_only=True, receive_own_messages=False,
-            )
+            base = dict(channel=channel, app_name=app_name)
+        common = dict(listen_only=True, receive_own_messages=False)
         if is_fd:
-            # CANoe_Ctrl.__init__ 의 FD 타이밍 값과 동일하게 맞춤
-            kwargs.update(data_bitrate=data_bitrate, sjw_abr=2, tseg1_abr=6, tseg2_abr=3)
+            # FD: from_sample_point 로 80MHz 유효 타이밍 자동 계산.
+            # python-can 기본(from_bitrate_and_segments)은 고정 세그먼트라 5M 등에서
+            # "effective bitrate diverges" 로 실패 → 다양한 data bitrate 를 못 연다.
+            from can import BitTimingFd
+            timing = BitTimingFd.from_sample_point(
+                f_clock=80_000_000,
+                nom_bitrate=int(bitrate), nom_sample_point=80.0,
+                data_bitrate=int(data_bitrate or bitrate), data_sample_point=80.0,
+            )
+            open_kwargs = dict(base, timing=timing, **common)
+        else:
+            open_kwargs = dict(base, bitrate=bitrate, fd=False, **common)
         try:
-            bus = VectorBus(**kwargs)
+            bus = VectorBus(**open_kwargs)
         except TypeError:
             # 일부 python-can 버전은 listen_only 미지원 → 폴백
-            kwargs.pop("listen_only", None)
-            bus = VectorBus(**kwargs)
+            open_kwargs.pop("listen_only", None)
+            bus = VectorBus(**open_kwargs)
         r["opened"] = True
     except Exception as e:
         msg = str(e)
@@ -2432,24 +2437,37 @@ def _scan_can_channel_blocking(channel: int, app_name: str, is_fd: bool,
         v = x["valid_frames"]; u = x["unique_ids"]; e = x["error_frames"]
         return v >= 8 and u >= 1 and v >= 2 * u and e <= v
 
+    # 추천 기준 = "프레임이 FD 포맷이냐"가 아니라 "어느 오픈 모드가 유효 트래픽을 받았나".
+    # (예: 500k/2M FD 로 열어야 수신되지만 프레임 자체는 FD[BRS] 아님 → fd_frames=0 이어도 FD 추천)
     real = [x for x in results if _is_real(x)]
-    # 실제 FD 프레임이 관측된 후보 → FD 버스로 판정
-    fd_real = [x for x in real if x["fd_frames"] >= 5]
+    classic_real = [x for x in real if not x["is_fd"]]
+    fd_real = [x for x in real if x["is_fd"]]
 
     recommended = None
-    if fd_real:
-        best = max(fd_real, key=lambda x: (x["fd_frames"], x["valid_frames"]))
+    if classic_real:
+        # classic 오픈이 유효 트래픽을 받으면 classic 버스 (FD 후보도 같은 프레임 받을 수 있어 classic 우선)
+        best = max(classic_real, key=lambda x: x["valid_frames"])
+        recommended = {"bitrate": best["bitrate"], "data_bitrate": None,
+                       "is_fd": False, "frames": best["valid_frames"]}
+    elif fd_real:
+        # classic 은 전부 에러/미수신인데 FD 모드로만 클린 수신 → FD 로 열어야 하는 버스
+        best = max(fd_real, key=lambda x: x["valid_frames"])
         recommended = {"bitrate": best["bitrate"], "data_bitrate": best["data_bitrate"],
                        "is_fd": True, "frames": best["valid_frames"]}
-    else:
-        classic_real = [x for x in real if not x["is_fd"]]
-        if classic_real:
-            best = max(classic_real, key=lambda x: x["valid_frames"])
-            recommended = {"bitrate": best["bitrate"], "data_bitrate": None,
-                           "is_fd": False, "frames": best["valid_frames"]}
+
+    # 추천 실패 시 원인 힌트: classic 이 전부 에러만 수신 → FD 버스 추정
+    hint = None
+    if recommended is None:
+        classic_err = sum(x["error_frames"] for x in results if not x["is_fd"])
+        classic_valid = sum(x["valid_frames"] for x in results if not x["is_fd"])
+        if classic_valid == 0 and classic_err >= 50:
+            hint = ("Classic 후보가 전부 에러 프레임만 수신 → 이 채널은 CAN FD 버스로 추정됩니다. "
+                    "FD 후보가 모두 실패했다면 실제 arbitration/data bitrate 를 확인해 수동 입력 후 테스트하세요.")
+        else:
+            hint = "진짜 트래픽 미검출 — 버스 연결/전원, 또는 채널이 다른 앱에 점유됐는지 확인하세요."
 
     return {"ok": True, "is_fd": is_fd, "results": results,
-            "recommended": recommended, "error": None}
+            "recommended": recommended, "hint": hint, "error": None}
 
 
 @router.post("/test-can-channel")
