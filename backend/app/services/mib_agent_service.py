@@ -1056,16 +1056,14 @@ class MIBAgentService:
                 sx = sy = 0
             if sx > 0 and sy > 0:
                 self._touch_src_x, self._touch_src_y = sx, sy
-                if (sx, sy) != (self._res_x, self._res_y):
-                    logger.info(
-                        "MIB touch source(HMI) res = %dx%d, display(dst) = %dx%d "
-                        "→ fake-resolution 보정 활성 (touch scale x=%.5f y=%.5f)",
-                        sx, sy, self._res_x, self._res_y,
-                        sx / (self._res_x * (int(sx / 1023) + 1)),
-                        sy / (self._res_y * (int(sy / 1023) + 1)),
-                    )
-                else:
-                    logger.info("MIB touch source res = display res %dx%d (네이티브)", sx, sy)
+                # 주의: 연결 시점 self._res(dst)는 아직 잠정값(기본/등록값)일 수 있고,
+                # 미러 첫 캡처가 실제 화면 해상도로 자동 갱신한다. 최종 터치 스케일은
+                # _touch_frame이 라이브 self._res로 매번 계산하므로 여기 dst는 참고용.
+                logger.info(
+                    "MIB touch source(HMI) res = %dx%d (fake-resolution 보정 활성). "
+                    "실제 스케일은 라이브 display(dst) 기준 계산 — 현재 잠정 dst=%dx%d",
+                    sx, sy, self._res_x, self._res_y,
+                )
                 return
         # 파일 없음/파싱 실패 → 네이티브(src=dst)
         self._touch_src_x = self._touch_src_y = None
