@@ -278,7 +278,7 @@ def list_available_modules() -> list[dict]:
               ],
               "item_fields": [
                   {"name": "channel", "label": "Channel", "type": "select", "default": "0",
-                   "options": ["0", "1", "2", "3", "4", "5", "6", "7"]},
+                   "options": ["0", "1", "2", "3", "4", "5", "6", "7"], "display_offset": 1},
                   {"name": "app_name", "label": "App Name", "type": "select", "default": "CANoe",
                    "options": ["CANoe", "CANalyzer", "CANalyzer Demo", "CANoe Demo"]},
                   {"name": "bitrate", "label": "Bitrate", "type": "select", "default": "500000",

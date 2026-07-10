@@ -33,6 +33,9 @@ interface ConnectField {
   options_endpoint?: string;
   // object_list 전용: 각 row에 테스트 버튼 노출 (예: 'canoe_channel' → CAN 채널 통신 테스트)
   row_test?: string;
+  // select 전용: 숫자 옵션을 표시할 때 이 값을 더해 라벨링 (저장값은 원본 유지).
+  // 예: display_offset=1 → 값 "0"을 "1"로 표시 (Vector Hardware Config 의 1-based 표기와 일치).
+  display_offset?: number;
 }
 
 interface ModuleInfo {
@@ -1346,6 +1349,12 @@ export default function DevicePage() {
       update(next);
     };
 
+    // 채널 표시 라벨: 스캔 선택 채널이면 이름, 아니면 1-based (저장값은 0-based 유지)
+    const chLabelOf = (item: Record<string, any>) =>
+      item.channel_index != null && item.channel_index !== ''
+        ? (item.channel_name || `Vector idx ${item.channel_index}`)
+        : `CH${Number(item.channel ?? 0) + 1}`;
+
     // CANoe 채널 통신 테스트 (listen-only): bitrate/data_bitrate 사용 가능 여부 확인
     const testCanRow = async (item: Record<string, any>, idx: number) => {
       const key = `${f.name}:${idx}`;
@@ -1371,13 +1380,13 @@ export default function DevicePage() {
         const d = res.data || {};
         setCanTestResult(prev => ({ ...prev, [key]: { ok: !!d.ok, frames: Number(d.frames || 0), error: d.error, opened: !!d.opened, error_frames: Number(d.error_frames || 0), fd_frames: Number(d.fd_frames || 0) } }));
         if (!d.ok) {
-          message.error(`CH${item.channel} 테스트 실패: ${d.error || '알 수 없는 오류'}`);
+          message.error(`${chLabelOf(item)} 테스트 실패: ${d.error || '알 수 없는 오류'}`);
         } else if (Number(d.frames || 0) > 0) {
-          message.success(`CH${item.channel} 정상 — 유효 ${d.frames} 프레임${Number(d.error_frames || 0) > 0 ? ` (에러 ${d.error_frames})` : ''}${Number(d.fd_frames || 0) > 0 ? ' · FD' : ''}`);
+          message.success(`${chLabelOf(item)} 정상 — 유효 ${d.frames} 프레임${Number(d.error_frames || 0) > 0 ? ` (에러 ${d.error_frames})` : ''}${Number(d.fd_frames || 0) > 0 ? ' · FD' : ''}`);
         } else if (Number(d.error_frames || 0) > 0) {
-          message.warning(`CH${item.channel} 유효 프레임 0 · 에러 프레임 ${d.error_frames} — 속도 불일치 가능성`);
+          message.warning(`${chLabelOf(item)} 유효 프레임 0 · 에러 프레임 ${d.error_frames} — 속도 불일치 가능성`);
         } else {
-          message.warning(`CH${item.channel} 채널은 열렸으나 수신 프레임 없음 — 버스 idle 또는 속도 불일치`);
+          message.warning(`${chLabelOf(item)} 채널은 열렸으나 수신 프레임 없음 — 버스 idle 또는 속도 불일치`);
         }
       } catch (e: any) {
         const emsg = e?.response?.data?.detail || e?.message || String(e);
@@ -1405,11 +1414,11 @@ export default function DevicePage() {
         const d = res.data || {};
         setCanScanResult(prev => ({ ...prev, [key]: d }));
         if (!d.ok) {
-          message.error(`CH${item.channel} 자동 추천 실패: ${d.error || '알 수 없는 오류'}`);
+          message.error(`${chLabelOf(item)} 자동 추천 실패: ${d.error || '알 수 없는 오류'}`);
         } else if (d.recommended) {
-          message.success(`CH${item.channel} 추천: ${d.recommended.is_fd ? 'FD ' : ''}${(d.recommended.bitrate / 1000)}k${d.recommended.data_bitrate ? ` / ${d.recommended.data_bitrate / 1000000}M` : ''} (유효 ${d.recommended.frames} 프레임)`);
+          message.success(`${chLabelOf(item)} 추천: ${d.recommended.is_fd ? 'FD ' : ''}${(d.recommended.bitrate / 1000)}k${d.recommended.data_bitrate ? ` / ${d.recommended.data_bitrate / 1000000}M` : ''} (유효 ${d.recommended.frames} 프레임)`);
         } else {
-          message.warning(`CH${item.channel} 진짜 트래픽 미검출 — 버스 연결/전원 또는 채널 점유 확인`);
+          message.warning(`${chLabelOf(item)} 진짜 트래픽 미검출 — 버스 연결/전원 또는 채널 점유 확인`);
         }
       } catch (e: any) {
         const emsg = e?.response?.data?.detail || e?.message || String(e);
@@ -1544,7 +1553,11 @@ export default function DevicePage() {
                     value={String(item[sf.name] ?? sf.default ?? '')}
                     onChange={(v) => updateItem(idx, sf.name, v)}
                   >
-                    {sf.options.map(o => <Option key={o} value={o}>{o}</Option>)}
+                    {sf.options.map(o => {
+                      const off = sf.display_offset;
+                      const lbl = (off != null && o !== '' && !isNaN(Number(o))) ? String(Number(o) + off) : o;
+                      return <Option key={o} value={o}>{lbl}</Option>;
+                    })}
                   </Select>
                 ) : sf.type === 'number' ? (
                   <InputNumber
