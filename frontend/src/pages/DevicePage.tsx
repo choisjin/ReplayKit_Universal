@@ -888,6 +888,25 @@ export default function DevicePage() {
     );
   };
 
+  // Vector 하드웨어 "추가" → 수동 연결 탭으로 전환 + CANoe_Ctrl 선택 + 해당 하드웨어 채널 미리 채움
+  const handleAddVectorHardware = (chs: VectorChannel[]) => {
+    const modInfo = modules.find(m => m.name === 'CANoe_Ctrl');
+    const seed: Record<string, any> = {};
+    if (modInfo?.connect_fields) {
+      for (const cf of modInfo.connect_fields) seed[cf.name] = cf.default ?? '';
+    }
+    // 스캔한 채널들을 device_info 행으로 미리 채움 (channel_index 로 물리 채널 직접 지정)
+    seed['device_info'] = chs.map(ch => ({
+      channel: '0', app_name: '', bitrate: '500000', is_fd: 'False', data_bitrate: 'None',
+      channel_index: ch.channel_index, channel_name: ch.name,
+    }));
+    setExtraFieldValues(seed);
+    setSelectedModule('CANoe_Ctrl');
+    setConnectType('module');
+    setModalTabKey('manual');
+    message.info('수동 연결로 전환 — 채널별 속도를 테스트/자동추천 후 연결하세요');
+  };
+
   const handleAddSerial = async (port: string, description: string) => {
     if (!ensurePrimaryProjectModel()) return;
     setConnecting(true);
@@ -2407,9 +2426,20 @@ export default function DevicePage() {
                     }
 
                     if (scanItemCategory('vector') === modalCategory && (scannedVector.channels.length > 0 || scannedVector.driver_missing)) {
+                      // 채널을 물리 하드웨어(serial)별로 묶어 하나로 표기
+                      const vecDeviceMap = new Map<number, VectorChannel[]>();
+                      for (const ch of scannedVector.channels) {
+                        const k = ch.serial;
+                        if (!vecDeviceMap.has(k)) vecDeviceMap.set(k, []);
+                        vecDeviceMap.get(k)!.push(ch);
+                      }
+                      const vecDevices = Array.from(vecDeviceMap.entries()).map(([serial, chs]) => {
+                        const devName = (chs[0]?.name || '').replace(/\s*(channel\s*)?\d+\s*$/i, '').trim() || chs[0]?.hw_type || 'Vector';
+                        return { serial, chs, devName, anyFd: chs.some(c => c.supports_fd) };
+                      });
                       scanTabs.push({
                         key: 'vector',
-                        label: <span>Vector-Hardware <Tag style={{ marginLeft: 3 }}>{scannedVector.channels.length}</Tag></span>,
+                        label: <span>Vector-Hardware <Tag style={{ marginLeft: 3 }}>{vecDevices.length}</Tag></span>,
                         children: scannedVector.driver_missing ? (
                           <div style={{ fontSize: 12, color: '#cf1322', padding: 8 }}>
                             {scannedVector.error || 'Vector XL Driver Library(vxlapi64.dll)가 설치되어 있지 않습니다.'}
@@ -2418,41 +2448,21 @@ export default function DevicePage() {
                           <List
                             size="small"
                             bordered
-                            dataSource={scannedVector.channels}
-                            pagination={scannedVector.channels.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
-                            renderItem={(ch) => {
-                              const canoe = allDevices.find(x => x.type === 'module' && x.info?.module === 'CANoe_Ctrl' && ((x.info?.connect_type as string) || 'none') === 'none');
-                              const prev: any[] = Array.isArray(canoe?.info?.device_info) ? (canoe!.info!.device_info as any[]) : [];
-                              const already = prev.some((c: any) => Number(c.channel_index) === ch.channel_index);
-                              const doAdd = async () => {
-                                try {
-                                  const merged = [...prev, {
-                                    channel_index: ch.channel_index, channel_name: ch.name,
-                                    app_name: '', bitrate: 500000, data_bitrate: null, is_fd: false,
-                                  }];
-                                  await connectDevice('module', 'CANoe_Ctrl', undefined, 'CANoe_Ctrl', 'auxiliary', 'CANoe_Ctrl', 'none', { device_info: merged });
-                                  message.success(`Vector 채널 추가: ${ch.name} (기본 500k, 필요 시 테스트/자동추천으로 조정)`);
-                                  closeAddModal();
-                                } catch (e: any) {
-                                  message.error(e.response?.data?.detail || 'Connect failed');
-                                }
-                              };
-                              return (
-                                <List.Item actions={[
-                                  already
-                                    ? <Tag color="success">추가됨</Tag>
-                                    : <Button size="small" type="primary" loading={connecting} onClick={doAdd}>{t('common.add')}</Button>,
-                                ]}>
-                                  <div>
-                                    <Tag color="cyan">Vector</Tag>
-                                    <strong>{ch.name}</strong>
-                                    <Tag style={{ marginLeft: 6 }}>idx {ch.channel_index}</Tag>
-                                    {ch.supports_fd && <Tag color="blue" style={{ marginLeft: 4 }}>FD</Tag>}
-                                    {ch.is_on_bus && <Tag color="green" style={{ marginLeft: 4 }}>on-bus</Tag>}
-                                  </div>
-                                </List.Item>
-                              );
-                            }}
+                            dataSource={vecDevices}
+                            pagination={vecDevices.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
+                            renderItem={(d) => (
+                              <List.Item actions={[
+                                <Button size="small" type="primary" onClick={() => handleAddVectorHardware(d.chs)}>{t('common.add')}</Button>,
+                              ]}>
+                                <div>
+                                  <Tag color="cyan">Vector</Tag>
+                                  <strong>{d.devName}</strong>
+                                  {d.serial > 0 && <span style={{ color: '#999', marginLeft: 6 }}>S/N {d.serial}</span>}
+                                  <Tag style={{ marginLeft: 6 }}>{d.chs.length}채널</Tag>
+                                  {d.anyFd && <Tag color="blue" style={{ marginLeft: 4 }}>FD</Tag>}
+                                </div>
+                              </List.Item>
+                            )}
                           />
                         ),
                       });
