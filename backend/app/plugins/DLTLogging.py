@@ -1090,6 +1090,24 @@ class DLTLogging:
         logger.info("[DLTLogging] WaitLog FAIL: '%s' not found in %ds", keyword, timeout_sec)
         return f"FAIL: keyword '{keyword}' not found within {int(timeout_sec)}s"
 
+    @staticmethod
+    def _match_phys_line(keyword: str, block: str) -> Optional[str]:
+        """keyword를 '연속된 구절'로 물리 라인 단위 매칭. 매칭 라인(없으면 None) 반환.
+
+        - keyword 내부 공백은 하나로 정규화하고, 검사 대상 물리 라인의 연속 공백도
+          하나로 정규화한 뒤 substring 포함 여부를 본다. 따라서 `83 10 01 21`은
+          같은 라인에 그 순서로 '연속'되어 있어야만 매칭된다(토큰이 흩어져 있으면 불통과).
+        - 한 DLT 메시지(block)에 개행이 섞여 여러 물리 라인이 들어와도 라인별로
+          검사해 실제 매칭된 물리 라인만 돌려준다(요약이 엉뚱한 라인을 가리키지 않도록).
+        """
+        kw = " ".join(keyword.split())
+        if not kw:
+            return None
+        for phys in block.split("\n"):
+            if kw in " ".join(phys.split()):
+                return phys.strip()
+        return None
+
     def ExpectFound(self, keyword: str, timeout: int = 60, max_retries: int = 5) -> str:
         """키워드가 나타날 때까지 전체 로그를 주기적으로 검색합니다.
 
@@ -1097,14 +1115,13 @@ class DLTLogging:
         최대 max_retries회 재시도합니다.
 
         Args:
-            keyword: 검색 키워드 (공백 구분 시 AND 조건)
+            keyword: 검색 키워드 (공백 포함 시 '연속된 구절'로 매칭, 예: "83 10 01 21")
             timeout: 총 대기 시간 (초, 기본 60)
             max_retries: 최대 재시도 횟수 (기본 5)
 
         Returns:
             "PASS: 발견 (N회차) — (매칭 로그)" 또는 "FAIL: keyword not found after N retries"
         """
-        keywords = keyword.split()
         timeout_sec = float(timeout)
         max_retries = max(1, int(max_retries))
         interval = timeout_sec / max_retries
@@ -1114,8 +1131,9 @@ class DLTLogging:
                 total = self._total_count
 
             for line in self._iter_abs_range(self._clear_base, total):
-                if all(k in line for k in keywords):
-                    summary = line.strip()[:120]
+                matched = self._match_phys_line(keyword, line)
+                if matched is not None:
+                    summary = matched[:120]
                     logger.info("[DLTLogging] ExpectFound PASS: '%s' → attempt %d/%d — %s",
                                 keyword, attempt, max_retries, summary)
                     return f"PASS: 발견 ({attempt}회차) — {summary}"
@@ -1137,14 +1155,13 @@ class DLTLogging:
         끝까지 없으면 PASS.
 
         Args:
-            keyword: 검색 키워드 (공백 구분 시 AND 조건)
+            keyword: 검색 키워드 (공백 포함 시 '연속된 구절'로 매칭, 예: "83 10 01 21")
             timeout: 총 확인 시간 (초, 기본 60)
             max_retries: 최대 확인 횟수 (기본 5)
 
         Returns:
             "PASS: keyword not found after N checks" 또는 "FAIL: 발견 (N회차) — (매칭 로그)"
         """
-        keywords = keyword.split()
         timeout_sec = float(timeout)
         max_retries = max(1, int(max_retries))
         interval = timeout_sec / max_retries
@@ -1154,8 +1171,9 @@ class DLTLogging:
                 total = self._total_count
 
             for line in self._iter_abs_range(self._clear_base, total):
-                if all(k in line for k in keywords):
-                    summary = line.strip()[:120]
+                matched = self._match_phys_line(keyword, line)
+                if matched is not None:
+                    summary = matched[:120]
                     logger.info("[DLTLogging] ExpectNotFound FAIL: '%s' → found at attempt %d/%d — %s",
                                 keyword, attempt, max_retries, summary)
                     return f"FAIL: 발견 ({attempt}회차) — {summary}"

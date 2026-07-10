@@ -1322,17 +1322,17 @@ class MIBAgentService:
         # 두 해상도 모델: 미러/디스플레이(dst = PNG = self._res)와 HMI 소스(src).
         # 컴포지터가 src를 dst로 균일 축소해 화면에 출력하고(레이어 source→destination region),
         # 터치 수신부는 src 좌표계를 기대한다. 프론트는 dst(미러) 좌표로 탭하므로:
-        #   digitizer = tap_dst × (src/dst) / MULT(src),   MULT(v) = int(v/1023)+1
-        # src 미검출(예: MQB, /data/resolution_config 없음=네이티브)이면 src=dst →
-        #   scale = 1/MULT(dst) 로 단일 해상도 동작(축별 독립, 플로어 없음).
-        # firmware 근거(set_resolution.sh + touch_event.sh + 10비트 프로토콜): 좌표는 축당
-        # 10비트(0~1023)라 MULT는 좌표를 1023 범위에 맞추는 분주비, SetFakeResolution=1/MULT.
+        #   digitizer = tap_dst × (src/dst) / MULT,   MULT = int(max(src_w,src_h)/1023)+1
+        # src 미검출(예: MQB, /data/resolution_config 없음=네이티브)이면 src=dst → scale=1/MULT.
+        # ★ MULT는 축별이 아니라 패널 단위 균일값. touch_event.sh 실코드가 10"=px/2·py/2,
+        #   15"=px/3·py/3 로 양축 동일 분주비를 쓰고(주석의 Y/1·Y/2는 거짓), 실측(X 일치·Y가
+        #   아래로 갈수록 점점 벌어짐)이 Y도 X와 같은 MULT를 요구함을 확인. 좌표는 축당 10비트
+        #   (≤1023)라 더 큰 축이 들어가도록 max 기준으로 MULT를 잡는다(SetFakeResolution=1/MULT).
         src_x = self._touch_src_x or self._res_x
         src_y = self._touch_src_y or self._res_y
-        dvx = max(1, int(src_x / 1023) + 1)
-        dvy = max(1, int(src_y / 1023) + 1)
-        xs = self._touch_x_scale if self._touch_x_scale is not None else (src_x / (self._res_x * dvx))
-        ys = self._touch_y_scale if self._touch_y_scale is not None else (src_y / (self._res_y * dvy))
+        mult = max(1, int(max(src_x, src_y) / 1023) + 1)
+        xs = self._touch_x_scale if self._touch_x_scale is not None else (src_x / (self._res_x * mult))
+        ys = self._touch_y_scale if self._touch_y_scale is not None else (src_y / (self._res_y * mult))
         dx = int(round(int(x) * xs)) + self._touch_x_offset
         dy = int(round(int(y) * ys)) + self._touch_y_offset
         # 디지타이저 좌표 범위로 클램프(= 화면×scale). 음수/초과 방지.
