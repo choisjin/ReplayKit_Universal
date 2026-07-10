@@ -300,8 +300,14 @@ class MIBAgentService:
                 return float(v)
             except Exception:
                 return None
-        self._touch_x_scale = _env_float_opt("MIB_TOUCH_X_SCALE")  # None → x_mult/2
-        self._touch_y_scale = _env_float_opt("MIB_TOUCH_Y_SCALE")  # None → y_mult/2
+        self._touch_x_scale = _env_float_opt("MIB_TOUCH_X_SCALE")  # None → 자동(src/dst 기반)
+        self._touch_y_scale = _env_float_opt("MIB_TOUCH_Y_SCALE")  # None → 자동(src/dst 기반)
+        # 터치 소스(HMI 논리) 해상도. 일부 유닛은 컴포지터가 src(예: 2240x1260)를
+        # dst(=화면/PNG, 예: 1920x1080)로 균일 축소해 출력한다("SetFakeResolution").
+        # 터치 수신부는 src 좌표계를 기대하므로, 미러(dst) 좌표를 src로 환산 후 인코딩해야 한다.
+        # /data/resolution_config 에서 연결 시 자동 검출. None = 네이티브(src=dst).
+        self._touch_src_x: Optional[int] = None
+        self._touch_src_y: Optional[int] = None
         # 캡처 전용 SSH 세션 — LayerManagerControl dump + SCP pull 용. 캡처 한 사이클은
         # 1초 가까이 걸리므로, 같은 락에 묶이면 그 사이 입력(ksend)이 블록됨.
         # 따라서 터치/하드키는 별도 _input_ssh_*에서 보내 캡처와 병렬화.
@@ -687,6 +693,12 @@ class MIBAgentService:
                 self._probe_layer_info()
             except Exception as e:
                 logger.debug("MIB layer probe skipped: %s", e)
+            # 터치 소스 해상도 검출 — /data/resolution_config(HMI 논리 해상도)가 화면(PNG)과
+            # 다르면(fake resolution) 터치 좌표를 src로 환산해야 정확히 맞는다. best-effort.
+            try:
+                self._detect_touch_source_res()
+            except Exception as e:
+                logger.debug("MIB touch source res detect skipped: %s", e)
             # ksend 입력 경로 진단: 바이너리 존재 + src/dst addr로 더미 프레임 송신 결과 확인.
             try:
                 self._probe_ksend()
@@ -1013,6 +1025,53 @@ class MIBAgentService:
             except Exception as e:
                 logger.debug("MIB HU dump diag idx=%d local hex failed: %s", idx, e)
 
+    def _detect_touch_source_res(self) -> None:
+        """터치 소스(HMI 논리) 해상도를 /data/resolution_config 에서 읽어 설정.
+
+        일부 유닛은 컴포지터가 src(예: 2240x1260)를 dst(=화면/PNG, 1920x1080)로 균일 축소해
+        출력한다(레이어 source→destination region, "SetFakeResolution"). 터치 수신부는 src
+        좌표계를 기대하므로, _touch_frame이 dst 탭 좌표를 src로 환산하려면 src 해상도가 필요.
+        파일이 없으면(= "Disable scaling" = 네이티브) src=dst로 두어 단일 해상도 동작 유지.
+        best-effort — 실패/부재는 무시하고 네이티브로 폴백.
+        """
+        out = ""
+        try:
+            with self._ssh_lock:
+                ssh = self._get_shared_ssh()
+                stdin, stdout, stderr = ssh.exec_command(
+                    "cat /data/resolution_config 2>/dev/null", timeout=5)
+                try:
+                    stdin.close()
+                except Exception:
+                    pass
+                out = stdout.read().decode("utf-8", errors="replace").strip()
+        except Exception as e:
+            logger.debug("MIB resolution_config read failed: %s", e)
+            return
+        parts = out.replace("\n", " ").split()
+        if len(parts) >= 2:
+            try:
+                sx, sy = int(parts[0]), int(parts[1])
+            except ValueError:
+                sx = sy = 0
+            if sx > 0 and sy > 0:
+                self._touch_src_x, self._touch_src_y = sx, sy
+                if (sx, sy) != (self._res_x, self._res_y):
+                    logger.info(
+                        "MIB touch source(HMI) res = %dx%d, display(dst) = %dx%d "
+                        "→ fake-resolution 보정 활성 (touch scale x=%.5f y=%.5f)",
+                        sx, sy, self._res_x, self._res_y,
+                        sx / (self._res_x * (int(sx / 1023) + 1)),
+                        sy / (self._res_y * (int(sy / 1023) + 1)),
+                    )
+                else:
+                    logger.info("MIB touch source res = display res %dx%d (네이티브)", sx, sy)
+                return
+        # 파일 없음/파싱 실패 → 네이티브(src=dst)
+        self._touch_src_x = self._touch_src_y = None
+        logger.info("MIB /data/resolution_config 없음 → 터치 네이티브(src=dst=%dx%d)",
+                    self._res_x, self._res_y)
+
     def _probe_layer_info(self) -> None:
         """LayerManagerControl get screens/layers를 실행해 진단 정보를 로깅.
 
@@ -1262,19 +1321,20 @@ class MIBAgentService:
     # Touch (press/drag/release) — ref RemoteController.excutecmdTouch*
     # ------------------------------------------------------------------
     def _touch_frame(self, x: int, y: int, end_byte: int) -> str:
-        # MIB 터치 스케일 = 화면 / mult,  mult = int(res/1023)+1 (축별 독립).
-        # 시료 firmware 확정(set_resolution.sh + touch_event.sh + 프로토콜 분석):
-        #   - ksend 좌표는 축당 10비트(0~1023)라 mult는 화면좌표를 1023 범위에 맞추는 분주비.
-        #   - touch_event.sh 공식 주석: 10"(1560x878)=X/2·Y/1, 15"(2240x1260)=X/3·Y/2,
-        #     8"MQB(800x480)=X/1·Y/1 → 전부 축별 int(res/1023)+1 과 일치.
-        #   - touch-app SetFakeResolution(%.6f) = 1/mult.
-        # 과거 max(2, mult) 플로어는 800x480/1280x640/1560x878 축에서 잘못 ÷2를 강제(MQB
-        # 좌상단 1/4 버그의 원인)해 제거. _x_mult/_y_mult 는 이미 ≥1이라 max(1,..)은 방어용.
-        # 화면좌표를 디지타이저 좌표로 변환 후 mult=1로 인코딩(참조의 ÷mult 사전클램프 버그 회피).
-        dvx = max(1, self._x_mult)
-        dvy = max(1, self._y_mult)
-        xs = self._touch_x_scale if self._touch_x_scale is not None else (1.0 / dvx)
-        ys = self._touch_y_scale if self._touch_y_scale is not None else (1.0 / dvy)
+        # 두 해상도 모델: 미러/디스플레이(dst = PNG = self._res)와 HMI 소스(src).
+        # 컴포지터가 src를 dst로 균일 축소해 화면에 출력하고(레이어 source→destination region),
+        # 터치 수신부는 src 좌표계를 기대한다. 프론트는 dst(미러) 좌표로 탭하므로:
+        #   digitizer = tap_dst × (src/dst) / MULT(src),   MULT(v) = int(v/1023)+1
+        # src 미검출(예: MQB, /data/resolution_config 없음=네이티브)이면 src=dst →
+        #   scale = 1/MULT(dst) 로 단일 해상도 동작(축별 독립, 플로어 없음).
+        # firmware 근거(set_resolution.sh + touch_event.sh + 10비트 프로토콜): 좌표는 축당
+        # 10비트(0~1023)라 MULT는 좌표를 1023 범위에 맞추는 분주비, SetFakeResolution=1/MULT.
+        src_x = self._touch_src_x or self._res_x
+        src_y = self._touch_src_y or self._res_y
+        dvx = max(1, int(src_x / 1023) + 1)
+        dvy = max(1, int(src_y / 1023) + 1)
+        xs = self._touch_x_scale if self._touch_x_scale is not None else (src_x / (self._res_x * dvx))
+        ys = self._touch_y_scale if self._touch_y_scale is not None else (src_y / (self._res_y * dvy))
         dx = int(round(int(x) * xs)) + self._touch_x_offset
         dy = int(round(int(y) * ys)) + self._touch_y_offset
         # 디지타이저 좌표 범위로 클램프(= 화면×scale). 음수/초과 방지.
