@@ -1319,25 +1319,24 @@ class MIBAgentService:
     # Touch (press/drag/release) — ref RemoteController.excutecmdTouch*
     # ------------------------------------------------------------------
     def _touch_frame(self, x: int, y: int, end_byte: int) -> str:
-        # 두 해상도 모델: 미러/디스플레이(dst = PNG = self._res)와 HMI 소스(src).
-        # 컴포지터가 src를 dst로 균일 축소해 화면에 출력하고(레이어 source→destination region),
-        # 터치 수신부는 src 좌표계를 기대한다. 프론트는 dst(미러) 좌표로 탭하므로:
-        #   digitizer = tap_dst × (src/dst) / MULT,   MULT = int(max(src_w,src_h)/1023)+1
-        # src 미검출(예: MQB, /data/resolution_config 없음=네이티브)이면 src=dst → scale=1/MULT.
-        # ★ MULT는 축별이 아니라 패널 단위 균일값. touch_event.sh 실코드가 10"=px/2·py/2,
-        #   15"=px/3·py/3 로 양축 동일 분주비를 쓰고(주석의 Y/1·Y/2는 거짓), 실측(X 일치·Y가
-        #   아래로 갈수록 점점 벌어짐)이 Y도 X와 같은 MULT를 요구함을 확인. 좌표는 축당 10비트
-        #   (≤1023)라 더 큰 축이 들어가도록 max 기준으로 MULT를 잡는다(SetFakeResolution=1/MULT).
+        # ★ 축 비대칭 모델 (13.1" VW_EU 실측 확정, 2026-07). 인코딩상 px=다바이트(큰 범위),
+        # py=10비트(0~1023)라 X/Y가 근본적으로 다르게 처리된다:
+        #   - X: 프론트(dst=미러) 좌표를 HMI 소스좌표로 환산 후 mult로 압축해 전송.
+        #        xs = src_x / (dst_x × mult),  mult = int(max(src_w,src_h)/1023)+1.
+        #        디바이스가 px를 ×mult·src→dst 매핑으로 복원(실측: 활성 X = px 복원값).
+        #   - Y: 디바이스가 py를 디스플레이 좌표로 1:1 사용 → 화면 좌표 그대로 전송(ys=1.0).
+        #        실측: digitizer_y == 활성 display_y (205→205, 332→333). src/mult 압축 아님.
+        # 검증: scale_y=1.0이면 Y 정확, scale_x=1.0이면 X 깨짐(=X는 0.389 압축 필요). MQB
+        # (src=dst=800×480, mult=1)도 이 규칙에 부합(xs=1.0, ys=1.0). src 미검출=네이티브(src=dst).
         src_x = self._touch_src_x or self._res_x
-        src_y = self._touch_src_y or self._res_y
-        mult = max(1, int(max(src_x, src_y) / 1023) + 1)
+        mult = max(1, int(max(src_x, self._touch_src_y or self._res_y) / 1023) + 1)
         xs = self._touch_x_scale if self._touch_x_scale is not None else (src_x / (self._res_x * mult))
-        ys = self._touch_y_scale if self._touch_y_scale is not None else (src_y / (self._res_y * mult))
+        ys = self._touch_y_scale if self._touch_y_scale is not None else 1.0
         dx = int(round(int(x) * xs)) + self._touch_x_offset
         dy = int(round(int(y) * ys)) + self._touch_y_offset
-        # 디지타이저 좌표 범위로 클램프(= 화면×scale). 음수/초과 방지.
+        # X 클램프 = 화면×scale. Y(py)는 10비트라 1023 초과 시 인코딩 wrap → 하드 캡.
         ax = min(max(0, dx), max(1, int(self._res_x * xs)))
-        ay = min(max(0, dy), max(1, int(self._res_y * ys)))
+        ay = min(max(0, dy), 1023, max(1, int(self._res_y * ys)))
         p1, p2, p3 = _encode_touch_xy(ax, ay, 1, 1)
         return (
             f"0x83 0x50 0x20 0x0b 0x00 0x00 0x00 0x00 0x00 0xa0 0x01 0x11 "
@@ -1411,14 +1410,14 @@ class MIBAgentService:
         _sy = self._touch_src_y or self._res_y
         _m = max(1, int(max(_sx, _sy) / 1023) + 1)
         _xs = self._touch_x_scale if self._touch_x_scale is not None else (_sx / (self._res_x * _m))
-        _ys = self._touch_y_scale if self._touch_y_scale is not None else (_sy / (self._res_y * _m))
+        _ys = self._touch_y_scale if self._touch_y_scale is not None else 1.0
+        _ax = min(max(0, int(round(x * _xs)) + self._touch_x_offset), max(1, int(self._res_x * _xs)))
+        _ay = min(max(0, int(round(y * _ys)) + self._touch_y_offset), 1023, max(1, int(self._res_y * _ys)))
         logger.info(
             "MIB tap MAP: in=(%d,%d) dst=%dx%d src=%dx%d mult=%d scale=(%.5f,%.5f) "
             "off=(%d,%d) → digitizer=(%d,%d)",
             x, y, self._res_x, self._res_y, _sx, _sy, _m, _xs, _ys,
-            self._touch_x_offset, self._touch_y_offset,
-            int(round(x * _xs)) + self._touch_x_offset,
-            int(round(y * _ys)) + self._touch_y_offset,
+            self._touch_x_offset, self._touch_y_offset, _ax, _ay,
         )
         self._touch_press(x, y)
         if dp > 0:
