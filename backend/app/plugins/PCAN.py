@@ -1,27 +1,28 @@
-"""PCAN — python-can 기반 CAN/CAN FD 송수신·로깅 플러그인.
+"""PCAN — python-can 기반 CAN/CAN FD 송수신·로깅 플러그인 (멀티채널).
 
 Reference/PCAN_python-can 프로토타입(app.py 의 PCAN 클래스)을 ReplayKit 모듈 규약으로 이식.
 
 설계
 ----
-- **인스턴스 1개 = 채널 1개(bus)**. module_service 의 connect_type="can" 가 생성자에
-  interface/channel/bitrate/fd 를 kwargs 로 전달한다(_build_connect_kwargs). __init__ 은
-  설정만 저장하고, _create_and_register 가 이어서 Connect() 를 자동 호출해 bus 를 연다
-  (모든 인자가 optional 이라 자동 연결 대상이 된다).
-- **구조화 파라미터**. 스텝은 msg_id/data/... 를 개별 인자로 받는다. 참조의 세미콜론
-  문자열 파싱(`name;;0x621;0;8;45 40..;1;500;1`)은 쓰지 않는다.
-- **HW 미탐지여도 hard-fail 금지**. Vector 처럼 채널을 수동 지정한다. Connect 실패 시
-  'ERROR' 를 반환해 인스턴스가 미연결로 남게 한다(module_service 자동 연결 규약).
-- **IsConnected()** 는 module_service._is_connected 규약에 쓰인다(끊긴 인스턴스 재생성).
+- **인스턴스 1개 = 인터페이스 1개(여러 채널 bus 관리)**. 디바이스는 PCAN 하드웨어 하나당 1개만
+  등록하고, **채널은 각 스텝 함수의 `channel` 인자로 선택**한다(예: 'PCAN_USBBUS1').
+  Connect() 가 감지된 모든 채널의 bus 를 열어 self._buses[채널명] 에 담고, 없는 채널은
+  스텝 실행 시 lazy open 한다. bitrate/fd 는 디바이스 공통 설정(모든 채널 동일).
+- module_service 의 connect_type="can" 가 생성자에 interface/bitrate/fd 를 kwargs 로 전달한다
+  (_build_connect_kwargs). __init__ 은 설정만 저장, _create_and_register 가 이어서 Connect() 를
+  자동 호출한다(모든 인자 optional).
+- **구조화 파라미터**. 참조의 세미콜론 문자열 파싱(`name;;0x621;..`)은 쓰지 않는다.
+- **HW 미탐지여도 hard-fail 금지**. Connect 실패(감지 채널 0) 시 'ERROR' 반환 → 미연결로 남는다.
+- **IsConnected()** = 열린 bus 존재 여부 (module_service._is_connected 규약: 끊긴 인스턴스 재생성).
 
 노출 스텝(핵심 1차)
 ------------------
 send_can, send_periodic_can, stop_all_tx, start_logging, stop_logging, can_all_stop.
+전부 첫 인자 뒤에 `channel`(기본 'PCAN_USBBUS1') 을 받아 채널을 선택한다.
 Connect/Disconnect/IsConnected 는 module_service.per_module_excluded 로 스텝 UI 에서 숨긴다.
 ISO-TP tp_send / send_and_verify(응답검증) 는 2차.
 
-결과 계약: 성공은 "ok: ..." 문자열, 실패는 "FAIL: ..." 로 시작하는 문자열을 반환한다
-(playback_service 가 not-connected/이미지비교 없을 때 "FAIL:" 접두로 스텝을 실패 처리).
+결과 계약: 성공 "ok: ...", 실패 "FAIL: ..." (playback_service 가 "FAIL:" 접두로 스텝 실패 처리).
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ from typing import Optional
 import can
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_CHANNEL = "PCAN_USBBUS1"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -61,6 +64,10 @@ def _parse_data(s) -> list[int]:
     if not s:
         return []
     return [int(p, 16) for p in s.replace(",", " ").split()]
+
+
+def _norm_channel(ch) -> str:
+    return str(ch).strip() or _DEFAULT_CHANNEL
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -104,70 +111,82 @@ class _CsvCanListener(can.Listener):
 
 
 class PCAN:
-    def __init__(self, interface: str = "pcan", channel: str = "PCAN_USBBUS1",
-                 bitrate: str = "500000", fd: str = "False") -> None:
+    def __init__(self, interface: str = "pcan", bitrate: str = "500000",
+                 fd: str = "False", channel: str = "") -> None:
         self.interface = (str(interface).strip() or "pcan")
-        self.channel = str(channel).strip()
         try:
             self.bitrate = int(str(bitrate).strip() or "500000")
         except ValueError:
             self.bitrate = 500000
         self.fd = _to_bool(fd)
+        # channel 이 명시되면 그 채널만 연다(단일채널 모드). 비면 감지된 전 채널을 연다.
+        self.channel = str(channel).strip()
 
-        self._bus = None
+        self._buses: dict[str, object] = {}          # channel_name -> can.Bus
         self._notifier: Optional[can.Notifier] = None
         self._log_listener: Optional[_CsvCanListener] = None
         self._log_path: Optional[str] = None
-        self._periodic: dict[int, object] = {}   # arbitration_id -> CyclicSendTask
+        self._periodic: dict[tuple, object] = {}      # (channel, arbitration_id) -> CyclicSendTask
         self._lock = threading.RLock()
 
     # ── 연결 수명주기 (스텝 UI 에서는 숨김) ─────────────────────────────
     def Connect(self):
-        """설정된 채널로 bus 를 연다. 성공 'OK', 실패 'ERROR'."""
+        """감지된 PCAN 채널(또는 명시된 단일 채널)의 bus 를 연다. 최소 1개 성공 시 'OK'."""
         with self._lock:
-            if self._bus is not None:
+            if self._buses:
                 return "OK"
-            try:
-                kwargs: dict = {"interface": self.interface, "bitrate": self.bitrate}
-                if self.channel:
-                    kwargs["channel"] = self.channel
-                if self.fd:
-                    kwargs["fd"] = True
-                self._bus = can.Bus(**kwargs)
-                logger.info("PCAN connected: interface=%s channel=%s bitrate=%d fd=%s",
-                            self.interface, self.channel, self.bitrate, self.fd)
-                return "OK"
-            except Exception as e:
-                logger.error("PCAN Connect failed (interface=%s channel=%s): %s",
-                             self.interface, self.channel, e)
-                self._bus = None
+            if self.channel:
+                targets = [self.channel]
+            else:
+                try:
+                    cfgs = can.detect_available_configs(interfaces=self.interface)
+                    targets = [str(c.get("channel")) for c in cfgs if c.get("channel")]
+                except Exception as e:
+                    logger.warning("PCAN detect_available_configs failed: %s", e)
+                    targets = []
+            opened = []
+            for ch in targets:
+                try:
+                    self._buses[ch] = self._open_bus(ch)
+                    opened.append(ch)
+                except Exception as e:
+                    logger.error("PCAN open channel %s failed: %s", ch, e)
+            if not self._buses:
+                logger.error("PCAN Connect: no channel opened (interface=%s)", self.interface)
                 return "ERROR"
+            logger.info("PCAN connected: interface=%s bitrate=%d fd=%s channels=%s",
+                        self.interface, self.bitrate, self.fd, opened)
+            return "OK"
 
     def IsConnected(self) -> bool:
-        return self._bus is not None
+        return bool(self._buses)
 
     def Disconnect(self):
-        """주기 송신·로깅을 정리하고 bus 를 shutdown."""
+        """주기 송신·로깅을 정리하고 모든 채널 bus 를 shutdown."""
         with self._lock:
             self._stop_all_tx_locked()
             self._stop_logging_locked()
-            if self._bus is not None:
+            for bus in self._buses.values():
                 try:
-                    self._bus.shutdown()
+                    bus.shutdown()
                 except Exception:
                     pass
-                self._bus = None
+            self._buses.clear()
             return "OK"
 
     # ── 송신 ────────────────────────────────────────────────────────────
-    def send_can(self, msg_id, data, is_extended: str = "False", is_fd: str = "False"):
-        """단발 CAN/CAN FD 프레임 1개 송신.
+    def send_can(self, msg_id, data, channel: str = _DEFAULT_CHANNEL,
+                 is_extended: str = "False", is_fd: str = "False"):
+        """지정 채널로 단발 CAN/CAN FD 프레임 1개 송신.
 
+        channel: 대상 채널명 (예: 'PCAN_USBBUS1', 'PCAN_USBBUS2').
         msg_id: 16진수 ID ('0x621' 또는 '621'). data: 공백/콤마 구분 16진수 바이트.
         """
         with self._lock:
-            if self._bus is None:
-                return "FAIL: PCAN not connected"
+            ch = _norm_channel(channel)
+            bus = self._get_bus(ch)
+            if bus is None:
+                return f"FAIL: PCAN channel not available: {ch}"
             try:
                 mid = _parse_msg_id(msg_id)
                 payload = _parse_data(data)
@@ -177,20 +196,23 @@ class PCAN:
                     is_extended_id=_to_bool(is_extended),
                     is_fd=_to_bool(is_fd) or self.fd,
                 )
-                self._bus.send(msg)
-                return f"ok: sent 0x{mid:X} [{' '.join(f'{b:02X}' for b in payload)}]"
+                bus.send(msg)
+                return f"ok: [{ch}] sent 0x{mid:X} [{' '.join(f'{b:02X}' for b in payload)}]"
             except Exception as e:
                 return f"FAIL: send error — {e}"
 
-    def send_periodic_can(self, msg_id, data, period_ms: str = "1000",
-                          is_extended: str = "False", is_fd: str = "False"):
-        """주기(cyclic) 송신 시작/갱신. 같은 ID 재호출 시 데이터만 갱신한다.
+    def send_periodic_can(self, msg_id, data, channel: str = _DEFAULT_CHANNEL,
+                          period_ms: str = "1000", is_extended: str = "False",
+                          is_fd: str = "False"):
+        """지정 채널에서 주기(cyclic) 송신 시작/갱신. 같은 채널·ID 재호출 시 데이터만 갱신.
 
         stop_all_tx / can_all_stop 로 정지. period_ms: 송신 주기(밀리초).
         """
         with self._lock:
-            if self._bus is None:
-                return "FAIL: PCAN not connected"
+            ch = _norm_channel(channel)
+            bus = self._get_bus(ch)
+            if bus is None:
+                return f"FAIL: PCAN channel not available: {ch}"
             try:
                 mid = _parse_msg_id(msg_id)
                 payload = _parse_data(data)
@@ -204,31 +226,33 @@ class PCAN:
                     is_extended_id=_to_bool(is_extended),
                     is_fd=_to_bool(is_fd) or self.fd,
                 )
-                existing = self._periodic.get(mid)
+                key = (ch, mid)
+                existing = self._periodic.get(key)
                 if existing is not None:
                     existing.modify_data(msg)
-                    return f"ok: periodic 0x{mid:X} updated (period={period_s * 1000:.0f}ms)"
-                task = self._bus.send_periodic(msg, period_s)
-                self._periodic[mid] = task
-                return f"ok: periodic 0x{mid:X} started (period={period_s * 1000:.0f}ms)"
+                    return f"ok: [{ch}] periodic 0x{mid:X} updated (period={period_s * 1000:.0f}ms)"
+                task = bus.send_periodic(msg, period_s)
+                self._periodic[key] = task
+                return f"ok: [{ch}] periodic 0x{mid:X} started (period={period_s * 1000:.0f}ms)"
             except Exception as e:
                 return f"FAIL: periodic send error — {e}"
 
     def stop_all_tx(self):
-        """모든 주기 송신 작업을 정지."""
+        """모든 채널의 주기(cyclic) 송신 작업을 정지."""
         with self._lock:
-            if self._bus is None:
+            if not self._buses:
                 return "FAIL: PCAN not connected"
             n = self._stop_all_tx_locked()
             return f"ok: stopped {n} periodic task(s)"
 
     # ── 로깅 ────────────────────────────────────────────────────────────
     def start_logging(self, csv_file: str = ""):
-        """CAN 트래픽 CSV 로깅 시작. csv_file 이 비면 재생 런 폴더(logs/) 또는
-        results/PCAN_Log 아래로 자동 저장한다.
+        """열린 모든 채널의 CAN 트래픽을 하나의 CSV 로 로깅 시작 (channel 컬럼으로 구분).
+
+        csv_file 이 비면 재생 런 폴더(logs/) 또는 results/PCAN_Log 아래로 자동 저장한다.
         """
         with self._lock:
-            if self._bus is None:
+            if not self._buses:
                 return "FAIL: PCAN not connected"
             if self._notifier is not None:
                 return f"ok: logging already running → {self._log_path}"
@@ -241,9 +265,9 @@ class PCAN:
                 os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             try:
                 self._log_listener = _CsvCanListener(path)
-                self._notifier = can.Notifier(self._bus, [self._log_listener])
+                self._notifier = can.Notifier(list(self._buses.values()), [self._log_listener])
                 self._log_path = path
-                return f"ok: logging started → {path}"
+                return f"ok: logging started ({len(self._buses)} ch) → {path}"
             except Exception as e:
                 self._stop_logging_locked()
                 return f"FAIL: logging start error — {e}"
@@ -258,20 +282,38 @@ class PCAN:
             return f"ok: logging stopped → {path}"
 
     def can_all_stop(self):
-        """주기 송신 + 로깅을 한 번에 정지 (bus 는 유지 → 연결 상태 보존)."""
+        """모든 채널의 주기 송신 + 로깅을 한 번에 정지 (bus 는 유지 → 연결 상태 보존)."""
         with self._lock:
-            if self._bus is None:
+            if not self._buses:
                 return "ok: PCAN not connected"
             self._stop_all_tx_locked()
             self._stop_logging_locked()
             return "ok: all tx + logging stopped"
 
-    # ── 내부 (락 보유 상태에서 호출) ───────────────────────────────────
+    # ── 내부 ───────────────────────────────────────────────────────────
+    def _open_bus(self, channel: str):
+        kwargs: dict = {"interface": self.interface, "channel": channel, "bitrate": self.bitrate}
+        if self.fd:
+            kwargs["fd"] = True
+        return can.Bus(**kwargs)
+
+    def _get_bus(self, channel: str):
+        """열린 bus 반환. 없으면 lazy open 시도(감지 못한 채널 명시 사용 대비). 실패 시 None."""
+        bus = self._buses.get(channel)
+        if bus is None:
+            try:
+                bus = self._open_bus(channel)
+                self._buses[channel] = bus
+            except Exception as e:
+                logger.error("PCAN lazy open channel %s failed: %s", channel, e)
+                return None
+        return bus
+
     def _stop_all_tx_locked(self) -> int:
         n = len(self._periodic)
-        if self._bus is not None:
+        for bus in self._buses.values():
             try:
-                self._bus.stop_all_periodic_tasks()
+                bus.stop_all_periodic_tasks()
             except Exception:
                 pass
         self._periodic.clear()

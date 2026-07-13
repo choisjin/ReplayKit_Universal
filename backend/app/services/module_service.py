@@ -290,10 +290,10 @@ def list_available_modules() -> list[dict]:
               ]},
          ]},
         {"name": "PCAN", "label": "PCAN (python-can)", "connect_type": "can",
+         # 채널은 디바이스가 아니라 각 스텝의 channel 인자로 선택 — 여기선 인터페이스 공통 설정만.
          "connect_fields": [
              {"name": "interface", "label": "Interface", "type": "select", "default": "pcan",
               "options": ["pcan", "vector", "kvaser", "socketcan", "ixxat"]},
-             {"name": "channel", "label": "Channel", "type": "text", "default": "PCAN_USBBUS1"},
              {"name": "bitrate", "label": "Bitrate", "type": "select", "default": "500000",
               "options": ["125000", "250000", "500000", "1000000"]},
              {"name": "fd", "label": "CAN FD", "type": "select", "default": "False",

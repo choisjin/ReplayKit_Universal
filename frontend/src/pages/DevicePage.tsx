@@ -919,18 +919,19 @@ export default function DevicePage() {
     message.info('수동 연결로 전환 — 채널별 속도를 테스트 후 연결하세요');
   };
 
-  // PCAN(PEAK/SysMax 호환) 채널 "추가" → 채널 1개당 PCAN 모듈 디바이스 1개 직접 등록.
-  // Vector 와 달리 채널=디바이스라 수동모드 전환 없이 바로 연결한다 (bitrate 기본 500k, FD 는 2차).
-  const handleAddPcan = async (ch: PcanChannel) => {
+  // PCAN(PEAK/SysMax 호환) "추가" → 하드웨어 1대를 PCAN 디바이스 1개로 등록.
+  // 채널은 디바이스가 아니라 각 스텝의 channel 인자로 선택하므로, 감지 채널 수와 무관하게 1개만 등록한다.
+  // (bitrate 기본 500k, FD 는 2차. Connect() 가 감지된 모든 채널 bus 를 연다.)
+  const handleAddPcan = async () => {
     const modInfo = modules.find(m => m.name === 'PCAN');
     const defBitrate = modInfo?.connect_fields?.find(f => f.name === 'bitrate')?.default || '500000';
     setConnecting(true);
     try {
       await connectDevice(
-        'module', ch.channel, undefined, `PCAN_${ch.channel}`, 'auxiliary', 'PCAN', 'can',
-        { interface: 'pcan', channel: ch.channel, bitrate: defBitrate, fd: 'False' },
+        'module', 'pcan', undefined, 'PCAN', 'auxiliary', 'PCAN', 'can',
+        { interface: 'pcan', bitrate: defBitrate, fd: 'False' },
       );
-      message.success(`PCAN ${ch.channel} ${t('common.connect')}`);
+      message.success(`PCAN ${t('common.connect')}`);
       closeAddModal();
     } catch (e: any) {
       message.error(e.response?.data?.detail || t('device.connectFailed'));
@@ -2506,6 +2507,10 @@ export default function DevicePage() {
                     }
 
                     if (scanItemCategory('pcan') === modalCategory && (scannedPcan.channels.length > 0 || scannedPcan.driver_missing)) {
+                      // 하드웨어 1대 = PCAN 디바이스 1개. 감지된 채널은 정보로만 표시하고(각 채널은
+                      // 스텝의 channel 인자로 선택), Add 버튼은 하나만 둔다.
+                      const pcanExisting = findExisting(x => x.type === 'module' && x.info?.module === 'PCAN');
+                      const anyFd = scannedPcan.channels.some(c => c.supports_fd);
                       scanTabs.push({
                         key: 'pcan',
                         label: <span>PCAN-Hardware <Tag style={{ marginLeft: 3 }}>{scannedPcan.channels.length}</Tag></span>,
@@ -2514,24 +2519,20 @@ export default function DevicePage() {
                             {scannedPcan.error || 'PEAK PCAN-Basic 드라이버(PCANBasic.dll)가 설치되어 있지 않습니다.'}
                           </div>
                         ) : (
-                          <List
-                            size="small"
-                            bordered
-                            dataSource={scannedPcan.channels}
-                            pagination={scannedPcan.channels.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
-                            renderItem={(ch) => {
-                              const existing = findExisting(x => x.type === 'module' && x.info?.module === 'PCAN' && x.address === ch.channel);
-                              return (
-                                <List.Item actions={[renderScanAction(existing, t('common.add'), () => handleAddPcan(ch))]}>
-                                  <div>
-                                    <Tag color="purple">PCAN</Tag>
-                                    <strong>{ch.channel}</strong>
-                                    {ch.device_id != null && <span style={{ color: '#999', marginLeft: 6 }}>dev {ch.device_id}</span>}
-                                    {ch.supports_fd && <Tag color="blue" style={{ marginLeft: 6 }}>FD</Tag>}
+                          <List size="small" bordered dataSource={[scannedPcan]}
+                            renderItem={() => (
+                              <List.Item actions={[renderScanAction(pcanExisting, t('common.add'), handleAddPcan)]}>
+                                <div>
+                                  <Tag color="purple">PCAN</Tag>
+                                  <strong>PCAN-Hardware</strong>
+                                  <Tag style={{ marginLeft: 6 }}>{scannedPcan.channels.length}채널</Tag>
+                                  {anyFd && <Tag color="blue" style={{ marginLeft: 4 }}>FD</Tag>}
+                                  <div style={{ color: '#999', fontSize: 12, marginTop: 2 }}>
+                                    {scannedPcan.channels.map(c => c.channel).join(', ')}
                                   </div>
-                                </List.Item>
-                              );
-                            }}
+                                </div>
+                              </List.Item>
+                            )}
                           />
                         ),
                       });
