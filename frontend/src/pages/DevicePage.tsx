@@ -896,8 +896,11 @@ export default function DevicePage() {
       for (const cf of modInfo.connect_fields) seed[cf.name] = cf.default ?? '';
     }
     // 스캔한 채널들을 device_info 행으로 미리 채움 (channel_index 로 물리 채널 직접 지정)
+    // Channel 컬럼(select, display_offset=1)은 표시용이므로 하드웨어 채널을 시드해
+    // 행마다 실제 채널 번호가 보이도록 한다 (백엔드는 channel_index 로 직접 오픈).
     seed['device_info'] = chs.map(ch => ({
-      channel: '0', app_name: '', bitrate: '500000', is_fd: 'False', data_bitrate: 'None',
+      channel: ch.hw_channel != null && ch.hw_channel >= 0 && ch.hw_channel <= 7 ? String(ch.hw_channel) : '0',
+      app_name: '', bitrate: '500000', is_fd: 'False', data_bitrate: 'None',
       channel_index: ch.channel_index, channel_name: ch.name,
     }));
     setExtraFieldValues(seed);
@@ -1508,6 +1511,10 @@ export default function DevicePage() {
       <div style={{ border: '1px solid #e0e0e0', borderRadius: 4, padding: 6, background: '#fafafa' }}>
         {f.row_test === 'canoe_channel' && (
           <div style={{ marginBottom: 6 }}>
+            <div style={{ fontSize: 10, color: '#ad6800', background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 3, padding: '3px 6px', marginBottom: 6 }}>
+              ⚠️ 테스트/자동추천은 <b>active(ACK) 모드</b>로 동작합니다 — CANoe 없이 벤치 단독으로 수신되지만,
+              버스에 ACK 를 주입하므로 <b>동작 중인 실차(다중 ECU) 버스</b>에 연결한 채로는 사용하지 마세요.
+            </div>
             <Button
               size="small"
               icon={<WifiOutlined />}

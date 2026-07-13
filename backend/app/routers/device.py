@@ -2258,6 +2258,7 @@ class TestCanChannelRequest(BaseModel):
     is_fd: bool = False
     duration_s: float = 2.0
     channel_index: Optional[int] = None  # 스캔 선택 채널이면 전역 인덱스로 직접 오픈
+    listen_only: bool = False  # 기본 active(ACK): 벤치 단독 수신 가능. True=SILENT(실차 안전)
 
 
 # 자동 추천 스윕 후보값 (일반적인 자동차 CAN 속도 순으로 정렬 — 앞쪽이 더 흔함)
@@ -2276,11 +2277,16 @@ _CAN_FD_SCAN_COMBOS = [
 
 def _vector_open_count(channel: int, app_name: str, bitrate: int,
                        data_bitrate: Optional[int], is_fd: bool,
-                       duration_s: float, channel_index: Optional[int] = None) -> dict:
-    """단일 (bitrate, data_bitrate) 조합으로 listen-only 오픈 후 프레임 수를 센다.
+                       duration_s: float, channel_index: Optional[int] = None,
+                       listen_only: bool = False) -> dict:
+    """단일 (bitrate, data_bitrate) 조합으로 오픈 후 프레임 수를 센다.
 
     반환: {opened, frames, error, driver_missing}
-    listen_only=True 는 버스에 ACK/에러프레임을 보내지 않아 실차 버스를 방해하지 않는다.
+    listen_only=False(기본, active/ACK): 우리 채널이 스스로 ACK 를 주므로 DUT + Vector
+      만 있는 벤치에서도 CANoe 등 다른 active 노드 없이 단독으로 프레임을 수신한다.
+      단, 버스에 ACK/에러프레임을 주입하므로 실차(다중 ECU) 버스에서는 주의.
+    listen_only=True(SILENT): ACK 를 보내지 않아 실차 버스를 방해하지 않지만, 버스에
+      ACK 를 줄 다른 노드가 없으면(벤치 단독) 유효 프레임이 잡히지 않는다.
     driver_missing=True 면 vxlapi64.dll 미설치 → 스윕 전체를 중단해야 함.
     channel_index 가 주어지면 스캔으로 찾은 전역 채널을 app_name 없이 직접 연다.
     """
@@ -2302,7 +2308,7 @@ def _vector_open_count(channel: int, app_name: str, bitrate: int,
             base = dict(channel=0, channel_index=int(channel_index), app_name=None)
         else:
             base = dict(channel=channel, app_name=app_name)
-        common = dict(listen_only=True, receive_own_messages=False)
+        common = dict(listen_only=bool(listen_only), receive_own_messages=False)
         if is_fd:
             # FD: from_sample_point 로 80MHz 유효 타이밍 자동 계산.
             # python-can 기본(from_bitrate_and_segments)은 고정 세그먼트라 5M 등에서
@@ -2375,15 +2381,17 @@ def _vector_open_count(channel: int, app_name: str, bitrate: int,
 
 def _test_can_channel_blocking(channel: int, app_name: str, bitrate: int,
                                data_bitrate: Optional[int], is_fd: bool,
-                               duration_s: float, channel_index: Optional[int] = None) -> dict:
-    """단일 CAN 채널을 listen-only 로 열어 프레임 수신 여부를 확인한다.
+                               duration_s: float, channel_index: Optional[int] = None,
+                               listen_only: bool = False) -> dict:
+    """단일 CAN 채널을 열어 프레임 수신 여부를 확인한다.
 
     - 채널 open 실패 → bitrate/드라이버/채널 할당 문제 (success=False, error).
     - open 성공 + frames>0 → bitrate/data_bitrate 가 실제 버스와 일치 (디코딩 성공).
     - open 성공 + frames==0 → 버스가 idle 이거나 속도 불일치 (판정 보류, warning).
+    listen_only 기본 False(active/ACK) → 벤치 단독에서도 우리 채널이 ACK 를 제공.
     """
     r = _vector_open_count(channel, app_name, bitrate, data_bitrate, is_fd, duration_s,
-                           channel_index=channel_index)
+                           channel_index=channel_index, listen_only=listen_only)
     return {
         "success": bool(r["opened"]),
         "opened": bool(r["opened"]),
@@ -2397,7 +2405,8 @@ def _test_can_channel_blocking(channel: int, app_name: str, bitrate: int,
 
 
 def _scan_can_channel_blocking(channel: int, app_name: str, is_fd: bool,
-                               duration_s: float, channel_index: Optional[int] = None) -> dict:
+                               duration_s: float, channel_index: Optional[int] = None,
+                               listen_only: bool = False) -> dict:
     """여러 속도 후보(Classic + FD)를 순차로 열어 '진짜 트래픽'이 잡히는 조합을 추천.
 
     핵심: 틀린 bitrate 도 에러/쓰레기 프레임 때문에 개수가 0이 아니고, 오히려 더 빠른
@@ -2413,7 +2422,7 @@ def _scan_can_channel_blocking(channel: int, app_name: str, is_fd: bool,
     results: list = []
     for br, dbr, fd in combos:
         r = _vector_open_count(channel, app_name, br, dbr, fd, duration_s,
-                               channel_index=channel_index)
+                               channel_index=channel_index, listen_only=listen_only)
         results.append({
             "bitrate": br,
             "data_bitrate": dbr,
@@ -2474,7 +2483,8 @@ def _scan_can_channel_blocking(channel: int, app_name: str, is_fd: bool,
 async def test_can_channel(req: TestCanChannelRequest):
     """CANoe_Ctrl 채널의 bitrate/data_bitrate 가 실제 버스에서 통신 가능한지 테스트.
 
-    listen-only 모드로 열어 지정 시간 동안 프레임을 세어 반환한다.
+    기본 active(ACK) 모드로 열어 지정 시간 동안 프레임을 세어 반환한다
+    (listen_only=True 로 요청하면 SILENT — 실차 버스 안전).
     CANoe_Ctrl 전용 단일 스레드 executor 에서 열기+수신+종료를 모두 수행해
     Vector 핸들을 동일 스레드에서 생성/사용/해제한다.
     """
@@ -2491,7 +2501,7 @@ async def test_can_channel(req: TestCanChannelRequest):
     fn = functools.partial(
         _test_can_channel_blocking,
         req.channel, req.app_name, req.bitrate, req.data_bitrate,
-        bool(req.is_fd), req.duration_s, req.channel_index,
+        bool(req.is_fd), req.duration_s, req.channel_index, bool(req.listen_only),
     )
     try:
         result = await asyncio.wait_for(
@@ -2523,14 +2533,16 @@ class ScanCanChannelRequest(BaseModel):
     is_fd: bool = False
     duration_s: float = 1.2  # 후보 하나당 수신 관찰 시간
     channel_index: Optional[int] = None  # 스캔 선택 채널이면 전역 인덱스로 직접 오픈
+    listen_only: bool = False  # 기본 active(ACK): 벤치 단독 수신 가능. True=SILENT(실차 안전)
 
 
 @router.post("/scan-can-channel")
 async def scan_can_channel(req: ScanCanChannelRequest):
     """여러 속도 후보를 순차로 시도해 프레임이 가장 많이 잡히는 조합을 추천.
 
-    listen-only 로만 열어 실차 버스를 방해하지 않는다. 후보 개수 × duration_s
-    만큼 시간이 걸리므로 timeout 을 넉넉히 잡는다.
+    기본 active(ACK) 모드로 열어 CANoe 등 다른 노드 없이 벤치 단독으로 트래픽을
+    받는다(listen_only=True 로 요청하면 SILENT — 실차 버스 안전). 후보 개수 ×
+    duration_s 만큼 시간이 걸리므로 timeout 을 넉넉히 잡는다.
     """
     import asyncio
     import functools
@@ -2542,6 +2554,7 @@ async def scan_can_channel(req: ScanCanChannelRequest):
     fn = functools.partial(
         _scan_can_channel_blocking,
         req.channel, req.app_name, bool(req.is_fd), req.duration_s, req.channel_index,
+        bool(req.listen_only),
     )
     try:
         result = await asyncio.wait_for(
