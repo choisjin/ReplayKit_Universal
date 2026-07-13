@@ -923,14 +923,15 @@ export default function DevicePage() {
   // 채널은 디바이스가 아니라 각 스텝의 channel 인자로 선택하므로, 감지 채널 수와 무관하게 1개만 등록한다.
   // (bitrate 기본 500k, FD 는 2차. Connect() 가 감지된 모든 채널 bus 를 연다.)
   const handleAddPcan = async () => {
+    // connect_fields 기본값(interface/bitrate/fd/data_bitrate)을 그대로 시드해 등록.
+    // FD 벤치는 이 빠른추가(classic 기본) 대신 "수동 추가"에서 CAN FD=True + Data Bitrate 를
+    // 골라 연결하거나, 등록 후 디바이스 편집에서 fd/data_bitrate 를 바꾼다.
     const modInfo = modules.find(m => m.name === 'PCAN');
-    const defBitrate = modInfo?.connect_fields?.find(f => f.name === 'bitrate')?.default || '500000';
+    const extra: Record<string, any> = { interface: 'pcan' };
+    for (const cf of modInfo?.connect_fields || []) extra[cf.name] = cf.default ?? '';
     setConnecting(true);
     try {
-      await connectDevice(
-        'module', 'pcan', undefined, 'PCAN', 'auxiliary', 'PCAN', 'can',
-        { interface: 'pcan', bitrate: defBitrate, fd: 'False' },
-      );
+      await connectDevice('module', 'pcan', undefined, 'PCAN', 'auxiliary', 'PCAN', 'can', extra);
       message.success(`PCAN ${t('common.connect')}`);
       closeAddModal();
     } catch (e: any) {

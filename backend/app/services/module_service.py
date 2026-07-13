@@ -294,10 +294,12 @@ def list_available_modules() -> list[dict]:
          "connect_fields": [
              {"name": "interface", "label": "Interface", "type": "select", "default": "pcan",
               "options": ["pcan", "vector", "kvaser", "socketcan", "ixxat"]},
-             {"name": "bitrate", "label": "Bitrate", "type": "select", "default": "500000",
+             {"name": "bitrate", "label": "Bitrate (nominal)", "type": "select", "default": "500000",
               "options": ["125000", "250000", "500000", "1000000"]},
              {"name": "fd", "label": "CAN FD", "type": "select", "default": "False",
               "options": ["True", "False"]},
+             {"name": "data_bitrate", "label": "Data Bitrate (FD)", "type": "select", "default": "2000000",
+              "options": ["2000000", "5000000", "8000000", "12000000"]},
          ]},
         {"name": "CANAT", "label": "CANAT", "connect_type": "serial",
          "connect_fields": [

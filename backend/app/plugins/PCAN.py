@@ -112,13 +112,19 @@ class _CsvCanListener(can.Listener):
 
 class PCAN:
     def __init__(self, interface: str = "pcan", bitrate: str = "500000",
-                 fd: str = "False", channel: str = "") -> None:
+                 fd: str = "False", data_bitrate: str = "2000000",
+                 channel: str = "") -> None:
         self.interface = (str(interface).strip() or "pcan")
         try:
             self.bitrate = int(str(bitrate).strip() or "500000")
         except ValueError:
             self.bitrate = 500000
         self.fd = _to_bool(fd)
+        # FD 데이터 구간 bitrate (nominal=self.bitrate, data=this). classic 이면 무시.
+        try:
+            self.data_bitrate = int(str(data_bitrate).strip() or "2000000")
+        except ValueError:
+            self.data_bitrate = 2000000
         # channel 이 명시되면 그 채널만 연다(단일채널 모드). 비면 감지된 전 채널을 연다.
         self.channel = str(channel).strip()
 
@@ -324,15 +330,34 @@ class PCAN:
     def _open_bus(self, channel: str):
         # receive_own_messages=True: 우리가 보낸 TX 프레임도 수신 루프백으로 돌아온다 →
         # start_logging CSV 에 Tx 로 찍혀 "실제로 송신됐는지" 눈으로 확인 가능 (진단 목적).
-        kwargs: dict = {
+        common: dict = {
             "interface": self.interface,
             "channel": channel,
-            "bitrate": self.bitrate,
             "receive_own_messages": True,
         }
-        if self.fd:
-            kwargs["fd"] = True
-        return can.Bus(**kwargs)
+        if not self.fd:
+            return can.Bus(bitrate=self.bitrate, **common)
+
+        # CAN FD: python-can PCAN 은 단순 fd=True 로는 부족하고 f_clock + nominal/data 세그먼트
+        # 타이밍이 필요하다. BitTimingFd 로 (nominal=self.bitrate, data=self.data_bitrate) 을
+        # 계산하되, 요청 조합에 맞는 유효 PCAN FD 클럭을 높은 것부터 자동 선택한다
+        # (예: 12M data 는 80MHz 로 불가 → 60MHz 로 성공).
+        from can import BitTimingFd
+        last_err: Optional[Exception] = None
+        for f_clock in (80_000_000, 60_000_000, 40_000_000, 30_000_000, 24_000_000, 20_000_000):
+            try:
+                timing = BitTimingFd.from_sample_point(
+                    f_clock=f_clock,
+                    nom_bitrate=self.bitrate, nom_sample_point=80.0,
+                    data_bitrate=self.data_bitrate, data_sample_point=70.0,
+                )
+                return can.Bus(timing=timing, **common)
+            except ValueError as e:
+                last_err = e
+                continue
+        raise RuntimeError(
+            f"FD 타이밍 계산 실패 (nominal={self.bitrate}, data={self.data_bitrate}): {last_err}"
+        )
 
     def _get_bus(self, channel: str):
         """열린 bus 반환. 없으면 lazy open 시도(감지 못한 채널 명시 사용 대비). 실패 시 None."""
