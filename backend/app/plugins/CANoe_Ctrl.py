@@ -13,6 +13,11 @@ from isotp import Address, NotifierBasedCanStack, AddressingMode, BlockingSendFa
 
 broadcastmanager.USE_WINDOWS_EVENTS = False  # For Periodic msg
 
+# 벡터(CANoe_Ctrl) 연결은 항상 이 비트레이트로 고정 오픈한다.
+# nominal 500kbps / data 2Mbps CAN FD. (다른 옵션은 현재 미사용)
+FIXED_NOM_BITRATE = 500_000
+FIXED_DATA_BITRATE = 2_000_000
+
 
 def _coerce_value(v):
     """UI는 모든 값을 string으로 보냄 → 적절한 Python 타입으로 변환.
@@ -90,23 +95,18 @@ class CANoe_Ctrl:
             else:
                 open_kwargs = dict(channel=row['channel'], app_name=row.get('app_name', 'CANoe'))
 
-            if not row.get('is_fd'):
-                self.bus.append(VectorBus(**open_kwargs,
-                                          bitrate=row['bitrate'], data_bitrate=row.get('data_bitrate'),
-                                          fd=False, receive_own_messages=True))
-            else:
-                # 실제 CAN FD 로 오픈. from_sample_point(80MHz) 타이밍을 전달하면
-                # python-can 이 timing 이 BitTimingFd 인 것을 보고 FD 모드로 연다.
-                # (과거엔 fd=True 누락으로 사실상 classic 오픈 + 고정 세그먼트가 5M 등에서 실패)
-                from can import BitTimingFd
-                _dbr = row.get('data_bitrate') or row['bitrate']
-                _timing = BitTimingFd.from_sample_point(
-                    f_clock=80_000_000,
-                    nom_bitrate=int(row['bitrate']), nom_sample_point=80.0,
-                    data_bitrate=int(_dbr), data_sample_point=80.0,
-                )
-                self.bus.append(VectorBus(**open_kwargs, timing=_timing,
-                                          rx_queue_size=2 ** 16, receive_own_messages=True))
+            # 벡터 연결은 무조건 CAN FD, nominal 500kbps / data 2Mbps 고정으로 연다.
+            # (현재 다른 비트레이트 옵션은 미사용 — device_info 의 bitrate/data_bitrate/is_fd 값은 무시)
+            # data_bitrate 미지정 시 nominal 로 폴백돼 FD 데이터 페이즈가 어긋나던 문제
+            # (DUT 미-ACK → Vector TX 큐 XL_ERR_QUEUE_IS_FULL → 주기 송신 스레드 사망) 원천 차단.
+            from can import BitTimingFd
+            _timing = BitTimingFd.from_sample_point(
+                f_clock=80_000_000,
+                nom_bitrate=FIXED_NOM_BITRATE, nom_sample_point=80.0,
+                data_bitrate=FIXED_DATA_BITRATE, data_sample_point=80.0,
+            )
+            self.bus.append(VectorBus(**open_kwargs, timing=_timing,
+                                      rx_queue_size=2 ** 16, receive_own_messages=True))
         self.CANoe_logger = None
         self.CANoe_logger_full = None
         self.CANoe_recv = None
