@@ -96,6 +96,29 @@ function canPanelSelectOptions(funcName: string | undefined, paramName: string):
   }
 }
 
+// CANoe_Ctrl(Vector): 스텝의 bus_channel 은 백엔드 self.bus 리스트 인덱스(디바이스 추가 시
+// device_info 행 순서 = 채널 등록 순서)로 매핑된다. 사용자가 "채널 인덱스"를 직접 외워 넣는 대신,
+// 디바이스 추가 때 설정한 채널을 라벨로 보여주는 드롭다운을 만든다.
+//   - value = 행 인덱스 (백엔드가 기대하는 값 그대로 — 백엔드 매핑 변경 불필요)
+//   - label = 설정한 채널 (스캔이면 채널명, 아니면 CH{채널+1}; device_info 채널 컬럼은 display_offset=1)
+// device_info 는 배열 또는 (직렬화된) 문자열일 수 있어 둘 다 관대하게 파싱한다.
+function canoeChannelOptions(deviceInfo: any): { value: string; label: string }[] | null {
+  if (deviceInfo == null || deviceInfo === '') return null;
+  let rows: any = deviceInfo;
+  if (typeof rows === 'string') {
+    try { rows = JSON.parse(rows); }
+    catch { try { rows = JSON.parse(rows.replace(/'/g, '"')); } catch { return null; } }
+  }
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  return rows.map((r: any, i: number) => {
+    const rawCh = r?.channel;
+    const chNum = (rawCh != null && rawCh !== '' && !isNaN(Number(rawCh))) ? Number(rawCh) : null;
+    const name = r?.channel_name ? String(r.channel_name) : (r?.app_name ? String(r.app_name) : '');
+    const chLabel = chNum != null ? `CH${chNum + 1}` : `#${i + 1}`;
+    return { value: String(i), label: name ? `${chLabel} — ${name}` : chLabel };
+  });
+}
+
 // Extracted outside to prevent re-creation on every render
 const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExclude, t }: {
   step: Step;
@@ -6175,6 +6198,11 @@ export default function RecordPage() {
                         if (fn) {
                           const defaults: Record<string, string> = {};
                           fn.params.forEach(p => { if (p.default !== undefined) defaults[p.name] = p.default.replace(/^'(.*)'$/, '$1'); });
+                          // CANoe_Ctrl.bus_channel 은 필수(기본값 없음)라 위 시드에서 빠진다.
+                          // 드롭다운 기본이 첫 채널(인덱스 0)이므로 미조작 시에도 누락되지 않게 '0' 시드.
+                          if (selectedModuleName === 'CANoe_Ctrl' && (v === 'canoe_send_message' || v === 'canoe_send_msg_all_stop')) {
+                            defaults['bus_channel'] = '0';
+                          }
                           // Android.Send_adb_command: serial은 자동 기입하지 않는다(비워둠).
                           // 비어 있으면 백엔드가 step.device_id에서 타겟 시리얼을 derive 해 라우팅하고,
                           // 콤보로 명시 선택한 경우에만 그 시리얼로 override 한다.
@@ -6293,6 +6321,12 @@ export default function RecordPage() {
                             // x/y/width/height → 숨김(모니터 크롭 버튼으로만 설정).
                             const isCanPanel = selectedModuleName === 'CANAT' && selectedModuleFunc === 'CAN_PANEL';
                             const canPanelOpts = selectedModuleName === 'CANAT' ? canPanelSelectOptions(selectedModuleFunc, p.name) : null;
+                            // CANoe_Ctrl: bus_channel → 디바이스 추가 시 설정한 채널 드롭다운
+                            const canoeChOpts = (selectedModuleName === 'CANoe_Ctrl'
+                              && (selectedModuleFunc === 'canoe_send_message' || selectedModuleFunc === 'canoe_send_msg_all_stop')
+                              && p.name === 'bus_channel')
+                              ? canoeChannelOptions((selectedDevice?.info as any)?.device_info) : null;
+                            const selectOpts = canPanelOpts || canoeChOpts;
                             // Frame_Check.Frame_Measure: mode → 콤보박스,
                             // start_image/start_threshold 는 mode='image' 일 때만 표시 (웹캠 크롭 버튼으로 설정).
                             const isFrameCheck = selectedModuleName === 'Frame_Check' && selectedModuleFunc === 'Frame_Measure';
@@ -6417,13 +6451,13 @@ export default function RecordPage() {
                                       { value: '1', label: '1 (주기 전송)' },
                                     ]}
                                   />
-                                ) : canPanelOpts ? (
+                                ) : selectOpts ? (
                                   <Select
                                     size="small"
-                                    value={moduleFuncArgs[p.name] ?? canPanelOpts[0].value}
+                                    value={moduleFuncArgs[p.name] ?? selectOpts[0].value}
                                     onChange={(v) => setModuleFuncArgs(prev => ({ ...prev, [p.name]: v }))}
                                     style={{ flex: 1, minWidth: 0 }}
-                                    options={canPanelOpts}
+                                    options={selectOpts}
                                   />
                                 ) : (
                                   <Input
@@ -7148,6 +7182,11 @@ export default function RecordPage() {
                       // x/y/width/height → 숨김(위의 모니터 크롭 버튼으로만 설정).
                       const isCanPanelEdit = editStepParams.module === 'CANAT' && editStepParams.function === 'CAN_PANEL';
                       const canPanelOptionsEdit = editStepParams.module === 'CANAT' ? canPanelSelectOptions(editStepParams.function, k) : null;
+                      // CANoe_Ctrl: bus_channel → 편집 중인 스텝 디바이스의 설정 채널 드롭다운
+                      const canoeChOptsEdit = (editStepParams.module === 'CANoe_Ctrl'
+                        && (editStepParams.function === 'canoe_send_message' || editStepParams.function === 'canoe_send_msg_all_stop')
+                        && k === 'bus_channel')
+                        ? canoeChannelOptions((allDevices.find(d => d.id === step.device_id)?.info as any)?.device_info) : null;
                       // Frame_Check.Frame_Measure: mode → 콤보박스,
                       // start_image/start_threshold 는 mode='function'이면 숨김 (웹캠 크롭 버튼으로 설정).
                       const isFrameCheckEdit =
@@ -7163,7 +7202,7 @@ export default function RecordPage() {
                           (args.mode || 'function') !== 'image') return null;
                       if (isCanPanelEdit && CAN_PANEL_HIDDEN_PARAMS.includes(k)) return null;
                       if (isAndroidSerialHidden) return null;
-                      const selectOptions = woohyunOptions || canPanelOptionsEdit || frameCheckModeOptions;
+                      const selectOptions = woohyunOptions || canPanelOptionsEdit || frameCheckModeOptions || canoeChOptsEdit;
                       return (
                         <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           <div style={{ display: 'flex', gap: 4, alignItems: 'center', width: '100%' }}>

@@ -298,14 +298,14 @@
           "message_id": "CAN ID(16진수 문자열). 예: '0x288'",
           "cycle_time": "전송 주기 (ms). 0이면 1회 전송",
           "can_message": "메시지 데이터 (공백 구분 16진수). 예: '01 02 03 04 05 06 07 08'",
-          "bus_channel": "버스 채널 인덱스 (0부터, device_info 등록 순서)",
+          "bus_channel": "버스 채널 (드롭다운: 디바이스 추가 시 설정한 채널을 선택. 내부값=등록 순서 인덱스, 0부터)",
           "message_type": "'FD'(기본) 또는 그 외 문자열 = Classic CAN"
         }
       },
       "canoe_send_msg_all_stop": {
         "description": "지정 채널의 모든 주기 송신을 중지합니다.",
         "params": {
-          "bus_channel": "버스 채널 인덱스"
+          "bus_channel": "버스 채널 (드롭다운: 디바이스 추가 시 설정한 채널을 선택)"
         }
       },
       "find_msg_from_latest_log": {
