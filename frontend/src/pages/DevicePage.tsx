@@ -344,6 +344,9 @@ export default function DevicePage() {
   const [vectorChannels, setVectorChannels] = useState<Record<string, VectorChannel[]>>({});
   // 일반 보조디바이스 스캔에 통합된 Vector 채널 결과
   const [scannedVector, setScannedVector] = useState<{ ok: boolean; driver_missing: boolean; channels: VectorChannel[]; error?: string | null }>({ ok: false, driver_missing: false, channels: [] });
+  // PCAN(PEAK/SysMax 호환) 채널 스캔 결과
+  type PcanChannel = { channel: string; device_id?: number | null; controller?: number | null; supports_fd: boolean };
+  const [scannedPcan, setScannedPcan] = useState<{ ok: boolean; driver_missing: boolean; channels: PcanChannel[]; error?: string | null }>({ ok: false, driver_missing: false, channels: [] });
   const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'bmw_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
   // BMW RSE Agent 전용 — 캡처 백엔드(adb screencap vs WebOS 컴포지터) + 해상도 fallback
   const [bmwCaptureBackend, setBmwCaptureBackend] = useState<'auto' | 'adb' | 'webos'>('auto');
@@ -654,6 +657,7 @@ export default function DevicePage() {
     setScannedSsh([]);
     setScannedCustom([]);
     setScannedVector({ ok: false, driver_missing: false, channels: [] });
+    setScannedPcan({ ok: false, driver_missing: false, channels: [] });
     setHasScanned(false);
     if (category === 'auxiliary') {
       deviceApi.listModules().then(res => setModules((res.data.modules || []).sort((a: ModuleInfo, b: ModuleInfo) => (a.label || a.name || '').localeCompare(b.label || b.name || '')))).catch(() => {});
@@ -680,6 +684,7 @@ export default function DevicePage() {
       setScannedSsh(res.data.ssh_hosts || []);
       setScannedCustom(res.data.custom_results || []);
       setScannedVector(res.data.vector || { ok: false, driver_missing: false, channels: [] });
+      setScannedPcan(res.data.pcan || { ok: false, driver_missing: false, channels: [] });
       setPcInterfaces(ifRes.data.interfaces || []);
       setHasScanned(true);
     } catch {
@@ -912,6 +917,25 @@ export default function DevicePage() {
     setConnectType('module');
     setModalTabKey('manual');
     message.info('수동 연결로 전환 — 채널별 속도를 테스트 후 연결하세요');
+  };
+
+  // PCAN(PEAK/SysMax 호환) 채널 "추가" → 채널 1개당 PCAN 모듈 디바이스 1개 직접 등록.
+  // Vector 와 달리 채널=디바이스라 수동모드 전환 없이 바로 연결한다 (bitrate 기본 500k, FD 는 2차).
+  const handleAddPcan = async (ch: PcanChannel) => {
+    const modInfo = modules.find(m => m.name === 'PCAN');
+    const defBitrate = modInfo?.connect_fields?.find(f => f.name === 'bitrate')?.default || '500000';
+    setConnecting(true);
+    try {
+      await connectDevice(
+        'module', ch.channel, undefined, `PCAN_${ch.channel}`, 'auxiliary', 'PCAN', 'can',
+        { interface: 'pcan', channel: ch.channel, bitrate: defBitrate, fd: 'False' },
+      );
+      message.success(`PCAN ${ch.channel} ${t('common.connect')}`);
+      closeAddModal();
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || t('device.connectFailed'));
+    }
+    setConnecting(false);
   };
 
   const handleAddSerial = async (port: string, description: string) => {
@@ -2481,6 +2505,38 @@ export default function DevicePage() {
                       });
                     }
 
+                    if (scanItemCategory('pcan') === modalCategory && (scannedPcan.channels.length > 0 || scannedPcan.driver_missing)) {
+                      scanTabs.push({
+                        key: 'pcan',
+                        label: <span>PCAN-Hardware <Tag style={{ marginLeft: 3 }}>{scannedPcan.channels.length}</Tag></span>,
+                        children: scannedPcan.driver_missing ? (
+                          <div style={{ fontSize: 12, color: '#cf1322', padding: 8 }}>
+                            {scannedPcan.error || 'PEAK PCAN-Basic 드라이버(PCANBasic.dll)가 설치되어 있지 않습니다.'}
+                          </div>
+                        ) : (
+                          <List
+                            size="small"
+                            bordered
+                            dataSource={scannedPcan.channels}
+                            pagination={scannedPcan.channels.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
+                            renderItem={(ch) => {
+                              const existing = findExisting(x => x.type === 'module' && x.info?.module === 'PCAN' && x.address === ch.channel);
+                              return (
+                                <List.Item actions={[renderScanAction(existing, t('common.add'), () => handleAddPcan(ch))]}>
+                                  <div>
+                                    <Tag color="purple">PCAN</Tag>
+                                    <strong>{ch.channel}</strong>
+                                    {ch.device_id != null && <span style={{ color: '#999', marginLeft: 6 }}>dev {ch.device_id}</span>}
+                                    {ch.supports_fd && <Tag color="blue" style={{ marginLeft: 6 }}>FD</Tag>}
+                                  </div>
+                                </List.Item>
+                              );
+                            }}
+                          />
+                        ),
+                      });
+                    }
+
                     if (scanItemCategory('dlt') === modalCategory && scannedDlt.length > 0) {
                       const dltModule = (scanBuiltin.dlt as any)?.module || 'DLTLogging';
                       scanTabs.push({
@@ -3429,6 +3485,7 @@ export default function DevicePage() {
             { key: 'bench',          label: 'WoohyunBench',   proto: 'UDP',      editablePorts: false },
             { key: 'vision_camera',  label: 'Vision Camera',  proto: 'GigE',     editablePorts: false },
             { key: 'vector',         label: 'Vector-Hardware',proto: 'XL',       editablePorts: false },
+            { key: 'pcan',           label: 'PCAN-Hardware',  proto: 'CAN',      editablePorts: false },
             { key: 'webcam',         label: 'Webcam',         proto: 'USB',      editablePorts: false },
             { key: 'ssh',            label: 'SSH',            proto: 'TCP',      editablePorts: false },
             { key: 'smartbench',     label: 'SmartBench',     proto: 'TCP',      editablePorts: false },

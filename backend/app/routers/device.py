@@ -52,6 +52,8 @@ _DEFAULT_SCAN_SETTINGS = {
         "dlt":            {"enabled": True,  "module": "DLTLogging",   "category": "auxiliary", "ports": [3490], "ips": []},
         "bench":          {"enabled": True,  "module": "WoohyunBench", "category": "auxiliary", "host": "192.168.1.101", "port": 25000},
         "vision_camera":  {"enabled": False, "module": "VisionCamera", "category": "primary"},
+        # PCAN(PEAK/SysMax 호환) CAN FD 하드웨어 채널 열거 — PCAN 모듈 등록용.
+        "pcan":           {"enabled": True,  "module": "PCAN",         "category": "auxiliary"},
         "webcam":         {"enabled": True,  "module": "WebcamDevice", "category": "primary"},
         "ssh":            {"enabled": True,  "module": "SSHManager",   "category": "auxiliary", "port": 22, "ips": []},
         "smartbench":     {"enabled": True,  "module": "SmartBench",   "category": "auxiliary", "host": "192.167.0.5", "port": 8000},
@@ -451,6 +453,14 @@ async def scan_ports():
             executor = _get_module_executor("CANoe_Ctrl")
             return await loop.run_in_executor(executor, _list_vector_channels_blocking)
         tasks["vector"] = asyncio.ensure_future(_scan_vector())
+    if _enabled("pcan"):
+        # PCAN-Hardware(PEAK/SysMax 호환) 채널 열거 — PCAN 모듈 등록용.
+        async def _scan_pcan():
+            from ..services.module_service import _get_module_executor
+            loop = asyncio.get_event_loop()
+            executor = _get_module_executor("PCAN")
+            return await loop.run_in_executor(executor, _list_pcan_channels_blocking)
+        tasks["pcan"] = asyncio.ensure_future(_scan_pcan())
     if _enabled("webcam"):
         async def _scan_webcams():
             from ..plugins.WebcamDevice import WebcamDevice
@@ -568,6 +578,7 @@ async def scan_ports():
         "radmoon_devices": [],
         "ssh_hosts": [],
         "vector": {"ok": False, "driver_missing": False, "channels": [], "error": None},
+        "pcan": {"ok": False, "driver_missing": False, "channels": [], "error": None},
         "custom_results": [],
     }
     for key, result in zip(all_keys, results):
@@ -2626,6 +2637,69 @@ def _list_vector_channels_blocking() -> dict:
     result["ok"] = True
     result["channels"] = channels
     return result
+
+
+def _list_pcan_channels_blocking() -> dict:
+    """설치된 PEAK PCAN-Basic 드라이버로 연결된 PCAN 채널을 열거한다 (PCAN 모듈 등록용).
+
+    SysMax PCAN-FD(PLUS/Pro) 등 PCAN-USB FD 호환 클론도 PEAK 드라이버로 인식되므로 함께 잡힌다.
+    반환: {ok, driver_missing, channels:[{channel, device_id, controller, supports_fd}], error}
+
+    주의: can.detect_available_configs('pcan') 는 드라이버 미설치여도 조용히 [] 를 반환한다
+    (예외 없음). "장치 없음"과 "드라이버 없음"을 구분하려면 PCANBasic.dll 로드를 먼저 시도한다
+    (미설치면 OSError "PCANBasic library not found.").
+    """
+    result: dict = {"ok": False, "driver_missing": False, "channels": [], "error": None}
+    try:
+        import can
+    except Exception as e:
+        result["driver_missing"] = True
+        result["error"] = f"python-can 로드 실패: {e}"
+        return result
+
+    # PCANBasic.dll 존재 확인 — 미설치면 driver_missing 로 graceful 반환.
+    try:
+        from can.interfaces.pcan.basic import PCANBasic
+        PCANBasic()
+    except Exception:
+        result["driver_missing"] = True
+        result["error"] = ("PEAK PCAN-Basic 드라이버(PCANBasic.dll)가 설치되어 있지 않습니다. "
+                           "PEAK-System Windows 드라이버를 설치하세요 "
+                           "(SysMax 등 PCAN-USB FD 호환 장치도 동일 드라이버 사용).")
+        return result
+
+    try:
+        configs = can.detect_available_configs(interfaces="pcan")
+    except Exception as e:
+        result["error"] = f"채널 열거 실패: {e}"
+        return result
+
+    channels: list = []
+    for cfg in configs:
+        ch = cfg.get("channel")
+        if not ch:
+            continue
+        channels.append({
+            "channel": str(ch),
+            "device_id": cfg.get("device_id"),
+            "controller": cfg.get("controller_number"),
+            "supports_fd": bool(cfg.get("supports_fd", True)),
+        })
+
+    result["ok"] = True
+    result["channels"] = channels
+    return result
+
+
+@router.get("/pcan/channels")
+async def pcan_channels():
+    """연결된 PCAN(PEAK/SysMax 호환) 채널을 자동 열거 — PCAN 모듈 등록용."""
+    import asyncio
+    from ..services.module_service import _get_module_executor
+
+    loop = asyncio.get_event_loop()
+    executor = _get_module_executor("PCAN")
+    return await loop.run_in_executor(executor, _list_pcan_channels_blocking)
 
 
 @router.get("/vector/channels")
