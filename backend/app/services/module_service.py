@@ -1290,6 +1290,13 @@ def _create_and_register(module_name: str, key: str, constructor_kwargs: Optiona
                             else:
                                 # 필수 인자 없으면 빈 문자열로 채움
                                 init_args[pname] = ""
+                            # bool 기본값 파라미터(e.g. CANAT ch1_fd/ch2_fd)에 문자열이 들어오면
+                            # 실제 bool 로 캐스팅. select("True"/"False") 문자열은 파이썬에서
+                            # 둘 다 truthy 라, 캐스팅 없이 넘기면 ch2_fd="False" 도 FD 로 열려
+                            # (버스는 Classic인데 채널만 500k/2M FD) 수신 큐 버퍼 초과를 유발한다.
+                            if (pname in init_args and isinstance(p.default, bool)
+                                    and isinstance(init_args[pname], str)):
+                                init_args[pname] = _cast_arg(init_args[pname], bool)
                         # log_path 기본값: {프로젝트루트}/results/CANAT_Log
                         if "log_path" in init_args and not init_args["log_path"]:
                             default_log = Path(__file__).resolve().parent.parent.parent / "results" / "CANAT_Log"
