@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Modal, Space, Tag, Typography } from 'antd';
 import { NotificationOutlined } from '@ant-design/icons';
-import { annTitle, dismissPopupsForever, dismissPopupsToday, isGuide, readDismiss, todayStr } from '../lib/manager';
+import { annTitle, dismissPopupsForever, dismissPopupsToday, isGuide, isPopupDismissed, readDismiss, todayStr } from '../lib/manager';
 import { useAnnouncements } from '../context/AnnouncementsContext';
 import { useTranslation } from '../i18n';
 import AnnouncementBody from './AnnouncementBody';
@@ -30,7 +30,7 @@ export default function PopupNotice() {
     if (shownRef.current || announcements.length === 0) return;
     const t = todayStr();
     const dismiss = readDismiss();
-    if (announcements.some((a) => a.is_popup === 1 && dismiss[a.id] !== t)) {
+    if (announcements.some((a) => a.is_popup === 1 && !isPopupDismissed(dismiss, a.id, t))) {
       shownRef.current = true;
       setOpen(true);
     }
@@ -39,7 +39,7 @@ export default function PopupNotice() {
   const t = todayStr();
   const dismiss = readDismiss();
   const candidates = announcements
-    .filter((a) => a.is_popup === 1 && dismiss[a.id] !== t)
+    .filter((a) => a.is_popup === 1 && !isPopupDismissed(dismiss, a.id, t))
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   const top = candidates[0];
 

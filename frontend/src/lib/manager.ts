@@ -98,6 +98,12 @@ export function readDismiss(): Record<string, string> {
   }
 }
 
+/** 해당 공지가 지금 차단 상태인지 여부. "오늘 하루"(오늘 날짜) 또는 "다시 보지 않기"(영구). */
+export function isPopupDismissed(dismiss: Record<string, string>, id: number, today = todayStr()): boolean {
+  const v = dismiss[id];
+  return v === today || v === DISMISS_FOREVER;
+}
+
 /** 주어진 공지 id 들을 오늘 날짜로 "그만 보기" 처리. */
 export function dismissPopupsToday(ids: number[]): void {
   const d = readDismiss();
