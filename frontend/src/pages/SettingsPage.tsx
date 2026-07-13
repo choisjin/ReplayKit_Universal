@@ -3,6 +3,7 @@ import { Button, Card, InputNumber, Select, Space, Switch, message, Typography }
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
 import { scenarioApi } from '../services/api';
+import BackupSection from '../components/BackupSection';
 
 const { Text } = Typography;
 
@@ -186,6 +187,8 @@ export default function SettingsPage() {
             <Button type="primary" size="small" onClick={handleThresholdApply}>{t('common.apply')}</Button>
           </div>
         </Card>
+
+        <BackupSection />
 
         {/* LGSI 전용 임시 마이그레이션 — 기존 시나리오의 SendAvnCan 스텝을 SendCan으로 일괄 변환 */}
         <Card title="시나리오 마이그레이션 (임시)" size="small">

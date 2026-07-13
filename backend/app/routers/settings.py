@@ -34,6 +34,11 @@ _DEFAULTS = {
     "threshold_full_exclude": 0.93,
     "threshold_multi_crop": 0.85,
     "threshold_match_crop": 0.85,
+    # 백업/복원
+    "backup_enabled": True,
+    "backup_interval_minutes": 1440,   # 기본 매일
+    "backup_dir": "",                   # 외부 저장 폴더(비면 내부 backend/backups/ 만)
+    "backup_keep": 10,                  # 위치별 최근 N개 보존
 }
 
 
@@ -70,6 +75,10 @@ class UpdateSettingsRequest(BaseModel):
     threshold_full_exclude: Optional[float] = None
     threshold_multi_crop: Optional[float] = None
     threshold_match_crop: Optional[float] = None
+    backup_enabled: Optional[bool] = None
+    backup_interval_minutes: Optional[int] = None
+    backup_dir: Optional[str] = None
+    backup_keep: Optional[int] = None
 
 
 @router.post("")
@@ -101,6 +110,14 @@ async def update_settings(req: UpdateSettingsRequest):
         current["threshold_multi_crop"] = req.threshold_multi_crop
     if req.threshold_match_crop is not None:
         current["threshold_match_crop"] = req.threshold_match_crop
+    if req.backup_enabled is not None:
+        current["backup_enabled"] = req.backup_enabled
+    if req.backup_interval_minutes is not None:
+        current["backup_interval_minutes"] = req.backup_interval_minutes
+    if req.backup_dir is not None:
+        current["backup_dir"] = req.backup_dir
+    if req.backup_keep is not None:
+        current["backup_keep"] = req.backup_keep
     _save(current)
 
     # 관제 서버 URL 변경 시 monitor_client 재연결

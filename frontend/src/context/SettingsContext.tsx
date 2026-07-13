@@ -19,6 +19,10 @@ export interface AppSettings {
   threshold_full_exclude: number;
   threshold_multi_crop: number;
   threshold_match_crop: number;
+  backup_enabled: boolean;
+  backup_interval_minutes: number;
+  backup_dir: string;
+  backup_keep: number;
 }
 
 interface SettingsContextType {
@@ -46,6 +50,10 @@ const DEFAULT_SETTINGS: AppSettings = {
   threshold_full_exclude: 0.93,
   threshold_multi_crop: 0.85,
   threshold_match_crop: 0.85,
+  backup_enabled: true,
+  backup_interval_minutes: 1440,
+  backup_dir: '',
+  backup_keep: 10,
 };
 
 const SettingsContext = createContext<SettingsContextType | null>(null);

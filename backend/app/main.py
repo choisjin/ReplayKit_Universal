@@ -37,7 +37,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from .routers import compositor as compositor_router, device, dlt as dlt_router, results, scenario, serial_log as serial_log_router, logcat_log as logcat_log_router, settings, webcam
+from .routers import compositor as compositor_router, device, dlt as dlt_router, results, scenario, serial_log as serial_log_router, logcat_log as logcat_log_router, settings, webcam, backup as backup_router
 from .dependencies import adb_service, device_manager, playback_service, recording_service, monitor_client
 from .services.adb_service import resolve_sf_display_id, resolve_input_display_id
 # build_dist.py가 배포 시 __init__.py를 빈 파일로 만들기 때문에 서브모듈 직접 import.
@@ -320,6 +320,10 @@ async def lifespan(app: FastAPI):
 
     reconnect_task = asyncio.create_task(_reconnect_loop())
 
+    # 자동 백업 스케줄러 — settings.backup_interval_minutes 주기로 전체 스냅샷 저장.
+    from .services import backup_service
+    backup_task = asyncio.create_task(backup_service.scheduler_loop())
+
     # 저장된 SSH 디바이스를 시작 시 자동 재연결 시도 (메모리 전용 연결이므로 재시작 시 복구)
     try:
         ssh_devices = [d for d in device_manager.list_all() if d.type == "ssh"]
@@ -348,6 +352,7 @@ async def lifespan(app: FastAPI):
     # --- Shutdown ---
     await monitor_client.stop()
     reconnect_task.cancel()
+    backup_task.cancel()
     # 모듈 인스턴스 graceful teardown — SCAR(netns 복원=인터넷/cvd-ebr 정리), TH(게이트웨이/cuttlefish
     # 정리) 등 무거운 모듈이 서버 종료 시 잔류 상태를 남기지 않도록. (재시작 후 stale 상태로 인한
     # "connected 인데 동작 안 함" / FqinAlreadyExists 완화)
@@ -402,6 +407,7 @@ app.include_router(compositor_router.router)
 app.include_router(dlt_router.router)
 app.include_router(serial_log_router.router)
 app.include_router(logcat_log_router.router)
+app.include_router(backup_router.router)
 
 # Serve app static assets (Tabulator 등 라이브러리)
 _static_dir = Path(__file__).resolve().parent / "static"

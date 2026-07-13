@@ -29,6 +29,7 @@ frontend/node_modules/
 backend/screenshots/
 backend/results/
 backend/scenarios/
+backend/backups/
 backend/auxiliary_devices.json
 backend/settings.json
 Results/

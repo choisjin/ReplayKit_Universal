@@ -346,4 +346,17 @@ export const compositorApi = {
     api.post('/compositor/presets/activate', { name, enabled }),
 };
 
+// Backup / Restore APIs
+export const backupApi = {
+  list: () => api.get('/backup/list'),
+  create: (reason = 'manual') => api.post('/backup/create', { reason }),
+  preview: (id: string) => api.get(`/backup/${encodeURIComponent(id)}/preview`),
+  restoreFull: (id: string, mode: 'merge' | 'replace' = 'merge') =>
+    api.post(`/backup/${encodeURIComponent(id)}/restore`, { mode }),
+  restoreScenario: (id: string, scenario: string) =>
+    api.post(`/backup/${encodeURIComponent(id)}/restore-scenario`, { scenario }),
+  remove: (id: string) => api.delete(`/backup/${encodeURIComponent(id)}`),
+  downloadUrl: (id: string) => `/api/backup/${encodeURIComponent(id)}/download`,
+};
+
 export default api;
