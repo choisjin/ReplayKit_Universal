@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Modal, Space, Tag, Typography } from 'antd';
 import { NotificationOutlined } from '@ant-design/icons';
-import { annTitle, dismissPopupsToday, isGuide, readDismiss, todayStr } from '../lib/manager';
+import { annTitle, dismissPopupsForever, dismissPopupsToday, isGuide, readDismiss, todayStr } from '../lib/manager';
 import { useAnnouncements } from '../context/AnnouncementsContext';
 import { useTranslation } from '../i18n';
 import AnnouncementBody from './AnnouncementBody';
@@ -22,6 +22,7 @@ export default function PopupNotice() {
     tr(p === 'urgent' ? 'announce.priorityUrgent' : p === 'important' ? 'announce.priorityImportant' : 'announce.priorityNormal');
   const [open, setOpen] = useState(false);
   const [dontShowToday, setDontShowToday] = useState(false);
+  const [dontShowEver, setDontShowEver] = useState(false);
   const shownRef = useRef(false);
 
   // 시작 시 1회: 오늘 미차단인 팝업 공지가 생기면 표시.
@@ -43,7 +44,10 @@ export default function PopupNotice() {
   const top = candidates[0];
 
   const applyDismiss = () => {
-    if (dontShowToday) dismissPopupsToday(candidates.map((c) => c.id));
+    const ids = candidates.map((c) => c.id);
+    // "다시 보지 않기"(영구)가 "오늘 하루 그만 보기"보다 우선한다.
+    if (dontShowEver) dismissPopupsForever(ids);
+    else if (dontShowToday) dismissPopupsToday(ids);
   };
   const handleClose = () => {
     applyDismiss();
@@ -71,9 +75,18 @@ export default function PopupNotice() {
       maskClosable={false}
       footer={
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Checkbox checked={dontShowToday} onChange={(e) => setDontShowToday(e.target.checked)}>
-            {tr('announce.dontShowToday')}
-          </Checkbox>
+          <Space size="large">
+            <Checkbox
+              checked={dontShowToday}
+              disabled={dontShowEver}
+              onChange={(e) => setDontShowToday(e.target.checked)}
+            >
+              {tr('announce.dontShowToday')}
+            </Checkbox>
+            <Checkbox checked={dontShowEver} onChange={(e) => setDontShowEver(e.target.checked)}>
+              {tr('announce.dontShowEver')}
+            </Checkbox>
+          </Space>
           <Space>
             <Button onClick={handleOpenList}>
               {others > 0 ? tr('announce.viewAllOthers', { n: others }) : tr('announce.viewAll')}

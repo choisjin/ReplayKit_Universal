@@ -76,9 +76,13 @@ export function useManagerUrl(): string {
   return (settings.admin_server_url || '').trim() || DEFAULT_MANAGER_URL;
 }
 
-// ── "오늘 하루 그만 보기" 영구 저장 (localStorage) ──
-// 저장 형태: { [공지id]: "YYYY-MM-DD" }
+// ── "오늘 하루 그만 보기" / "다시 보지 않기" 영구 저장 (localStorage) ──
+// 저장 형태: { [공지id]: "YYYY-MM-DD" | "never" }
+// - "YYYY-MM-DD": 해당 날짜 동안만 차단(오늘 하루 그만 보기)
+// - "never": 영구 차단(어떤 날짜와도 일치하지 않으므로 항상 숨김)
 const DISMISS_KEY = 'popup_dismiss';
+/** 영구 차단 sentinel. 날짜 문자열과 절대 일치하지 않는다. */
+export const DISMISS_FOREVER = 'never';
 
 /** 로컬 날짜 "YYYY-MM-DD". */
 export function todayStr(): string {
@@ -100,6 +104,19 @@ export function dismissPopupsToday(ids: number[]): void {
   const t = todayStr();
   ids.forEach((id) => {
     d[id] = t;
+  });
+  try {
+    localStorage.setItem(DISMISS_KEY, JSON.stringify(d));
+  } catch {
+    /* 저장 실패는 무시 (시크릿 모드 등) */
+  }
+}
+
+/** 주어진 공지 id 들을 "다시 보지 않기"(영구) 처리. */
+export function dismissPopupsForever(ids: number[]): void {
+  const d = readDismiss();
+  ids.forEach((id) => {
+    d[id] = DISMISS_FOREVER;
   });
   try {
     localStorage.setItem(DISMISS_KEY, JSON.stringify(d));
