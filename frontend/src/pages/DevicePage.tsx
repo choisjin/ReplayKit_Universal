@@ -1410,22 +1410,16 @@ export default function DevicePage() {
     // CANoe 채널 통신 테스트 (listen-only): bitrate/data_bitrate 사용 가능 여부 확인
     const testCanRow = async (item: Record<string, any>, idx: number) => {
       const key = `${f.name}:${idx}`;
-      const isFd = String(item.is_fd) === 'true' || item.is_fd === true;
-      const dataBitrate = item.data_bitrate == null || String(item.data_bitrate) === 'None' || String(item.data_bitrate) === ''
-        ? null : Number(item.data_bitrate);
-      if (isFd && !dataBitrate) {
-        message.warning('CAN FD 채널은 Data Bitrate 를 선택하세요');
-        return;
-      }
+      // 연결과 동일하게 CAN FD 500k/2M 고정으로 테스트 (행별 속도 편집 항목은 제거됨).
       setCanTestLoading(prev => ({ ...prev, [key]: true }));
       setCanTestResult(prev => { const n = { ...prev }; delete n[key]; return n; });
       try {
         const res = await deviceApi.testCanChannel({
           channel: Number(item.channel ?? 0),
           app_name: String(item.app_name ?? 'CANoe'),
-          bitrate: Number(item.bitrate ?? 500000),
-          data_bitrate: isFd ? dataBitrate : null,
-          is_fd: isFd,
+          bitrate: 500000,
+          data_bitrate: 2000000,
+          is_fd: true,
           duration_s: 2.0,
           channel_index: item.channel_index != null && item.channel_index !== '' ? Number(item.channel_index) : null,
         });
@@ -1508,8 +1502,22 @@ export default function DevicePage() {
         }
         const chs: VectorChannel[] = d.channels || [];
         setVectorChannels(prev => ({ ...prev, [f.name]: chs }));
-        if (chs.length === 0) message.warning('감지된 Vector CAN 채널이 없습니다');
-        else message.success(`${chs.length}개 Vector 채널 감지`);
+        if (chs.length === 0) { message.warning('감지된 Vector CAN 채널이 없습니다'); return; }
+        // 실제 물리 CAN 채널을 channel_index 로 자동 추가한다 (앱채널 1/2 vs 하드웨어채널 3/4 혼동 회피).
+        // on-bus(실제 동작 중) 채널이 있으면 그것만, 없으면 감지된 전체를 추가.
+        const onbus = chs.filter(c => c.is_on_bus);
+        const pick = onbus.length > 0 ? onbus : chs;
+        const existingIdx = new Set(items.map(it => Number(it.channel_index)));
+        const proto = f.default_items?.[0] ? { ...f.default_items[0] } : {};
+        const toAdd = pick
+          .filter(c => !existingIdx.has(c.channel_index))
+          .map(c => ({ ...proto, channel_index: c.channel_index, channel_name: c.name }));
+        if (toAdd.length === 0) {
+          message.info(`${chs.length}개 감지 — 이미 모두 추가됨`);
+        } else {
+          update([...items, ...toAdd]);
+          message.success(`${toAdd.length}개 채널 자동 추가 (${onbus.length > 0 ? 'on-bus 우선' : '감지 전체'})`);
+        }
       } catch (e: any) {
         const emsg = e?.response?.data?.detail || e?.message || String(e);
         message.error(`Vector 스캔 실패: ${emsg}`);
@@ -1561,7 +1569,7 @@ export default function DevicePage() {
                   return (
                     <div key={ch.channel_index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, padding: '1px 0' }}>
                       <span>
-                        {ch.name} <span style={{ color: '#999' }}>(idx {ch.channel_index}{ch.supports_fd ? ', FD' : ''}{ch.is_on_bus ? ', on-bus' : ''})</span>
+                        {ch.name} <span style={{ color: '#999' }}>(idx {ch.channel_index}{ch.transceiver ? ', ' + ch.transceiver : ''}{ch.supports_fd ? ', FD' : ''}{ch.is_on_bus ? ', on-bus' : ''})</span>
                       </span>
                       <Button size="small" type="link" disabled={added} onClick={() => addChannelFromScan(ch)}>
                         {added ? '추가됨' : '추가'}
@@ -1743,9 +1751,12 @@ export default function DevicePage() {
           )}
           </div>
         );})}
-        <Button size="small" icon={<PlusOutlined />} onClick={addItem} style={{ marginTop: 2 }}>
-          채널 추가
-        </Button>
+        {/* CANoe 는 스캔 자동추가만 사용(수동 빈 행은 유효 채널이 안 됨). 그 외 object_list 는 수동 추가 유지. */}
+        {f.row_test !== 'canoe_channel' && (
+          <Button size="small" icon={<PlusOutlined />} onClick={addItem} style={{ marginTop: 2 }}>
+            채널 추가
+          </Button>
+        )}
       </div>
     );
   };

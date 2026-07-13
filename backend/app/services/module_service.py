@@ -271,23 +271,13 @@ def list_available_modules() -> list[dict]:
          "connect_fields": []},
         {"name": "CANoe_Ctrl", "label": "CANoe_Ctrl (Vector HW)", "connect_type": "none",
          "connect_fields": [
-             {"name": "device_info", "label": "채널 구성", "type": "object_list",
+             # 연결은 항상 CAN FD 500k/2M 고정 오픈이라 bitrate/data_bitrate/is_fd/app_name 편집 항목은
+             # 제거했다. 채널은 "Vector 장치 스캔"으로 감지된 물리 채널(channel_index)을 자동 추가한다
+             # — 앱채널(CAN 1/2) vs 하드웨어채널(3/4) 넘버링 혼동을 원천 제거.
+             {"name": "device_info", "label": "채널 구성 (Vector 스캔으로 자동 추가)", "type": "object_list",
               "row_test": "canoe_channel",
-              "default_items": [
-                  {"channel": 0, "app_name": "CANoe", "bitrate": 500000, "data_bitrate": None, "is_fd": False},
-              ],
-              "item_fields": [
-                  {"name": "channel", "label": "Channel", "type": "select", "default": "0",
-                   "options": ["0", "1", "2", "3", "4", "5", "6", "7"], "display_offset": 1},
-                  {"name": "app_name", "label": "App Name", "type": "select", "default": "CANoe",
-                   "options": ["CANoe", "CANalyzer", "CANalyzer Demo", "CANoe Demo"]},
-                  {"name": "bitrate", "label": "Bitrate", "type": "select", "default": "500000",
-                   "options": ["125000", "250000", "500000", "1000000"]},
-                  {"name": "is_fd", "label": "CAN FD", "type": "select", "default": "False",
-                   "options": ["True", "False"]},
-                  {"name": "data_bitrate", "label": "Data Bitrate (FD)", "type": "select", "default": "None",
-                   "options": ["None", "1000000", "2000000", "4000000", "5000000", "8000000"]},
-              ]},
+              "default_items": [],
+              "item_fields": []},
          ]},
         {"name": "PCAN", "label": "PCAN (python-can)", "connect_type": "can",
          # 채널은 디바이스가 아니라 각 스텝의 channel 인자로 선택 — 여기선 인터페이스 공통 설정만.
