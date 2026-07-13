@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Button, Card, Checkbox, Col, Image, Input, Modal, Radio, Row, Segmented, Select, Slider, Space, InputNumber, message, List, Tabs, Tag, Popover, Tooltip, Splitter } from 'antd';
-import { PlayCircleOutlined, PauseOutlined, PlusOutlined, SwapOutlined, FolderOpenOutlined, SaveOutlined, DeleteOutlined, BranchesOutlined, ScissorOutlined, CameraOutlined, ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined, EditOutlined, CopyOutlined, ZoomInOutlined, ZoomOutOutlined, HolderOutlined, SettingOutlined, StopOutlined, QuestionCircleOutlined, FundProjectionScreenOutlined, ReloadOutlined, FieldTimeOutlined } from '@ant-design/icons';
+import { PlayCircleOutlined, PauseOutlined, PlusOutlined, SwapOutlined, FolderOpenOutlined, SaveOutlined, DeleteOutlined, BranchesOutlined, ScissorOutlined, CameraOutlined, ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined, EditOutlined, CopyOutlined, ZoomInOutlined, ZoomOutOutlined, HolderOutlined, SettingOutlined, StopOutlined, QuestionCircleOutlined, FundProjectionScreenOutlined, ReloadOutlined, FieldTimeOutlined, SearchOutlined } from '@ant-design/icons';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -3744,12 +3744,28 @@ export default function RecordPage() {
   // Fetch saved scenario list
   const [recordFolders, setRecordFolders] = useState<Record<string, string[]>>({});
   const [recordSelectedFolder, setRecordSelectedFolder] = useState<string>('__all__');
+  // 스텝 복사 모달용: 그룹 목록 + 시나리오 생성시각 맵 (폴더/그룹 필터·정렬)
+  const [recordGroups, setRecordGroups] = useState<Record<string, { name: string }[]>>({});
+  const [scenarioCreatedAt, setScenarioCreatedAt] = useState<Record<string, string>>({});
 
   const fetchSavedScenarios = async () => {
     try {
       const [scRes, fRes] = await Promise.all([scenarioApi.list(), scenarioApi.getFolders()]);
       setSavedScenarios(scRes.data.scenarios);
       setRecordFolders(fRes.data.folders || {});
+    } catch { /* ignore */ }
+    // 그룹·생성시각은 실패해도 목록 자체는 동작하도록 분리 (best-effort)
+    try {
+      const gRes = await scenarioApi.getGroups();
+      setRecordGroups(gRes.data.groups || {});
+    } catch { /* ignore */ }
+    try {
+      const dRes = await scenarioApi.listDetailed();
+      const map: Record<string, string> = {};
+      for (const s of (dRes.data.scenarios || [])) {
+        if (s?.name && s?.created_at) map[s.name] = s.created_at;
+      }
+      setScenarioCreatedAt(map);
     } catch { /* ignore */ }
   };
 
@@ -4004,6 +4020,48 @@ export default function RecordPage() {
   const [importChecked, setImportChecked] = useState<Set<number>>(new Set());
   const [importLoading, setImportLoading] = useState(false);
   const [importRangeInput, setImportRangeInput] = useState('');
+  // 소스 시나리오 선택 필터/정렬 상태
+  const [importFilterMode, setImportFilterMode] = useState<'folder' | 'group'>('folder');
+  const [importFilterFolder, setImportFilterFolder] = useState('__all__');
+  const [importFilterGroup, setImportFilterGroup] = useState('__all__');
+  const [importSearch, setImportSearch] = useState('');
+  const [importSort, setImportSort] = useState<'name_asc' | 'name_desc' | 'created'>('name_asc');
+
+  // 필터·검색·정렬을 적용한 소스 시나리오 후보 목록 ('현재 시나리오'는 항상 최상단 고정이라 제외)
+  const importSourceCandidates = React.useMemo(() => {
+    let names = savedScenarios.filter(n => n !== scenarioName);
+    if (importFilterMode === 'folder') {
+      if (importFilterFolder !== '__all__') {
+        const items = recordFolders[importFilterFolder] || [];
+        names = names.filter(n => items.includes(n));
+      }
+    } else {
+      if (importFilterGroup !== '__all__') {
+        const members = (recordGroups[importFilterGroup] || []).map(m => m.name);
+        names = names.filter(n => members.includes(n));
+      }
+    }
+    const q = importSearch.trim().toLowerCase();
+    if (q) names = names.filter(n => n.toLowerCase().includes(q));
+    const arr = [...names];
+    if (importSort === 'name_asc') {
+      arr.sort((a, b) => a.localeCompare(b));
+    } else if (importSort === 'name_desc') {
+      arr.sort((a, b) => b.localeCompare(a));
+    } else {
+      // 만든시간순: 최신 생성이 위로. created_at 없는 항목은 뒤로.
+      arr.sort((a, b) => {
+        const ca = scenarioCreatedAt[a] || '';
+        const cb = scenarioCreatedAt[b] || '';
+        if (!ca && !cb) return a.localeCompare(b);
+        if (!ca) return 1;
+        if (!cb) return -1;
+        return cb.localeCompare(ca);
+      });
+    }
+    return arr;
+  }, [savedScenarios, scenarioName, importFilterMode, importFilterFolder, importFilterGroup,
+      importSearch, importSort, recordFolders, recordGroups, scenarioCreatedAt]);
 
   const applyImportRange = () => {
     const total = importSourceSteps.length;
@@ -4041,6 +4099,12 @@ export default function RecordPage() {
     setImportSourceSteps(steps);
     setImportChecked(new Set());
     setImportRangeInput('');
+    // 소스 필터/검색/정렬 초기화
+    setImportFilterMode('folder');
+    setImportFilterFolder('__all__');
+    setImportFilterGroup('__all__');
+    setImportSearch('');
+    setImportSort('name_asc');
     setImportStepModalOpen(true);
   };
 
@@ -7276,16 +7340,80 @@ export default function RecordPage() {
           {importMode !== 'move' && (
             <div>
               <div style={{ marginBottom: 3, fontSize: 11 }}>{t('record.importSource')}</div>
-              <Select
-                style={{ width: '100%' }}
-                value={importSourceName || undefined}
-                onChange={loadImportSource}
-              >
-                <Option value="__current__">{t('record.currentScenario')}</Option>
-                {savedScenarios.filter(n => n !== scenarioName).map(n => (
-                  <Option key={n} value={n}>{n}</Option>
-                ))}
-              </Select>
+              <Space direction="vertical" style={{ width: '100%' }} size={6}>
+                {/* 폴더/그룹 토글 + 해당 드롭다운 */}
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <Segmented
+                    size="small"
+                    value={importFilterMode}
+                    onChange={(v) => setImportFilterMode(v as 'folder' | 'group')}
+                    options={[
+                      { label: t('record.importFilterFolder'), value: 'folder' },
+                      { label: t('record.importFilterGroup'), value: 'group' },
+                    ]}
+                  />
+                  {importFilterMode === 'folder' ? (
+                    <Select
+                      size="small"
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={importFilterFolder}
+                      onChange={setImportFilterFolder}
+                      options={[
+                        { label: t('record.importFilterAll'), value: '__all__' },
+                        ...Object.keys(recordFolders).sort((a, b) => a.localeCompare(b)).map(f => ({ label: f, value: f })),
+                      ]}
+                    />
+                  ) : (
+                    <Select
+                      size="small"
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={importFilterGroup}
+                      onChange={setImportFilterGroup}
+                      options={[
+                        { label: t('record.importFilterAll'), value: '__all__' },
+                        ...Object.keys(recordGroups).sort((a, b) => a.localeCompare(b)).map(g => ({ label: g, value: g })),
+                      ]}
+                    />
+                  )}
+                </div>
+                {/* 검색 + 정렬 */}
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <Input
+                    size="small"
+                    allowClear
+                    prefix={<SearchOutlined style={{ color: '#888' }} />}
+                    placeholder={t('record.importSearchPlaceholder')}
+                    value={importSearch}
+                    onChange={(e) => setImportSearch(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <Select
+                    size="small"
+                    style={{ width: 130 }}
+                    value={importSort}
+                    onChange={setImportSort}
+                    options={[
+                      { label: t('record.importSortNameAsc'), value: 'name_asc' },
+                      { label: t('record.importSortNameDesc'), value: 'name_desc' },
+                      { label: t('record.importSortCreated'), value: 'created' },
+                    ]}
+                  />
+                </div>
+                {/* 소스 시나리오 선택 */}
+                <Select
+                  style={{ width: '100%' }}
+                  value={importSourceName || undefined}
+                  onChange={loadImportSource}
+                  showSearch
+                  optionFilterProp="children"
+                  notFoundContent={<span style={{ color: '#888' }}>{t('record.importNoMatch')}</span>}
+                >
+                  <Option value="__current__">{t('record.currentScenario')}</Option>
+                  {importSourceCandidates.map(n => (
+                    <Option key={n} value={n}>{n}</Option>
+                  ))}
+                </Select>
+              </Space>
             </div>
           )}
           <div style={{ fontSize: 11, color: '#888' }}>

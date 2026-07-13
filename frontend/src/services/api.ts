@@ -85,6 +85,7 @@ export const deviceApi = {
 // Scenario APIs
 export const scenarioApi = {
   list: () => api.get('/scenario/list'),
+  listDetailed: () => api.get('/scenario/list-detailed'),
   get: (name: string) => api.get(`/scenario/${encodeURIComponent(name)}`),
   delete: (name: string) => api.delete(`/scenario/${encodeURIComponent(name)}`),
   update: (name: string, data: any) => api.put(`/scenario/${encodeURIComponent(name)}`, data),

@@ -1659,6 +1659,36 @@ async def list_scenarios():
     return {"scenarios": names}
 
 
+@router.get("/list-detailed")
+async def list_scenarios_detailed():
+    """List scenarios with created_at metadata (스텝 복사 모달 정렬용).
+
+    각 시나리오 JSON의 created_at 필드를 읽고, 없으면 파일 mtime(ISO)으로 폴백한다.
+    이름 목록만 필요한 경우 가벼운 /list 를 계속 사용한다.
+    """
+    from datetime import datetime
+
+    from ..services.recording_service import SCENARIOS_DIR
+
+    names = await recording_svc.list_scenarios()
+    result: list[dict] = []
+    for name in names:
+        fp = SCENARIOS_DIR / f"{name}.json"
+        created: Optional[str] = None
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            created = data.get("created_at")
+        except Exception:
+            created = None
+        if not created:
+            try:
+                created = datetime.fromtimestamp(fp.stat().st_mtime).isoformat()
+            except Exception:
+                created = None
+        result.append({"name": name, "created_at": created})
+    return {"scenarios": result}
+
+
 # ------------------------------------------------------------------
 # Migration (LGSI 전용 임시) — WoohyunBench SendAvnCan → SendCan
 # ------------------------------------------------------------------
