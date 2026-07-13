@@ -44,6 +44,12 @@
       "can_all_stop": {
         "description": "Stops all periodic sends and logging across all channels at once (connection kept alive).",
         "params": {}
+      },
+      "check_status": {
+        "description": "Diagnostics: reports the channel's bus state (ok/error/bus-off) and the number of open channels & periodic tasks. Use to narrow down why sends aren't working (channel/bitrate vs ID/data/wakeup).",
+        "params": {
+          "channel": "Target channel name (e.g. 'PCAN_USBBUS1', 'PCAN_USBBUS2'). Default PCAN_USBBUS1."
+        }
       }
     }
   },

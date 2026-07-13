@@ -2509,6 +2509,8 @@ export default function DevicePage() {
                     if (scanItemCategory('pcan') === modalCategory && (scannedPcan.channels.length > 0 || scannedPcan.driver_missing)) {
                       // 하드웨어 1대 = PCAN 디바이스 1개. 감지된 채널은 정보로만 표시하고(각 채널은
                       // 스텝의 channel 인자로 선택), Add 버튼은 하나만 둔다.
+                      // 하드웨어 1대 = PCAN 디바이스 1개. 감지된 채널은 정보로만 표시하고(각 채널은
+                      // 스텝의 channel 인자로 선택), Add 버튼은 하나만 둔다.
                       const pcanExisting = findExisting(x => x.type === 'module' && x.info?.module === 'PCAN');
                       const anyFd = scannedPcan.channels.some(c => c.supports_fd);
                       scanTabs.push({

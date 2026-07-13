@@ -281,6 +281,36 @@ class PCAN:
             self._stop_logging_locked()
             return f"ok: logging stopped → {path}"
 
+    def check_status(self, channel: str = _DEFAULT_CHANNEL):
+        """진단: 지정 채널 bus 의 상태(정상/에러/버스오프)와 열린 채널·주기송신 개수를 보고.
+
+        송신이 안 먹힐 때 원인 좁히기용. state 가 ACTIVE/status_ok=True 인데도 ECU 반응이
+        없으면 bitrate·채널은 정상이고 ID/데이터/웨이크업(NM) 문제일 가능성이 크다.
+        반대로 ERROR/PASSIVE/버스오프면 bitrate 불일치·종단저항·배선(ACK 없음)을 의심.
+        """
+        with self._lock:
+            ch = _norm_channel(channel)
+            bus = self._buses.get(ch)
+            if bus is None:
+                opened = ", ".join(self._buses) or "none"
+                return f"FAIL: channel not open: {ch} (opened: {opened})"
+            parts = [f"[{ch}]"]
+            try:
+                parts.append(f"state={getattr(bus, 'state', '?')}")
+            except Exception as e:
+                parts.append(f"state=err({e})")
+            status_ok = getattr(bus, "status_is_ok", None)
+            if callable(status_ok):
+                try:
+                    parts.append(f"status_ok={status_ok()}")
+                except Exception as e:
+                    parts.append(f"status_ok=err({e})")
+            parts.append(f"bitrate={self.bitrate}")
+            parts.append(f"fd={self.fd}")
+            parts.append(f"opened={', '.join(self._buses)}")
+            parts.append(f"periodic={len(self._periodic)}")
+            return "ok: " + " ".join(str(p) for p in parts)
+
     def can_all_stop(self):
         """모든 채널의 주기 송신 + 로깅을 한 번에 정지 (bus 는 유지 → 연결 상태 보존)."""
         with self._lock:
@@ -292,7 +322,14 @@ class PCAN:
 
     # ── 내부 ───────────────────────────────────────────────────────────
     def _open_bus(self, channel: str):
-        kwargs: dict = {"interface": self.interface, "channel": channel, "bitrate": self.bitrate}
+        # receive_own_messages=True: 우리가 보낸 TX 프레임도 수신 루프백으로 돌아온다 →
+        # start_logging CSV 에 Tx 로 찍혀 "실제로 송신됐는지" 눈으로 확인 가능 (진단 목적).
+        kwargs: dict = {
+            "interface": self.interface,
+            "channel": channel,
+            "bitrate": self.bitrate,
+            "receive_own_messages": True,
+        }
         if self.fd:
             kwargs["fd"] = True
         return can.Bus(**kwargs)

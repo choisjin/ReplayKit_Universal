@@ -44,6 +44,12 @@
       "can_all_stop": {
         "description": "모든 채널의 주기 송신과 로깅을 한 번에 정지합니다 (연결은 유지).",
         "params": {}
+      },
+      "check_status": {
+        "description": "진단: 지정 채널의 버스 상태(정상/에러/버스오프), 열린 채널·주기송신 개수를 보고합니다. 송신이 안 먹힐 때 원인(채널/bitrate vs ID·데이터·웨이크업)을 좁히는 용도.",
+        "params": {
+          "channel": "대상 채널명 (예: 'PCAN_USBBUS1', 'PCAN_USBBUS2'). 기본 PCAN_USBBUS1."
+        }
       }
     }
   },
