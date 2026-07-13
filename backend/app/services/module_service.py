@@ -289,6 +289,16 @@ def list_available_modules() -> list[dict]:
                    "options": ["None", "1000000", "2000000", "4000000", "5000000", "8000000"]},
               ]},
          ]},
+        {"name": "PCAN", "label": "PCAN (python-can)", "connect_type": "can",
+         "connect_fields": [
+             {"name": "interface", "label": "Interface", "type": "select", "default": "pcan",
+              "options": ["pcan", "vector", "kvaser", "socketcan", "ixxat"]},
+             {"name": "channel", "label": "Channel", "type": "text", "default": "PCAN_USBBUS1"},
+             {"name": "bitrate", "label": "Bitrate", "type": "select", "default": "500000",
+              "options": ["125000", "250000", "500000", "1000000"]},
+             {"name": "fd", "label": "CAN FD", "type": "select", "default": "False",
+              "options": ["True", "False"]},
+         ]},
         {"name": "CANAT", "label": "CANAT", "connect_type": "serial",
          "connect_fields": [
              {"name": "log_path", "label": "Log Path", "type": "text", "default": ""},
@@ -914,6 +924,8 @@ def get_module_functions(module_name: str) -> list[dict]:
     # 모듈 스텝 UI에서 숨길 메서드 (시나리오는 자동으로 연결을 관리하므로 노출 불필요)
     per_module_excluded: dict[str, set[str]] = {
         "SerialLogging": {"Connect", "Disconnect", "IsConnected"},
+        # PCAN: 연결은 시나리오가 자동 관리 — 스텝엔 송신/로깅 함수만 노출.
+        "PCAN": {"Connect", "Disconnect", "IsConnected"},
         # SCAR.Disconnect 는 device_manager 연결해제/등록삭제 시 netns 복원용으로 자동 호출 —
         # 시나리오 스텝에 노출할 필요 없음 (Reconnect/Setup/SendApi/Exec 등은 그대로 노출).
         "SCAR": {"Disconnect"},

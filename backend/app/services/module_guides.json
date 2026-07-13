@@ -3,6 +3,48 @@
     "version": "2.0",
     "description": "모듈 함수 가이드 — 각 함수의 설명과 파라미터 설명을 포함합니다. 수정 후 서버 재시작 없이 반영됩니다."
   },
+  "PCAN": {
+    "_description": "PCAN (python-can) — python-can 라이브러리로 PCAN/Vector/Kvaser 등 CAN 인터페이스에 연결해 CAN/CAN FD 메시지를 송신하고 CSV 로그를 저장하는 모듈. 연결/해제는 시나리오가 자동 관리합니다.",
+    "functions": {
+      "send_can": {
+        "description": "단발 CAN/CAN FD 프레임 1개를 송신합니다.",
+        "params": {
+          "msg_id": "CAN 메시지 ID (16진수). 예: '0x621' 또는 '621' (둘 다 0x621).",
+          "data": "데이터 바이트 (공백 또는 콤마 구분 16진수). 예: '45 40 FF FF FF FF FF FF'",
+          "is_extended": "확장 ID(29비트) 여부. True/False (기본 False = 표준 11비트).",
+          "is_fd": "이 프레임을 CAN FD 로 보낼지. True/False (연결이 FD 모드면 자동 FD)."
+        }
+      },
+      "send_periodic_can": {
+        "description": "주기(cyclic) 송신을 시작하거나 갱신합니다. 같은 ID 로 다시 호출하면 데이터만 갱신됩니다. stop_all_tx 또는 can_all_stop 으로 정지합니다.",
+        "params": {
+          "msg_id": "CAN 메시지 ID (16진수). 예: '0x621'",
+          "data": "데이터 바이트 (공백/콤마 구분 16진수). 예: '45 40 FF FF FF FF FF FF'",
+          "period_ms": "송신 주기(밀리초). 예: '500' (0.5초마다). 기본 1000.",
+          "is_extended": "확장 ID(29비트) 여부. True/False (기본 False).",
+          "is_fd": "CAN FD 여부. True/False."
+        }
+      },
+      "stop_all_tx": {
+        "description": "실행 중인 모든 주기(cyclic) 송신 작업을 정지합니다.",
+        "params": {}
+      },
+      "start_logging": {
+        "description": "CAN 트래픽을 CSV 파일로 로깅 시작합니다 (Timestamp,Message_id,Dir,DLC,Data,channel).",
+        "params": {
+          "csv_file": "저장할 CSV 경로. 비우면 재생 런 폴더(logs/) 또는 results/PCAN_Log 아래로 자동 저장됩니다."
+        }
+      },
+      "stop_logging": {
+        "description": "CSV 로깅을 정지하고 파일을 저장(flush+close)합니다.",
+        "params": {}
+      },
+      "can_all_stop": {
+        "description": "모든 주기 송신과 로깅을 한 번에 정지합니다 (연결은 유지).",
+        "params": {}
+      }
+    }
+  },
   "CANAT": {
     "_description": "CANat 디바이스 — CANat 하드웨어를 통해 CAN 버스 메시지를 송수신하는 모듈",
     "functions": {

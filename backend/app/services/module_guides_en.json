@@ -3,6 +3,48 @@
     "version": "2.0",
     "description": "Module function guide — Contains descriptions and parameter details for each function. Changes take effect without server restart."
   },
+  "PCAN": {
+    "_description": "PCAN (python-can) — Connects to CAN interfaces such as PCAN/Vector/Kvaser via the python-can library to send CAN/CAN FD messages and save CSV logs. Connection lifecycle is managed automatically by the scenario.",
+    "functions": {
+      "send_can": {
+        "description": "Sends a single CAN/CAN FD frame.",
+        "params": {
+          "msg_id": "CAN message ID (hex). e.g. '0x621' or '621' (both mean 0x621).",
+          "data": "Data bytes (space- or comma-separated hex). e.g. '45 40 FF FF FF FF FF FF'",
+          "is_extended": "Extended (29-bit) ID? True/False (default False = standard 11-bit).",
+          "is_fd": "Send this frame as CAN FD? True/False (auto FD if the bus is in FD mode)."
+        }
+      },
+      "send_periodic_can": {
+        "description": "Starts or updates a cyclic (periodic) send. Calling again with the same ID only updates the data. Stop with stop_all_tx or can_all_stop.",
+        "params": {
+          "msg_id": "CAN message ID (hex). e.g. '0x621'",
+          "data": "Data bytes (space/comma-separated hex). e.g. '45 40 FF FF FF FF FF FF'",
+          "period_ms": "Send period in milliseconds. e.g. '500'. Default 1000.",
+          "is_extended": "Extended (29-bit) ID? True/False (default False).",
+          "is_fd": "CAN FD? True/False."
+        }
+      },
+      "stop_all_tx": {
+        "description": "Stops all running cyclic (periodic) send tasks.",
+        "params": {}
+      },
+      "start_logging": {
+        "description": "Starts logging CAN traffic to a CSV file (Timestamp,Message_id,Dir,DLC,Data,channel).",
+        "params": {
+          "csv_file": "CSV path to save. If empty, auto-saved under the playback run folder (logs/) or results/PCAN_Log."
+        }
+      },
+      "stop_logging": {
+        "description": "Stops CSV logging and saves the file (flush+close).",
+        "params": {}
+      },
+      "can_all_stop": {
+        "description": "Stops all periodic sends and logging at once (connection kept alive).",
+        "params": {}
+      }
+    }
+  },
   "CANAT": {
     "_description": "CANat Device — Sends and receives CAN bus messages via CANat hardware",
     "functions": {
