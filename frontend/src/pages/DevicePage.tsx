@@ -12,6 +12,10 @@ import { useTestMode, TEST_ONLY_MODULES } from '../hooks/useTestMode';
 
 const { Option } = Select;
 
+// CAN 채널 "자동 추천"(여러 속도 스윕) 기능 표시 여부. 현재 비활성(숨김).
+// 다시 노출하려면 true 로 변경.
+const CAN_AUTO_RECOMMEND_ENABLED = false;
+
 interface ConnectField {
   name: string;
   label: string;
@@ -907,7 +911,7 @@ export default function DevicePage() {
     setSelectedModule('CANoe_Ctrl');
     setConnectType('module');
     setModalTabKey('manual');
-    message.info('수동 연결로 전환 — 채널별 속도를 테스트/자동추천 후 연결하세요');
+    message.info('수동 연결로 전환 — 채널별 속도를 테스트 후 연결하세요');
   };
 
   const handleAddSerial = async (port: string, description: string) => {
@@ -1512,7 +1516,7 @@ export default function DevicePage() {
         {f.row_test === 'canoe_channel' && (
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontSize: 10, color: '#ad6800', background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 3, padding: '3px 6px', marginBottom: 6 }}>
-              ⚠️ 테스트/자동추천은 <b>active(ACK) 모드</b>로 동작합니다 — CANoe 없이 벤치 단독으로 수신되지만,
+              ⚠️ 채널 테스트는 <b>active(ACK) 모드</b>로 동작합니다 — CANoe 없이 벤치 단독으로 수신되지만,
               버스에 ACK 를 주입하므로 <b>동작 중인 실차(다중 ECU) 버스</b>에 연결한 채로는 사용하지 마세요.
             </div>
             <Button
@@ -1565,13 +1569,13 @@ export default function DevicePage() {
           )}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: `repeat(${itemFields.length}, minmax(0, 1fr)) auto`,
-            gap: 4,
+            gridTemplateColumns: `repeat(${itemFields.length}, minmax(90px, 1fr))`,
+            gap: 6,
             alignItems: 'end',
           }}>
             {itemFields.map(sf => (
               <div key={sf.name} style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 10, color: '#888' }}>{sf.label}</div>
+                <div style={{ fontSize: 10, color: '#888', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sf.label}</div>
                 {sf.type === 'select' && sf.options ? (
                   <Select
                     size="small"
@@ -1601,37 +1605,39 @@ export default function DevicePage() {
                 )}
               </div>
             ))}
-            <div style={{ display: 'flex', gap: 4, alignItems: 'end' }}>
-              {f.row_test === 'canoe_channel' && (
-                <>
-                  <Button
-                    size="small"
-                    icon={<ApiOutlined />}
-                    loading={!!canTestLoading[rowKey]}
-                    onClick={() => testCanRow(item, idx)}
-                    title="이 채널의 속도로 통신 가능한지 테스트 (listen-only)"
-                  >
-                    테스트
-                  </Button>
+          </div>
+          <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', marginTop: 6 }}>
+            {f.row_test === 'canoe_channel' && (
+              <>
+                <Button
+                  size="small"
+                  icon={<ApiOutlined />}
+                  loading={!!canTestLoading[rowKey]}
+                  onClick={() => testCanRow(item, idx)}
+                  title="이 채널의 속도로 통신 가능한지 테스트 (active/ACK)"
+                >
+                  테스트
+                </Button>
+                {CAN_AUTO_RECOMMEND_ENABLED && (
                   <Button
                     size="small"
                     icon={<SearchOutlined />}
                     loading={!!canScanLoading[rowKey]}
                     onClick={() => scanCanRow(item, idx)}
-                    title="여러 속도를 자동으로 시도해 최적값 추천 (listen-only)"
+                    title="여러 속도를 자동으로 시도해 최적값 추천 (active/ACK)"
                   >
                     자동 추천
                   </Button>
-                </>
-              )}
-              <Button
-                size="small"
-                danger
-                icon={<DeleteOutlined />}
-                onClick={() => removeItem(idx)}
-                title="이 행 제거"
-              />
-            </div>
+                )}
+              </>
+            )}
+            <Button
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => removeItem(idx)}
+              title="이 행 제거"
+            />
           </div>
           {f.row_test === 'canoe_channel' && testResult && (
             <div style={{
@@ -1652,7 +1658,7 @@ export default function DevicePage() {
                 : `✗ ${testResult.error || '테스트 실패'}`}
             </div>
           )}
-          {f.row_test === 'canoe_channel' && scanResult && (
+          {CAN_AUTO_RECOMMEND_ENABLED && f.row_test === 'canoe_channel' && scanResult && (
             <div style={{
               fontSize: 11,
               marginTop: 3,
@@ -3277,6 +3283,8 @@ export default function DevicePage() {
         confirmLoading={editSaving}
         okText={t('common.save')}
         cancelText={t('common.cancel')}
+        width={760}
+        styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
       >
         {editDevice && (
           <Space direction="vertical" style={{ width: '100%' }}>
