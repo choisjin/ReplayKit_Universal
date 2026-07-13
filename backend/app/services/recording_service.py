@@ -389,26 +389,47 @@ class RecordingService:
         # Load, update name, save to new path
         data = json.loads(old_path.read_text(encoding="utf-8"))
         data["name"] = new_name
-        # Rename screenshots directory
+        # ---- 스크린샷 폴더/파일 이름 변경 (원자적: 실패 시 롤백) ----
+        # 파일명은 "시나리오 이름 프리픽스"만 교체하고 _step_NNN...timestamp 부분은
+        # 원본 그대로 보존한다. 과거에는 현재 step id 로 파일명을 재구성했는데,
+        # 스텝 재인덱싱으로 id 가 캡처 당시 번호와 어긋나면 파일명이 충돌하며
+        # (Windows FileExistsError) rename 이 중단돼 폴더만 옮겨진 채 JSON 과
+        # 불일치하는 손상 상태가 됐다.
         old_ss = SCREENSHOTS_DIR / old_name
         new_ss = SCREENSHOTS_DIR / new_name
-        if old_ss.exists() and not new_ss.exists():
-            old_ss.rename(new_ss)
-        # 이미지 파일명과 expected_image 필드도 새 이름으로 갱신
-        ss_dir = new_ss if new_ss.exists() else old_ss
-        if ss_dir.exists():
-            for step_data in data.get("steps", []):
-                ei = step_data.get("expected_image")
-                if ei:
-                    new_ei = self._rename_image_file(ss_dir, ei, new_name, step_data.get("id", 0))
-                    step_data["expected_image"] = new_ei
-                for ci in step_data.get("expected_images", []):
-                    ci_img = ci.get("image")
-                    if ci_img:
-                        new_ci = self._rename_image_file(ss_dir, ci_img, new_name, step_data.get("id", 0), crop=True)
-                        ci["image"] = new_ci
-        new_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        old_path.unlink()
+        done: list[tuple[Path, Path]] = []  # 롤백용 (from, to)
+        dir_moved = False
+        json_written = False
+        try:
+            # 1) 폴더 안 파일들을 새 프리픽스로 rename (폴더는 아직 old 이름)
+            if old_ss.exists():
+                for step_data in data.get("steps", []):
+                    ei = step_data.get("expected_image")
+                    if ei:
+                        step_data["expected_image"] = self._swap_image_prefix(
+                            old_ss, ei, old_name, new_name, done)
+                    for ci in step_data.get("expected_images", []):
+                        ci_img = ci.get("image")
+                        if ci_img:
+                            ci["image"] = self._swap_image_prefix(
+                                old_ss, ci_img, old_name, new_name, done)
+                # 2) 폴더 이름 변경
+                if not new_ss.exists():
+                    old_ss.rename(new_ss)
+                    dir_moved = True
+            new_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            json_written = True
+            old_path.unlink()
+        except Exception:
+            # 롤백: 새 JSON 제거 → 폴더 → 파일 순 원복 (경로가 old_ss 기준이라 폴더부터)
+            if json_written and new_path.exists() and old_path.exists():
+                new_path.unlink()
+            if dir_moved and new_ss.exists() and not old_ss.exists():
+                new_ss.rename(old_ss)
+            for src, dst in reversed(done):
+                if dst.exists() and not src.exists():
+                    dst.rename(src)
+            raise
         # Update group references
         groups = self._load_groups()
         changed = False
@@ -433,22 +454,27 @@ class RecordingService:
         return True
 
     @staticmethod
-    def _rename_image_file(ss_dir: Path, old_filename: str, new_name: str, step_id: int, crop: bool = False) -> str:
-        """이미지 파일을 새 시나리오 이름 기반으로 리네임하고 새 파일명을 반환."""
-        old_path = ss_dir / old_filename
-        if not old_path.exists():
+    def _swap_image_prefix(ss_dir: Path, old_filename: str, old_name: str,
+                           new_name: str, done: list) -> str:
+        """이미지 파일명의 시나리오 이름 프리픽스만 교체하고 실제 파일도 rename.
+        step 번호/timestamp/crop 인덱스는 원본 그대로 보존해 파일명 충돌을 막는다.
+        실제 파일이 없으면 파일명(문자열)만 갱신한다. done 에 (src, dst) 를 기록해
+        상위에서 롤백할 수 있게 한다."""
+        prefix = f"{old_name}_"
+        if not old_filename.startswith(prefix):
             return old_filename
-        # 기존 파일 확장자 및 타임스탬프/crop 인덱스 보존
-        stem = Path(old_filename).stem
-        ext = Path(old_filename).suffix or ".png"
-        # _step_NNN 이후의 suffix 추출 (타임스탬프, crop 인덱스 등)
-        m = re.search(r'_step_\d+(.*)', stem)
-        suffix = m.group(1) if m else ""
-        new_filename = f"{new_name}_step_{step_id:03d}{suffix}{ext}"
+        new_filename = f"{new_name}_" + old_filename[len(prefix):]
         if new_filename == old_filename:
             return old_filename
-        new_path = ss_dir / new_filename
-        old_path.rename(new_path)
+        src = ss_dir / old_filename
+        dst = ss_dir / new_filename
+        if src.exists():
+            if dst.exists():
+                # 이전 실패 시도의 잔여물 등 — 덮어쓰면 데이터 손실이라 명확히 실패시켜
+                # 상위 롤백을 유도한다.
+                raise FileExistsError(f"rename target already exists: {dst}")
+            src.rename(dst)
+            done.append((src, dst))
         return new_filename
 
     # ------------------------------------------------------------------
