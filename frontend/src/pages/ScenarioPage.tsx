@@ -308,6 +308,8 @@ export default function ScenarioPage() {
     _shownLogNotis.current.clear();
   }, []);
   const [scenarios, setScenarios] = useState<string[]>([]);
+  // 시나리오 생성시각 맵 (내보내기 모달 '만든시간순' 정렬용)
+  const [scenarioCreatedAt, setScenarioCreatedAt] = useState<Record<string, string>>({});
   const [selectedScenario, setSelectedScenario] = useState<ScenarioDetail | null>(null);
   const [detailVisible, setDetailVisible] = useState(false);
 
@@ -538,6 +540,34 @@ export default function ScenarioPage() {
   const [exportSelectedGroups, setExportSelectedGroups] = useState<string[]>([]);
   const [exportAll, setExportAll] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  const [exportSort, setExportSort] = useState<'name_asc' | 'name_desc' | 'created'>('name_asc');
+
+  // 내보내기 모달 정렬 적용된 그룹/시나리오 목록
+  const exportSortedGroups = useMemo(() => {
+    const names = Object.keys(groups);
+    if (exportSort === 'name_desc') return names.sort((a, b) => b.localeCompare(a));
+    // 그룹은 생성시각이 없어 '만든시간순'도 이름 오름차순으로 폴백
+    return names.sort((a, b) => a.localeCompare(b));
+  }, [groups, exportSort]);
+
+  const exportSortedScenarios = useMemo(() => {
+    const arr = [...scenarios];
+    if (exportSort === 'name_asc') {
+      arr.sort((a, b) => a.localeCompare(b));
+    } else if (exportSort === 'name_desc') {
+      arr.sort((a, b) => b.localeCompare(a));
+    } else {
+      arr.sort((a, b) => {
+        const ca = scenarioCreatedAt[a] || '';
+        const cb = scenarioCreatedAt[b] || '';
+        if (!ca && !cb) return a.localeCompare(b);
+        if (!ca) return 1;
+        if (!cb) return -1;
+        return cb.localeCompare(ca);
+      });
+    }
+    return arr;
+  }, [scenarios, exportSort, scenarioCreatedAt]);
 
   const [importModalVisible, setImportModalVisible] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -571,6 +601,15 @@ export default function ScenarioPage() {
       const res = await scenarioApi.list();
       setScenarios(res.data.scenarios);
     } catch { message.error(t('scenario.listFailed')); }
+    // 생성시각은 best-effort (정렬 보조용, 실패해도 목록은 동작)
+    try {
+      const dRes = await scenarioApi.listDetailed();
+      const map: Record<string, string> = {};
+      for (const s of (dRes.data.scenarios || [])) {
+        if (s?.name && s?.created_at) map[s.name] = s.created_at;
+      }
+      setScenarioCreatedAt(map);
+    } catch { /* ignore */ }
   };
 
   const fetchFolders = async () => {
@@ -3603,61 +3642,86 @@ export default function ScenarioPage() {
         okText={t('common.download')}
         confirmLoading={exportLoading}
         okButtonProps={{ disabled: !exportAll && exportSelectedScenarios.length === 0 && exportSelectedGroups.length === 0 }}
-        width={500}
+        width={760}
       >
-        <Checkbox
-          checked={exportAll}
-          onChange={(e) => {
-            setExportAll(e.target.checked);
-            if (e.target.checked) {
-              setExportSelectedScenarios([...scenarios]);
-              setExportSelectedGroups(Object.keys(groups));
-            } else {
-              setExportSelectedScenarios([]);
-              setExportSelectedGroups([]);
-            }
-          }}
-          style={{ marginBottom: 10 }}
-        >
-          <strong>{t('scenario.selectAll')}</strong>
-        </Checkbox>
-
-        {Object.keys(groups).length > 0 && (
-          <>
-            <Divider style={{ margin: '8px 0' }}>{t('scenario.groupLabel')}</Divider>
-            <Checkbox.Group
-              value={exportSelectedGroups}
-              onChange={(vals) => {
-                setExportSelectedGroups(vals as string[]);
-                // Auto-select member scenarios
-                const memberNames = new Set(exportSelectedScenarios);
-                (vals as string[]).forEach((gn) => {
-                  (groups[gn] || []).forEach((m) => memberNames.add(m.name));
-                });
-                setExportSelectedScenarios([...memberNames]);
-              }}
-              style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
-            >
-              {Object.entries(groups).map(([gn, members]) => (
-                <Checkbox key={gn} value={gn}>
-                  <FolderOutlined /> {gn} ({members.length})
-                </Checkbox>
-              ))}
-            </Checkbox.Group>
-          </>
-        )}
-
-        <Divider style={{ margin: '8px 0' }}>{t('scenario.title')}</Divider>
-        <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-          <Checkbox.Group
-            value={exportSelectedScenarios}
-            onChange={(vals) => setExportSelectedScenarios(vals as string[])}
-            style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
+        {/* 상단: 전체 선택 + 정렬 필터 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+          <Checkbox
+            checked={exportAll}
+            onChange={(e) => {
+              setExportAll(e.target.checked);
+              if (e.target.checked) {
+                setExportSelectedScenarios([...scenarios]);
+                setExportSelectedGroups(Object.keys(groups));
+              } else {
+                setExportSelectedScenarios([]);
+                setExportSelectedGroups([]);
+              }
+            }}
           >
-            {scenarios.map((sn) => (
-              <Checkbox key={sn} value={sn}>{sn}</Checkbox>
-            ))}
-          </Checkbox.Group>
+            <strong>{t('scenario.selectAll')}</strong>
+          </Checkbox>
+          <Select
+            size="small"
+            style={{ width: 130, marginLeft: 'auto' }}
+            value={exportSort}
+            onChange={setExportSort}
+            options={[
+              { label: t('record.importSortNameAsc'), value: 'name_asc' },
+              { label: t('record.importSortNameDesc'), value: 'name_desc' },
+              { label: t('record.importSortCreated'), value: 'created' },
+            ]}
+          />
+        </div>
+
+        {/* 좌(그룹) / 우(시나리오) 2열 */}
+        <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            <Divider style={{ margin: '4px 0 8px' }}>{t('scenario.groupLabel')}</Divider>
+            <div style={{ flex: 1, minHeight: 0, maxHeight: 360, overflowY: 'auto', border: `1px solid ${isDark ? '#303030' : '#d9d9d9'}`, borderRadius: 4, padding: '8px 10px' }}>
+              {exportSortedGroups.length === 0 ? (
+                <div style={{ color: '#888', fontSize: 12, textAlign: 'center', padding: 8 }}>{t('scenario.noGroups')}</div>
+              ) : (
+                <Checkbox.Group
+                  value={exportSelectedGroups}
+                  onChange={(vals) => {
+                    setExportSelectedGroups(vals as string[]);
+                    // 선택 그룹의 멤버 시나리오 자동 선택
+                    const memberNames = new Set(exportSelectedScenarios);
+                    (vals as string[]).forEach((gn) => {
+                      (groups[gn] || []).forEach((m) => memberNames.add(m.name));
+                    });
+                    setExportSelectedScenarios([...memberNames]);
+                  }}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%' }}
+                >
+                  {exportSortedGroups.map((gn) => (
+                    <Checkbox key={gn} value={gn}>
+                      <FolderOutlined /> {gn} ({(groups[gn] || []).length})
+                    </Checkbox>
+                  ))}
+                </Checkbox.Group>
+              )}
+            </div>
+          </div>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            <Divider style={{ margin: '4px 0 8px' }}>{t('scenario.title')}</Divider>
+            <div style={{ flex: 1, minHeight: 0, maxHeight: 360, overflowY: 'auto', border: `1px solid ${isDark ? '#303030' : '#d9d9d9'}`, borderRadius: 4, padding: '8px 10px' }}>
+              {exportSortedScenarios.length === 0 ? (
+                <div style={{ color: '#888', fontSize: 12, textAlign: 'center', padding: 8 }}>{t('scenario.noScenarios')}</div>
+              ) : (
+                <Checkbox.Group
+                  value={exportSelectedScenarios}
+                  onChange={(vals) => setExportSelectedScenarios(vals as string[])}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%' }}
+                >
+                  {exportSortedScenarios.map((sn) => (
+                    <Checkbox key={sn} value={sn}>{sn}</Checkbox>
+                  ))}
+                </Checkbox.Group>
+              )}
+            </div>
+          </div>
         </div>
       </Modal>
 
