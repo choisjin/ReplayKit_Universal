@@ -4091,6 +4091,67 @@ export default function RecordPage() {
     setImportChecked(next);
   };
 
+  // 스텝 복사/이동 모달의 스텝 목록 패널 (전체선택·범위 + 스텝 리스트). copy/move 공용.
+  const renderImportStepsPanel = () => (
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+      {importSourceSteps.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+          <Checkbox
+            checked={importChecked.size === importSourceSteps.length && importSourceSteps.length > 0}
+            indeterminate={importChecked.size > 0 && importChecked.size < importSourceSteps.length}
+            onChange={(e) => {
+              if (e.target.checked) {
+                setImportChecked(new Set(importSourceSteps.map((_, i) => i)));
+              } else {
+                setImportChecked(new Set());
+              }
+            }}
+          >
+            {t('record.importSelectAll')} ({importChecked.size}/{importSourceSteps.length})
+          </Checkbox>
+          <Input
+            size="small"
+            placeholder={t('record.importRangePlaceholder')}
+            value={importRangeInput}
+            onChange={(e) => setImportRangeInput(e.target.value)}
+            onPressEnter={applyImportRange}
+            style={{ width: 180 }}
+          />
+          <Button size="small" onClick={applyImportRange}>
+            {t('record.importRangeApply')}
+          </Button>
+        </div>
+      )}
+      <div style={{ flex: 1, minHeight: 0, maxHeight: 420, overflow: 'auto', border: '1px solid #303030', borderRadius: 4 }}>
+        {importSourceSteps.length === 0 ? (
+          <div style={{ padding: 13, textAlign: 'center', color: '#888' }}>{t('record.noSteps')}</div>
+        ) : importSourceSteps.map((s, i) => (
+          <div
+            key={i}
+            onClick={() => setImportChecked(prev => {
+              const next = new Set(prev);
+              next.has(i) ? next.delete(i) : next.add(i);
+              return next;
+            })}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', cursor: 'pointer',
+              background: importChecked.has(i) ? 'rgba(22,119,255,0.15)' : (i % 2 ? 'rgba(255,255,255,0.02)' : undefined),
+              borderBottom: '1px solid rgba(255,255,255,0.06)',
+            }}
+          >
+            <input type="checkbox" checked={importChecked.has(i)} readOnly style={{ flexShrink: 0 }} />
+            <Tag style={{ margin: 0, minWidth: 28, textAlign: 'center' }}>{i + 1}</Tag>
+            <span style={{ flex: 1, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <Tag color="blue" style={{ margin: 0, marginRight: 3 }}>{s.type}</Tag>
+              {s.description || JSON.stringify(s.params).slice(0, 60)}
+            </span>
+            {s.expected_image && <CameraOutlined style={{ color: '#52c41a', flexShrink: 0 }} />}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   const openImportStepModal = (afterIndex: number, mode: 'copy' | 'move' = 'copy') => {
     setImportMode(mode);
     setImportInsertIndex(afterIndex);
@@ -7334,148 +7395,120 @@ export default function RecordPage() {
         onOk={executeImportSteps}
         okText={`${importMode === 'move' ? t('record.moveSteps') : t('record.importSteps')} (${importChecked.size})`}
         okButtonProps={{ disabled: importChecked.size === 0, loading: importLoading }}
-        width={600}
+        width={importMode === 'move' ? 600 : 880}
       >
-        <Space direction="vertical" style={{ width: '100%' }} size={12}>
-          {importMode !== 'move' && (
-            <div>
-              <div style={{ marginBottom: 3, fontSize: 11 }}>{t('record.importSource')}</div>
-              <Space direction="vertical" style={{ width: '100%' }} size={6}>
-                {/* 폴더/그룹 토글 + 해당 드롭다운 */}
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <Segmented
-                    size="small"
-                    value={importFilterMode}
-                    onChange={(v) => setImportFilterMode(v as 'folder' | 'group')}
-                    options={[
-                      { label: t('record.importFilterFolder'), value: 'folder' },
-                      { label: t('record.importFilterGroup'), value: 'group' },
-                    ]}
-                  />
-                  {importFilterMode === 'folder' ? (
-                    <Select
-                      size="small"
-                      style={{ flex: 1, minWidth: 0 }}
-                      value={importFilterFolder}
-                      onChange={setImportFilterFolder}
-                      options={[
-                        { label: t('record.importFilterAll'), value: '__all__' },
-                        ...Object.keys(recordFolders).sort((a, b) => a.localeCompare(b)).map(f => ({ label: f, value: f })),
-                      ]}
-                    />
-                  ) : (
-                    <Select
-                      size="small"
-                      style={{ flex: 1, minWidth: 0 }}
-                      value={importFilterGroup}
-                      onChange={setImportFilterGroup}
-                      options={[
-                        { label: t('record.importFilterAll'), value: '__all__' },
-                        ...Object.keys(recordGroups).sort((a, b) => a.localeCompare(b)).map(g => ({ label: g, value: g })),
-                      ]}
-                    />
-                  )}
-                </div>
-                {/* 검색 + 정렬 */}
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <Input
-                    size="small"
-                    allowClear
-                    prefix={<SearchOutlined style={{ color: '#888' }} />}
-                    placeholder={t('record.importSearchPlaceholder')}
-                    value={importSearch}
-                    onChange={(e) => setImportSearch(e.target.value)}
-                    style={{ flex: 1 }}
-                  />
+        {importMode === 'move' ? (
+          // MOVE: 현재 시나리오 스텝 재정렬 — 단일 컬럼
+          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+            <div style={{ fontSize: 11, color: '#888' }}>
+              {t('record.importInsertAt', { index: importInsertIndex + 1 })}
+              {' · '}{t('record.importSelectHint')}
+            </div>
+            {renderImportStepsPanel()}
+          </Space>
+        ) : (
+          // COPY: 좌(시나리오 목록) / 우(스텝) 2열
+          <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
+            {/* 좌: 시나리오 목록 (펼쳐진 형태, 필터·검색 실시간 반영) */}
+            <div style={{ width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ marginBottom: 6, fontSize: 11 }}>{t('record.importSource')}</div>
+              {/* 폴더/그룹 토글 + 해당 드롭다운 */}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                <Segmented
+                  size="small"
+                  value={importFilterMode}
+                  onChange={(v) => setImportFilterMode(v as 'folder' | 'group')}
+                  options={[
+                    { label: t('record.importFilterFolder'), value: 'folder' },
+                    { label: t('record.importFilterGroup'), value: 'group' },
+                  ]}
+                />
+                {importFilterMode === 'folder' ? (
                   <Select
                     size="small"
-                    style={{ width: 130 }}
-                    value={importSort}
-                    onChange={setImportSort}
+                    style={{ flex: 1, minWidth: 0 }}
+                    value={importFilterFolder}
+                    onChange={setImportFilterFolder}
                     options={[
-                      { label: t('record.importSortNameAsc'), value: 'name_asc' },
-                      { label: t('record.importSortNameDesc'), value: 'name_desc' },
-                      { label: t('record.importSortCreated'), value: 'created' },
+                      { label: t('record.importFilterAll'), value: '__all__' },
+                      ...Object.keys(recordFolders).sort((a, b) => a.localeCompare(b)).map(f => ({ label: f, value: f })),
                     ]}
                   />
-                </div>
-                {/* 소스 시나리오 선택 */}
-                <Select
-                  style={{ width: '100%' }}
-                  value={importSourceName || undefined}
-                  onChange={loadImportSource}
-                  showSearch
-                  optionFilterProp="children"
-                  notFoundContent={<span style={{ color: '#888' }}>{t('record.importNoMatch')}</span>}
-                >
-                  <Option value="__current__">{t('record.currentScenario')}</Option>
-                  {importSourceCandidates.map(n => (
-                    <Option key={n} value={n}>{n}</Option>
-                  ))}
-                </Select>
-              </Space>
-            </div>
-          )}
-          <div style={{ fontSize: 11, color: '#888' }}>
-            {t('record.importInsertAt', { index: importInsertIndex + 1 })}
-            {' · '}{t('record.importSelectHint')}
-          </div>
-          {importSourceSteps.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <Checkbox
-                checked={importChecked.size === importSourceSteps.length && importSourceSteps.length > 0}
-                indeterminate={importChecked.size > 0 && importChecked.size < importSourceSteps.length}
-                onChange={(e) => {
-                  if (e.target.checked) {
-                    setImportChecked(new Set(importSourceSteps.map((_, i) => i)));
-                  } else {
-                    setImportChecked(new Set());
-                  }
-                }}
-              >
-                {t('record.importSelectAll')} ({importChecked.size}/{importSourceSteps.length})
-              </Checkbox>
-              <Input
-                size="small"
-                placeholder={t('record.importRangePlaceholder')}
-                value={importRangeInput}
-                onChange={(e) => setImportRangeInput(e.target.value)}
-                onPressEnter={applyImportRange}
-                style={{ width: 200 }}
-              />
-              <Button size="small" onClick={applyImportRange}>
-                {t('record.importRangeApply')}
-              </Button>
-            </div>
-          )}
-          <div style={{ maxHeight: 400, overflow: 'auto', border: '1px solid #303030', borderRadius: 4 }}>
-            {importSourceSteps.length === 0 ? (
-              <div style={{ padding: 13, textAlign: 'center', color: '#888' }}>{t('record.noSteps')}</div>
-            ) : importSourceSteps.map((s, i) => (
-              <div
-                key={i}
-                onClick={() => setImportChecked(prev => {
-                  const next = new Set(prev);
-                  next.has(i) ? next.delete(i) : next.add(i);
-                  return next;
-                })}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', cursor: 'pointer',
-                  background: importChecked.has(i) ? 'rgba(22,119,255,0.15)' : (i % 2 ? 'rgba(255,255,255,0.02)' : undefined),
-                  borderBottom: '1px solid rgba(255,255,255,0.06)',
-                }}
-              >
-                <input type="checkbox" checked={importChecked.has(i)} readOnly style={{ flexShrink: 0 }} />
-                <Tag style={{ margin: 0, minWidth: 28, textAlign: 'center' }}>{i + 1}</Tag>
-                <span style={{ flex: 1, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  <Tag color="blue" style={{ margin: 0, marginRight: 3 }}>{s.type}</Tag>
-                  {s.description || JSON.stringify(s.params).slice(0, 60)}
-                </span>
-                {s.expected_image && <CameraOutlined style={{ color: '#52c41a', flexShrink: 0 }} />}
+                ) : (
+                  <Select
+                    size="small"
+                    style={{ flex: 1, minWidth: 0 }}
+                    value={importFilterGroup}
+                    onChange={setImportFilterGroup}
+                    options={[
+                      { label: t('record.importFilterAll'), value: '__all__' },
+                      ...Object.keys(recordGroups).sort((a, b) => a.localeCompare(b)).map(g => ({ label: g, value: g })),
+                    ]}
+                  />
+                )}
               </div>
-            ))}
+              {/* 검색 + 정렬 */}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                <Input
+                  size="small"
+                  allowClear
+                  prefix={<SearchOutlined style={{ color: '#888' }} />}
+                  placeholder={t('record.importSearchPlaceholder')}
+                  value={importSearch}
+                  onChange={(e) => setImportSearch(e.target.value)}
+                  style={{ flex: 1, minWidth: 0 }}
+                />
+                <Select
+                  size="small"
+                  style={{ width: 118, flexShrink: 0 }}
+                  value={importSort}
+                  onChange={setImportSort}
+                  options={[
+                    { label: t('record.importSortNameAsc'), value: 'name_asc' },
+                    { label: t('record.importSortNameDesc'), value: 'name_desc' },
+                    { label: t('record.importSortCreated'), value: 'created' },
+                  ]}
+                />
+              </div>
+              {/* 펼쳐진 시나리오 목록 — 실시간 필터링 */}
+              <div style={{ flex: 1, minHeight: 0, maxHeight: 470, overflow: 'auto', border: '1px solid #303030', borderRadius: 4 }}>
+                {(() => {
+                  const rowStyle = (value: string): React.CSSProperties => ({
+                    padding: '6px 10px', cursor: 'pointer', fontSize: 12,
+                    background: importSourceName === value ? 'rgba(22,119,255,0.18)' : undefined,
+                    borderBottom: '1px solid rgba(255,255,255,0.06)',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  });
+                  return (
+                    <>
+                      {/* 현재 시나리오 — 항상 최상단 고정 */}
+                      <div onClick={() => loadImportSource('__current__')} style={{ ...rowStyle('__current__'), fontWeight: 600 }}>
+                        {t('record.currentScenario')}
+                      </div>
+                      {importSourceCandidates.length === 0 ? (
+                        <div style={{ padding: 12, textAlign: 'center', color: '#888', fontSize: 11 }}>
+                          {t('record.importNoMatch')}
+                        </div>
+                      ) : importSourceCandidates.map(n => (
+                        <div key={n} onClick={() => loadImportSource(n)} style={rowStyle(n)} title={n}>
+                          {n}
+                        </div>
+                      ))}
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+            {/* 우: 선택 시나리오의 스텝 */}
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ fontSize: 11, color: '#888', marginBottom: 6 }}>
+                {t('record.importInsertAt', { index: importInsertIndex + 1 })}
+                {' · '}{t('record.importSelectHint')}
+              </div>
+              {renderImportStepsPanel()}
+            </div>
           </div>
-        </Space>
+        )}
       </Modal>
 
       {/* 연속터치 모달 */}
