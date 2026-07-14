@@ -1829,6 +1829,7 @@ class WinControlService:
         text: str,
         click_first_x: Optional[int] = None,
         click_first_y: Optional[int] = None,
+        press_enter: bool = False,
     ) -> None:
         """텍스트 입력 — KEYEVENTF_UNICODE 직접 키 인젝션.
 
@@ -1844,6 +1845,9 @@ class WinControlService:
         click_first_x/y 가 지정되면 텍스트 입력 전 그 client 좌표 클릭으로 입력 컨트롤
         포커스 부여. 분리된 win_tap → win_input_text 두 호출로 처리하면 사이의 fg 복원
         때문에 자식 다이얼로그의 포커스가 풀리는 문제가 있어 atomic 으로 합침.
+
+        press_enter 가 True 면 텍스트 전송 후 Enter 키를 한 번 더 눌러줌 (검색창 제출 등).
+        분리된 win_key 호출은 사이의 fg 복원으로 포커스가 풀리므로 같은 컨텍스트에 포함.
         """
         self._check()
         ctx = self._save_context()
@@ -1870,6 +1874,10 @@ class WinControlService:
                     for ch in line:
                         self._send_unicode_char(ch)
                         time.sleep(0.010)
+            # 3) press_enter — 텍스트 입력 후 Enter 제출 (같은 컨텍스트 안에서 포커스 유지).
+            if press_enter:
+                time.sleep(0.05)
+                self._send_vk(win32con.VK_RETURN)
             time.sleep(0.10)
         finally:
             self._restore_context(ctx)

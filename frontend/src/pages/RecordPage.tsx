@@ -569,6 +569,8 @@ export default function RecordPage() {
   // 텍스트 입력 대기 모드 — '입력' 버튼 클릭 시 보낼 텍스트가 여기에 저장되고,
   // 다음 캔버스 클릭이 win_tap → win_input_text 시퀀스로 처리됨.
   const [wcPendingText, setWcPendingText] = useState<string | null>(null);
+  // '입력후 엔터' 대기 모드 — 텍스트 입력 후 Enter 키까지 전송할지 여부 (win_input_text press_enter).
+  const [wcPendingEnter, setWcPendingEnter] = useState(false);
   // 단축키 위치 대기 모드 — 단축키 버튼 클릭 시 조합이 여기 저장되고, 다음 캔버스
   // 좌클릭 좌표를 먼저 클릭(대상 컨트롤 포커스)한 뒤 단축키를 전송 (백엔드 atomic).
   // sequence: 'Ctrl+A → BackSpace' 처럼 여러 조합이면 첫 조합만 클릭과 묶고 나머지는 이어서 전송.
@@ -1760,11 +1762,13 @@ export default function RecordPage() {
       const dist0 = Math.hypot(c.x - wcGestureRef.current.startX, c.y - wcGestureRef.current.startY);
       if (dist0 <= 10) {
         const text = wcPendingText;
+        const pressEnter = wcPendingEnter;
         setWcPendingText(null);
+        setWcPendingEnter(false);
         const preview = text.length > 20 ? text.slice(0, 20) + '...' : text;
         await wcExecuteAction('win_input_text',
-          { text, click_first_x: c.x, click_first_y: c.y },
-          `win_input_text @(${c.x},${c.y}) "${preview}"`);
+          { text, click_first_x: c.x, click_first_y: c.y, ...(pressEnter ? { press_enter: true } : {}) },
+          `win_input_text${pressEnter ? ' +Enter' : ''} @(${c.x},${c.y}) "${preview}"`);
         return;
       }
     }
@@ -1801,7 +1805,7 @@ export default function RecordPage() {
         { x: startX, y: startY, button },
         `win_tap${button === 'right' ? ' [right]' : ''} (${startX},${startY})`);
     }
-  }, [wcToWinCoords, wcExecuteAction, wcPendingText, wcPendingCombo, wcComboAtPoint, wcSeqMode, wcSeqClick]);
+  }, [wcToWinCoords, wcExecuteAction, wcPendingText, wcPendingEnter, wcPendingCombo, wcComboAtPoint, wcSeqMode, wcSeqClick]);
 
   const wcDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     // 연속클릭(시퀀스) 모드 — 두 번의 mouseup이 이미 개별 클릭으로 처리됐으므로 무시.
@@ -1817,18 +1821,20 @@ export default function RecordPage() {
   // 사용자가 캔버스의 입력 컨트롤(에디트박스 등) 을 좌클릭하면, 백엔드가 해당 좌표를
   // 먼저 클릭해 포커스를 보낸 뒤 텍스트를 전송 → 입력 누락 방지.
   // 다시 누르면 토글 취소.
-  const wcSendText = useCallback(() => {
+  const wcSendText = useCallback((pressEnter = false) => {
     if (wcPendingText !== null) {
       setWcPendingText(null);
+      setWcPendingEnter(false);
       message.info('텍스트 입력 취소됨');
       return;
     }
     const txt = wcInputText;
     if (!txt) return;
     setWcPendingText(txt);
+    setWcPendingEnter(pressEnter);
     setWcInputText('');
     setWcPendingCombo(null);  // 단축키 위치 대기 모드와 상호 배타.
-    message.info('입력 위치를 클릭하세요');
+    message.info(pressEnter ? '입력 위치를 클릭하세요 (입력 후 Enter)' : '입력 위치를 클릭하세요');
   }, [wcInputText, wcPendingText]);
 
   // 단축키 버튼 → 위치 대기 모드 토글. 다음 캔버스 좌클릭 좌표를 먼저 클릭한 뒤
@@ -6109,21 +6115,32 @@ export default function RecordPage() {
                         placeholder={t('record.winControlInputTextPlaceholder')}
                         value={wcInputText}
                         onChange={(e) => setWcInputText(e.target.value)}
-                        onPressEnter={wcSendText}
+                        onPressEnter={() => wcSendText(false)}
                       />
                       <Button
                         size="small"
                         type="primary"
                         danger={wcPendingText !== null}
-                        onClick={wcSendText}
+                        onClick={() => wcSendText(false)}
                         disabled={!wcInputText && wcPendingText === null}
                       >
                         {wcPendingText !== null ? '취소' : t('record.winControlInputTextSend')}
                       </Button>
+                      {/* 입력후 엔터: 텍스트 전송 뒤 Enter 키까지 전송 (검색창 제출 등).
+                          대기 중에는 위 '취소' 버튼으로 일괄 취소하므로 숨김. */}
+                      {wcPendingText === null && (
+                        <Button
+                          size="small"
+                          onClick={() => wcSendText(true)}
+                          disabled={!wcInputText}
+                        >
+                          {t('record.winControlInputTextSendEnter')}
+                        </Button>
+                      )}
                     </Space.Compact>
                     {wcPendingText !== null && (
                       <Tag color="orange" style={{ alignSelf: 'flex-start' }}>
-                        {`입력 위치를 클릭하세요 — "${wcPendingText.length > 30 ? wcPendingText.slice(0, 30) + '...' : wcPendingText}"`}
+                        {`입력 위치를 클릭하세요${wcPendingEnter ? ' (입력 후 Enter)' : ''} — "${wcPendingText.length > 30 ? wcPendingText.slice(0, 30) + '...' : wcPendingText}"`}
                       </Tag>
                     )}
                     {/* 연속클릭(시퀀스): 여러 위치를 순서대로 클릭. 드롭다운처럼 타겟 비활성화

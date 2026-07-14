@@ -1366,7 +1366,8 @@ async def device_input(req: InputRequest):
                     cfy = p.get("click_first_y")
                     wc.send_text(str(p.get("text", "")),
                                  int(cfx) if cfx is not None else None,
-                                 int(cfy) if cfy is not None else None)
+                                 int(cfy) if cfy is not None else None,
+                                 press_enter=bool(p.get("press_enter")))
                 elif req.action == "win_key":
                     wc.send_key(str(p.get("key", "")))
                 elif req.action == "win_key_combo":

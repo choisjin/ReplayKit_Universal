@@ -1600,7 +1600,8 @@ class PlaybackService:
             return f"win_swipe ({p.get('x1', 0)},{p.get('y1', 0)})→({p.get('x2', 0)},{p.get('y2', 0)}) [{tgt}]"
         elif step.type == StepType.WIN_INPUT_TEXT:
             txt = p.get("text", "")
-            return f"win_input_text \"{txt[:30]}{'...' if len(txt) > 30 else ''}\""
+            enter_suffix = " +Enter" if p.get("press_enter") else ""
+            return f"win_input_text{enter_suffix} \"{txt[:30]}{'...' if len(txt) > 30 else ''}\""
         elif step.type == StepType.WIN_KEY:
             return f"win_key {p.get('key', '')}"
         elif step.type == StepType.WIN_KEY_COMBO:
@@ -3173,7 +3174,8 @@ class PlaybackService:
                 await loop.run_in_executor(None,
                     functools.partial(wc.send_text, str(params.get("text", "")),
                                       int(cfx) if cfx is not None else None,
-                                      int(cfy) if cfy is not None else None))
+                                      int(cfy) if cfy is not None else None,
+                                      press_enter=bool(params.get("press_enter"))))
             elif step.type == StepType.WIN_KEY:
                 await loop.run_in_executor(None,
                     functools.partial(wc.send_key, str(params.get("key", ""))))
