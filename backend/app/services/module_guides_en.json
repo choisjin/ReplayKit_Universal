@@ -293,19 +293,33 @@
         "params": {}
       },
       "canoe_send_message": {
-        "description": "Sends a CAN/CAN FD message. A non-zero cycle time sends periodically; 0 sends once.",
+        "description": "Sends a CAN/CAN FD message. A non-zero cycle time sends periodically; 0 sends once. When apply_e2e=True, the Alive Counter and CRC16 are recomputed in real time every cycle for an E2E-protected periodic transmit.",
         "params": {
           "message_id": "CAN ID (hex string). e.g. '0x288'",
           "cycle_time": "Transmit cycle (ms). 0 = send once",
           "can_message": "Message data (space-separated hex). e.g. '01 02 03 04 05 06 07 08'",
           "bus_channel": "Bus channel index (from 0, in device_info order)",
-          "message_type": "'FD' (default) or any other string = Classic CAN"
+          "message_type": "'FD' (default) or any other string = Classic CAN",
+          "apply_e2e": "True = E2E (Alive Counter + CRC16) periodic transmit; False (default) = plain transmit. E2E spec is read per message_id from plugins/e2e_config.json, falling back to a default template. Only effective when cycle_time > 0."
+        }
+      },
+      "canoe_send_message_stop": {
+        "description": "Stops the periodic transmit of a single CAN ID (both E2E and plain periodic). Other periodic messages keep running.",
+        "params": {
+          "message_id": "CAN ID to stop (hex string). e.g. '0xA0'",
+          "bus_channel": "Bus channel index"
         }
       },
       "canoe_send_msg_all_stop": {
-        "description": "Stops all periodic transmits on the given channel.",
+        "description": "Stops all periodic transmits on the given channel (including E2E).",
         "params": {
           "bus_channel": "Bus channel index"
+        }
+      },
+      "load_e2e_config": {
+        "description": "Reloads the E2E spec JSON file. Defaults to plugins/e2e_config.json when omitted. (Auto-loaded once at module init; call only to re-apply after editing the file.)",
+        "params": {
+          "config_path": "Path to the E2E config JSON. Leave empty to use the default file (plugins/e2e_config.json)."
         }
       },
       "find_msg_from_latest_log": {

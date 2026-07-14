@@ -81,9 +81,145 @@ def _normalize_device_info(device_info):
     return result
 
 
+class E2E_Helper:
+    """Vector E2E CRC16 테이블 빌드 및 알고리즘 헬퍼 클래스"""
+    CRC16table = []
+
+    @classmethod
+    def init_crc_table(cls):
+        if cls.CRC16table:
+            return
+        # Standard CRC16-CCITT polynomial: 0x1021
+        polynomial = 0x1021
+        for i in range(256):
+            crc = i << 8
+            for _ in range(8):
+                if crc & 0x8000:
+                    crc = (crc << 1) ^ polynomial
+                else:
+                    crc = crc << 1
+                crc &= 0xFFFF
+            cls.CRC16table.append(crc)
+
+    @staticmethod
+    def normalize_msg_id(msg_id_str):
+        """메시지 ID 형식을 표준화 (예: '0x0A0' -> 'A0', 'a0' -> 'A0')"""
+        if not isinstance(msg_id_str, str):
+            msg_id_str = f"{msg_id_str:X}"
+        temp = msg_id_str.upper().strip()
+        if temp.startswith("0X"):
+            temp = temp[2:]
+        return temp.lstrip("0") if temp.lstrip("0") else "0"
+
+    @staticmethod
+    def safe_int(value):
+        """10진수 숫자형 문자열 혹은 '0xF800' 형식의 16진수 문자열을 안전하게 int형으로 변환"""
+        if isinstance(value, str):
+            if value.lower().startswith("0x"):
+                return int(value, 16)
+            return int(value)
+        return int(value)
+
+
+class E2E_PeriodicTask:
+    """JSON 설정을 기반으로 실시간 Alive Counter 및 CRC16을 동적 계산하여 주기 송신하는 고정밀 스레드"""
+
+    def __init__(self, bus, message, period, msg_id, config):
+        self.bus = bus
+        self.message = message
+        self.period = period
+        self.msg_id = msg_id
+        self.config = config
+
+        # JSON 사양 동적 로딩 및 변환
+        self.counter_idx = E2E_Helper.safe_int(config.get("counter_index", 2))
+        self.counter_mask = E2E_Helper.safe_int(config.get("counter_mask", 0xFF))
+        self.crc_start_idx = E2E_Helper.safe_int(config.get("crc_start_index", 2))
+        self.crc_low_idx = E2E_Helper.safe_int(config.get("crc_low_index", 0))
+        self.crc_high_idx = E2E_Helper.safe_int(config.get("crc_high_index", 1))
+        self.data_id_offset = E2E_Helper.safe_int(config.get("data_id_offset", 0xF800))
+
+        data_list = list(message.data)
+        self.alive_counter = data_list[self.counter_idx] if len(data_list) > self.counter_idx else 0
+        self.running = False
+        self.thread = None
+
+    def start(self):
+        self.running = True
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=0.5)
+
+    def _run(self):
+        CRC16table = E2E_Helper.CRC16table
+        u16msgID = self.msg_id
+
+        # Windows 주기 편차 제거를 위한 고정밀 타이머 초기화
+        next_tx_time = time.perf_counter()
+
+        while self.running:
+            data_list = list(self.message.data)
+            dlc = len(data_list)
+
+            # 설정된 인덱스 범위 초과 에러 방지 안전장치
+            max_index_required = max(self.counter_idx, self.crc_start_idx, self.crc_low_idx, self.crc_high_idx)
+            if dlc > max_index_required:
+                # 1. Alive Counter 업데이트 (동적 마스크 크기 지원)
+                self.alive_counter = (self.alive_counter + 1) & self.counter_mask
+                data_list[self.counter_idx] = self.alive_counter
+
+                # 2. 동적 영역 CRC16 계산
+                param_crc = 0xFFFF
+                for crcIndex in range(self.crc_start_idx, dlc):
+                    param_crc = (param_crc << 8) ^ CRC16table[(param_crc >> 8) ^ data_list[crcIndex]]
+                    param_crc &= 0xFFFF
+
+                # 2-1. ID Low Byte 반영
+                param_crc = (param_crc << 8) ^ CRC16table[(param_crc >> 8) ^ (u16msgID & 0xFF)]
+                param_crc &= 0xFFFF
+
+                # 2-2. ID + DATA_ID_INIT High Byte 반영
+                high_byte = ((u16msgID + self.data_id_offset) >> 8) & 0xFF
+                param_crc = (param_crc << 8) ^ CRC16table[(param_crc >> 8) ^ high_byte]
+                param_crc &= 0xFFFF
+
+                # 3. 계산된 CRC 값을 동적 위치에 분할 저장
+                data_list[self.crc_low_idx] = param_crc & 0xFF
+                data_list[self.crc_high_idx] = (param_crc >> 8) & 0xFF
+
+                self.message.data = bytes(data_list)
+
+            # CAN 메시지 송신
+            try:
+                self.bus.send(self.message)
+            except Exception as e:
+                print(f"E2E Send Error: {e}")
+
+            # [고정밀 튜닝] Windows OS 오차 방지 하이브리드 슬립 알고리즘 적용 (10ms 정밀 유지)
+            next_tx_time += self.period
+            while True:
+                current_time = time.perf_counter()
+                remaining = next_tx_time - current_time
+                if remaining <= 0:
+                    break
+                if remaining > 0.002:
+                    time.sleep(0.001)
+
+
 class CANoe_Ctrl:
     def __init__(self, device_info):
         self.bus = []
+        self.e2e_tasks = {}  # E2E 주기 태스크 관리 딕셔너리
+        self.periodic_tasks = {}  # 일반 주기 태스크 관리 딕셔너리
+        self.e2e_config = {}  # 동적 E2E 사양 딕셔너리
+
+        E2E_Helper.init_crc_table()  # CRC Table 초기화
+        self.load_e2e_config()  # 기본 e2e_config.json 파일 자동 로드 시도
+
         dev_dict = _normalize_device_info(device_info)
         for rp in range(0, len(dev_dict)):
             row = dev_dict[rp]
@@ -120,6 +256,28 @@ class CANoe_Ctrl:
         self.tester_present_thread = None
         self.tester_present_running = False
 
+    @keyword('CANoe Load E2E Config')
+    def load_e2e_config(self, config_path=None):
+        """E2E JSON 설정 파일을 동적으로 불러오는 키워드.
+
+        config_path 미지정 시 이 모듈과 같은 폴더의 'e2e_config.json'을 기본 사용
+        (백엔드 실행 cwd 와 무관하게 항상 찾도록).
+        """
+        if config_path is None or config_path == "":
+            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "e2e_config.json")
+
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    raw_config = json.load(f)
+                    # ID를 대문자 표준 포맷으로 노멀라이징하여 저장
+                    self.e2e_config = {E2E_Helper.normalize_msg_id(k): v for k, v in raw_config.items()}
+                print(f"[E2E Config] Successfully loaded config from '{config_path}': {self.e2e_config}")
+            except Exception as e:
+                print(f"[E2E Config] Error loading config file: {e}")
+        else:
+            print(f"[E2E Config] Configuration file '{config_path}' not found.")
+
     @keyword('CANoe Full Log Save Start')
     def canoe_full_log_save_start(self, path, file_name):
         file_name_SD = file_name.split('.')
@@ -141,6 +299,22 @@ class CANoe_Ctrl:
                 self.bus[busNum].stop_all_periodic_tasks()
             except:
                 pass
+
+        # 일반 주기 태스크 전체 정지 및 메모리 비우기
+        for task in list(self.periodic_tasks.values()):
+            try:
+                task.stop()
+            except:
+                pass
+        self.periodic_tasks.clear()
+
+        # E2E 주기 태스크 전체 정지 및 메모리 비우기
+        for task in list(self.e2e_tasks.values()):
+            try:
+                task.stop()
+            except:
+                pass
+        self.e2e_tasks.clear()
 
         # Stop notifier BEFORE logger to prevent writing to closed file
         if self.CANoe_recv:
@@ -180,7 +354,12 @@ class CANoe_Ctrl:
                 pass
 
     @keyword('CANoe Send Message')
-    def canoe_send_message(self, message_id, cycle_time, can_message, bus_channel, message_type='FD'):
+    def canoe_send_message(self, message_id, cycle_time, can_message, bus_channel, message_type='FD', apply_e2e=False):
+        """
+        메시지 송신 키워드
+        :param apply_e2e: True인 경우에만 E2E(Alive Counter + CRC16) 적용 주기 송신하며,
+                          False이거나 지정하지 않은 경우 일반 전송 (기본값: False)
+        """
         _message_id = int(message_id, 16)
         _bus_ch = int(bus_channel)
 
@@ -197,15 +376,78 @@ class CANoe_Ctrl:
         _can_message = [int(n, 16) for n in can_message.split()]
         _cycle_time = int(cycle_time)
 
-        if _cycle_time > 0:
-            self.bus[_bus_ch].send_periodic(
-                Message(arbitration_id=_message_id,
-                        data=_can_message,
-                        is_fd=_is_fd,
-                        dlc=len(_can_message),
-                        is_extended_id=_is_extended_id,
-                        is_rx=False), _cycle_time / 1000)
+        # Robot Framework 문자열 호환 대응 ('True', 'YES', '1' 등 판별하여 Boolean화)
+        if isinstance(apply_e2e, str):
+            if apply_e2e.upper() in ["TRUE", "YES", "1"]:
+                should_apply_e2e = True
+            else:
+                should_apply_e2e = False
         else:
+            should_apply_e2e = bool(apply_e2e)
+
+        task_key = (_bus_ch, _message_id)
+
+        if _cycle_time > 0:
+            if should_apply_e2e:
+                # 기존 일반 주기 태스크가 돌고 있다면 정지 후 제거
+                if task_key in self.periodic_tasks:
+                    try:
+                        self.periodic_tasks[task_key].stop()
+                    except:
+                        pass
+                    del self.periodic_tasks[task_key]
+
+                # E2E 설정 매핑 정보 추출 (만약 JSON에 설정을 깜빡했을 시 기본 템플릿 적용)
+                norm_id = E2E_Helper.normalize_msg_id(message_id)
+                config_data = self.e2e_config.get(norm_id, {
+                    "counter_index": 2, "counter_mask": "0xFF", "crc_start_index": 2,
+                    "crc_low_index": 0, "crc_high_index": 1, "data_id_offset": "0xF800"
+                })
+
+                print(f'periodic E2E Dynamic send ({message_id}) config : {config_data}')
+
+                if task_key in self.e2e_tasks:
+                    self.e2e_tasks[task_key].stop()
+
+                msg = Message(arbitration_id=_message_id,
+                              data=_can_message,
+                              is_fd=_is_fd,
+                              dlc=len(_can_message),
+                              is_extended_id=_is_extended_id,
+                              is_rx=False)
+
+                task = E2E_PeriodicTask(self.bus[_bus_ch], msg, _cycle_time / 1000.0, _message_id, config_data)
+                self.e2e_tasks[task_key] = task
+                task.start()
+            else:
+                # 기존 E2E 태스크가 돌고 있다면 정지 후 제거
+                if task_key in self.e2e_tasks:
+                    try:
+                        self.e2e_tasks[task_key].stop()
+                    except:
+                        pass
+                    del self.e2e_tasks[task_key]
+
+                # 기존 일반 주기 태스크가 이미 등록되어 있다면 정지
+                if task_key in self.periodic_tasks:
+                    try:
+                        self.periodic_tasks[task_key].stop()
+                    except:
+                        pass
+
+                # 일반 주기 메시지 송신 및 태스크 객체 저장 (E2E 미적용)
+                msg = Message(arbitration_id=_message_id,
+                              data=_can_message,
+                              is_fd=_is_fd,
+                              dlc=len(_can_message),
+                              is_extended_id=_is_extended_id,
+                              is_rx=False)
+
+                # send_periodic은 정지 제어가 가능한 CyclicSendTask 객체를 리턴합니다.
+                task = self.bus[_bus_ch].send_periodic(msg, _cycle_time / 1000.0)
+                self.periodic_tasks[task_key] = task
+        else:
+            # 단일 샷(1회성) 전송
             self.bus[_bus_ch].send(
                 Message(arbitration_id=_message_id,
                         data=_can_message,
@@ -214,10 +456,69 @@ class CANoe_Ctrl:
                         is_extended_id=_is_extended_id,
                         is_rx=False))
 
+    @keyword('CANoe Send Message Stop')
+    def canoe_send_message_stop(self, message_id, bus_channel):
+        """
+        특정 단일 메시지의 주기적 송신을 중단하는 키워드 (E2E 및 일반 주기 메시지 모두 지원)
+        :param message_id: 중단할 메시지 ID (예: '0xA0' 또는 '0x411')
+        :param bus_channel: 버스 채널 인덱스 (예: '0' 또는 0)
+        """
+        _message_id = int(message_id, 16)
+        _bus_ch = int(bus_channel)
+        task_key = (_bus_ch, _message_id)
+        stopped = False
+
+        # 1. E2E 태스크 정지 시도
+        if task_key in self.e2e_tasks:
+            try:
+                self.e2e_tasks[task_key].stop()
+                del self.e2e_tasks[task_key]
+                print(f"[Stop] Stopped E2E periodic message 0x{_message_id:X} on channel {_bus_ch}")
+                stopped = True
+            except Exception as e:
+                print(f"[Stop] Error stopping E2E task for 0x{_message_id:X}: {e}")
+
+        # 2. 일반 주기 태스크 정지 시도
+        if task_key in self.periodic_tasks:
+            try:
+                self.periodic_tasks[task_key].stop()
+                del self.periodic_tasks[task_key]
+                print(f"[Stop] Stopped normal periodic message 0x{_message_id:X} on channel {_bus_ch}")
+                stopped = True
+            except Exception as e:
+                print(f"[Stop] Error stopping normal task for 0x{_message_id:X}: {e}")
+
+        if not stopped:
+            print(f"[Stop] No active periodic message found for 0x{_message_id:X} on channel {_bus_ch}")
+
     @keyword('CANoe Send Message All Stop')
     def canoe_send_msg_all_stop(self, bus_channel):
         _bus_ch = int(bus_channel)
         self.bus[_bus_ch].stop_all_periodic_tasks()
+
+        # 채널에 해당되는 일반 주기 태스크 정지 및 제거
+        keys_to_remove_norm = []
+        for key, task in self.periodic_tasks.items():
+            if key[0] == _bus_ch:
+                try:
+                    task.stop()
+                except:
+                    pass
+                keys_to_remove_norm.append(key)
+        for key in keys_to_remove_norm:
+            del self.periodic_tasks[key]
+
+        # 채널에 해당되는 E2E 주기 태스크 정지 및 제거
+        keys_to_remove_e2e = []
+        for key, task in self.e2e_tasks.items():
+            if key[0] == _bus_ch:
+                try:
+                    task.stop()
+                except:
+                    pass
+                keys_to_remove_e2e.append(key)
+        for key in keys_to_remove_e2e:
+            del self.e2e_tasks[key]
 
     @keyword('Find CAN Data From Latest Log')
     def find_msg_from_latest_log(self, log_file, message_id, can_message):
@@ -459,6 +760,22 @@ class CANoe_Ctrl:
                     self.bus[busNum].stop_all_periodic_tasks()
                 except:
                     pass
+
+            if hasattr(self, 'periodic_tasks'):
+                for task in list(self.periodic_tasks.values()):
+                    try:
+                        task.stop()
+                    except:
+                        pass
+                self.periodic_tasks.clear()
+
+            if hasattr(self, 'e2e_tasks'):
+                for task in list(self.e2e_tasks.values()):
+                    try:
+                        task.stop()
+                    except:
+                        pass
+                self.e2e_tasks.clear()
 
             # Stop isotp stack
             if self.stack:

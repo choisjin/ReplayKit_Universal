@@ -1,0 +1,10 @@
+{
+    "0XA0": {
+        "counter_index": 2,
+        "counter_mask": "0xFF",
+        "crc_start_index": 2,
+        "crc_low_index": 0,
+        "crc_high_index": 1,
+        "data_id_offset": "0xF800"
+    }
+}

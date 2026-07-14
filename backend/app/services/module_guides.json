@@ -293,19 +293,33 @@
         "params": {}
       },
       "canoe_send_message": {
-        "description": "CAN/CAN FD 메시지를 전송합니다. 주기를 지정하면 주기 송신, 0이면 1회 송신.",
+        "description": "CAN/CAN FD 메시지를 전송합니다. 주기를 지정하면 주기 송신, 0이면 1회 송신. apply_e2e=True이면 Alive Counter와 CRC16을 매 주기 실시간 계산하여 E2E 보호 메시지로 주기 송신합니다.",
         "params": {
           "message_id": "CAN ID(16진수 문자열). 예: '0x288'",
           "cycle_time": "전송 주기 (ms). 0이면 1회 전송",
           "can_message": "메시지 데이터 (공백 구분 16진수). 예: '01 02 03 04 05 06 07 08'",
           "bus_channel": "버스 채널 (드롭다운: 디바이스 추가 시 설정한 채널을 선택. 내부값=등록 순서 인덱스, 0부터)",
-          "message_type": "'FD'(기본) 또는 그 외 문자열 = Classic CAN"
+          "message_type": "'FD'(기본) 또는 그 외 문자열 = Classic CAN",
+          "apply_e2e": "True이면 E2E(Alive Counter+CRC16) 적용 주기 송신, False(기본)이면 일반 전송. E2E 사양은 plugins/e2e_config.json의 message_id별 설정을 사용하며 없으면 기본 템플릿 적용. cycle_time>0일 때만 유효."
+        }
+      },
+      "canoe_send_message_stop": {
+        "description": "특정 CAN ID의 주기 송신만 개별 중지합니다 (E2E·일반 주기 모두 지원). 다른 메시지의 주기 송신은 계속 유지됩니다.",
+        "params": {
+          "message_id": "중지할 CAN ID(16진수 문자열). 예: '0xA0'",
+          "bus_channel": "버스 채널 (드롭다운: 디바이스 추가 시 설정한 채널을 선택)"
         }
       },
       "canoe_send_msg_all_stop": {
-        "description": "지정 채널의 모든 주기 송신을 중지합니다.",
+        "description": "지정 채널의 모든 주기 송신을 중지합니다 (E2E 포함).",
         "params": {
           "bus_channel": "버스 채널 (드롭다운: 디바이스 추가 시 설정한 채널을 선택)"
+        }
+      },
+      "load_e2e_config": {
+        "description": "E2E 사양 JSON 파일을 다시 불러옵니다. 미지정 시 plugins/e2e_config.json을 사용합니다. (모듈 로드 시 자동 1회 로드되므로 파일 수정 후 재적용할 때만 호출)",
+        "params": {
+          "config_path": "E2E 설정 JSON 파일 경로. 비우면 기본 파일(plugins/e2e_config.json) 사용"
         }
       },
       "find_msg_from_latest_log": {
