@@ -1817,16 +1817,22 @@ async def _run_play_job(data: dict):
         mark_playback_active(True)
         mark_runtime_fail_active(True)  # SerialLogging/DLTLogging assert_keyword fail 누적 활성화
         publish_event({"type": "playback_reset", "scenario": scenario_name})
+        # 재생 준비 단계별 진행 표시 — 준비 구간(녹화/로드/디바이스확인)은 정상적으로 시간이
+        # 걸릴 수 있어, "서버 연결 중" 배너 대신 "재생 준비 중(k/3)..." 로 진행상황을 알린다.
+        # key 는 프론트에서 i18n 라벨로 매핑한다.
+        publish_event({"type": "prepare", "key": "record", "index": 1, "total": 3})
         # Frame_Check 마커 초기화 — 이전 런/단발 스텝 테스트의 잔여 마커 제거
         from .services.frame_check_service import get_frame_check_service
         get_frame_check_service().reset()
         # 웹캠 녹화 시작 (열려 있을 때만)
         webcam_session = await _webcam_session_start(iteration=1)
 
+        publish_event({"type": "prepare", "key": "load", "index": 2, "total": 3})
         scen = await recording_service.load_scenario(scenario_name)
         if skip_steps:
             scen.steps = [s for s in scen.steps if s.id not in skip_steps]
 
+        publish_event({"type": "prepare", "key": "check", "index": 3, "total": 3})
         preflight_errors = await playback_service.preflight_check(scen, device_map_override)
         if preflight_errors:
             publish_event({"type": "preflight_error", "errors": preflight_errors})
@@ -2122,6 +2128,9 @@ async def _run_play_group_job(data: dict):
         mark_playback_active(True)
         mark_runtime_fail_active(True)
         publish_event({"type": "playback_reset", "group": True})
+        # 재생 준비 단계별 진행 표시 — 그룹은 멤버 시나리오마다 로드/디바이스확인이 필요해
+        # 준비 구간이 길 수 있다. "재생 준비 중" + 멤버별 진행(k/N)으로 알린다.
+        publish_event({"type": "prepare", "key": "record", "index": 0, "total": len(entries)})
         # Frame_Check 마커 초기화 — 그룹 재생은 영상 분석 미지원(회차↔시나리오 매핑 모호),
         # 잔여 마커가 다음 단일 재생을 오염시키지 않도록만 정리한다.
         from .services.frame_check_service import get_frame_check_service
@@ -2129,7 +2138,11 @@ async def _run_play_group_job(data: dict):
         webcam_session = await _webcam_session_start(iteration=1)
 
         all_preflight_errors: list[str] = []
-        for entry in entries:
+        for _mi, entry in enumerate(entries, start=1):
+            publish_event({
+                "type": "prepare", "key": "check_member",
+                "index": _mi, "total": len(entries), "name": entry.get("name", ""),
+            })
             try:
                 scen = await recording_service.load_scenario(entry["name"])
                 # 그룹 일괄 매핑(device_map_override)을 각 멤버 시나리오의 preflight에도 적용.

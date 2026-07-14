@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Button, Card, Checkbox, Col, Collapse, DatePicker, Descriptions, Divider, Dropdown, Image, Input, InputNumber, List, Modal, Radio, Row, Select, Space, Splitter, Table, Tabs, Tag, Tooltip, Tree, Upload, message, notification } from 'antd';
+import { Button, Card, Checkbox, Col, Collapse, DatePicker, Descriptions, Divider, Dropdown, Image, Input, InputNumber, List, Modal, Progress, Radio, Row, Select, Space, Spin, Splitter, Table, Tabs, Tag, Tooltip, Tree, Upload, message, notification } from 'antd';
 import dayjs from 'dayjs';
 import type { TreeProps } from 'antd';
 import {
@@ -9,6 +9,7 @@ import {
   EditOutlined, BranchesOutlined,
   DownOutlined, RightOutlined, ClearOutlined, UploadOutlined,
   ExportOutlined, ImportOutlined, CheckCircleOutlined, WarningOutlined,
+  LoadingOutlined,
 } from '@ant-design/icons';
 import { scenarioApi, deviceApi, resultsApi, serverApi } from '../services/api';
 import { useDevice } from '../context/DeviceContext';
@@ -489,6 +490,14 @@ export default function ScenarioPage() {
   const [newGroupName, setNewGroupName] = useState('');
   const [scenarioStepsCache, setScenarioStepsCache] = useState<Record<string, any[]>>({});
   const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set());
+  // 그룹 관리 모달 일괄 로딩 진행률 ({done, total}) — 멤버 스텝 병렬 로드 시 프로그레스바.
+  const [groupCacheProgress, setGroupCacheProgress] = useState<{ done: number; total: number } | null>(null);
+  // 개별 시나리오 스텝을 로딩 중인 이름 집합 (그룹 상세 패널 확장 시 스피너 표시용).
+  const [loadingStepsNames, setLoadingStepsNames] = useState<Set<string>>(new Set());
+  // 그룹 목록 로딩 중 여부 (그룹 탭 진입 시 스피너).
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  // 재생 준비 단계 진행 표시 (백엔드 prepare 이벤트) — null이면 준비단계 아님.
+  const [playbackPrepare, setPlaybackPrepare] = useState<{ key: string; index: number; total: number; name?: string } | null>(null);
   const [groupDrag, setGroupDrag] = useState<{ gName: string; from: number; over: number | null } | null>(null);
   // 그룹 모달 좌측 트리에서 다중 선택된 시나리오들 (드래그 시 일괄 추가)
   const [modalTreeSelected, setModalTreeSelected] = useState<string[]>([]);
@@ -587,7 +596,21 @@ export default function ScenarioPage() {
     playingRef.current = false;
     if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
     setPlaying(false);
+    setPlaybackPrepare(null);  // 재생 준비 진행표시 해제 (완료/중단/에러 공통)
   };
+
+  // 재생 준비 단계 라벨/진행률 — 백엔드 prepare 이벤트의 key를 i18n 라벨로 매핑.
+  const preparePhaseLabel = (p: { key: string; index: number; total: number; name?: string }) => {
+    if (p.key === 'load') return t('scenario.prepareLoad');
+    if (p.key === 'check') return t('scenario.prepareCheck');
+    if (p.key === 'check_member') {
+      const base = `${t('scenario.prepareCheck')} (${p.index}/${p.total})`;
+      return p.name ? `${base} — ${p.name}` : base;
+    }
+    return t('scenario.prepareRecord');
+  };
+  const preparePercent = (p: { index: number; total: number }) =>
+    p.total > 0 ? Math.min(100, Math.round((p.index / p.total) * 100)) : 0;
 
   // --- Filtered scenarios by group ---
   // 그룹 선택 시 그룹 멤버 순서 유지 (scenarios는 알파벳순이므로 filter 대신 map 사용)
@@ -627,22 +650,39 @@ export default function ScenarioPage() {
   };
 
   const fetchGroups = async () => {
+    setGroupsLoading(true);
     try {
       const res = await scenarioApi.getGroups();
       setGroups(res.data.groups);
     } catch { /* ignore */ }
+    finally { setGroupsLoading(false); }
   };
 
-  const fetchScenarioStepsCache = async (names: string[], force = false) => {
+  const fetchScenarioStepsCache = async (
+    names: string[],
+    force = false,
+    onProgress?: (done: number, total: number) => void,
+  ) => {
     // force=true: 캐시 키 존재 여부와 무관하게 서버에서 다시 받아와 덮어씀.
     // 그룹 관리 모달 열림처럼 "지금 즉시 최신 상태가 필요한" 진입점에서 사용.
+    // onProgress: 병렬 로드 완료 개수를 실시간 통지 — 프로그레스바 표시용.
     const cache: Record<string, any[]> = { ...scenarioStepsCache };
     const toFetch = force ? names : names.filter((n) => !(n in cache));
+    if (toFetch.length === 0) { onProgress?.(0, 0); return; }
+    // 로딩 중 이름 표시(그룹 상세 패널 확장 스피너)
+    setLoadingStepsNames((prev) => { const s = new Set(prev); toFetch.forEach((n) => s.add(n)); return s; });
+    let done = 0;
+    onProgress?.(0, toFetch.length);
     await Promise.all(toFetch.map(async (name) => {
       try {
         const res = await scenarioApi.get(name);
         cache[name] = res.data.steps ?? [];
       } catch { cache[name] = []; }
+      finally {
+        done++;
+        onProgress?.(done, toFetch.length);
+        setLoadingStepsNames((prev) => { const s = new Set(prev); s.delete(name); return s; });
+      }
     }));
     setScenarioStepsCache(cache);
   };
@@ -1111,7 +1151,11 @@ export default function ScenarioPage() {
       };
       ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
-      if (msg.type === 'iteration_start') {
+      if (msg.type === 'prepare') {
+        // 재생 준비 단계별 진행 표시 (녹화/로드/디바이스확인). 첫 스텝/회차 시작 시 해제.
+        setPlaybackPrepare({ key: msg.key, index: msg.index, total: msg.total, name: msg.name });
+      } else if (msg.type === 'iteration_start') {
+        setPlaybackPrepare(null);
         // 재연결 시 buffer replay로 과거 iteration_start가 다시 올 수 있음 → 최고값 기반으로 스킵
         if (msg.iteration <= maxIterationRef.current) return;
         maxIterationRef.current = msg.iteration;
@@ -1124,6 +1168,7 @@ export default function ScenarioPage() {
           });
         }
       } else if (msg.type === 'step_start') {
+        setPlaybackPrepare(null);  // 준비 완료 → 실제 스텝 진행
         // 첫 스텝 시작 = 디바이스 검사 통과 → 웹캠 녹화 시작
         if (doAutoRecord && !webcamRecordingActiveRef.current) {
           webcam.startRecordingAuto().then((ok) => { webcamRecordingActiveRef.current = ok; });
@@ -1425,12 +1470,17 @@ export default function ScenarioPage() {
       };
       ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
-      if (msg.type === 'group_scenario_start') {
+      if (msg.type === 'prepare') {
+        // 그룹 재생 준비 단계 (녹화 + 멤버별 디바이스 확인) 진행 표시.
+        setPlaybackPrepare({ key: msg.key, index: msg.index, total: msg.total, name: msg.name });
+      } else if (msg.type === 'group_scenario_start') {
+        setPlaybackPrepare(null);
         setCurrentGroupScenario(msg.scenario_name);
         setGroupScenarioIndex(msg.scenario_index);
         setGroupScenarioTotal(msg.total_scenarios);
         setPlayingName(msg.scenario_name);
       } else if (msg.type === 'iteration_start') {
+        setPlaybackPrepare(null);
         // 재연결 replay 시 과거 iteration 스킵
         if (msg.iteration <= maxIterationRef.current) return;
         maxIterationRef.current = msg.iteration;
@@ -1443,6 +1493,7 @@ export default function ScenarioPage() {
           });
         }
       } else if (msg.type === 'step_start') {
+        setPlaybackPrepare(null);  // 준비 완료 → 실제 스텝 진행
         // 첫 스텝 시작 = 디바이스 검사 통과 → 웹캠 녹화 시작
         if (doAutoRecord && !webcamRecordingActiveRef.current) {
           webcam.startRecordingAuto().then((ok) => { webcamRecordingActiveRef.current = ok; });
@@ -1727,9 +1778,14 @@ export default function ScenarioPage() {
         <Button icon={<FolderOutlined />} size="small" onClick={() => {
           setGroupModalVisible(true);
           // 모달 open 시 멤버 시나리오 스텝을 강제 refetch — 다른 경로(RecordPage 녹화, 외부 편집)로
-          // 변경된 내용까지 즉시 반영. 캐시에 이미 있어도 덮어씀.
+          // 변경된 내용까지 즉시 반영. 캐시에 이미 있어도 덮어씀. 진행률은 프로그레스바로 표시.
           const allNames = Array.from(new Set(Object.values(groups).flatMap((ms) => ms.map((m) => m.name))));
-          if (allNames.length > 0) fetchScenarioStepsCache(allNames, true);
+          if (allNames.length > 0) {
+            setGroupCacheProgress({ done: 0, total: allNames.length });
+            fetchScenarioStepsCache(allNames, true, (done, total) => {
+              setGroupCacheProgress(total > 0 ? { done, total } : null);
+            }).finally(() => setGroupCacheProgress(null));
+          }
         }}>{t('scenario.groupManage')}</Button>
         <Button icon={<ExportOutlined />} size="small" onClick={() => { setExportSelectedScenarios([]); setExportSelectedGroups([]); setExportAll(false); setExportModalVisible(true); }}>{t('scenario.exportTitle')}</Button>
         <Button icon={<ImportOutlined />} size="small" onClick={() => { setImportFile(null); setImportPreviewData(null); setImportModalVisible(true); }}>{t('scenario.importTitle')}</Button>
@@ -1752,13 +1808,25 @@ export default function ScenarioPage() {
           tabBarStyle={{ marginBottom: 6 }}
           items={[
             { key: '__all__', label: `${t('scenario.all')} (${scenarios.length})` },
-            { key: '__groups__', label: `${t('scenario.groupLabel')} (${Object.keys(groups).length})` },
+            {
+              key: '__groups__',
+              label: (
+                <span>
+                  {t('scenario.groupLabel')} ({Object.keys(groups).length})
+                  {groupsLoading && <Spin size="small" style={{ marginLeft: 6 }} />}
+                </span>
+              ),
+            },
           ]}
         />
 
         {selectedGroup === '__groups__' ? (
           /* ===== 그룹 트리 (폴더 관리 + 드래그&드롭 + 컨텍스트 메뉴) ===== */
           (() => {
+            // 그룹 목록 최초 로딩 중(아직 데이터 없음) — 중앙 스피너로 진행 표시.
+            if (groupsLoading && Object.keys(groups).length === 0) {
+              return <div style={{ padding: 24, textAlign: 'center' }}><Spin /><div style={{ marginTop: 8, color: '#888', fontSize: 12 }}>{t('scenario.loadingGroups')}</div></div>;
+            }
             const gFoldered = new Set<string>();
             for (const items of Object.values(groupFolders)) items.forEach(g => gFoldered.add(g));
 
@@ -2397,6 +2465,20 @@ export default function ScenarioPage() {
             ) : undefined
           }
         >
+          {/* 재생 준비 단계별 진행 표시 — "서버 연결 중" 배너 대신 정상 로딩임을 알린다. */}
+          {playbackPrepare && (
+            <div style={{
+              padding: '8px 12px', marginBottom: 8, borderRadius: 6,
+              background: 'rgba(22,119,255,0.08)', border: '1px solid rgba(22,119,255,0.25)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <LoadingOutlined spin style={{ color: '#1677ff' }} />
+                <strong style={{ fontSize: 13 }}>{t('scenario.preparing')}</strong>
+                <span style={{ color: '#888', fontSize: 12 }}>{preparePhaseLabel(playbackPrepare)}</span>
+              </div>
+              <Progress percent={preparePercent(playbackPrepare)} size="small" status="active" />
+            </div>
+          )}
           {(playing || stepResults.length > 0) ? (
             /* 재생 중 / 완료: 결과 테이블 (스텝만 스크롤, 자동 최하단) */
             <div style={{ flex: 1, overflow: 'auto' }}>
@@ -2567,7 +2649,12 @@ export default function ScenarioPage() {
                           {isExpanded && (
                             <div style={{ paddingLeft: 29, marginTop: 5, borderLeft: `2px solid ${isDark ? '#424242' : '#d9d9d9'}`, marginLeft: 14 }}>
                               <div style={{ fontSize: 10, marginBottom: 3, fontWeight: 600 }}>{t('scenario.stepConditionalJump')}:</div>
-                              {steps.length === 0 && <div style={{ fontSize: 11, padding: 3 }}>{t('scenario.stepsLoading')}</div>}
+                              {steps.length === 0 && (
+                                <div style={{ fontSize: 11, padding: 3, color: '#888' }}>
+                                  {loadingStepsNames.has(entry.name) && <Spin size="small" style={{ marginRight: 6 }} />}
+                                  {t('scenario.stepsLoading')}
+                                </div>
+                              )}
                               {steps.map((step: any, si: number) => {
                                 const sid = step.id;
                                 const sj = stepJumps[String(sid)] || { on_pass_goto: null, on_fail_goto: null };
@@ -2730,6 +2817,19 @@ export default function ScenarioPage() {
           <span style={{ color: '#888', fontSize: 11 }}>{t('common.invalidNameHint', { chars: INVALID_NAME_CHARS_DISPLAY })}</span>
           <span style={{ color: '#888', fontSize: 11 }}>{t('scenario.dragHint')}</span>
         </Space>
+        {/* 멤버 시나리오 스텝 일괄 로딩 진행률 — 로드 완료 시 자동 숨김. */}
+        {groupCacheProgress && groupCacheProgress.total > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <LoadingOutlined spin style={{ color: '#1677ff' }} />
+            <span style={{ fontSize: 12, color: '#888', whiteSpace: 'nowrap' }}>
+              {t('scenario.loadingSteps')} {groupCacheProgress.done}/{groupCacheProgress.total}
+            </span>
+            <Progress
+              percent={Math.round((groupCacheProgress.done / groupCacheProgress.total) * 100)}
+              size="small" status="active" style={{ flex: 1, maxWidth: 320 }}
+            />
+          </div>
+        )}
         <Splitter style={{ flex: 1, minHeight: 0 }}>
           <Splitter.Panel defaultSize="22%" min="15%" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', paddingRight: 6 }}>
             {/* ───── 좌측: 그룹 트리 (폴더 지원) ───── */}
@@ -3387,7 +3487,12 @@ export default function ScenarioPage() {
                         {isExpanded && (
                           <div style={{ paddingLeft: 29, marginTop: 5, borderLeft: `2px solid ${isDark ? '#424242' : '#d9d9d9'}`, marginLeft: 14 }}>
                             <div style={{ fontSize: 10, marginBottom: 3, fontWeight: 600 }}>{t('scenario.stepConditionalJump')}:</div>
-                            {steps.length === 0 && <div style={{ fontSize: 11, padding: 3 }}>{t('scenario.stepsLoading')}</div>}
+                            {steps.length === 0 && (
+                              <div style={{ fontSize: 11, padding: 3, color: '#888' }}>
+                                {loadingStepsNames.has(entry.name) && <Spin size="small" style={{ marginRight: 6 }} />}
+                                {t('scenario.stepsLoading')}
+                              </div>
+                            )}
                             {steps.map((step: any, si: number) => {
                               const sid = step.id;
                               const sj = stepJumps[String(sid)] || { on_pass_goto: null, on_fail_goto: null };
