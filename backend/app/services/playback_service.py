@@ -524,8 +524,13 @@ class PlaybackService:
                 # 이 스텝이 trigger한 sync 모드 fail_on_keyword 결과를 인라인 삽입
                 inline_fails = consume_runtime_fails_for(step.id)
                 for f_sr in inline_fails:
+                    # 부모가 조건부이동 '결과 미반영'(분기)이면 그 상세 fail row도 집계에서 제외
+                    if step_result.excluded_from_result:
+                        f_sr.excluded_from_result = True
                     result.step_results.append(f_sr)
-                    if f_sr.status == "fail":
+                    if f_sr.excluded_from_result:
+                        pass  # 분기 상세 — 집계/시나리오 판정에서 제외
+                    elif f_sr.status == "fail":
                         result.failed_steps += 1
                     elif f_sr.status == "pass":
                         result.passed_steps += 1
@@ -638,6 +643,9 @@ class PlaybackService:
                 # (parent_step_id == step.id로 매칭된 항목만)
                 inline_fails = consume_runtime_fails_for(step.id)
                 for f_sr in inline_fails:
+                    # 부모가 조건부이동 '결과 미반영'(분기)이면 그 상세 fail row도 집계에서 제외
+                    if step_result.excluded_from_result:
+                        f_sr.excluded_from_result = True
                     yield f_sr
 
                 # Determine next step based on conditional jump

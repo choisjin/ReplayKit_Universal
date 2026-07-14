@@ -2226,6 +2226,8 @@ async def _run_play_group_job(data: dict):
                     _pending_seq = 0
                     # sub-iteration 종료 시점의 마지막 일반 step 상태 (runtime fail 제외)
                     last_step_status = "pass"
+                    # 직전 일반 step이 조건부이동 '결과 미반영'(분기)이었는지 — 그 상세 fail row도 제외하기 위함
+                    last_step_excluded = False
                     async for item in playback_service.execute_scenario_stream(
                         scen, verify=verify, repeat_index=iteration, start_step=start_step,
                         device_map_override=device_map_override, group_scenario_index=sc_idx + 1,
@@ -2267,6 +2269,14 @@ async def _run_play_group_job(data: dict):
                                 step_result.excluded_from_result = True
                             elif real_status in ("fail", "error") and _sj.get("exclude_fail_from_result"):
                                 step_result.excluded_from_result = True
+                        if is_runtime_fail:
+                            # 부모가 분기(결과 미반영)면 그 상세 fail row도 집계에서 제외.
+                            # (Step 모델 exclude는 playback_service가 이미 마킹, 그룹 step_jumps
+                            #  exclude는 여기서 last_step_excluded로 보강)
+                            if last_step_excluded:
+                                step_result.excluded_from_result = True
+                        else:
+                            last_step_excluded = step_result.excluded_from_result
 
                         if _steps_ndjson is not None:
                             _append_step_ndjson(_steps_ndjson, step_result)
