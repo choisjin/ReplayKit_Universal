@@ -37,6 +37,11 @@ export const deviceApi = {
     api.get('/device/mib-keys', { params: deviceId ? { device_id: deviceId } : {} }),
   updateMibKeys: (deviceId: string, keys: Record<string, { class?: 'short' | 'long'; key?: number; visible?: boolean }>) =>
     api.post('/device/mib-keys', { device_id: deviceId, keys }),
+  // Connect Wide (ADB) 하드키 — 미러 하단 하드키 버튼용
+  listConnectWideKeys: (deviceId?: string) =>
+    api.get('/device/connectwide-keys', { params: deviceId ? { device_id: deviceId } : {} }),
+  updateConnectWideKeys: (deviceId: string, keys: Record<string, { visible?: boolean }>) =>
+    api.post('/device/connectwide-keys', { device_id: deviceId, keys }),
   detectMibResolution: (deviceId: string) =>
     api.post('/device/mib/detect_resolution', { device_id: deviceId }),
   // CANoe_Ctrl 수동 등록 시 채널별 bitrate/data_bitrate 사용 가능 여부 테스트 (listen-only)

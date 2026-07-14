@@ -1428,9 +1428,20 @@ class LinControlService:
         text: str,
         click_first_x: Optional[int] = None,
         click_first_y: Optional[int] = None,
+        press_enter: bool = False,
     ) -> None:
+        # press_enter 가 True 면 텍스트 전송 후 Enter 키까지 눌러줌 (검색창 제출 등).
+        # 분리된 send_key 호출은 사이의 fg 복원으로 포커스가 풀리므로 같은 컨텍스트에 포함.
         self._check()
         ctx = self._save_context()
+
+        def _tap_return() -> None:
+            enter_kc = self._dpy.keysym_to_keycode(XK.XK_Return)
+            if enter_kc:
+                self._xtest_key(enter_kc, True)
+                time.sleep(0.01)
+                self._xtest_key(enter_kc, False)
+
         try:
             self._focus()
             if click_first_x is not None and click_first_y is not None:
@@ -1446,15 +1457,14 @@ class LinControlService:
                 lines = normalized.split("\n")
                 for i, line in enumerate(lines):
                     if i > 0:
-                        enter_kc = self._dpy.keysym_to_keycode(XK.XK_Return)
-                        if enter_kc:
-                            self._xtest_key(enter_kc, True)
-                            time.sleep(0.01)
-                            self._xtest_key(enter_kc, False)
+                        _tap_return()
                         time.sleep(0.05)
                     for ch in line:
                         self._send_char_unicode(ch)
                         time.sleep(0.010)
+            if press_enter:
+                time.sleep(0.05)
+                _tap_return()
             time.sleep(0.10)
         finally:
             self._restore_context(ctx)

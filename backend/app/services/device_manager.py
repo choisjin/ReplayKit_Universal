@@ -1167,6 +1167,11 @@ class DeviceManager:
                         info = await self.adb.get_device_info(d.serial)
                         if not v.name or v.name == v.address:
                             v.name = info.get("model", v.name)
+                        # 수동 설정 정보(연결 시 지정한 모델, 하드키 오버라이드 등)는
+                        # 주기적 refresh 가 덮어쓰지 않도록 보존한다.
+                        for _pk in ("device_model", "connectwide_keys"):
+                            if _pk in (v.info or {}) and _pk not in info:
+                                info[_pk] = v.info[_pk]
                         v.info = info
                     except Exception:
                         pass

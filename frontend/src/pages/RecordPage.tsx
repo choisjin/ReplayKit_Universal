@@ -229,6 +229,16 @@ interface HkmcKeyInfo {
   variant?: 'navi' | 'non_navi' | null;  // 키 스펙 적용 대상 (backend 필터링 기준)
 }
 
+// Connect Wide (ADB) 하드키 — /device/connectwide-keys 응답 항목
+interface ConnectWideKeyInfo {
+  name: string;
+  group: string;
+  label: string;
+  is_dial: boolean;
+  has_hold: boolean;
+  visible: boolean;
+}
+
 // Annotated thumbnail: draws expected image with colored region rectangles
 const AnnotatedThumbnail = React.memo(({ src, regions, color, height = 48 }: {
   src: string;
@@ -599,6 +609,11 @@ export default function RecordPage() {
 
   // HKMC hardware keys
   const [hkmcKeys, setHkmcKeys] = useState<HkmcKeyInfo[]>([]);
+  // Connect Wide (ADB) 하드키 — 미러 하단 버튼용
+  const [cwKeys, setCwKeys] = useState<ConnectWideKeyInfo[]>([]);
+  const [cwKeysModalOpen, setCwKeysModalOpen] = useState(false);
+  const [cwKeysDraft, setCwKeysDraft] = useState<ConnectWideKeyInfo[]>([]);
+  const [cwKeysSaving, setCwKeysSaving] = useState(false);
   // CCRC 명령(0x93) source 토글 — RRC/CCRC rear 그룹 키 발사 시 적용
   // null = Auto (기본): RRC는 CMD_RRC(0x90), CCRC는 정의된 source(보통 BRRC)
   // 0x02=RRC(유선), 0x07=BRRC(Bluetooth) — 명시 선택 시 RRC도 CMD_CCRC(0x93)로 라우팅됨
@@ -978,6 +993,8 @@ export default function RecordPage() {
   // 녹화 중이면 의도치 않은 방향키 스텝이 추가되는 문제가 있었다.
   // 스크린샷은 capture 요청 시 screen_type 을 명시하므로 별도 포커스 조작 불필요.
   const isScreenAdb = screenDevice?.type === 'adb';
+  // Connect Wide 를 ADB 로 연결한 경우 — 미러 하단에 하드키 버튼 노출
+  const isScreenConnectWide = isScreenAdb && screenDevice?.info?.device_model === 'Connect Wide';
   const isScreenBmw = screenDevice?.type === 'bmw_agent';
   // 카메라류(vision_camera/webcam)는 관찰 전용 — 조작(탭/스와이프/키) 금지
   const isScreenReadonly = screenDevice?.type === 'vision_camera' || screenDevice?.type === 'webcam';
@@ -1149,6 +1166,19 @@ export default function RecordPage() {
       }).catch(() => {});
     } else {
       setHkmcKeys([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screenshotDeviceId, primaryDevices]);
+
+  // Connect Wide (ADB) 하드키 목록 조회 — ADB 연결 + 모델이 Connect Wide 인 경우만
+  useEffect(() => {
+    const dev = primaryDevices.find(d => d.id === screenshotDeviceId);
+    if (dev?.type === 'adb' && dev?.info?.device_model === 'Connect Wide') {
+      deviceApi.listConnectWideKeys(dev.id).then(res => {
+        setCwKeys(res.data.keys || []);
+      }).catch(() => setCwKeys([]));
+    } else {
+      setCwKeys([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenshotDeviceId, primaryDevices]);
@@ -5480,7 +5510,7 @@ export default function RecordPage() {
               <>
               <div style={{
                 position: 'relative', display: 'inline-block', maxWidth: '100%',
-                maxHeight: (viewCropEnabled || ((isScreenHkmc || isScreenICAS) && hkmcKeys.length > 0)) ? 'calc(100% - 120px)' : '100%',
+                maxHeight: (viewCropEnabled || ((isScreenHkmc || isScreenICAS) && hkmcKeys.length > 0) || (isScreenConnectWide && cwKeys.length > 0)) ? 'calc(100% - 120px)' : '100%',
               }}>
                 {(() => {
                   // 뷰포트 크롭
@@ -5943,6 +5973,51 @@ export default function RecordPage() {
                           </Button>
                         </div>
                       )}
+                    </div>
+                  );
+                })()}
+                {/* Connect Wide (ADB) 하드키 — 미러 하단 버튼. 클릭 = short(누름+뗌 완결) 주입 */}
+                {isScreenConnectWide && cwKeys.length > 0 && testingStepIndex == null && (() => {
+                  const CW_GROUP_ORDER = ['MKBD', 'MKBD_MCAN', 'CCP', 'CCP_DIAL', 'KNOB', 'KNOB_MCAN', 'SWHL', 'ETC', 'OHCL'];
+                  const visibleKeys = cwKeys.filter(k => k.visible !== false);
+                  const byGroup: Record<string, ConnectWideKeyInfo[]> = {};
+                  visibleKeys.forEach(k => {
+                    const g = k.group || 'OTHER';
+                    (byGroup[g] ??= []).push(k);
+                  });
+                  const groups = [
+                    ...CW_GROUP_ORDER.filter(g => byGroup[g]),
+                    ...Object.keys(byGroup).filter(g => !CW_GROUP_ORDER.includes(g)).sort(),
+                  ];
+                  return (
+                    <div style={{ marginTop: 3, width: '100%' }}>
+                      {groups.map((group) => {
+                        const keys = byGroup[group];
+                        if (!keys || keys.length === 0) return null;
+                        return (
+                          <details key={group} style={{ marginBottom: 2 }}>
+                            <summary style={{ fontSize: 10, color: subTextColor, cursor: 'pointer', userSelect: 'none' }}>
+                              {group} <span style={{ color: '#888' }}>({keys.length})</span>
+                            </summary>
+                            <div style={{ padding: '2px 0 2px 4px' }}>
+                              {keys.map(k => (
+                                <Button key={k.name} size="small"
+                                  style={{ fontSize: 9, padding: '0 6px', height: 22, margin: '0 2px 2px 0', touchAction: 'none' }}
+                                  title={k.name}
+                                  onClick={() => executeAction('connectwide_key', { key_name: k.name, key_action: 'short' }, k.name)}
+                                >{k.label}</Button>
+                              ))}
+                            </div>
+                          </details>
+                        );
+                      })}
+                      <div style={{ marginTop: 5, display: 'flex', gap: 2, alignItems: 'center' }}>
+                        <span style={{ flex: 1 }} />
+                        <Button size="small" icon={<SettingOutlined />} style={{ fontSize: 9, height: 22 }}
+                          onClick={() => { setCwKeysDraft(cwKeys.map(k => ({ ...k }))); setCwKeysModalOpen(true); }}>
+                          {t('record.cwKeyConfig')}
+                        </Button>
+                      </div>
                     </div>
                   );
                 })()}
@@ -7736,6 +7811,77 @@ export default function RecordPage() {
           </div>
         )}
       </Modal>
+      {/* Connect Wide (ADB) 하드키 설정 모달 — 키별 표시 여부(visible) 관리 */}
+      <Modal
+        title={`${t('record.cwKeyConfig')}${screenshotDeviceId ? ` — ${screenshotDeviceId}` : ''}`}
+        open={cwKeysModalOpen}
+        onCancel={() => setCwKeysModalOpen(false)}
+        width={640}
+        confirmLoading={cwKeysSaving}
+        okText={t('common.save')}
+        cancelText={t('common.cancel')}
+        onOk={async () => {
+          if (!screenshotDeviceId) return;
+          setCwKeysSaving(true);
+          try {
+            const payload: Record<string, { visible: boolean }> = {};
+            for (const k of cwKeysDraft) {
+              payload[k.name] = { visible: k.visible !== false };
+            }
+            await deviceApi.updateConnectWideKeys(screenshotDeviceId, payload);
+            const r = await deviceApi.listConnectWideKeys(screenshotDeviceId);
+            setCwKeys(r.data.keys || []);
+            message.success(t('common.saved'));
+            setCwKeysModalOpen(false);
+          } catch (e: any) {
+            const detail = e.response?.data?.detail;
+            message.error(typeof detail === 'string' ? detail : t('record.stepRecordFailed'));
+          } finally {
+            setCwKeysSaving(false);
+          }
+        }}
+      >
+        <div style={{ maxHeight: 460, overflowY: 'auto' }}>
+          {(() => {
+            const CW_GROUP_ORDER = ['MKBD', 'MKBD_MCAN', 'CCP', 'CCP_DIAL', 'KNOB', 'KNOB_MCAN', 'SWHL', 'ETC', 'OHCL'];
+            const byGroup: Record<string, ConnectWideKeyInfo[]> = {};
+            cwKeysDraft.forEach(k => { (byGroup[k.group || 'OTHER'] ??= []).push(k); });
+            const groups = [
+              ...CW_GROUP_ORDER.filter(g => byGroup[g]),
+              ...Object.keys(byGroup).filter(g => !CW_GROUP_ORDER.includes(g)).sort(),
+            ];
+            const setVisible = (name: string, visible: boolean) =>
+              setCwKeysDraft(prev => prev.map(k => k.name === name ? { ...k, visible } : k));
+            const setGroupVisible = (g: string, visible: boolean) =>
+              setCwKeysDraft(prev => prev.map(k => (k.group || 'OTHER') === g ? { ...k, visible } : k));
+            return groups.map(g => {
+              const keys = byGroup[g];
+              const allOn = keys.every(k => k.visible !== false);
+              return (
+                <details key={g} open style={{ marginBottom: 6 }}>
+                  <summary style={{ fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                    {g} <span style={{ color: '#888', fontWeight: 400 }}>({keys.length})</span>
+                    <Button size="small" type="link" style={{ fontSize: 11 }}
+                      onClick={(e) => { e.preventDefault(); setGroupVisible(g, !allOn); }}>
+                      {allOn ? t('record.cwDeselectAll') : t('record.cwSelectAll')}
+                    </Button>
+                  </summary>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '4px 0 4px 8px' }}>
+                    {keys.map(k => (
+                      <Checkbox key={k.name} checked={k.visible !== false}
+                        onChange={(e) => setVisible(k.name, e.target.checked)}
+                        style={{ width: 180, fontSize: 12 }}>
+                        {k.label}
+                      </Checkbox>
+                    ))}
+                  </div>
+                </details>
+              );
+            });
+          })()}
+        </div>
+      </Modal>
+
       {/* 하드키 설정 모달 — HKMC/iSAP 디바이스별 키 값/표시 여부 관리 */}
       <Modal
         title={`키 설정${screenshotDeviceId ? ` — ${screenshotDeviceId}` : ''}`}

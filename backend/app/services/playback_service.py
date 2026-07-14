@@ -1573,6 +1573,9 @@ class PlaybackService:
         elif step.type == StepType.ICAS_LONG_PRESS:
             st = step.screen_type or p.get("screen_type", "")
             return f"icas_long_press ({p.get('x', 0)}, {p.get('y', 0)}) {p.get('duration_ms', 3000)}ms [{st}]"
+        elif step.type == StepType.CONNECTWIDE_KEY:
+            ka = p.get("key_action", "short")
+            return f"connectwide_key {p.get('key_name', '')}" + (f" ({ka})" if ka != "short" else "")
         elif step.type == StepType.ALL_RANDOM:
             rc = int(p.get("repeat_count", 1))
             iv = int(p.get("interval_ms", 0))
@@ -3227,6 +3230,23 @@ class PlaybackService:
                 await svc.async_swipe(params["x1"], params["y1"], params["x2"], params["y2"],
                                       screen_type, int(params.get("duration_ms", 0)),
                                       hold_ms=int(params.get("hold_ms", 0) or 0))
+
+        elif step.type == StepType.CONNECTWIDE_KEY:
+            # Connect Wide (ADB) 하드키 — /dev/vcs_simulator_rx 로 hex 프레임 주입.
+            from . import connectwide_adb_service as cw
+            adb_serial = real_id
+            dev = self.dm.get_device(real_id) if real_id else None
+            if dev:
+                if dev.type != "adb":
+                    raise ValueError(f"connectwide_key requires an ADB device, got {dev.type}")
+                adb_serial = dev.address
+            if not adb_serial:
+                raise ValueError("connectwide_key requires device_id")
+            key_name = params.get("key_name")
+            if not key_name:
+                raise ValueError("connectwide_key requires key_name")
+            await cw.async_send_key(self.adb, adb_serial, key_name,
+                                    params.get("key_action", "short"))
 
         else:
             # ADB actions — real_id를 ADB 시리얼(dev.address)로 변환

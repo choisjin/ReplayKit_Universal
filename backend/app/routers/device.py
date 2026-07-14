@@ -1467,6 +1467,21 @@ async def device_input(req: InputRequest):
                                       hold_ms=int(p.get("hold_ms", 0) or 0))
             return {"result": "ok"}
 
+        # Connect Wide (ADB) 하드키 — /dev/vcs_simulator_rx 로 hex 프레임 주입.
+        # ADB 로 연결된 Connect Wide 디바이스에서 미러 하단 하드키 버튼이 사용한다.
+        if req.action == "connectwide_key" and dev and dev.type == "adb":
+            from ..services import connectwide_adb_service as cw
+            p = req.params
+            key_name = p.get("key_name")
+            if not key_name:
+                raise HTTPException(status_code=400, detail="key_name is required")
+            key_action = p.get("key_action", "short")
+            try:
+                await cw.async_send_key(adb, dev.address, key_name, key_action)
+            except KeyError as ke:
+                raise HTTPException(status_code=400, detail=str(ke))
+            return {"result": "ok"}
+
         # ADB actions — allow even if device is not in managed list (race with refresh)
         if dev and dev.type not in ("adb", None):
             raise HTTPException(status_code=400, detail=f"Action '{req.action}' requires an ADB device")
@@ -2223,6 +2238,57 @@ async def update_mib_keys(req: UpdateMibKeysRequest):
     svc = dm.get_mib_service(req.device_id)
     if svc:
         svc.set_key_overrides(dev.info.get("mib_keys"))
+    dm._save_auxiliary_devices()
+    return {"status": "ok", "device_id": req.device_id, "count": len(clean)}
+
+
+@router.get("/connectwide-keys")
+async def list_connectwide_keys(device_id: Optional[str] = None):
+    """List Connect Wide (ADB) hardware keys (merged with per-device override).
+
+    Connect Wide 를 ADB 로 연결한 경우(type=="adb", model=="Connect Wide") 미러
+    화면 하단에 노출할 하드키 목록을 반환한다. device_id 지정 시 해당 디바이스의
+    info["connectwide_keys"] 오버라이드(현재 visible 만)를 병합한다.
+    """
+    from ..services import connectwide_adb_service as cw
+    overrides: dict[str, dict] = {}
+    if device_id:
+        dev = dm.get_device(device_id)
+        if dev:
+            overrides = dev.info.get("connectwide_keys") or {}
+    return {
+        "keys": cw.list_keys(overrides),
+        "group_order": cw.GROUP_ORDER,
+    }
+
+
+class UpdateConnectWideKeysRequest(BaseModel):
+    device_id: str
+    keys: dict[str, dict]  # name → {visible?}
+
+
+@router.post("/connectwide-keys")
+async def update_connectwide_keys(req: UpdateConnectWideKeysRequest):
+    """Save per-device Connect Wide (ADB) key overrides (visible only)."""
+    from ..services.connectwide_adb_service import CONNECTWIDE_KEYS
+    dev = dm.get_device(req.device_id)
+    if not dev:
+        raise HTTPException(status_code=404, detail=f"Device {req.device_id} not found")
+    if dev.type != "adb":
+        raise HTTPException(status_code=400, detail=f"Device {req.device_id} is not an ADB device")
+    clean: dict[str, dict] = {}
+    for name, ov in (req.keys or {}).items():
+        if name not in CONNECTWIDE_KEYS:
+            continue
+        entry: dict = {}
+        if "visible" in ov and ov["visible"] is not None:
+            entry["visible"] = bool(ov["visible"])
+        if entry:
+            clean[name] = entry
+    if clean:
+        dev.info["connectwide_keys"] = clean
+    else:
+        dev.info.pop("connectwide_keys", None)
     dm._save_auxiliary_devices()
     return {"status": "ok", "device_id": req.device_id, "count": len(clean)}
 

@@ -25,6 +25,7 @@ class StepType(str, Enum):
     ICAS_SWIPE = "icas_swipe"
     ICAS_KEY = "icas_key"
     ICAS_LONG_PRESS = "icas_long_press"
+    CONNECTWIDE_KEY = "connectwide_key"  # Connect Wide(ADB) 하드키 — /dev/vcs_simulator_rx 주입
     MULTI_TOUCH = "multi_touch"  # 멀티핑거 제스처 (핀치, 멀티스와이프)
     REPEAT_TAP = "repeat_tap"    # 같은 위치 연속 터치
     ALL_RANDOM = "all_random"    # 랜덤 스트레스 (HK/SK/DRAG 가중 선택)
