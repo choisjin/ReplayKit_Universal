@@ -1575,6 +1575,8 @@ class PlaybackService:
             return f"icas_long_press ({p.get('x', 0)}, {p.get('y', 0)}) {p.get('duration_ms', 3000)}ms [{st}]"
         elif step.type == StepType.CONNECTWIDE_KEY:
             ka = p.get("key_action", "short")
+            if ka == "hold":
+                return f"connectwide_key {p.get('key_name', '')} (hold {int(p.get('hold_ms', 0) or 0)}ms)"
             return f"connectwide_key {p.get('key_name', '')}" + (f" ({ka})" if ka != "short" else "")
         elif step.type == StepType.ALL_RANDOM:
             rc = int(p.get("repeat_count", 1))
@@ -3246,7 +3248,8 @@ class PlaybackService:
             if not key_name:
                 raise ValueError("connectwide_key requires key_name")
             await cw.async_send_key(self.adb, adb_serial, key_name,
-                                    params.get("key_action", "short"))
+                                    params.get("key_action", "short"),
+                                    hold_ms=int(params.get("hold_ms", 0) or 0))
 
         else:
             # ADB actions — real_id를 ADB 시리얼(dev.address)로 변환

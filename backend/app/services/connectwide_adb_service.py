@@ -18,6 +18,7 @@ IVI 의 VCS 시뮬레이터가 해당 물리 키 이벤트로 해석한다. 이 
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Iterable, Optional
 
@@ -113,14 +114,48 @@ def resolve_frames(key_name: str, action: str = "short") -> "list[str]":
     return list(frames)
 
 
+def _raw_frames(key_name: str, action: str) -> "list[str]":
+    """폴백 없이 해당 액션의 프레임만 반환(없으면 빈 리스트). hold 판단용."""
+    spec = CONNECTWIDE_KEYS.get(key_name)
+    if not spec:
+        raise KeyError(f"Unknown Connect Wide key: {key_name}")
+    return list(spec.get("actions", {}).get(action) or [])
+
+
+def supports_hold(key_name: str) -> bool:
+    """press/release 프레임이 분리돼 있어 롱키(꾹누르기)가 가능한 키인지."""
+    spec = CONNECTWIDE_KEYS.get(key_name) or {}
+    acts = spec.get("actions", {})
+    return bool(acts.get("press") and acts.get("release"))
+
+
 def build_inject_command(key_name: str, action: str = "short") -> str:
     """키 주입에 필요한 `shell "..."` 명령 문자열을 만든다(ADBService 로 전달)."""
     return _shell_arg_for_frames(resolve_frames(key_name, action))
 
 
 async def async_send_key(adb_service, serial: str, key_name: str,
-                         action: str = "short") -> None:
-    """ADBService 로 Connect Wide 하드키 프레임을 디바이스에 주입한다."""
+                         action: str = "short", hold_ms: int = 0) -> None:
+    """ADBService 로 Connect Wide 하드키 프레임을 디바이스에 주입한다.
+
+    action:
+      - "short": 누름+뗌 완결(단발). 대부분의 클릭 동작.
+      - "press"/"release": 개별 단계.
+      - "hold": press 프레임 → hold_ms 대기 → release 프레임(롱키/꾹누르기).
+        press/release 가 분리되지 않은 키(supports_hold=False)면 short 로 폴백.
+    """
+    if action == "hold":
+        press = _raw_frames(key_name, "press")
+        release = _raw_frames(key_name, "release")
+        if press and release:
+            logger.info("[ConnectWide HK] serial=%s key=%s action=hold hold_ms=%d",
+                        serial, key_name, hold_ms)
+            await adb_service.run_shell_command(_shell_arg_for_frames(press), serial=serial)
+            await asyncio.sleep(max(0, hold_ms) / 1000.0)
+            await adb_service.run_shell_command(_shell_arg_for_frames(release), serial=serial)
+            return
+        # 롱키 미지원 키 → short 로 폴백
+        action = "short"
     cmd = build_inject_command(key_name, action)
     logger.info("[ConnectWide HK] serial=%s key=%s action=%s frames=%d",
                 serial, key_name, action, len(resolve_frames(key_name, action)))

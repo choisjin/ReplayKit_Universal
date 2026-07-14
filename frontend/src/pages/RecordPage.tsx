@@ -6001,11 +6001,57 @@ export default function RecordPage() {
                             </summary>
                             <div style={{ padding: '2px 0 2px 4px' }}>
                               {keys.map(k => (
-                                <Button key={k.name} size="small"
-                                  style={{ fontSize: 9, padding: '0 6px', height: 22, margin: '0 2px 2px 0', touchAction: 'none' }}
-                                  title={k.name}
-                                  onClick={() => executeAction('connectwide_key', { key_name: k.name, key_action: 'short' }, k.name)}
-                                >{k.label}</Button>
+                                k.has_hold ? (
+                                  // press/release 분리 키 — 꾹누르기 지원.
+                                  // 2초 미만=short(단발), 2초 이상=hold(press→유지→release).
+                                  <Button key={k.name} size="small"
+                                    className="hk-btn"
+                                    style={{ fontSize: 9, padding: '0 6px', height: 22, margin: '0 2px 2px 0', touchAction: 'none' }}
+                                    title={`${k.name} (길게 누르면 롱키)`}
+                                    onPointerDown={(e) => {
+                                      if (e.button !== 0) return;
+                                      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+                                      hkTimerRef.current.delete(k.name);
+                                      const btn = e.currentTarget;
+                                      btn.classList.remove('long-done');
+                                      btn.classList.add('pressing');
+                                      hkTimerRef.current.set(k.name, { downTs: Date.now() });
+                                    }}
+                                    onPointerUp={(e) => {
+                                      if (e.button !== 0) return;
+                                      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+                                      const entry = hkTimerRef.current.get(k.name);
+                                      if (entry) {
+                                        const held = Date.now() - entry.downTs;
+                                        if (held >= HKMC_LONG_PRESS_MS) {
+                                          executeAction('connectwide_key',
+                                            { key_name: k.name, key_action: 'hold', hold_ms: held },
+                                            `${k.name} (Long ${Math.round(held / 100) / 10}s)`);
+                                        } else {
+                                          executeAction('connectwide_key',
+                                            { key_name: k.name, key_action: 'short' }, k.name);
+                                        }
+                                      }
+                                      hkTimerRef.current.delete(k.name);
+                                      e.currentTarget.classList.remove('pressing', 'long-done');
+                                    }}
+                                    onPointerCancel={(e) => {
+                                      hkTimerRef.current.delete(k.name);
+                                      e.currentTarget.classList.remove('pressing', 'long-done');
+                                    }}
+                                    onContextMenu={(e) => {
+                                      e.preventDefault();
+                                      hkTimerRef.current.delete(k.name);
+                                      e.currentTarget.classList.remove('pressing', 'long-done');
+                                    }}
+                                  ><span>{k.label}</span></Button>
+                                ) : (
+                                  <Button key={k.name} size="small"
+                                    style={{ fontSize: 9, padding: '0 6px', height: 22, margin: '0 2px 2px 0', touchAction: 'none' }}
+                                    title={k.name}
+                                    onClick={() => executeAction('connectwide_key', { key_name: k.name, key_action: 'short' }, k.name)}
+                                  >{k.label}</Button>
+                                )
                               ))}
                             </div>
                           </details>

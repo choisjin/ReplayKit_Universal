@@ -1477,7 +1477,8 @@ async def device_input(req: InputRequest):
                 raise HTTPException(status_code=400, detail="key_name is required")
             key_action = p.get("key_action", "short")
             try:
-                await cw.async_send_key(adb, dev.address, key_name, key_action)
+                await cw.async_send_key(adb, dev.address, key_name, key_action,
+                                        hold_ms=int(p.get("hold_ms", 0) or 0))
             except KeyError as ke:
                 raise HTTPException(status_code=400, detail=str(ke))
             return {"result": "ok"}
