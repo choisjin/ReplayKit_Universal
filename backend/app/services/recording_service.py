@@ -662,7 +662,12 @@ class RecordingService:
 
     def _save_groups(self, groups: dict[str, list[dict]]) -> None:
         SCENARIOS_DIR.mkdir(parents=True, exist_ok=True)
-        GROUPS_FILE.write_text(json.dumps(groups, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 대용량 그룹(수천 멤버)에서 indent=2는 파일 크기·직렬화 비용을 크게 키운다.
+        # groups.json은 기계 관리 파일이므로 compact(구분자 최소)로 저장한다.
+        GROUPS_FILE.write_text(
+            json.dumps(groups, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
 
     def get_groups(self) -> dict[str, list[dict]]:
         return self._load_groups()
@@ -703,16 +708,27 @@ class RecordingService:
         return groups
 
     def add_to_group(self, group_name: str, scenario_name: str) -> dict[str, list[dict]]:
+        # 단건 추가는 배치(1건)로 위임 — 동작 동일.
+        return self.add_batch_to_group(group_name, [scenario_name])
+
+    def add_batch_to_group(self, group_name: str, scenario_names: list[str]) -> dict[str, list[dict]]:
+        """여러 시나리오를 그룹에 한 번에 추가 — load 1회 + save 1회 (O(N)).
+
+        기존 방식(시나리오당 add_to_group 호출)은 매 건마다 groups.json 전체를
+        read+parse+write 해서 N건 추가 시 O(N²)가 되고, 동기 I/O가 이벤트 루프를
+        오래 점유해 /api/health 를 굶겨 프론트가 "서버 연결 중"에 머무른다.
+        배치로 묶어 파일 접근을 1회로 줄인다. 동일 시나리오 중복 추가 허용.
+        """
         groups = self._load_groups()
         if group_name not in groups:
             groups[group_name] = []
-        # 동일 시나리오 중복 추가 허용
-        groups[group_name].append({
-            "name": scenario_name,
-            "on_pass_goto": None,
-            "on_fail_goto": None,
-            "play_count": 1,
-        })
+        for scenario_name in scenario_names:
+            groups[group_name].append({
+                "name": scenario_name,
+                "on_pass_goto": None,
+                "on_fail_goto": None,
+                "play_count": 1,
+            })
         self._save_groups(groups)
         return groups
 

@@ -1348,7 +1348,30 @@ class GroupIndexRequest(BaseModel):
 
 @router.post("/groups/add")
 async def add_to_group(req: GroupScenarioRequest):
-    groups = recording_svc.add_to_group(req.group_name, req.scenario_name)
+    # 동기 파일 I/O를 워커 스레드로 오프로드 — 이벤트 루프(/api/health) 굶김 방지.
+    import asyncio
+    groups = await asyncio.to_thread(
+        recording_svc.add_to_group, req.group_name, req.scenario_name
+    )
+    return {"groups": groups}
+
+
+class GroupScenariosBatchRequest(BaseModel):
+    group_name: str
+    scenario_names: list[str]
+
+
+@router.post("/groups/add-batch")
+async def add_batch_to_group(req: GroupScenariosBatchRequest):
+    """여러 시나리오를 그룹에 한 번에 추가 — load/save 1회(O(N)).
+
+    프론트가 1,000+ 시나리오를 그룹에 넣을 때 건별 /groups/add 를 순차 호출하면
+    O(N²) 파일 재작성 + 이벤트 루프 블로킹으로 "서버 연결 중"에 머문다. 배치로 대체.
+    """
+    import asyncio
+    groups = await asyncio.to_thread(
+        recording_svc.add_batch_to_group, req.group_name, req.scenario_names
+    )
     return {"groups": groups}
 
 

@@ -893,6 +893,17 @@ export default function ScenarioPage() {
     } catch { message.error(t('scenario.groupAddFailed')); }
   };
 
+  // 여러 시나리오를 한 번의 요청으로 그룹에 추가. 1,000+ 대량 드롭 시 건별 순차 호출
+  // (O(N²) 파일 재작성 + 이벤트 루프 블로킹 → "서버 연결 중")을 피한다.
+  const addToGroupBatch = async (gName: string, sNames: string[]) => {
+    if (sNames.length === 0) return;
+    try {
+      const res = await scenarioApi.addToGroupBatch(gName, sNames);
+      setGroups(res.data.groups);
+      fetchScenarioStepsCache(sNames);
+    } catch { message.error(t('scenario.groupAddFailed')); }
+  };
+
   const removeFromGroup = async (gName: string, index: number) => {
     try {
       const res = await scenarioApi.removeFromGroup(gName, index);
@@ -2748,7 +2759,7 @@ export default function ScenarioPage() {
                     try {
                       const raw = e.dataTransfer.getData('application/x-scenario-names');
                       const names: string[] = JSON.parse(raw || '[]');
-                      for (const n of names) await addToGroup(gName, n);
+                      await addToGroupBatch(gName, names);
                       setSelectedGroupForDetail(gName);
                     } catch { /* ignore */ }
                   }}
@@ -3193,7 +3204,7 @@ export default function ScenarioPage() {
                       try {
                         const raw = e.dataTransfer.getData('application/x-scenario-names');
                         const names: string[] = JSON.parse(raw || '[]');
-                        for (const n of names) await addToGroup(gName, n);
+                        await addToGroupBatch(gName, names);
                       } catch { /* ignore */ }
                     }}
                     style={{
@@ -3228,7 +3239,7 @@ export default function ScenarioPage() {
                       try {
                         const raw = e.dataTransfer.getData('application/x-scenario-names');
                         const names: string[] = JSON.parse(raw || '[]');
-                        for (const n of names) await addToGroup(gName, n);
+                        await addToGroupBatch(gName, names);
                       } catch { /* ignore */ }
                     }}
                     style={{

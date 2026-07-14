@@ -207,6 +207,9 @@ export const scenarioApi = {
   deleteGroup: (groupName: string) => api.post('/scenario/groups/delete', { group_name: groupName }),
   addToGroup: (groupName: string, scenarioName: string) =>
     api.post('/scenario/groups/add', { group_name: groupName, scenario_name: scenarioName }),
+  // 여러 시나리오를 한 요청으로 추가 — 1,000+ 대량 추가 시 O(N²)/이벤트 루프 블로킹 방지
+  addToGroupBatch: (groupName: string, scenarioNames: string[]) =>
+    api.post('/scenario/groups/add-batch', { group_name: groupName, scenario_names: scenarioNames }),
   removeFromGroup: (groupName: string, index: number) =>
     api.post('/scenario/groups/remove', { group_name: groupName, index }),
   reorderGroup: (groupName: string, orderedIndices: number[]) =>
