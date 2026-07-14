@@ -318,6 +318,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug("ADB server pre-start: %s", e)
 
+    # 이벤트 루프 스톨 감시 — 동기 작업이 루프를 오래 막으면(=/api/health 굶김,
+    # "서버 연결 중..." 배너의 원인) 그 시점의 메인 스레드 스택을 로그로 덤프한다.
+    try:
+        from .services import loop_watchdog
+        loop_watchdog.start()
+    except Exception as e:
+        logger.debug("loop watchdog start: %s", e)
+
     reconnect_task = asyncio.create_task(_reconnect_loop())
 
     # 자동 백업 스케줄러 — settings.backup_interval_minutes 주기로 전체 스냅샷 저장.
@@ -350,6 +358,11 @@ async def lifespan(app: FastAPI):
 
     yield
     # --- Shutdown ---
+    try:
+        from .services import loop_watchdog
+        loop_watchdog.stop()
+    except Exception:
+        pass
     await monitor_client.stop()
     reconnect_task.cancel()
     backup_task.cancel()

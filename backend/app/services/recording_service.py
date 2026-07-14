@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -270,14 +271,21 @@ class RecordingService:
         self._prune_unused_device_map(scenario)
         SCENARIOS_DIR.mkdir(parents=True, exist_ok=True)
         filepath = SCENARIOS_DIR / f"{scenario.name}.json"
-        data = scenario.model_dump()
-        # 빈 device_map은 직렬화 결과에서 제외 — 사용자가 매핑을 명시적으로 활용할 때만 노출
-        if not data.get("device_map"):
-            data.pop("device_map", None)
-        filepath.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+
+        # model_dump(대형 시나리오는 수천 스텝) + json.dumps + write_text 는 모두 동기
+        # CPU/IO 작업이라 이벤트 루프를 점유한다. 워커 스레드로 오프로드해 /api/health 를
+        # 굶기지 않는다(load_scenario 의 자동 저장 경로 등에서도 루프를 막지 않도록).
+        def _write_sync() -> None:
+            data = scenario.model_dump()
+            # 빈 device_map은 직렬화 결과에서 제외 — 사용자가 매핑을 명시적으로 활용할 때만 노출
+            if not data.get("device_map"):
+                data.pop("device_map", None)
+            filepath.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        await asyncio.to_thread(_write_sync)
         return str(filepath)
 
     @staticmethod
@@ -295,16 +303,28 @@ class RecordingService:
         scenario.device_map = {k: v for k, v in scenario.device_map.items() if k in used}
 
     async def load_scenario(self, name: str) -> Scenario:
-        """Load scenario from JSON file."""
+        """Load scenario from JSON file.
+
+        파일 읽기 + json 파싱 + pydantic 검증 + 이미지 참조 수리(_repair_image_refs 는
+        스텝마다 glob 을 돌 수 있음)는 모두 동기 CPU/IO 작업이라, 대형 시나리오에서는
+        이벤트 루프를 수초간 점유해 /api/health 를 굶긴다(재생 시작 직후 "서버 연결 중..."
+        배너의 원인). 워커 스레드로 오프로드해 루프를 막지 않는다.
+        """
         filepath = SCENARIOS_DIR / f"{name}.json"
         if not filepath.exists():
             raise FileNotFoundError(f"Scenario not found: {name}")
-        data = json.loads(filepath.read_text(encoding="utf-8"))
-        # 레거시 cmd_send / cmd_check → module_command CMD.* 로 자동 마이그레이션
-        migrated = _migrate_legacy_step_types(data)
-        scenario = Scenario(**data)
-        # 이미지 참조 자동 수리: 파일이 없으면 폴더 내에서 같은 step ID 파일 탐색
-        if self._repair_image_refs(name, scenario) or migrated:
+
+        def _load_sync() -> tuple[Scenario, bool]:
+            data = json.loads(filepath.read_text(encoding="utf-8"))
+            # 레거시 cmd_send / cmd_check → module_command CMD.* 로 자동 마이그레이션
+            migrated = _migrate_legacy_step_types(data)
+            scenario = Scenario(**data)
+            # 이미지 참조 자동 수리: 파일이 없으면 폴더 내에서 같은 step ID 파일 탐색
+            changed = self._repair_image_refs(name, scenario)
+            return scenario, (changed or migrated)
+
+        scenario, needs_save = await asyncio.to_thread(_load_sync)
+        if needs_save:
             await self.save_scenario(scenario)
         return scenario
 
