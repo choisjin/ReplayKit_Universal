@@ -131,6 +131,14 @@ MIB_KEYS: dict[str, dict] = {
 }
 
 
+# Y(py) 인코딩은 base-255: y_layer=y2//255 가 param2 하위 2비트에만 들어가고(=최대 3),
+# param3=y2%255. 따라서 인코딩 가능한 최대 y2 = 3*255+254 = 1019.
+# 이보다 크면 y_layer=4(=0b100)가 2비트 필드를 넘쳐 x 비트로 흘러들어가며,
+# 디바이스는 y_layer=0으로 읽어 화면 최상단으로 wrap 된다(예: 1023→화면 top).
+# → _touch_frame 에서 ay 를 반드시 이 값으로 클램프해 하단 탭이 상단으로 튀지 않게 한다.
+_MAX_ENCODABLE_DIGITIZER_Y = 1019
+
+
 def _encode_touch_xy(x: int, y: int, x_mult: int, y_mult: int) -> tuple[int, int, int]:
     """Touch 좌표를 ksend param1/param2/param3 바이트로 인코딩."""
     x2 = int(round(float(x) / max(1, x_mult)))
@@ -1332,9 +1340,10 @@ class MIBAgentService:
         ys = self._touch_y_scale if self._touch_y_scale is not None else 1.0
         dx = int(round(int(x) * xs)) + self._touch_x_offset
         dy = int(round(int(y) * ys)) + self._touch_y_offset
-        # X 클램프 = 화면×scale. Y(py)는 10비트라 1023 초과 시 인코딩 wrap → 하드 캡.
+        # X 클램프 = 화면×scale. Y(py)는 base-255·y_layer 2비트라 1019 초과 시
+        # 인코딩 overflow→화면 top 으로 wrap → _MAX_ENCODABLE_DIGITIZER_Y 로 하드 캡.
         ax = min(max(0, dx), max(1, int(self._res_x * xs)))
-        ay = min(max(0, dy), 1023, max(1, int(self._res_y * ys)))
+        ay = min(max(0, dy), _MAX_ENCODABLE_DIGITIZER_Y, max(1, int(self._res_y * ys)))
         p1, p2, p3 = _encode_touch_xy(ax, ay, 1, 1)
         return (
             f"0x83 0x50 0x20 0x0b 0x00 0x00 0x00 0x00 0x00 0xa0 0x01 0x11 "
@@ -1408,7 +1417,7 @@ class MIBAgentService:
         _xs = self._touch_x_scale if self._touch_x_scale is not None else (1.0 / _mx)
         _ys = self._touch_y_scale if self._touch_y_scale is not None else 1.0
         _ax = min(max(0, int(round(x * _xs)) + self._touch_x_offset), max(1, int(self._res_x * _xs)))
-        _ay = min(max(0, int(round(y * _ys)) + self._touch_y_offset), 1023, max(1, int(self._res_y * _ys)))
+        _ay = min(max(0, int(round(y * _ys)) + self._touch_y_offset), _MAX_ENCODABLE_DIGITIZER_Y, max(1, int(self._res_y * _ys)))
         logger.info(
             "MIB tap MAP: in=(%d,%d) dst=%dx%d mult_x=%d scale=(%.5f,%.5f) "
             "off=(%d,%d) → digitizer=(%d,%d)",
