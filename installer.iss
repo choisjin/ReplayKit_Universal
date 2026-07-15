@@ -8,6 +8,18 @@
 ; dist/ReplayKit path (build_dist.py output)
 #define DistDir "dist\ReplayKit"
 
+; ── site-packages 번들 여부 ──
+; 온라인 배포본: python\Lib\site-packages 를 제외 → 인스톨러 빌드/용량 대폭 감소.
+;   설치 후 setup.bat / ReplayKit.bat 가 requirements.txt 로 인터넷 설치 (lge.auto 는 로컬 .whl).
+; 오프라인 배포본(.offline_mode 마커 존재): 인터넷 설치 불가 → site-packages 를 그대로 번들.
+#if FileExists(SourcePath + DistDir + "\.offline_mode")
+  #define SitePkgExclude ""
+  #pragma message "OFFLINE dist detected — bundling site-packages."
+#else
+  #define SitePkgExclude ",site-packages"
+  #pragma message "ONLINE dist — excluding site-packages (installed from requirements.txt at runtime)."
+#endif
+
 [Setup]
 AppId={{B8F2A3E1-4D5C-4F6A-9E7B-1C2D3E4F5A6B}
 AppName={#MyAppName}
@@ -42,7 +54,7 @@ Name: "vimbax"; Description: "Vimba X SDK (Vision Camera support)"; Types: full
 
 [Files]
 ; Main project files (인스톨러 전용 바이너리 제외)
-Source: "{#DistDir}\*"; DestDir: "{app}"; Excludes: "*.msi,VimbaX_Setup*,python-3.10.4-amd64.exe,Git-*.exe,vcredist_x64.exe,DltViewerSDK_21.1.3_ver"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: main
+Source: "{#DistDir}\*"; DestDir: "{app}"; Excludes: "*.msi,VimbaX_Setup*,python-3.10.4-amd64.exe,Git-*.exe,vcredist_x64.exe,DltViewerSDK_21.1.3_ver{#SitePkgExclude}"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: main
 ; VC++ Runtime (설치 후 삭제)
 Source: "{#DistDir}\vcredist_x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: not IsVCRedistInstalled
 ; Git installer (설치 후 삭제)

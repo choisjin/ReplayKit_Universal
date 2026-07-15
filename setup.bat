@@ -142,9 +142,23 @@ echo       pip ready
 :: -------------------------------------------------------
 :install_packages
 echo [3/5] Installing Python packages...
-:: Embedded Python(python/ 폴더)은 패키지가 이미 포함 — pip install 건너뜀
+:: Embedded Python(python/ 폴더):
+::   - 온라인 인스톨러는 site-packages 를 번들하지 않음 (installer.iss 가 제외).
+::     → requirements.txt 로 인터넷 설치. (lge.auto 는 아래에서 로컬 .whl 로 별도 설치)
+::   - 오프라인 배포본은 site-packages 가 번들돼 있으므로 그대로 사용.
+::   - 개발용으로 미리 채워진 embedded 는 import 통과 → 스킵.
 if exist "python\python.exe" (
-    echo       Embedded Python — pip install 건너뜀 (패키지 내장)
+    if "%OFFLINE_MODE%"=="1" (
+        echo       [OFFLINE] Embedded Python — using bundled packages ^(pip install skipped^)
+    ) else (
+        %PY% -c "import rapidocr_onnxruntime, rapidfuzz" >nul 2>&1
+        if errorlevel 1 (
+            echo       Embedded Python — installing packages from requirements.txt ^(internet^)...
+            %PIP% install -r requirements.txt --no-warn-script-location
+        ) else (
+            echo       Embedded Python — packages already present, skipping
+        )
+    )
 ) else (
     if "%OFFLINE_MODE%"=="1" (
         echo       [OFFLINE] PyPI install skipped - system Python must have packages pre-installed.
