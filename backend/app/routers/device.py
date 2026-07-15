@@ -1670,8 +1670,10 @@ async def update_device(req: UpdateDeviceRequest):
             # 채널을 열 수 있다(reset_instance 단순 pop 은 주기 태스크가 옛 bus 를 붙들어 채널 점유).
             from ..services.module_service import reset_instance, disconnect_instance
             if dev.info.get("connect_type") == "can" and _prev_module:
+                # 블로킹 bus.shutdown → to_thread 오프로드 (이벤트 루프 스톨 방지).
+                import asyncio
                 try:
-                    disconnect_instance(_prev_module)
+                    await asyncio.to_thread(disconnect_instance, _prev_module)
                 except Exception as e:
                     logger.warning("CAN module teardown on module-change failed: %s", e)
             reset_instance(req.module)
@@ -1749,8 +1751,11 @@ async def update_device(req: UpdateDeviceRequest):
                 # 주기 송신·로깅 정지 + bus.shutdown(채널 해제) 후 pop 한다.
                 from ..services.module_service import reset_instance, disconnect_instance
                 if dev.info.get("connect_type") == "can":
+                    # bus.shutdown → PCANBasic.Uninitialize 는 블로킹 DLL 호출이라 이벤트 루프에서
+                    # 직접 부르면 /api/health 를 굶겨("서버 연결 중") loop_watchdog 스톨을 낸다 → to_thread 오프로드.
+                    import asyncio
                     try:
-                        disconnect_instance(module_name)
+                        await asyncio.to_thread(disconnect_instance, module_name)
                     except Exception as e:
                         logger.warning("CAN module teardown on update failed: %s", e)
                 else:
