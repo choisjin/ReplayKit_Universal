@@ -182,11 +182,13 @@ class PCAN:
 
     # ── 송신 ────────────────────────────────────────────────────────────
     def send_can(self, msg_id, data, channel: str = _DEFAULT_CHANNEL,
-                 is_extended: str = "False", is_fd: str = "False"):
+                 is_extended: str = "False", is_fd: str = "False", brs: str = ""):
         """지정 채널로 단발 CAN/CAN FD 프레임 1개 송신.
 
         channel: 대상 채널명 (예: 'PCAN_USBBUS1', 'PCAN_USBBUS2').
         msg_id: 16진수 ID ('0x621' 또는 '621'). data: 공백/콤마 구분 16진수 바이트.
+        brs: FD Bit Rate Switch. 빈값이면 FD 프레임에서 자동 켜짐(참조 pcan_fd_test_sender 와 동일 —
+             500k/2M 자동차 버스는 BRS 프레임을 기대). classic 프레임에서는 항상 꺼짐.
         """
         with self._lock:
             ch = _norm_channel(channel)
@@ -196,11 +198,14 @@ class PCAN:
             try:
                 mid = _parse_msg_id(msg_id)
                 payload = _parse_data(data)
+                fd_flag = _to_bool(is_fd) or self.fd
+                brs_flag = fd_flag if str(brs).strip() == "" else (_to_bool(brs) and fd_flag)
                 msg = can.Message(
                     arbitration_id=mid,
                     data=payload,
                     is_extended_id=_to_bool(is_extended),
-                    is_fd=_to_bool(is_fd) or self.fd,
+                    is_fd=fd_flag,
+                    bitrate_switch=brs_flag,
                 )
                 bus.send(msg)
                 return f"ok: [{ch}] sent 0x{mid:X} [{' '.join(f'{b:02X}' for b in payload)}]"
@@ -209,10 +214,11 @@ class PCAN:
 
     def send_periodic_can(self, msg_id, data, channel: str = _DEFAULT_CHANNEL,
                           period_ms: str = "1000", is_extended: str = "False",
-                          is_fd: str = "False"):
+                          is_fd: str = "False", brs: str = ""):
         """지정 채널에서 주기(cyclic) 송신 시작/갱신. 같은 채널·ID 재호출 시 데이터만 갱신.
 
         stop_all_tx / can_all_stop 로 정지. period_ms: 송신 주기(밀리초).
+        brs: FD Bit Rate Switch (send_can 과 동일 규약 — 빈값이면 FD 프레임에서 자동 켜짐).
         """
         with self._lock:
             ch = _norm_channel(channel)
@@ -226,11 +232,14 @@ class PCAN:
                     period_s = max(1, int(float(str(period_ms).strip() or "1000"))) / 1000.0
                 except ValueError:
                     period_s = 1.0
+                fd_flag = _to_bool(is_fd) or self.fd
+                brs_flag = fd_flag if str(brs).strip() == "" else (_to_bool(brs) and fd_flag)
                 msg = can.Message(
                     arbitration_id=mid,
                     data=payload,
                     is_extended_id=_to_bool(is_extended),
-                    is_fd=_to_bool(is_fd) or self.fd,
+                    is_fd=fd_flag,
+                    bitrate_switch=brs_flag,
                 )
                 key = (ch, mid)
                 existing = self._periodic.get(key)
@@ -346,10 +355,14 @@ class PCAN:
         last_err: Optional[Exception] = None
         for f_clock in (80_000_000, 60_000_000, 40_000_000, 30_000_000, 24_000_000, 20_000_000):
             try:
+                # sample point 은 nominal/data 모두 80% — 참조 pcan_fd_test_sender 의 PEAK 프리셋
+                # (500k: tseg1=63,tseg2=16 / 2M: tseg1=31,tseg2=8) 과 동일한 80% 샘플포인트로,
+                # 자동차 500k/2M 버스 노드들의 표준 샘플포인트와 일치시킨다. (70% 는 off-spec 이라
+                # 데이터 구간 샘플 에러/ACK 누락 위험이 있었다.)
                 timing = BitTimingFd.from_sample_point(
                     f_clock=f_clock,
                     nom_bitrate=self.bitrate, nom_sample_point=80.0,
-                    data_bitrate=self.data_bitrate, data_sample_point=70.0,
+                    data_bitrate=self.data_bitrate, data_sample_point=80.0,
                 )
                 return can.Bus(timing=timing, **common)
             except ValueError as e:
