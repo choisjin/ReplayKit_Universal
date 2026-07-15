@@ -411,6 +411,12 @@ class PCAN:
             nb, nt1, nt2, nsjw = _NOM_PRESETS[self.bitrate]
             db, dt1, dt2, dsjw = _DATA_PRESETS[self.data_bitrate]
             # 참조와 동일한 레거시 kwargs 스타일(f_clock_mhz + nom_*/data_*). PcanBus 가 직접 지원.
+            # 어떤 FD 타이밍으로 열었는지 로그로 남긴다 → 배포된 코드 버전/타이밍을 connect 로그에서 확인.
+            logger.info(
+                "PCAN FD open %s: PEAK-PRESET f_clock=80MHz nom(brp=%d,tseg1=%d,tseg2=%d,sjw=%d) "
+                "data(brp=%d,tseg1=%d,tseg2=%d,sjw=%d) [nom=%d data=%d]",
+                channel, nb, nt1, nt2, nsjw, db, dt1, dt2, dsjw, self.bitrate, self.data_bitrate,
+            )
             return can.Bus(
                 fd=True, f_clock_mhz=80,
                 nom_brp=nb, nom_tseg1=nt1, nom_tseg2=nt2, nom_sjw=nsjw,
@@ -428,6 +434,7 @@ class PCAN:
                     nom_bitrate=self.bitrate, nom_sample_point=80.0,
                     data_bitrate=self.data_bitrate, data_sample_point=80.0,
                 )
+                logger.info("PCAN FD open %s: COMPUTED(from_sample_point) %s", channel, timing)
                 return can.Bus(timing=timing, **common)
             except ValueError as e:
                 last_err = e
