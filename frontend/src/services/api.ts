@@ -52,6 +52,8 @@ export const deviceApi = {
     api.post('/device/scan-can-channel', payload),
   // 장치 관리자의 Vector-Hardware(VN1630A 등) 채널 자동 열거 → 사용자가 선택
   listVectorChannels: () => api.get('/device/vector/channels'),
+  // 연결된 PCAN(PEAK/SysMax 호환) 채널 자동 열거 → PCAN 스텝 channel 드롭다운
+  listPcanChannels: () => api.get('/device/pcan/channels'),
   disconnect: (deviceId: string) => api.post('/device/disconnect', { address: deviceId }),
   updateDevice: (device_id: string, updates: Record<string, any>) =>
     api.post('/device/update', { device_id, ...updates }),

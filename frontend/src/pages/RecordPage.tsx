@@ -113,9 +113,13 @@ const PCAN_BRS_OPTS = [
   { value: 'True', label: 'True (강제 ON)' },
   { value: 'False', label: 'False (강제 OFF)' },
 ];
-function pcanSelectOptions(paramName: string): { value: string; label: string }[] | null {
+function pcanSelectOptions(paramName: string, detectedChannels?: string[]): { value: string; label: string }[] | null {
   switch (paramName) {
-    case 'channel': return PCAN_CHANNEL_OPTS;
+    case 'channel':
+      // 드라이버로 실제 감지된 채널이 있으면 그것을(CANoe 처럼), 없으면 정적 USBBUS1..8 폴백.
+      return (detectedChannels && detectedChannels.length > 0)
+        ? detectedChannels.map(ch => ({ value: ch, label: ch }))
+        : PCAN_CHANNEL_OPTS;
     case 'is_extended':
     case 'is_fd': return PCAN_BOOL_OPTS;
     case 'brs': return PCAN_BRS_OPTS;
@@ -630,6 +634,10 @@ export default function RecordPage() {
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
   const [moduleFunctions, setModuleFunctions] = useState<{ name: string; description?: string; params: { name: string; required: boolean; default?: string; description?: string }[] }[]>([]);
   const [selectedModuleFunc, setSelectedModuleFunc] = useState('');
+  // PCAN 스텝 channel 드롭다운용 — 드라이버로 실제 감지된 채널명(예: 'PCAN_USBBUS1').
+  // CANoe 처럼 등록 시점 스캔값을 쓰되, PCAN 은 device_info 에 저장하지 않으므로 스텝 편집기에서
+  // 실시간으로 /device/pcan/channels 를 조회한다. 비면 정적 USBBUS1..8 폴백.
+  const [pcanChannels, setPcanChannels] = useState<string[]>([]);
   const [moduleFuncArgs, setModuleFuncArgs] = useState<Record<string, string>>({});
   const [moduleDescription, setModuleDescription] = useState('');
   const [dltBackground, setDltBackground] = useState(false);
@@ -1099,6 +1107,19 @@ export default function RecordPage() {
       setModuleFuncArgs({});
     }).catch(() => { setModuleFunctions([]); setModuleDescription(''); });
   }, [selectedModuleName]);
+
+  // PCAN 채널 자동 열거 — 스텝 추가(selectedModuleName) 또는 편집(editStepParams.module)이
+  // PCAN 일 때 드라이버에서 실제 감지된 채널을 가져와 channel 드롭다운을 채운다.
+  useEffect(() => {
+    const isPcanContext = selectedModuleName === 'PCAN' || editStepParams?.module === 'PCAN';
+    if (!isPcanContext) return;
+    deviceApi.listPcanChannels().then(res => {
+      const chs = (res.data?.channels || [])
+        .map((c: any) => String(c.channel || '').trim())
+        .filter(Boolean);
+      setPcanChannels(chs);
+    }).catch(() => { /* 스캔 실패 시 정적 폴백 유지 */ });
+  }, [selectedModuleName, editStepParams?.module]);
 
   // Random stress 설정 저장 여부 추적 (디바이스 전환 중 초기 로드와 auto-save 충돌 방지)
   const randCfgLoadedRef = useRef(false);
@@ -6616,8 +6637,8 @@ export default function RecordPage() {
                               && (selectedModuleFunc === 'canoe_send_message' || selectedModuleFunc === 'canoe_send_msg_all_stop')
                               && p.name === 'bus_channel')
                               ? canoeChannelOptions((selectedDevice?.info as any)?.device_info) : null;
-                            // PCAN: channel/is_extended/is_fd/brs → 드롭다운
-                            const pcanOpts = selectedModuleName === 'PCAN' ? pcanSelectOptions(p.name) : null;
+                            // PCAN: channel/is_extended/is_fd/brs → 드롭다운 (channel 은 감지된 채널 사용)
+                            const pcanOpts = selectedModuleName === 'PCAN' ? pcanSelectOptions(p.name, pcanChannels) : null;
                             const selectOpts = canPanelOpts || canoeChOpts || pcanOpts;
                             // Frame_Check.Frame_Measure: mode → 콤보박스,
                             // start_image/start_threshold 는 mode='image' 일 때만 표시 (웹캠 크롭 버튼으로 설정).
@@ -7494,8 +7515,8 @@ export default function RecordPage() {
                           (args.mode || 'function') !== 'image') return null;
                       if (isCanPanelEdit && CAN_PANEL_HIDDEN_PARAMS.includes(k)) return null;
                       if (isAndroidSerialHidden) return null;
-                      // PCAN: channel/is_extended/is_fd/brs → 드롭다운
-                      const pcanOptsEdit = editStepParams.module === 'PCAN' ? pcanSelectOptions(k) : null;
+                      // PCAN: channel/is_extended/is_fd/brs → 드롭다운 (channel 은 감지된 채널 사용)
+                      const pcanOptsEdit = editStepParams.module === 'PCAN' ? pcanSelectOptions(k, pcanChannels) : null;
                       const selectOptions = woohyunOptions || canPanelOptionsEdit || frameCheckModeOptions || canoeChOptsEdit || pcanOptsEdit;
                       return (
                         <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
