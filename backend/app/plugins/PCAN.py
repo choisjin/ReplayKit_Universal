@@ -133,6 +133,7 @@ class PCAN:
         self._log_listener: Optional[_CsvCanListener] = None
         self._log_path: Optional[str] = None
         self._periodic: dict[tuple, object] = {}      # (channel, arbitration_id) -> CyclicSendTask
+        self._last_tx_error: Optional[str] = None     # 마지막 주기 송신 스레드 에러 (check_status 진단용)
         self._lock = threading.RLock()
 
     # ── 연결 수명주기 (스텝 UI 에서는 숨김) ─────────────────────────────
@@ -241,12 +242,18 @@ class PCAN:
                     is_fd=fd_flag,
                     bitrate_switch=brs_flag,
                 )
+                # ① 즉시 1회 동기 전송으로 전송 가능 여부를 검증한다(참조 pcan_fd_test_sender 와 동일).
+                #    버스 문제(채널 점유·비트레이트/FD 불일치·버스오프·큐풀)면 여기서 예외 → FAIL 로 노출.
+                #    이전 구조는 주기 태스크만 만들고 "ok" 를 즉시 반환했는데, 스레드가 첫 send 에서
+                #    죽어도(on_error 부재) 스텝은 PASS 로 보였다 → 송신 안 되고 로그 빔 증상의 원인.
+                bus.send(msg)
                 key = (ch, mid)
                 existing = self._periodic.get(key)
                 if existing is not None:
                     existing.modify_data(msg)
                     return f"ok: [{ch}] periodic 0x{mid:X} updated (period={period_s * 1000:.0f}ms)"
-                task = bus.send_periodic(msg, period_s)
+                # ② 일시적 실패에도 죽지 않는 주기 태스크(웨이크업은 ECU 가 깰 때까지 계속 송신).
+                task = self._start_resilient_periodic(bus, msg, period_s)
                 self._periodic[key] = task
                 return f"ok: [{ch}] periodic 0x{mid:X} started (period={period_s * 1000:.0f}ms)"
             except Exception as e:
@@ -324,6 +331,8 @@ class PCAN:
             parts.append(f"fd={self.fd}")
             parts.append(f"opened={', '.join(self._buses)}")
             parts.append(f"periodic={len(self._periodic)}")
+            if self._last_tx_error:
+                parts.append(f"last_tx_error={self._last_tx_error}")
             return "ok: " + " ".join(str(p) for p in parts)
 
     def can_all_stop(self):
@@ -336,6 +345,39 @@ class PCAN:
             return "ok: all tx + logging stopped"
 
     # ── 내부 ───────────────────────────────────────────────────────────
+    def _on_periodic_error(self, exc) -> bool:
+        """주기 송신 스레드에서 send 예외 발생 시 콜백. True 반환 = 태스크 유지.
+
+        웨이크업 시퀀스는 대상 ECU 가 깰 때까지 계속 프레임을 보내야 하므로, 일시적 전송
+        실패(초기 미ACK 등)로 태스크를 죽이지 않는다(참조 sender 가 예외를 잡고 루프를
+        계속하는 것과 동일). 마지막 에러는 기록해 check_status 로 진단한다.
+        """
+        self._last_tx_error = str(exc)
+        logger.warning("PCAN periodic send error (task kept alive): %s", exc)
+        return True
+
+    def _start_resilient_periodic(self, bus, msg, period_s):
+        """on_error 로 태스크가 죽지 않는 주기 송신을 시작한다.
+
+        bus.send_periodic() 은 on_error 를 노출하지 않으므로 ThreadBasedCyclicSendTask 를
+        직접 구성한다. python-can 버전차로 실패하면 표준 send_periodic 으로 폴백.
+        """
+        try:
+            from can.broadcastmanager import ThreadBasedCyclicSendTask
+            lock = getattr(bus, "_lock_send_periodic", None)
+            if lock is None:
+                lock = threading.Lock()
+                try:
+                    bus._lock_send_periodic = lock
+                except Exception:
+                    pass
+            return ThreadBasedCyclicSendTask(
+                bus, lock, msg, period_s, on_error=self._on_periodic_error,
+            )
+        except Exception as e:
+            logger.warning("PCAN resilient periodic unavailable (%s) — falling back", e)
+            return bus.send_periodic(msg, period_s)
+
     def _open_bus(self, channel: str):
         # receive_own_messages=True: 우리가 보낸 TX 프레임도 수신 루프백으로 돌아온다 →
         # start_logging CSV 에 Tx 로 찍혀 "실제로 송신됐는지" 눈으로 확인 가능 (진단 목적).
