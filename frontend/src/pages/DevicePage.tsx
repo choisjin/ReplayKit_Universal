@@ -252,7 +252,57 @@ export default function DevicePage() {
   };
 
   // 개별 연결
+  // 저장된 dev.info(해상도 + 터치 스케일)로 현재 프로파일을 추정해 드롭다운 기본값으로.
+  const inferMibProfileKey = (dev: any): string => {
+    const info = dev?.info || {};
+    const res = info.resolution
+      ? `${info.resolution.width}x${info.resolution.height}`
+      : (info.resolution_str || '');
+    const txs = info.touch_x_scale ?? null;
+    const tys = info.touch_y_scale ?? null;
+    // 스케일까지 저장돼 있으면 정확 매칭 우선(같은 해상도의 12.9"/13.1" 구분).
+    const exact = MIB_PANEL_PROFILES.find(p => p.resolution === res && p.txs === txs && p.tys === tys);
+    if (exact) return exact.key;
+    const byRes = MIB_PANEL_PROFILES.find(p => p.resolution === res);
+    return byRes ? byRes.key : '12.9';
+  };
+
   const handleConnectOne = async (deviceId: string) => {
+    const dev = allDevices.find(d => d.id === deviceId);
+    // MIB 주디바이스는 연결 전에 패널 프로파일을 선택한다(해상도 같아도 터치 보정이 다름).
+    if (dev?.type === 'mib_agent') {
+      setMibConnectId(deviceId);
+      setMibConnectProfile(inferMibProfileKey(dev));
+      setMibConnectOpen(true);
+      return;
+    }
+    await doConnectOne(deviceId);
+  };
+
+  // 선택한 프로파일의 해상도 + 터치 보정을 적용(persist)한 뒤 연결.
+  const handleMibConnectConfirm = async () => {
+    const deviceId = mibConnectId;
+    const prof = MIB_PANEL_PROFILES.find(p => p.key === mibConnectProfile);
+    setMibConnectOpen(false);
+    if (!deviceId || !prof) return;
+    setConnectingIds(prev => new Set(prev).add(deviceId));
+    try {
+      await deviceApi.updateDevice(deviceId, {
+        extra_fields: {
+          resolution: prof.resolution,
+          touch_x_scale: prof.txs,   // null → 백엔드 해상도 공식 기본값 사용
+          touch_y_scale: prof.tys,
+        },
+      });
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || t('device.connectFailed'));
+      setConnectingIds(prev => { const n = new Set(prev); n.delete(deviceId); return n; });
+      return;
+    }
+    await doConnectOne(deviceId);
+  };
+
+  const doConnectOne = async (deviceId: string) => {
     setConnectingIds(prev => new Set(prev).add(deviceId));
     // SCAR/TH 는 최초 연결 시 컨테이너·CVD 기동으로 분 단위가 걸린다 — 무응답으로
     // 오인해 재클릭(중복 Setup)하지 않도록 진행 중 안내를 띄운다.
@@ -364,6 +414,24 @@ export default function DevicePage() {
   ];
   const MIB_DEFAULT_RESOLUTION = '1560x700';
   const [mibResolution, setMibResolution] = useState<string>(MIB_DEFAULT_RESOLUTION);
+  // MIB 패널 프로파일 — 해상도가 같아도 터치 디지타이저 보정이 다르다.
+  // 예: 12.9"와 13.1"는 둘 다 1920x1080 이지만 12.9"는 Y÷2(대칭), 13.1"는 Y×1(비대칭).
+  // 연결 시 프로파일을 골라 resolution + touch_x_scale/touch_y_scale 를 함께 적용한다.
+  // txs/tys = null 이면 백엔드 해상도 공식 기본값 사용(미측정 패널). 실측된 패널만 명시.
+  const MIB_PANEL_PROFILES: { key: string; label: string; resolution: string; txs: number | null; tys: number | null }[] = [
+    { key: '10.0',    label: '10.0" — 1560x700',               resolution: '1560x700',  txs: null, tys: null },
+    { key: '10.4',    label: '10.4" — 1560x878',               resolution: '1560x878',  txs: null, tys: null },
+    { key: '12.9',    label: '12.9" — 1920x1080 (대칭, Y÷2)',  resolution: '1920x1080', txs: 0.5,  tys: 0.5  },
+    { key: '13.1-sk', label: '13.1" — 1920x1080 (SK, Y×1)',    resolution: '1920x1080', txs: 0.5,  tys: 1.0  },
+    { key: '15.0',    label: '15.0" — 2240x1260',              resolution: '2240x1260', txs: null, tys: null },
+    { key: '8.0',     label: '8.0" — 800x480 (mqb)',           resolution: '800x480',   txs: null, tys: null },
+    { key: '9.2',     label: '9.2" — 1280x640 (mqb)',          resolution: '1280x640',  txs: null, tys: null },
+    { key: '14.6',    label: '14.6" — 1080x1920 (Ford)',       resolution: '1080x1920', txs: null, tys: null },
+  ];
+  // 연결 시 패널 프로파일 선택 모달 상태 (mib_agent 전용).
+  const [mibConnectOpen, setMibConnectOpen] = useState(false);
+  const [mibConnectId, setMibConnectId] = useState<string>('');
+  const [mibConnectProfile, setMibConnectProfile] = useState<string>('12.9');
   const [connectAddress, setConnectAddress] = useState('');
   const [baudrate, setBaudrate] = useState(115200);
   const [connecting, setConnecting] = useState(false);
@@ -3476,6 +3544,39 @@ export default function DevicePage() {
             <Input addonBefore={t('device.visionGateway')} value={forceIpGateway} onChange={e => setForceIpGateway(e.target.value)} />
           </Space>
         )}
+      </Modal>
+      {/* MIB 연결 시 패널 프로파일(해상도+터치보정) 선택 모달 */}
+      <Modal
+        title="MIB 패널 선택"
+        open={mibConnectOpen}
+        onCancel={() => setMibConnectOpen(false)}
+        onOk={handleMibConnectConfirm}
+        okText={t('device.connectOne')}
+        width={460}
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <div style={{ fontSize: 12, color: '#888' }}>
+            해상도가 같아도 패널마다 터치 보정이 다릅니다. 연결할 패널을 선택하세요.
+          </div>
+          <Select
+            style={{ width: '100%' }}
+            value={mibConnectProfile}
+            onChange={setMibConnectProfile}
+          >
+            {MIB_PANEL_PROFILES.map(p => (
+              <Option key={p.key} value={p.key}>{p.label}</Option>
+            ))}
+          </Select>
+          {(() => {
+            const p = MIB_PANEL_PROFILES.find(x => x.key === mibConnectProfile);
+            if (!p) return null;
+            return (
+              <div style={{ fontSize: 11, color: '#aaa' }}>
+                해상도 {p.resolution} · 터치 스케일 X={p.txs ?? '자동'} / Y={p.tys ?? '자동'}
+              </div>
+            );
+          })()}
+        </Space>
       </Modal>
       {/* 스캔 설정 모달 */}
       <Modal
