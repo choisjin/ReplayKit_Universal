@@ -1666,7 +1666,14 @@ async def update_device(req: UpdateDeviceRequest):
                 except Exception as e:
                     logger.warning("prev serial module teardown failed: %s", e)
         else:
-            from ..services.module_service import reset_instance
+            # CAN 모듈(connect_type="can")은 옛 채널/주기 태스크를 gracefully 해제해야 새 모듈이
+            # 채널을 열 수 있다(reset_instance 단순 pop 은 주기 태스크가 옛 bus 를 붙들어 채널 점유).
+            from ..services.module_service import reset_instance, disconnect_instance
+            if dev.info.get("connect_type") == "can" and _prev_module:
+                try:
+                    disconnect_instance(_prev_module)
+                except Exception as e:
+                    logger.warning("CAN module teardown on module-change failed: %s", e)
             reset_instance(req.module)
     if req.connect_type is not None:
         dev.info["connect_type"] = req.connect_type
@@ -1735,8 +1742,19 @@ async def update_device(req: UpdateDeviceRequest):
             if dev.type == "serial":
                 need_serial_reconnect = True
             else:
-                from ..services.module_service import reset_instance
-                reset_instance(module_name)
+                # CAN 모듈(connect_type="can")은 설정(bitrate/fd/data_bitrate)이 바뀌면 옛 bus 를
+                # gracefully 해제해야 반영된다. reset_instance(단순 pop)는 주기 태스크 스레드가 옛
+                # bus 를 붙들어 채널이 점유된 채 남고 옛 설정(예: classic)이 그대로 살아, FD 재등록이
+                # 재시작 전까지 반영되지 않는 버그가 있었다. disconnect_instance 는 Disconnect()로
+                # 주기 송신·로깅 정지 + bus.shutdown(채널 해제) 후 pop 한다.
+                from ..services.module_service import reset_instance, disconnect_instance
+                if dev.info.get("connect_type") == "can":
+                    try:
+                        disconnect_instance(module_name)
+                    except Exception as e:
+                        logger.warning("CAN module teardown on update failed: %s", e)
+                else:
+                    reset_instance(module_name)
 
     # Persist changes — auxiliary는 항상, primary 중 mib_agent는 해상도/터치보정 변경 시 저장.
     # 터치 스케일/오프셋은 라이브 반영만 하고 저장하지 않으면 백엔드 재시작 시 유실된다.

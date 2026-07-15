@@ -389,18 +389,40 @@ class PCAN:
         if not self.fd:
             return can.Bus(bitrate=self.bitrate, **common)
 
-        # CAN FD: python-can PCAN 은 단순 fd=True 로는 부족하고 f_clock + nominal/data 세그먼트
-        # 타이밍이 필요하다. BitTimingFd 로 (nominal=self.bitrate, data=self.data_bitrate) 을
-        # 계산하되, 요청 조합에 맞는 유효 PCAN FD 클럭을 높은 것부터 자동 선택한다
-        # (예: 12M data 는 80MHz 로 불가 → 60MHz 로 성공).
+        # CAN FD: 참조 pcan_fd_test_sender.py 의 PEAK 권장 프리셋을 그대로 사용한다.
+        # (같은 벤치에서 CANAT FD 및 참조 sender 로 검증된 값 — from_sample_point 계산은
+        #  data 구간 DBRP 가 달라져(예: 2M 을 brp=2 로) 데이터 구간 동기가 어긋날 수 있어 폐기.)
+        # f_clock 80MHz 기준. 표에 없는 조합만 from_sample_point 로 폴백.
+        _NOM_PRESETS = {   # nom_bitrate: (nom_brp, nom_tseg1, nom_tseg2, nom_sjw)
+            1000000: (2, 31, 8, 8),
+            500000:  (2, 63, 16, 16),
+            250000:  (4, 63, 16, 16),
+            125000:  (8, 63, 16, 16),
+        }
+        _DATA_PRESETS = {  # data_bitrate: (data_brp, data_tseg1, data_tseg2, data_sjw)
+            12000000: (1, 4, 2, 2),
+            8000000:  (1, 7, 2, 2),
+            5000000:  (1, 12, 3, 3),
+            4000000:  (1, 15, 4, 4),
+            2000000:  (1, 31, 8, 8),
+            1000000:  (2, 31, 8, 8),
+        }
+        if self.bitrate in _NOM_PRESETS and self.data_bitrate in _DATA_PRESETS:
+            nb, nt1, nt2, nsjw = _NOM_PRESETS[self.bitrate]
+            db, dt1, dt2, dsjw = _DATA_PRESETS[self.data_bitrate]
+            # 참조와 동일한 레거시 kwargs 스타일(f_clock_mhz + nom_*/data_*). PcanBus 가 직접 지원.
+            return can.Bus(
+                fd=True, f_clock_mhz=80,
+                nom_brp=nb, nom_tseg1=nt1, nom_tseg2=nt2, nom_sjw=nsjw,
+                data_brp=db, data_tseg1=dt1, data_tseg2=dt2, data_sjw=dsjw,
+                **common,
+            )
+
+        # 폴백: 프리셋에 없는 조합 → 계산(80% 샘플포인트), 유효 클럭 높은 것부터.
         from can import BitTimingFd
         last_err: Optional[Exception] = None
         for f_clock in (80_000_000, 60_000_000, 40_000_000, 30_000_000, 24_000_000, 20_000_000):
             try:
-                # sample point 은 nominal/data 모두 80% — 참조 pcan_fd_test_sender 의 PEAK 프리셋
-                # (500k: tseg1=63,tseg2=16 / 2M: tseg1=31,tseg2=8) 과 동일한 80% 샘플포인트로,
-                # 자동차 500k/2M 버스 노드들의 표준 샘플포인트와 일치시킨다. (70% 는 off-spec 이라
-                # 데이터 구간 샘플 에러/ACK 누락 위험이 있었다.)
                 timing = BitTimingFd.from_sample_point(
                     f_clock=f_clock,
                     nom_bitrate=self.bitrate, nom_sample_point=80.0,
