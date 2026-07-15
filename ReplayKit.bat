@@ -15,18 +15,6 @@ set "PATH=C:\Program Files\Git\cmd;C:\Program Files (x86)\Git\cmd;%PATH%"
 REM Stop existing server BEFORE git pull / pip install - required to release .pyd locks
 call :stop_existing_server
 
-REM ============================================================
-REM  Offline mode detection
-REM  - .offline_mode 파일이 있으면 모든 네트워크 액세스 시도 스킵
-REM    (git pull, pip install, paddlepaddle/OCR 모델 다운로드)
-REM  - build_dist.py --offline 로 빌드한 배포본이 이 파일을 동봉함
-REM ============================================================
-set "OFFLINE_MODE=0"
-if exist ".offline_mode" (
-    set "OFFLINE_MODE=1"
-    echo [OFFLINE] .offline_mode detected - network access disabled.
-)
-
 REM --home option: use git_remote_home.txt instead of git_remote.txt
 set "GIT_REMOTE_FILE=git_remote.txt"
 if "%~1"=="--home" (
@@ -41,11 +29,7 @@ if "%~1"=="--home" (
 REM Canonical remote URL - auto-correct if origin differs
 set "CANONICAL_REMOTE=http://mod.lge.com/hub/dqa_replay_kit/replay_kit.git"
 
-REM Git init or update (오프라인 모드에선 통째로 스킵)
-if "%OFFLINE_MODE%"=="1" (
-    echo [GIT] Skipped ^(offline mode^).
-    goto :after_git
-)
+REM Git init or update
 if not exist ".git" (
     if exist "%GIT_REMOTE_FILE%" (
         where git.exe >nul 2>nul
@@ -104,20 +88,10 @@ goto :eof
 
 REM Auto dependency update - pip install only when requirements.txt changed
 REM Uses .req_hash pattern same as build_dist.py (python\.req_hash)
-REM 오프라인 모드: dist에 포함된 site-packages를 신뢰하고 pip install 시도 안 함
-if "%OFFLINE_MODE%"=="1" (
-    echo [DEPS] Skipped ^(offline mode^).
-) else (
-    if exist "python\python.exe" if exist "requirements.txt" call :update_deps
-)
+if exist "python\python.exe" if exist "requirements.txt" call :update_deps
 
 REM Auto OCR multilingual model install (first boot only)
-REM 오프라인 모드: dist에 OCR 모델이 동봉되어 있어야 함 (build_dist.py --offline 검증)
-if "%OFFLINE_MODE%"=="1" (
-    echo [OCR] Skipped ^(offline mode - models must be bundled in dist^).
-) else (
-    if exist "python\python.exe" if exist "scripts\download_ocr_models.py" call :update_ocr_models
-)
+if exist "python\python.exe" if exist "scripts\download_ocr_models.py" call :update_ocr_models
 
 goto :start_server
 

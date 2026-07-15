@@ -13,13 +13,6 @@ if [ -f "frontend/dist/index.html" ] && [ ! -f "frontend/package.json" ]; then
     PRODUCTION=1
 fi
 
-# Offline 모드
-OFFLINE_MODE=0
-if [ -f ".offline_mode" ]; then
-    OFFLINE_MODE=1
-    echo "      [OFFLINE] .offline_mode detected - skipping network operations."
-fi
-
 # -------------------------------------------------------
 # [1/5] Python (embedded > venv > system 우선순위)
 # -------------------------------------------------------
@@ -89,19 +82,15 @@ esac
 # [3/5] Python packages
 # -------------------------------------------------------
 echo "[3/5] Installing Python packages..."
-if [ "$OFFLINE_MODE" = "1" ]; then
-    echo "      [OFFLINE] PyPI install skipped."
-else
-    "$PY" -m pip install --upgrade pip -q
-    # 이전 install 의 stale lge.auto 가 numpy (<1.25) 를 pin 해서 requirements.txt
-    # 의 numpy==2.2.6 (opencv-python 요구) 으로 못 올라가는 케이스 방지.
-    # pip uninstall + 파일시스템 강제 제거 — pip 가 못 잡는 잔재까지 정리.
-    SITE_PACKAGES=$("$PY" -c "import site; print(site.getsitepackages()[0])")
-    "$PY" -m pip uninstall -y lge.auto lge-auto || true
-    rm -rf "$SITE_PACKAGES/lge" "$SITE_PACKAGES"/lge.auto-*.dist-info "$SITE_PACKAGES"/lge_auto-*.dist-info 2>/dev/null || true
-    # --upgrade-strategy eager — dirty env 의 stale numpy 등을 강제 갱신.
-    "$PY" -m pip install -r requirements.txt --upgrade --upgrade-strategy eager -q
-fi
+"$PY" -m pip install --upgrade pip -q
+# 이전 install 의 stale lge.auto 가 numpy (<1.25) 를 pin 해서 requirements.txt
+# 의 numpy==2.2.6 (opencv-python 요구) 으로 못 올라가는 케이스 방지.
+# pip uninstall + 파일시스템 강제 제거 — pip 가 못 잡는 잔재까지 정리.
+SITE_PACKAGES=$("$PY" -c "import site; print(site.getsitepackages()[0])")
+"$PY" -m pip uninstall -y lge.auto lge-auto || true
+rm -rf "$SITE_PACKAGES/lge" "$SITE_PACKAGES"/lge.auto-*.dist-info "$SITE_PACKAGES"/lge_auto-*.dist-info 2>/dev/null || true
+# --upgrade-strategy eager — dirty env 의 stale numpy 등을 강제 갱신.
+"$PY" -m pip install -r requirements.txt --upgrade --upgrade-strategy eager -q
 
 # lge.auto 로컬 wheel (Linux 휠만 — win_amd64 휠이 함께 있어도 거름).
 # 아키텍처별 wheel 파일명: lge.auto-<ver>-cp310-cp310-linux_x86_64.whl 또는 linux_aarch64.
@@ -153,8 +142,6 @@ fi
 # -------------------------------------------------------
 if [ "$PRODUCTION" = "1" ]; then
     echo "[5/5] Production mode - skipping Node.js"
-elif [ "$OFFLINE_MODE" = "1" ]; then
-    echo "[5/5] Offline mode - skipping npm install"
 elif ! command -v npm >/dev/null 2>&1; then
     echo "[5/5] Node.js not found - install with: sudo apt install nodejs npm"
 else

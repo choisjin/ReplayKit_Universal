@@ -13,13 +13,6 @@ if exist "frontend\dist\index.html" (
     if not exist "frontend\package.json" set "PRODUCTION=1"
 )
 
-:: Offline mode detection - .offline_mode 파일이 있으면 PyPI / npm 등 외부 액세스 차단
-set "OFFLINE_MODE=0"
-if exist ".offline_mode" (
-    set "OFFLINE_MODE=1"
-    echo       [OFFLINE] .offline_mode detected - skipping network operations.
-)
-
 :: -------------------------------------------------------
 :: [1/5] Python setup
 :: -------------------------------------------------------
@@ -143,31 +136,22 @@ echo       pip ready
 :install_packages
 echo [3/5] Installing Python packages...
 :: Embedded Python(python/ 폴더):
-::   - 온라인 인스톨러는 site-packages 를 번들하지 않음 (installer.iss 가 제외).
+::   - 인스톨러는 site-packages 를 번들하지 않음 (installer.iss 가 제외).
 ::     → requirements.txt 로 인터넷 설치. (lge.auto 는 아래에서 로컬 .whl 로 별도 설치)
-::   - 오프라인 배포본은 site-packages 가 번들돼 있으므로 그대로 사용.
 ::   - 개발용으로 미리 채워진 embedded 는 import 통과 → 스킵.
 if exist "python\python.exe" (
-    if "%OFFLINE_MODE%"=="1" (
-        echo       [OFFLINE] Embedded Python — using bundled packages ^(pip install skipped^)
+    %PY% -c "import rapidocr_onnxruntime, rapidfuzz" >nul 2>&1
+    if errorlevel 1 (
+        echo       Embedded Python — installing packages from requirements.txt ^(internet^)...
+        %PIP% install -r requirements.txt --no-warn-script-location
     ) else (
-        %PY% -c "import rapidocr_onnxruntime, rapidfuzz" >nul 2>&1
-        if errorlevel 1 (
-            echo       Embedded Python — installing packages from requirements.txt ^(internet^)...
-            %PIP% install -r requirements.txt --no-warn-script-location
-        ) else (
-            echo       Embedded Python — packages already present, skipping
-        )
+        echo       Embedded Python — packages already present, skipping
     )
 ) else (
-    if "%OFFLINE_MODE%"=="1" (
-        echo       [OFFLINE] PyPI install skipped - system Python must have packages pre-installed.
-    ) else (
-        %PY% -m pip install --upgrade pip -q --no-warn-script-location 2>nul
-        %PIP% install -r requirements.txt -q --no-warn-script-location
-    )
+    %PY% -m pip install --upgrade pip -q --no-warn-script-location 2>nul
+    %PIP% install -r requirements.txt -q --no-warn-script-location
 )
-:: lge.auto는 로컬 .whl — 오프라인 설치 가능 (PyPI 접근 불필요).
+:: lge.auto는 로컬 .whl — PyPI 접근 불필요.
 :: Windows 호스트는 win_amd64 휠만 설치 (Linux 휠이 PROJECT_ROOT 에 함께 있어도 거름).
 set "LGE_WHL="
 for %%f in (lge.auto-*-win_amd64.whl) do set "LGE_WHL=%%f"
@@ -209,10 +193,6 @@ if exist "tools\ffmpeg.exe" (
 :: -------------------------------------------------------
 if "%PRODUCTION%"=="1" (
     echo [4/4] Production mode - skipping Node.js
-    goto :skip_npm
-)
-if "%OFFLINE_MODE%"=="1" (
-    echo [4/4] Offline mode - skipping npm install
     goto :skip_npm
 )
 

@@ -22,13 +22,6 @@ elif [ -x "venv/bin/python" ]; then
     PY_MODE="venv"
 fi
 
-# ---- Offline 모드 ----
-OFFLINE_MODE=0
-if [ -f ".offline_mode" ]; then
-    OFFLINE_MODE=1
-    echo "[OFFLINE] .offline_mode detected - network access disabled."
-fi
-
 # ---- --home 옵션 ----
 GIT_REMOTE_FILE="git_remote.txt"
 if [ "${1:-}" = "--home" ]; then
@@ -143,9 +136,7 @@ update_ocr_models() {
 stop_existing_server
 
 # ---- Git 동기화 ----
-if [ "$OFFLINE_MODE" = "1" ]; then
-    echo "[GIT] Skipped (offline mode)."
-elif [ ! -d ".git" ]; then
+if [ ! -d ".git" ]; then
     if [ -f "$GIT_REMOTE_FILE" ] && command -v git >/dev/null 2>&1; then
         git_init || true
     fi
@@ -155,16 +146,12 @@ elif command -v git >/dev/null 2>&1; then
 fi
 
 # ---- 의존성 자동 업데이트 ----
-if [ "$OFFLINE_MODE" = "1" ]; then
-    echo "[DEPS] Skipped (offline mode)."
-elif [ -n "$PY" ] && [ -f "requirements.txt" ]; then
+if [ -n "$PY" ] && [ -f "requirements.txt" ]; then
     update_deps
 fi
 
 # ---- OCR 모델 (최초 부팅) ----
-if [ "$OFFLINE_MODE" = "1" ]; then
-    echo "[OCR] Skipped (offline mode - models must be bundled)."
-elif [ -n "$PY" ] && [ -f "scripts/download_ocr_models.py" ]; then
+if [ -n "$PY" ] && [ -f "scripts/download_ocr_models.py" ]; then
     update_ocr_models
 fi
 

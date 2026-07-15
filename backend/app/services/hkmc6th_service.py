@@ -65,11 +65,19 @@ CCRC_PRESS = 0x01
 CCRC_SHORT = 0x02
 CCRC_LONG = 0x03
 
-# CCRC key_source (data[0]) — 어떤 입력 장치에서 온 키인지
+# CCRC key_source (data[0]) — 어떤 입력 장치에서 온 키인지.
+# 값은 IVI 펌웨어 KeySourceType enum 의 ordinal 과 1:1 대응한다.
+#   MKBD=0, CCP=1, RRC=2, SWRC=3, MIRROR=4, BT_REAR_LEFT=5, BT_REAR_RIGHT=6,
+#   BRRC=7, BRPC=8, BRGP_LEFT=9, BRGP_RIGHT=10, RL_MONITOR=11, RR_MONITOR=12,
+#   CCRC_RESET=13, SOFTKEY=14, CTS=15, ATS=16
 CCRC_SRC_RRC = 0x02             # 유선 RRC
 CCRC_SRC_BRRC = 0x07            # Bluetooth Rear Remote Control (기본)
-CCRC_SRC_REAR_LEFT_MONITOR = 0x0B
-CCRC_SRC_REAR_RIGHT_MONITOR = 0x0C
+CCRC_SRC_REAR_LEFT_MONITOR = 0x0B   # RL_MONITOR (Rear Left Monitor)
+CCRC_SRC_REAR_RIGHT_MONITOR = 0x0C  # RR_MONITOR (Rear Right Monitor)
+CCRC_SRC_RESET = 0x0D           # CCRC_RESET — ccRC Reset Flag Check 용
+CCRC_SRC_SOFTKEY = 0x0E         # SOFTKEY — SW Remote Controller (구 SW_VT_RC 개명)
+CCRC_SRC_CTS = 0x0F             # CTS — Console Touch Screen (ccRC Slim)
+CCRC_SRC_ATS = 0x10             # ATS — Armrest Touch Screen (ccRC Slim)
 
 # CCRC monitor 필드 (data[3]) — 대상 모니터
 CCRC_MONITOR_LEFT = 0x01
@@ -213,22 +221,36 @@ HKMC_KEYS = {
     "MIRROR_VOICE_LOCAL_SEARCH":     {"cmd": CMD_MIRROR, "key": 0x2C},
     "MIRROR_ROADSIDE_ASSISTANT":     {"cmd": CMD_MIRROR, "key": 0x2D},
 
-    # ---------- CCRC (CMD_CCRC=0x93) — 레거시 CCRC 프로토콜 (BRRC + rear monitor)
+    # ---------- CCRC (CMD_CCRC=0x93) — BRRC(Bluetooth Rear Remote Control) 하드키
     # data format: [key_source, key_type, key_status, monitor]
+    # key_type 은 IVI 펌웨어 KeyType enum ordinal (아래 주석은 매핑되는 KeyType).
     # ccrc=True: send_key_by_name에서 PRESS/SHORT/LONG/RELEASE 값이 CCRC_* 로 치환된다.
-    "CCRC_UP":           {"cmd": CMD_CCRC, "key": 0x00, "ccrc": True, "source": CCRC_SRC_BRRC},
-    "CCRC_DOWN":         {"cmd": CMD_CCRC, "key": 0x01, "ccrc": True, "source": CCRC_SRC_BRRC},
-    "CCRC_LEFT":         {"cmd": CMD_CCRC, "key": 0x03, "ccrc": True, "source": CCRC_SRC_BRRC},
-    "CCRC_RIGHT":        {"cmd": CMD_CCRC, "key": 0x06, "ccrc": True, "source": CCRC_SRC_BRRC},
-    "CCRC_ENTER":        {"cmd": CMD_CCRC, "key": 0x08, "ccrc": True, "source": CCRC_SRC_BRRC},
-    "CCRC_BACK":         {"cmd": CMD_CCRC, "key": 0x09, "ccrc": True, "source": CCRC_SRC_BRRC},
-    "CCRC_HOME":         {"cmd": CMD_CCRC, "key": 0x14, "ccrc": True, "source": CCRC_SRC_BRRC},
-    "CCRC_VOLUME_UP":    {"cmd": CMD_CCRC, "key": 0x15, "ccrc": True, "source": CCRC_SRC_BRRC},
-    "CCRC_VOLUME_DOWN":  {"cmd": CMD_CCRC, "key": 0x16, "ccrc": True, "source": CCRC_SRC_BRRC},
-    "CCRC_VOLUME_LEFT":  {"cmd": CMD_CCRC, "key": 0x17, "ccrc": True, "source": CCRC_SRC_BRRC},
-    "CCRC_VOLUME_RIGHT": {"cmd": CMD_CCRC, "key": 0x18, "ccrc": True, "source": CCRC_SRC_BRRC},  # MUTE
-    "CCRC_POWER_LEFT":   {"cmd": CMD_CCRC, "key": 0x1A, "ccrc": True, "source": CCRC_SRC_BRRC},
-    "CCRC_POWER_RIGHT":  {"cmd": CMD_CCRC, "key": 0x1B, "ccrc": True, "source": CCRC_SRC_BRRC},
+    # 2024 최신 ccRC 키 스펙(BT Key event value 표) 기준 20키 반영.
+    "CCRC_UP":           {"cmd": CMD_CCRC, "key": 0x00, "ccrc": True, "source": CCRC_SRC_BRRC},  # UP
+    "CCRC_DOWN":         {"cmd": CMD_CCRC, "key": 0x01, "ccrc": True, "source": CCRC_SRC_BRRC},  # DOWN
+    "CCRC_LEFT":         {"cmd": CMD_CCRC, "key": 0x03, "ccrc": True, "source": CCRC_SRC_BRRC},  # LEFT
+    "CCRC_RIGHT":        {"cmd": CMD_CCRC, "key": 0x06, "ccrc": True, "source": CCRC_SRC_BRRC},  # RIGHT
+    "CCRC_ENTER":        {"cmd": CMD_CCRC, "key": 0x08, "ccrc": True, "source": CCRC_SRC_BRRC},  # ENTER (Select/Play·Pause)
+    "CCRC_BACK":         {"cmd": CMD_CCRC, "key": 0x09, "ccrc": True, "source": CCRC_SRC_BRRC},  # BACK
+    "CCRC_HOME":         {"cmd": CMD_CCRC, "key": 0x14, "ccrc": True, "source": CCRC_SRC_BRRC},  # HOME
+    "CCRC_VOLUME_UP":    {"cmd": CMD_CCRC, "key": 0x15, "ccrc": True, "source": CCRC_SRC_BRRC},  # VOLUME_UP
+    "CCRC_VOLUME_DOWN":  {"cmd": CMD_CCRC, "key": 0x16, "ccrc": True, "source": CCRC_SRC_BRRC},  # VOLUME_DOWN
+    "CCRC_POWER":        {"cmd": CMD_CCRC, "key": 0x19, "ccrc": True, "source": CCRC_SRC_BRRC},  # POWER (On/Off)
+    "CCRC_TOGGLE":       {"cmd": CMD_CCRC, "key": 0x37, "ccrc": True, "source": CCRC_SRC_BRRC},  # TOGGLE (L/R Toggle)
+    "CCRC_CUSTOM":       {"cmd": CMD_CCRC, "key": 0x11, "ccrc": True, "source": CCRC_SRC_BRRC},  # CUSTOM
+    "CCRC_MIC":          {"cmd": CMD_CCRC, "key": 0x3A, "ccrc": True, "source": CCRC_SRC_BRRC},  # VOICE_COMMAND (MIC)
+    "CCRC_YOUTUBE":      {"cmd": CMD_CCRC, "key": 0x38, "ccrc": True, "source": CCRC_SRC_BRRC},  # HOTKEY_1 (YouTube)
+    "CCRC_NETFLIX":      {"cmd": CMD_CCRC, "key": 0x39, "ccrc": True, "source": CCRC_SRC_BRRC},  # HOTKEY_2 (NETFLIX)
+    "CCRC_MUTE":         {"cmd": CMD_CCRC, "key": 0x24, "ccrc": True, "source": CCRC_SRC_BRRC},  # MUTE
+    "CCRC_DISPLAY":      {"cmd": CMD_CCRC, "key": 0x2F, "ccrc": True, "source": CCRC_SRC_BRRC},  # DISPLAY (Display On/Off)
+    "CCRC_FOLD_UP":      {"cmd": CMD_CCRC, "key": 0x3B, "ccrc": True, "source": CCRC_SRC_BRRC},  # FOLD_UP (Folding up)
+    "CCRC_FOLD_DOWN":    {"cmd": CMD_CCRC, "key": 0x3C, "ccrc": True, "source": CCRC_SRC_BRRC},  # FOLD_DOWN (Folding down)
+    "CCRC_STAR_LIGHT":   {"cmd": CMD_CCRC, "key": 0x3D, "ccrc": True, "source": CCRC_SRC_BRRC},  # STAR_LIGHT (Star Light On/Off)
+    # 구 rear 듀얼모니터 리모컨 전용(단일 BRRC 스펙엔 없음) — 기존 시나리오 호환 위해 유지.
+    "CCRC_VOLUME_LEFT":  {"cmd": CMD_CCRC, "key": 0x17, "ccrc": True, "source": CCRC_SRC_BRRC},  # VOLUME_LEFT
+    "CCRC_VOLUME_RIGHT": {"cmd": CMD_CCRC, "key": 0x18, "ccrc": True, "source": CCRC_SRC_BRRC},  # VOLUME_RIGHT
+    "CCRC_POWER_LEFT":   {"cmd": CMD_CCRC, "key": 0x1A, "ccrc": True, "source": CCRC_SRC_BRRC},  # POWER_LEFT
+    "CCRC_POWER_RIGHT":  {"cmd": CMD_CCRC, "key": 0x1B, "ccrc": True, "source": CCRC_SRC_BRRC},  # POWER_RIGHT
 
     # ---------- hkccic SWRC2 (CMD_SWRC2=0x71) ----------
     "SWRC2_BACK":       {"cmd": CMD_SWRC2, "key": 0x01},

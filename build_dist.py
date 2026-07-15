@@ -15,10 +15,6 @@ frontend를 빌드하고, 배포 패키지를 생성합니다.
   python build_dist.py --backend          # 백엔드만 컴파일
   python build_dist.py --init-deploy      # 배포 repo 최초 설정
   python build_dist.py --clean            # 빌드 산출물 정리
-  python build_dist.py --offline          # 완전 오프라인 배포본
-                                          #   - .offline_mode 마커 파일 생성
-                                          #   - git_remote.txt 제거 (자동 pull 금지)
-                                          #   - OCR 모델 누락 시 빌드 중단
 """
 
 import hashlib
@@ -522,7 +518,7 @@ def _run_native_win_build(version: str, do_frontend: bool = True) -> int:
             print("        해결: GUI 에서 'frontend 빌드 포함' 체크 또는 cd frontend && npm run build", file=sys.stderr)
             return 1
         print("[FRONTEND] 스킵 (--skip-frontend / GUI 체크 해제) — 기존 frontend/dist 사용")
-    if not step_package(False, offline=False):
+    if not step_package(False):
         print("\n빌드 중단: 패키지 조립 실패")
         return 1
     clean()
@@ -880,77 +876,10 @@ def step_build_frontend(force=False) -> bool:
     return True
 
 
-# ── 오프라인 빌드 사전 검증 ──
-
-# 오프라인 배포본에 반드시 dist에 들어 있어야 하는 외부 리소스.
-# 누락되면 설치 PC에서 인터넷이 없을 때 해당 기능이 동작 불가.
-_OFFLINE_REQUIRED = [
-    # (소스 경로 - PROJECT_ROOT 기준 상대 경로, 설명, 치명적 여부)
-    ("backend/app/services/ocr_models/korean/rec_infer.onnx", "OCR 한국어 모델", True),
-    ("backend/app/services/ocr_models/english/rec_infer.onnx", "OCR 영어 모델", True),
-    ("backend/app/services/ocr_models/japan/rec_infer.onnx",   "OCR 일본어 모델", False),
-    ("backend/app/services/ocr_models/chinese/rec_infer.onnx", "OCR 중국어 모델", False),
-    ("tools/scrcpy-server.jar", "scrcpy 서버 v1.25 (자동차 IVI/구 Android H.264 미러링)", True),
-    ("tools/scrcpy-server-v3.3.4.jar", "scrcpy 서버 v3.3.4 (Android 14+ 일반 폰 H.264 미러링)", True),
-    ("tools/ffmpeg.exe", "ffmpeg (웹캠 녹화 처리)", False),
-]
-
-
-def _validate_offline_prereqs() -> bool:
-    """오프라인 빌드 사전 검증. 치명적 자원 누락 시 False."""
-    print("\n  [오프라인 검증] 필수 자원 확인...")
-    missing_critical = []
-    missing_optional = []
-    for rel, desc, critical in _OFFLINE_REQUIRED:
-        p = PROJECT_ROOT / rel
-        if p.exists():
-            print(f"    OK  {rel} ({desc})")
-        else:
-            print(f"    MISS {rel} ({desc})")
-            (missing_critical if critical else missing_optional).append((rel, desc))
-    # 루트 wheel/installer는 선택적 — 없어도 빌드는 통과.
-    # lge.auto wheel 은 host OS 별 휠만 검사 (양쪽 휠이 함께 있어도 다른 OS 휠은 무시).
-    host = _host_os()
-    lge_whl_pattern = "lge.auto-*-win_amd64.whl" if host == "win" else "lge.auto-*-linux_*.whl"
-    optional_root_globs = [
-        (lge_whl_pattern, f"lge.auto Python wheel ({host})"),
-        ("Git-*.exe", "Git for Windows 인스톨러"),
-        ("vcredist_x64.exe", "VC++ Redistributable"),
-        ("python-3.10.4-amd64.exe", "시스템 Python 3.10 인스톨러(폴백용)"),
-        ("node-*-x64.msi", "Node.js MSI"),
-        ("VimbaX_Setup*.exe", "Vimba X SDK(Vision Camera)"),
-    ]
-    for pattern, desc in optional_root_globs:
-        found = list(PROJECT_ROOT.glob(pattern))
-        if found:
-            print(f"    OK  {found[0].name} ({desc})")
-        else:
-            print(f"    --  {pattern} ({desc}) — 없음(선택)")
-    if missing_critical:
-        print("\n  [오프라인 검증] 치명적 자원 누락:")
-        for rel, desc in missing_critical:
-            print(f"    * {rel} — {desc}")
-        print("\n  해결 방법:")
-        print("    - OCR 모델: 빌드 PC에서 한 번")
-        print("        pip install paddle2onnx paddlepaddle")
-        print("        python scripts/download_ocr_models.py")
-        print("    - scrcpy-server*.jar: tools/ 폴더에 미리 복사 (v1.25 + v3.3.4 둘 다)")
-        return False
-    if missing_optional:
-        print("\n  [오프라인 검증] 선택 자원 누락(기능 일부만 비활성화):")
-        for rel, desc in missing_optional:
-            print(f"    - {rel} — {desc}")
-    return True
-
-
 # ── Step 3: 패키지 조립 ──
 
-def step_package(force=False, offline=False) -> bool:
+def step_package(force=False) -> bool:
     print("\n=== [3/3] 배포 패키지 생성 ===")
-    if offline:
-        if not _validate_offline_prereqs():
-            print("\n  오프라인 빌드 중단.")
-            return False
     t0 = time.time()
     DIST_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1006,46 +935,36 @@ def step_package(force=False, offline=False) -> bool:
     # ── 루트 인스톨러/wheel 자동 복사 (PROJECT_ROOT에 있는 것만) ──
     _copy_root_installers()
 
-    # ── git_remote.txt / git_remote_home.txt / .offline_mode ──
-    # git_remote.txt: 사내 사용자 자동 pull URL (LG GitLab).
+    # ── git_remote.txt / git_remote_home.txt ──
+    # git_remote.txt: 사내 사용자 자동 pull URL (LG GitLab). DIST_PUSH_REMOTES 기반 자동 채움.
     # git_remote_home.txt: 과거 외부(GitHub) 배포용. GitHub 푸시 제거 이후로는 항상 정리.
     #   ReplayKit.bat --home 모드는 파일 부재 시 기본(git_remote.txt) 로 폴백.
     git_remote_file = DIST_DIR / "git_remote.txt"
     git_remote_home_file = DIST_DIR / "git_remote_home.txt"
-    offline_marker = DIST_DIR / ".offline_mode"
     host = _host_os()
-    # GitHub 배포 채널 제거됨 — home remote 파일은 어떤 모드에서든 항상 정리.
+    # GitHub 배포 채널 제거됨 — home remote 파일은 항상 정리.
     if git_remote_home_file.exists():
         git_remote_home_file.unlink()
         print(f"  git_remote_home.txt 제거 (GitHub 배포 없음)")
-    if offline:
-        # 오프라인 모드: 자동 git pull 차단, 마커 파일 생성
-        if git_remote_file.exists():
-            git_remote_file.unlink()
-            print(f"  오프라인 모드: git_remote.txt 제거")
-        offline_marker.write_text(
-            "# 이 파일이 있으면 ReplayKit.bat / setup.bat이 네트워크 액세스를\n"
-            "# 시도하지 않습니다. 삭제하면 온라인 모드로 동작합니다.\n",
-            encoding="utf-8",
-        )
-        print("  오프라인 모드: .offline_mode 마커 생성")
-    else:
-        # 온라인 모드: 마커 제거 + DIST_PUSH_REMOTES 기반 자동 채움 (LGE 만)
-        if offline_marker.exists():
-            offline_marker.unlink()
-        lge_url = _remote_url(host, "lge")
-        if lge_url:
-            git_remote_file.write_text(lge_url, encoding="utf-8")
-            print(f"  git_remote.txt → {lge_url}")
-        elif git_remote_file.exists():
-            git_remote_file.unlink()
+    # 구 오프라인 배포본 잔재 정리 (offline 빌드 폐지 — 마커가 있으면 자동 pull/pip 이 막힘).
+    stale_offline = DIST_DIR / ".offline_mode"
+    if stale_offline.exists():
+        stale_offline.unlink()
+        print("  구 .offline_mode 마커 제거 (offline 빌드 폐지)")
+    # git_remote.txt 자동 채움 (LGE 만)
+    lge_url = _remote_url(host, "lge")
+    if lge_url:
+        git_remote_file.write_text(lge_url, encoding="utf-8")
+        print(f"  git_remote.txt → {lge_url}")
+    elif git_remote_file.exists():
+        git_remote_file.unlink()
 
     # 통계
     total = sum(1 for _ in DIST_DIR.rglob("*") if _.is_file())
     pyd_count = sum(1 for _ in DIST_DIR.rglob("*.pyd"))
     py_count = sum(1 for _ in DIST_DIR.rglob("*.py"))
     elapsed = time.time() - t0
-    print(f"\n  패키지 완료: {DIST_DIR}" + (" [OFFLINE]" if offline else ""))
+    print(f"\n  패키지 완료: {DIST_DIR}")
     print(f"  총 {total}개 파일 (.pyd: {pyd_count}, .py: {py_count})")
     print(f"  소요: {elapsed:.1f}s")
     return True
@@ -1054,7 +973,7 @@ def step_package(force=False, offline=False) -> bool:
 def _copy_root_installers():
     """PROJECT_ROOT에 있는 외부 인스톨러/wheel을 dist 루트에 복사.
 
-    오프라인 배포본을 위해 빌드 PC에 미리 두어야 하는 파일들:
+    빌드 PC에 미리 두어야 하는 파일들:
       - lge.auto-*.whl       (로컬 wheel, setup.bat에서 pip install)
       - Git-*.exe            (Git for Windows; installer.iss가 silent install)
       - vcredist_x64.exe     (VC++ Runtime; installer.iss가 silent install)
@@ -1465,7 +1384,7 @@ def main():
       a) GUI (default, 인자 없음): PySide6 _show_release_dialog 띄움 → OS/버전/옵션 선택
          → 해당 OS 빌드 + 배포 git force push.
       b) CLI 자동 (--os / --version 지정): 인터랙티브 없이 즉시 빌드/push.
-      c) 레거시 (--clean / --init-deploy / --deploy / --backend / --full / --offline):
+      c) 레거시 (--clean / --init-deploy / --deploy / --backend / --full):
          기존 build_dist.py 동작 보존 (Windows 호스트 전용).
     Linux 에서도 GUI/CLI release 모드 사용 가능 — Linux 선택 시 scripts/build_deb.sh 호출.
     """
@@ -1488,7 +1407,6 @@ def main():
         i += 1
     args = set(args_list)
     force = "--full" in args
-    offline = "--offline" in args
     do_skip_build = "--skip-build" in args
     do_skip_push = "--skip-push" in args
     do_skip_frontend = "--skip-frontend" in args
