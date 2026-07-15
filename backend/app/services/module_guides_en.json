@@ -13,7 +13,8 @@
           "data": "Data bytes (space- or comma-separated hex). e.g. '45 40 FF FF FF FF FF FF'",
           "channel": "Target channel name (e.g. 'PCAN_USBBUS1', 'PCAN_USBBUS2'). Default PCAN_USBBUS1.",
           "is_extended": "Extended (29-bit) ID? True/False (default False = standard 11-bit).",
-          "is_fd": "Send this frame as CAN FD? True/False (auto FD if the bus is in FD mode)."
+          "is_fd": "Send this frame as CAN FD? True/False (auto FD if the bus is in FD mode).",
+          "brs": "FD Bit Rate Switch. Leave empty to auto-enable on FD frames (matches the reference sender; standard for 500k/2M buses). Always OFF for classic frames."
         }
       },
       "send_periodic_can": {
@@ -24,7 +25,8 @@
           "channel": "Target channel name (e.g. 'PCAN_USBBUS1', 'PCAN_USBBUS2'). Default PCAN_USBBUS1.",
           "period_ms": "Send period in milliseconds. e.g. '500'. Default 1000.",
           "is_extended": "Extended (29-bit) ID? True/False (default False).",
-          "is_fd": "CAN FD? True/False."
+          "is_fd": "CAN FD? True/False.",
+          "brs": "FD Bit Rate Switch. Leave empty to auto-enable on FD frames (matches the reference sender; standard for 500k/2M buses). Always OFF for classic frames."
         }
       },
       "stop_all_tx": {

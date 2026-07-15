@@ -13,7 +13,8 @@
           "data": "데이터 바이트 (공백 또는 콤마 구분 16진수). 예: '45 40 FF FF FF FF FF FF'",
           "channel": "대상 채널명 (예: 'PCAN_USBBUS1', 'PCAN_USBBUS2'). 기본 PCAN_USBBUS1.",
           "is_extended": "확장 ID(29비트) 여부. True/False (기본 False = 표준 11비트).",
-          "is_fd": "이 프레임을 CAN FD 로 보낼지. True/False (연결이 FD 모드면 자동 FD)."
+          "is_fd": "이 프레임을 CAN FD 로 보낼지. True/False (연결이 FD 모드면 자동 FD).",
+          "brs": "FD Bit Rate Switch. 비우면 FD 프레임에서 자동 ON(참조 송신기와 동일, 500k/2M 버스 표준). classic 프레임에서는 항상 OFF."
         }
       },
       "send_periodic_can": {
@@ -24,7 +25,8 @@
           "channel": "대상 채널명 (예: 'PCAN_USBBUS1', 'PCAN_USBBUS2'). 기본 PCAN_USBBUS1.",
           "period_ms": "송신 주기(밀리초). 예: '500' (0.5초마다). 기본 1000.",
           "is_extended": "확장 ID(29비트) 여부. True/False (기본 False).",
-          "is_fd": "CAN FD 여부. True/False."
+          "is_fd": "CAN FD 여부. True/False.",
+          "brs": "FD Bit Rate Switch. 비우면 FD 프레임에서 자동 ON(참조 송신기와 동일, 500k/2M 버스 표준). classic 프레임에서는 항상 OFF."
         }
       },
       "stop_all_tx": {

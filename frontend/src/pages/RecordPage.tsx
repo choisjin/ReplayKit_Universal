@@ -96,6 +96,33 @@ function canPanelSelectOptions(funcName: string | undefined, paramName: string):
   }
 }
 
+// PCAN(python-can) 스텝 파라미터 중 열거 가능한 것은 드롭다운으로.
+//   channel      → PCAN_USBBUS1..8 (PEAK 드라이버 채널 명명 규약)
+//   is_extended  → True/False (29비트 확장 ID)
+//   is_fd        → True/False (CAN FD 프레임)
+//   brs          → auto('')/True/False (FD Bit Rate Switch — 빈값이면 FD 프레임 자동 ON)
+const PCAN_CHANNEL_OPTS = Array.from({ length: 8 }, (_, i) => ({
+  value: `PCAN_USBBUS${i + 1}`, label: `PCAN_USBBUS${i + 1}`,
+}));
+const PCAN_BOOL_OPTS = [
+  { value: 'False', label: 'False' },
+  { value: 'True', label: 'True' },
+];
+const PCAN_BRS_OPTS = [
+  { value: '', label: 'auto (FD 프레임 자동 ON)' },
+  { value: 'True', label: 'True (강제 ON)' },
+  { value: 'False', label: 'False (강제 OFF)' },
+];
+function pcanSelectOptions(paramName: string): { value: string; label: string }[] | null {
+  switch (paramName) {
+    case 'channel': return PCAN_CHANNEL_OPTS;
+    case 'is_extended':
+    case 'is_fd': return PCAN_BOOL_OPTS;
+    case 'brs': return PCAN_BRS_OPTS;
+    default: return null;
+  }
+}
+
 // CANoe_Ctrl(Vector): 스텝의 bus_channel 은 백엔드 self.bus 리스트 인덱스(디바이스 추가 시
 // device_info 행 순서 = 채널 등록 순서)로 매핑된다. 사용자가 "채널 인덱스"를 직접 외워 넣는 대신,
 // 디바이스 추가 때 설정한 채널을 라벨로 보여주는 드롭다운을 만든다.
@@ -6589,7 +6616,9 @@ export default function RecordPage() {
                               && (selectedModuleFunc === 'canoe_send_message' || selectedModuleFunc === 'canoe_send_msg_all_stop')
                               && p.name === 'bus_channel')
                               ? canoeChannelOptions((selectedDevice?.info as any)?.device_info) : null;
-                            const selectOpts = canPanelOpts || canoeChOpts;
+                            // PCAN: channel/is_extended/is_fd/brs → 드롭다운
+                            const pcanOpts = selectedModuleName === 'PCAN' ? pcanSelectOptions(p.name) : null;
+                            const selectOpts = canPanelOpts || canoeChOpts || pcanOpts;
                             // Frame_Check.Frame_Measure: mode → 콤보박스,
                             // start_image/start_threshold 는 mode='image' 일 때만 표시 (웹캠 크롭 버튼으로 설정).
                             const isFrameCheck = selectedModuleName === 'Frame_Check' && selectedModuleFunc === 'Frame_Measure';
@@ -7465,7 +7494,9 @@ export default function RecordPage() {
                           (args.mode || 'function') !== 'image') return null;
                       if (isCanPanelEdit && CAN_PANEL_HIDDEN_PARAMS.includes(k)) return null;
                       if (isAndroidSerialHidden) return null;
-                      const selectOptions = woohyunOptions || canPanelOptionsEdit || frameCheckModeOptions || canoeChOptsEdit;
+                      // PCAN: channel/is_extended/is_fd/brs → 드롭다운
+                      const pcanOptsEdit = editStepParams.module === 'PCAN' ? pcanSelectOptions(k) : null;
+                      const selectOptions = woohyunOptions || canPanelOptionsEdit || frameCheckModeOptions || canoeChOptsEdit || pcanOptsEdit;
                       return (
                         <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           <div style={{ display: 'flex', gap: 4, alignItems: 'center', width: '100%' }}>
