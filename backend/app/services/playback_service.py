@@ -942,8 +942,8 @@ class PlaybackService:
                 if not has_expected and mod_result.startswith("FAIL:"):
                     step_result.status = "fail"
 
-            # Wait (중단 가능)
-            if await self._interruptible_sleep(step.delay_after_ms / 1000.0):
+            # Wait (중단 가능) — 스텝 딜레이도 고정밀 sleep으로 틱 격자 양자화 회피
+            if await self._precise_sleep(step.delay_after_ms / 1000.0):
                 step_result.status = "error"
                 step_result.message = "Stopped by user"
                 return step_result
