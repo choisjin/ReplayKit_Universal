@@ -513,6 +513,8 @@ export default function RecordPage() {
 
   // 구간반복 (start~end 1-based, count회 실행)
   const [loops, setLoops] = useState<LoopRange[]>([]);
+  const loopsRef = useRef<LoopRange[]>(loops);
+  loopsRef.current = loops; // 콜백(updateStepJump)에서 최신 loops 참조용
   const savedLoopsRef = useRef<string>('[]');
   // 구간반복 모달 상태
   const [loopModalOpen, setLoopModalOpen] = useState(false);
@@ -4652,9 +4654,30 @@ export default function RecordPage() {
     return loops.some((lp, i) => i !== editingLoopIdx && loopsOverlap(lp, loopCandidate));
   }, [loopCandidate, loops, editingLoopIdx]);
 
+  // 구간 내 스텝의 조건부 이동(on_pass/fail_goto)이 구간 밖(또는 END)을 가리키면 설정 불가.
+  // 반복 되감기는 자연 진행 시에만 동작하므로, 구간을 벗어나는 점프가 있으면
+  // 반복 횟수가 보장되지 않는다. 구간 내부로만 향하는 점프는 정상 동작한다.
+  const loopJumpError = useMemo<{ step: number; target: number } | null>(() => {
+    if (!loopCandidate) return null;
+    const { start, end } = loopCandidate;
+    for (let pos = start; pos <= end; pos++) {
+      const st = steps[pos - 1];
+      if (!st) continue;
+      for (const g of [st.on_pass_goto, st.on_fail_goto]) {
+        if (g == null) continue;
+        if (g === -1 || g < start || g > end) return { step: pos, target: g };
+      }
+    }
+    return null;
+  }, [loopCandidate, steps]);
+
+  const loopJumpErrorText = (e: { step: number; target: number }) =>
+    t('record.loopJumpEscape', { step: e.step, target: e.target === -1 ? 'END' : `#${e.target}` });
+
   const confirmLoop = () => {
     if (!loopCandidate) { message.warning(t('record.loopSelectSteps')); return; }
     if (loopOverlapError) { message.error(t('record.loopOverlap')); return; }
+    if (loopJumpError) { message.error(loopJumpErrorText(loopJumpError)); return; }
     const count = Math.max(2, Math.floor(loopCount || 2));
     const next: LoopRange = { start: loopCandidate.start, end: loopCandidate.end, count };
     setLoops(prev => {
@@ -4867,8 +4890,20 @@ export default function RecordPage() {
   };
 
   const updateStepJump = useCallback((index: number, field: 'on_pass_goto' | 'on_fail_goto', value: number | null) => {
+    // 이 스텝이 구간반복 내부라면, 구간 밖(또는 END)으로 나가는 조건부 이동은 금지.
+    // (반복 되감기는 자연 진행 시에만 동작하므로 구간을 벗어나면 반복이 깨진다)
+    if (value != null) {
+      const pos = index + 1;
+      const lp = loopsRef.current.find(l => pos >= l.start && pos <= l.end);
+      if (lp && (value === -1 || value < lp.start || value > lp.end)) {
+        message.error(t('record.loopJumpBlockedByLoop', {
+          start: lp.start, end: lp.end, target: value === -1 ? 'END' : `#${value}`,
+        }));
+        return;
+      }
+    }
     setSteps((prev) => prev.map((s, i) => i === index ? { ...s, [field]: value } : s));
-  }, []);
+  }, [t]);
 
   // 조건부이동 '결과 미반영' 체크박스 토글
   const updateStepExclude = useCallback((index: number, field: 'exclude_pass_from_result' | 'exclude_fail_from_result', value: boolean) => {
@@ -7206,7 +7241,7 @@ export default function RecordPage() {
           </span>
           <span style={{ marginLeft: 'auto', fontSize: 12 }}>{t('record.loopCount')}:</span>
           <InputNumber size="small" min={2} max={9999} value={loopCount} onChange={(v) => setLoopCount(Math.max(2, Math.floor(v || 2)))} style={{ width: 90 }} />
-          <Button type="primary" size="small" disabled={!loopCandidate || loopOverlapError} onClick={confirmLoop}>
+          <Button type="primary" size="small" disabled={!loopCandidate || loopOverlapError || !!loopJumpError} onClick={confirmLoop}>
             {editingLoopIdx !== null ? t('record.loopUpdate') : t('record.loopAdd')}
           </Button>
           {(loopSelStart !== null || editingLoopIdx !== null) && (
@@ -7216,6 +7251,7 @@ export default function RecordPage() {
           )}
         </div>
         {loopOverlapError && <div style={{ color: '#ff4d4f', fontSize: 12, marginBottom: 6 }}>{t('record.loopOverlap')}</div>}
+        {loopJumpError && <div style={{ color: '#ff4d4f', fontSize: 12, marginBottom: 6 }}>{loopJumpErrorText(loopJumpError)}</div>}
 
         {/* 현재 구간반복 리스트 */}
         <div style={{ marginTop: 12, borderTop: isDark ? '1px solid #303030' : '1px solid #f0f0f0', paddingTop: 8 }}>
