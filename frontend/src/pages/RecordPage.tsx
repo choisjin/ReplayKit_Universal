@@ -159,14 +159,19 @@ function canoeChannelOptions(deviceInfo: any): { value: string; label: string }[
 }
 
 // Extracted outside to prevent re-creation on every render
-const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExclude, t }: {
+const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExclude, t, loopRange }: {
   step: Step;
   index: number;
   steps: Step[];
   onUpdate: (index: number, field: 'on_pass_goto' | 'on_fail_goto', value: number | null) => void;
   onToggleExclude: (index: number, field: 'exclude_pass_from_result' | 'exclude_fail_from_result', value: boolean) => void;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
-}) => (
+  // 이 스텝이 구간반복 내부면 그 범위(1-based). 구간 밖/END로 나가는 점프는 비활성화.
+  loopRange?: { start: number; end: number } | null;
+}) => {
+  // 조건부 이동 대상이 구간을 벗어나는지 (구간 밖 스텝 위치 = 비활성)
+  const outOfLoop = (pos1: number) => !!loopRange && (pos1 < loopRange.start || pos1 > loopRange.end);
+  return (
   <Space direction="vertical" size={4} style={{ padding: 3 }}>
     <div style={{ fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
       {t('record.conditionalJumpTitle', { index: String(index + 1) })}
@@ -188,11 +193,11 @@ const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExcl
         style={{ width: 120 }}
       >
         {steps.map((_s, i) => (
-          <Option key={i} value={i + 1} disabled={i === index}>
+          <Option key={i} value={i + 1} disabled={i === index || outOfLoop(i + 1)}>
             #{i + 1} {_s.type}
           </Option>
         ))}
-        <Option value={-1}>{t('record.end')}</Option>
+        <Option value={-1} disabled={!!loopRange}>{t('record.end')}</Option>
       </Select>
       {BRANCH_MODE_ENABLED && (
         <Tooltip title={t('scenario.excludeResultTooltip')}>
@@ -214,11 +219,11 @@ const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExcl
         style={{ width: 120 }}
       >
         {steps.map((_s, i) => (
-          <Option key={i} value={i + 1} disabled={i === index}>
+          <Option key={i} value={i + 1} disabled={i === index || outOfLoop(i + 1)}>
             #{i + 1} {_s.type}
           </Option>
         ))}
-        <Option value={-1}>{t('record.end')}</Option>
+        <Option value={-1} disabled={!!loopRange}>{t('record.end')}</Option>
       </Select>
       {BRANCH_MODE_ENABLED && (
         <Tooltip title={t('scenario.excludeResultTooltip')}>
@@ -230,7 +235,8 @@ const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExcl
       )}
     </Space>
   </Space>
-));
+  );
+});
 
 interface ROI { x: number; y: number; width: number; height: number }
 interface CropItem { image: string; label: string; roi?: ROI | null }
@@ -5529,7 +5535,7 @@ export default function RecordPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 2, justifyContent: 'flex-end' }}>
               <Button size="small" type="text" icon={<EditOutlined />} title={t('record.editCommand')} onClick={() => openEditStepModal(index)} style={{ color: '#1890ff', width: 28 }} />
               <Popover
-                content={<JumpEditorInner step={s} index={index} steps={steps} onUpdate={updateStepJump} onToggleExclude={updateStepExclude} t={t} />}
+                content={<JumpEditorInner step={s} index={index} steps={steps} onUpdate={updateStepJump} onToggleExclude={updateStepExclude} t={t} loopRange={ls ? { start: loops[ls.loopIdx].start, end: loops[ls.loopIdx].end } : null} />}
                 trigger="click"
                 placement="left"
               >
