@@ -30,6 +30,34 @@ def _set_sleep_block(block: bool):
             ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
     except Exception:
         pass
+
+
+# 재생 동안만 Windows 멀티미디어 타이머 해상도를 1ms 로 상향한다.
+# 기본 해상도(~15.6ms)에서는 asyncio.sleep 이 저(低) 밀리초 wait 를 시스템 틱
+# 격자에 양자화해, 10/20/30ms 같은 요청이 요청값과 무관하게 넓은 밴드로 튄다
+# (첫 sleep 언더파이어 → 1ms 같은 관측). 비Windows 는 무시(해상도가 이미 촘촘).
+# ref-count 로 반복/그룹 재생의 중첩 호출에도 실제 begin/end 는 한 번만 일어나게 한다.
+_timer_res_refcount = 0
+
+
+def _set_timer_resolution(high: bool):
+    """Windows 타이머 해상도 1ms 상향/복원. 비Windows 에서는 무시."""
+    global _timer_res_refcount
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        winmm = ctypes.windll.winmm
+        if high:
+            if _timer_res_refcount == 0:
+                winmm.timeBeginPeriod(1)
+            _timer_res_refcount += 1
+        elif _timer_res_refcount > 0:
+            _timer_res_refcount -= 1
+            if _timer_res_refcount == 0:
+                winmm.timeEndPeriod(1)
+    except Exception:
+        pass
 from .adb_service import ADBService
 from .device_manager import DeviceManager
 from .image_compare_service import ImageCompareService
@@ -416,6 +444,36 @@ class PlaybackService:
             remaining -= interval
         return False
 
+    # 마지막 이 시간(초)만큼은 asyncio.sleep 대신 perf_counter busy-wait 로 마감한다.
+    # 타이머 해상도를 1ms 로 올려도(_set_timer_resolution) 커널 스케줄 지터가 남으므로,
+    # 서브밀리초 마감을 위해 짧게 스핀한다. 이벤트 루프는 이 구간 동안만 블록된다.
+    _PRECISE_SPIN_S = 0.0015
+
+    async def _precise_sleep(self, seconds: float) -> bool:
+        """고정밀 sleep. 큰 부분은 asyncio.sleep 로 이벤트 루프에 양보하고,
+        끝의 ~1.5ms 는 busy-wait 로 마감해 저 밀리초 wait 를 틱 격자 양자화 없이
+        정확히 잰다. _should_stop 이면 즉시 중단(True 반환).
+
+        - _set_timer_resolution(1ms) 와 함께 쓰여야 asyncio.sleep 청크도 정확해진다.
+        - perf_counter 는 wall-clock 점프에 영향받지 않는 단조 시계라 duration 측정에 적합.
+        """
+        if seconds <= 0:
+            return self._should_stop
+        end = time.perf_counter() + seconds
+        while True:
+            if self._should_stop:
+                return True
+            remaining = end - time.perf_counter()
+            if remaining <= self._PRECISE_SPIN_S:
+                break
+            # 남은 시간에서 스핀 여유만 남기고 sleep. 중단 반응성 위해 최대 50ms 청크.
+            await asyncio.sleep(min(remaining - self._PRECISE_SPIN_S, 0.05))
+        # 마지막 구간 busy-wait — 틱 격자/스케줄 지터 우회
+        while time.perf_counter() < end:
+            if self._should_stop:
+                return True
+        return False
+
     def _resolve_device_map(self, scenario: Scenario, override_map: Optional[dict[str, str]] = None) -> dict[str, str]:
         """Build alias -> real device ID mapping.
 
@@ -501,6 +559,7 @@ class PlaybackService:
         self._device_map = self._resolve_device_map(scenario, device_map_override)
         self._running = True
         _set_sleep_block(True)
+        _set_timer_resolution(True)
         # 재생 중 scrcpy 인코더가 screencap 검증과 디바이스에서 경합하지 않도록 미러
         # 백엔드를 회수한다(ensure 는 재생 게이트로 막혀 재기동 안 됨, 종료 후 자동 복귀).
         try:
@@ -596,6 +655,7 @@ class PlaybackService:
         finally:
             self._running = False
             _set_sleep_block(False)
+            _set_timer_resolution(False)
             set_current_step_context(None, 1)
             self._cleanup_run_output_dir()
             result.finished_at = datetime.now(timezone.utc).isoformat()
@@ -628,6 +688,7 @@ class PlaybackService:
         self._group_scenario_index = group_scenario_index
         self._running = True
         _set_sleep_block(True)
+        _set_timer_resolution(True)
         # 재생 중 scrcpy 인코더가 screencap 검증과 경합하지 않도록 미러 백엔드 회수.
         try:
             await self.adb.close_scrcpy_backends_for_playback()
@@ -719,6 +780,7 @@ class PlaybackService:
         finally:
             self._running = False
             _set_sleep_block(False)
+            _set_timer_resolution(False)
             set_current_step_context(None, 1)
             # 중단된 경우 run_dir 참조를 유지 — 호출자(_run_play_job.finally)가
             # cleanup_active_instances로 StopLogging(또는 SerialLogging의 경우 Disconnect가
@@ -3134,7 +3196,8 @@ class PlaybackService:
             # → WebSocket idle 방지 + 프론트엔드 진행률 표시 가능
             total_s = actual_ms / 1000.0
             if total_s <= 2.0:
-                await self._interruptible_sleep(total_s)
+                # 짧은 wait 는 고정밀 sleep 으로 — 틱 격자(~15.6ms) 양자화 회피.
+                await self._precise_sleep(total_s)
             else:
                 PROGRESS_INTERVAL_S = 5.0
                 CHUNK_S = 1.0
