@@ -463,6 +463,31 @@ class PlaybackService:
 
         return errors
 
+    @staticmethod
+    def _build_loop_map(scenario: Scenario, step_by_id: dict[int, int]) -> dict[int, tuple[int, int]]:
+        """구간반복 정의를 { end_idx: (start_idx, count) } 로 변환.
+
+        start/end 는 step.id(1-based 위치)이며 step_by_id 로 실제 인덱스로 변환한다.
+        count<=1 이거나 스텝이 없으면 무시. 비겹침을 가정하므로 end_idx 키가 겹치면
+        마지막 정의가 우선한다. 실행부는 자연 진행(다음 스텝) 시에만 이 맵을 참조해
+        조건부이동(goto)이 항상 반복보다 우선하도록 한다.
+        """
+        loop_by_end_idx: dict[int, tuple[int, int]] = {}
+        for lp in (getattr(scenario, "loops", None) or []):
+            s_idx = step_by_id.get(lp.start)
+            e_idx = step_by_id.get(lp.end)
+            if s_idx is None or e_idx is None:
+                continue
+            if s_idx > e_idx:
+                s_idx, e_idx = e_idx, s_idx
+            try:
+                cnt = int(lp.count or 1)
+            except (TypeError, ValueError):
+                cnt = 1
+            if cnt > 1:
+                loop_by_end_idx[e_idx] = (s_idx, cnt)
+        return loop_by_end_idx
+
     async def execute_scenario(
         self,
         scenario: Scenario,
@@ -499,6 +524,8 @@ class PlaybackService:
         step_by_id: dict[int, int] = {}
         for i, s in enumerate(scenario.steps):
             step_by_id[s.id] = i
+        loop_by_end_idx = self._build_loop_map(scenario, step_by_id)
+        loop_remaining: dict[int, int] = {}  # start_idx -> 남은 추가 반복 횟수
 
         try:
             idx = 0
@@ -551,6 +578,17 @@ class PlaybackService:
                     target = step_by_id.get(step.on_fail_goto)
                     if target is not None:
                         next_idx = target
+                # 구간반복 — 명시적 조건부이동이 없을 때(자연 진행)만 적용
+                if next_idx == idx + 1 and idx in loop_by_end_idx:
+                    s_idx, cnt = loop_by_end_idx[idx]
+                    rem = loop_remaining.get(s_idx)
+                    if rem is None:
+                        rem = cnt - 1  # 첫 통과 완료 → 남은 반복
+                    if rem > 0:
+                        loop_remaining[s_idx] = rem - 1
+                        next_idx = s_idx
+                    else:
+                        loop_remaining.pop(s_idx, None)
                 idx = next_idx
         except Exception as e:
             logger.error("Playback error: %s", e)
@@ -613,6 +651,8 @@ class PlaybackService:
         step_by_id: dict[int, int] = {}  # step.id -> index
         for i, s in enumerate(scenario.steps):
             step_by_id[s.id] = i
+        loop_by_end_idx = self._build_loop_map(scenario, step_by_id)
+        loop_remaining: dict[int, int] = {}  # start_idx -> 남은 추가 반복 횟수
 
         # 그룹 재생 시 호출자(main.py)가 _result_timestamp를 미리 설정하므로
         # 여기서 cleanup하면 안 됨 — _is_group_member로 판별
@@ -662,6 +702,19 @@ class PlaybackService:
                     target = step_by_id.get(step.on_fail_goto)
                     if target is not None:
                         next_idx = target
+                # 구간반복 — 명시적 조건부이동이 없을 때(자연 진행)만 적용.
+                # 반복 각 회차는 새 exec_seq 로 step_start/step_result 를 다시 흘려보내므로
+                # 조건부이동 revisit 과 동일하게 프론트/집계가 그대로 처리한다.
+                if next_idx == idx + 1 and idx in loop_by_end_idx:
+                    s_idx, cnt = loop_by_end_idx[idx]
+                    rem = loop_remaining.get(s_idx)
+                    if rem is None:
+                        rem = cnt - 1  # 첫 통과 완료 → 남은 반복
+                    if rem > 0:
+                        loop_remaining[s_idx] = rem - 1
+                        next_idx = s_idx
+                    else:
+                        loop_remaining.pop(s_idx, None)
                 idx = next_idx
         finally:
             self._running = False

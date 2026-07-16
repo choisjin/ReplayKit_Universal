@@ -130,12 +130,25 @@ class Step(BaseModel):
     screenshot_device_id: Optional[str] = None  # 이미지 비교용 디바이스 (wait 등 디바이스 비종속 스텝에서 사용)
 
 
+class LoopRange(BaseModel):
+    """구간반복 — start~end(1-based, step.id 기준, 포함) 구간을 count회 반복 실행.
+
+    step.id 는 저장 시 항상 1-based 위치로 재번호되므로 start/end 는 스텝 위치와
+    동일하다. count 는 구간의 '총 실행 횟수'(예: 2 = 두 번 실행)이며 1 이하이면
+    반복 없음으로 취급한다.
+    """
+    start: int
+    end: int
+    count: int = 2
+
+
 class Scenario(BaseModel):
     name: str
     description: str = ""
     device_serial: Optional[str] = None
     resolution: Optional[dict[str, int]] = None  # {"width": 1080, "height": 1920}
     steps: list[Step] = Field(default_factory=list)
+    loops: list[LoopRange] = Field(default_factory=list)  # 구간반복 정의
     device_map: dict[str, str] = Field(default_factory=dict)  # alias -> real device id (e.g. "Android_1" -> "RXCT30...")
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

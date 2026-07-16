@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Button, Card, Checkbox, Col, Image, Input, Modal, Radio, Row, Segmented, Select, Slider, Space, InputNumber, message, List, Tabs, Tag, Popover, Tooltip, Splitter } from 'antd';
-import { PlayCircleOutlined, PauseOutlined, PlusOutlined, SwapOutlined, FolderOpenOutlined, SaveOutlined, DeleteOutlined, BranchesOutlined, ScissorOutlined, CameraOutlined, ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined, EditOutlined, CopyOutlined, ZoomInOutlined, ZoomOutOutlined, HolderOutlined, SettingOutlined, StopOutlined, QuestionCircleOutlined, FundProjectionScreenOutlined, ReloadOutlined, FieldTimeOutlined, SearchOutlined } from '@ant-design/icons';
+import { PlayCircleOutlined, PauseOutlined, PlusOutlined, SwapOutlined, FolderOpenOutlined, SaveOutlined, DeleteOutlined, BranchesOutlined, ScissorOutlined, CameraOutlined, ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined, EditOutlined, CopyOutlined, ZoomInOutlined, ZoomOutOutlined, HolderOutlined, SettingOutlined, StopOutlined, QuestionCircleOutlined, FundProjectionScreenOutlined, ReloadOutlined, FieldTimeOutlined, SearchOutlined, RetweetOutlined } from '@ant-design/icons';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -20,7 +20,7 @@ const { Option } = Select;
 const { TextArea } = Input;
 
 // 드래그 가능한 스텝 아이템 래퍼
-const SortableStepItem = ({ id, index, isDark, children }: { id: string; index: number; isDark: boolean; children: React.ReactNode }) => {
+const SortableStepItem = ({ id, index, isDark, loopStyle, children }: { id: string; index: number; isDark: boolean; loopStyle?: { color: string; isStart: boolean; isEnd: boolean } | null; children: React.ReactNode }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -29,8 +29,16 @@ const SortableStepItem = ({ id, index, isDark, children }: { id: string; index: 
     display: 'flex',
     padding: '4px 8px',
     gap: 6,
-    background: index % 2 === 0 ? undefined : 'rgba(255,255,255,0.04)',
-    borderBottom: isDark ? '1px solid #303030' : '1px solid #f0f0f0',
+    background: loopStyle
+      ? hexToRgba(loopStyle.color, isDark ? 0.14 : 0.07)
+      : (index % 2 === 0 ? undefined : 'rgba(255,255,255,0.04)'),
+    borderBottom: loopStyle?.isEnd
+      ? `2px solid ${loopStyle.color}`
+      : (isDark ? '1px solid #303030' : '1px solid #f0f0f0'),
+    ...(loopStyle ? {
+      borderLeft: `3px solid ${loopStyle.color}`,
+      borderTop: loopStyle.isStart ? `2px solid ${loopStyle.color}` : undefined,
+    } : {}),
   };
   return (
     <div ref={setNodeRef} style={style}>
@@ -249,6 +257,68 @@ interface Step {
   _imageVer?: number; // 미리보기 캐시 버스팅용 (프론트엔드 전용)
 }
 
+// 구간반복 — start~end(1-based 스텝 위치, 포함) 구간을 count회 실행.
+// 백엔드 Scenario.loops 와 동일 형식. step.id 는 저장 시 위치로 재번호되므로
+// start/end 는 스텝 위치(1-based)와 일치한다.
+interface LoopRange {
+  start: number;
+  end: number;
+  count: number;
+}
+
+// 구간반복 시각 표시용 색상 팔레트 (loops 배열 순서대로 순환)
+const LOOP_COLORS = ['#1677ff', '#fa8c16', '#52c41a', '#eb2f96', '#722ed1', '#13c2c2'];
+const loopColorAt = (i: number) => LOOP_COLORS[i % LOOP_COLORS.length];
+function hexToRgba(hex: string, a: number): string {
+  const m = hex.replace('#', '');
+  const r = parseInt(m.slice(0, 2), 16);
+  const g = parseInt(m.slice(2, 4), 16);
+  const b = parseInt(m.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+// 두 구간이 겹치는지 (포함 경계)
+const loopsOverlap = (a: { start: number; end: number }, b: { start: number; end: number }) =>
+  a.start <= b.end && b.start <= a.end;
+
+// ── 구간반복 위치 리맵 헬퍼 (스텝 삽입/삭제/재정렬 시 start/end 유지) ──
+// 스텝 삽입: insertPos1(1-based) 이상 경계를 count 만큼 밀어냄
+function shiftLoopsOnInsert(loops: LoopRange[], insertPos1: number, count = 1): LoopRange[] {
+  return loops.map(lp => ({
+    ...lp,
+    start: lp.start >= insertPos1 ? lp.start + count : lp.start,
+    end: lp.end >= insertPos1 ? lp.end + count : lp.end,
+  }));
+}
+// 스텝 삭제: delIdx0(0-based) 위치 제거 → 구간 축소/이동, 비면 드롭
+function remapLoopsOnDelete(loops: LoopRange[], delIdx0: number): LoopRange[] {
+  const del1 = delIdx0 + 1;
+  const out: LoopRange[] = [];
+  for (const lp of loops) {
+    let { start, end } = lp;
+    if (del1 < start) { start -= 1; end -= 1; }
+    else if (del1 <= end) { end -= 1; } // 구간 내부/시작 삭제 → 뒤 경계 축소
+    if (end >= start) out.push({ ...lp, start, end });
+  }
+  return out;
+}
+// 스텝 재정렬: posMapping(old 1-based → new 1-based)로 경계를 이동, 없어지면 드롭
+function remapLoopsOnReorder(loops: LoopRange[], posMapping: Map<number, number>): LoopRange[] {
+  const out: LoopRange[] = [];
+  for (const lp of loops) {
+    const ns = posMapping.get(lp.start);
+    const ne = posMapping.get(lp.end);
+    if (ns == null || ne == null || ns < 1 || ne < 1) continue;
+    out.push({ ...lp, start: Math.min(ns, ne), end: Math.max(ns, ne) });
+  }
+  return out;
+}
+// 최종 안전망: 현재 스텝 수 범위로 클램프, 무효 구간 드롭
+function clampLoops(loops: LoopRange[], len: number): LoopRange[] {
+  return loops
+    .filter(lp => lp.start >= 1 && lp.end >= lp.start && lp.end <= len)
+    .map(lp => ({ ...lp, count: Math.max(2, Math.floor(lp.count || 2)) }));
+}
+
 interface HkmcKeyInfo {
   name: string;
   group: string;
@@ -441,6 +511,17 @@ export default function RecordPage() {
   const [description, setDescription] = useState('');
   const [steps, setSteps] = useState<Step[]>([]);
 
+  // 구간반복 (start~end 1-based, count회 실행)
+  const [loops, setLoops] = useState<LoopRange[]>([]);
+  const savedLoopsRef = useRef<string>('[]');
+  // 구간반복 모달 상태
+  const [loopModalOpen, setLoopModalOpen] = useState(false);
+  const [loopSelStart, setLoopSelStart] = useState<number | null>(null); // 0-based
+  const [loopSelEnd, setLoopSelEnd] = useState<number | null>(null);     // 0-based
+  const [loopSelAnchor, setLoopSelAnchor] = useState<number | null>(null);
+  const [loopCount, setLoopCount] = useState<number>(2);
+  const [editingLoopIdx, setEditingLoopIdx] = useState<number | null>(null);
+
   // Scenario load/edit
   const [savedScenarios, setSavedScenarios] = useState<string[]>([]);
   const [editingExisting, setEditingExisting] = useState(false);
@@ -456,8 +537,8 @@ export default function RecordPage() {
     // steps.length === 0 인 경우에도 저장된 스냅샷이 비어있지 않으면 dirty
     // (전체 삭제 후 저장 버튼이 사라져 이어녹화 시 서버에서 복원되는 버그 방지)
     const current = JSON.stringify(steps.map(({ _imageVer, ...rest }) => rest));
-    return current !== savedStepsRef.current;
-  }, [steps]);
+    return current !== savedStepsRef.current || JSON.stringify(loops) !== savedLoopsRef.current;
+  }, [steps, loops]);
   const confirmIfDirty = useCallback((): Promise<boolean> => {
     if (!isDirty()) return Promise.resolve(true);
     return new Promise(resolve => {
@@ -3900,8 +3981,11 @@ export default function RecordPage() {
       const loadedSteps = res.data.steps || [];
       setSteps(loadedSteps);
       savedStepsRef.current = JSON.stringify(loadedSteps.map(({ _imageVer, ...rest }: any) => rest));
-      // 프론트엔드에서 편집하지 않는 시나리오 메타데이터 보존
-      const { name: _n, description: _d, steps: _s, ...meta } = res.data;
+      const loadedLoops: LoopRange[] = clampLoops(res.data.loops || [], loadedSteps.length);
+      setLoops(loadedLoops);
+      savedLoopsRef.current = JSON.stringify(loadedLoops);
+      // 프론트엔드에서 편집하지 않는 시나리오 메타데이터 보존 (loops 는 별도 관리하므로 제외)
+      const { name: _n, description: _d, steps: _s, loops: _l, ...meta } = res.data;
       scenarioMetaRef.current = meta;
       setEditingExisting(true);
       message.success(t('record.scenarioLoaded', { name, count: res.data.steps?.length || 0 }));
@@ -3942,12 +4026,16 @@ export default function RecordPage() {
         }
         return out;
       });
+      const savedLoops = clampLoops(loops, reindexed.length);
       await scenarioApi.update(newName, {
         ...scenarioMetaRef.current,
         name: newName,
         description,
         steps: reindexed,
+        loops: savedLoops,
       });
+      if (savedLoops.length !== loops.length) setLoops(savedLoops);
+      savedLoopsRef.current = JSON.stringify(savedLoops);
       // _imageVer 복원 (캐시 버스팅 유지) — 리네임된 경우 새 파일명을 강제 리로드
       const renamed = Object.keys(renamedStepsByIdx).length > 0;
       const savedSteps = reindexed.map((s, i) => ({
@@ -3990,13 +4078,16 @@ export default function RecordPage() {
     if (editingExisting) {
       try {
         const newName = scenarioName.trim();
+        const syncedLoops = clampLoops(loops, reindexed.length);
         await scenarioApi.update(newName, {
           ...scenarioMetaRef.current,
           name: newName,
           description,
           steps: reindexed,
+          loops: syncedLoops,
         });
         savedStepsRef.current = JSON.stringify(reindexed);
+        savedLoopsRef.current = JSON.stringify(syncedLoops);
         return true;
       } catch (e: any) {
         console.warn('disk save failed:', e?.response?.data?.detail || e);
@@ -4060,6 +4151,7 @@ export default function RecordPage() {
         on_fail_goto: remapGoto(s.on_fail_goto, mapping),
       }));
     });
+    setLoops((prev) => remapLoopsOnDelete(prev, index));
     message.success(t('record.stepDeleted', { index: index + 1 }));
   };
 
@@ -4087,6 +4179,16 @@ export default function RecordPage() {
       }));
       return reordered;
     });
+    // 구간반복 경계도 동일 매핑으로 이동 (setSteps 밖에서 top-level 갱신 — 중첩 setState 회피)
+    {
+      const oldIds = steps.map((_, i) => i + 1);
+      const newIds = [...oldIds];
+      newIds.splice(oldIndex, 1);
+      newIds.splice(newIndex, 0, oldIds[oldIndex]);
+      const posMapping = new Map<number, number>();
+      for (let i = 0; i < steps.length; i++) posMapping.set(i + 1, newIds.indexOf(i + 1) + 1);
+      setLoops((prevL) => remapLoopsOnReorder(prevL, posMapping));
+    }
     // 녹화/편집 모드 모두에서 즉시 백엔드 동기화 (in-memory 또는 디스크)
     if (scenarioName.trim() && reordered.length > 0) {
       syncFrontendStepsToBackend(reordered).catch((e: any) => {
@@ -4336,6 +4438,12 @@ export default function RecordPage() {
         });
         return reordered;
       });
+      // 벌크 이동은 위치가 크게 재배열되므로 구간반복 경계 추적이 어렵다.
+      // 이동된 스텝과 겹치는 구간은 드롭하고, 나머지는 새 스텝 수로 클램프한다.
+      setLoops(prev => clampLoops(
+        prev.filter(lp => !sortedIndices.some(mi => mi + 1 >= lp.start && mi + 1 <= lp.end)),
+        reordered.length,
+      ));
       setImportStepModalOpen(false);
       message.success(t('record.stepsMoved', { count: sortedIndices.length }));
       // 녹화/편집 모드 모두에서 즉시 백엔드 동기화
@@ -4360,6 +4468,8 @@ export default function RecordPage() {
         merged = arr.map((s, i) => ({ ...s, id: i + 1 }));
         return merged;
       });
+      // 삽입 위치(importInsertIndex+2) 이후 구간반복 경계를 imported.length 만큼 시프트
+      setLoops(prev => shiftLoopsOnInsert(prev, importInsertIndex + 2, imported.length));
       setImportStepModalOpen(false);
       message.success(t('record.stepsImported', { count: imported.length }));
       // 녹화/편집 모드 모두에서 즉시 백엔드 동기화 (import-steps는 target을 변경하지 않음)
@@ -4409,9 +4519,9 @@ export default function RecordPage() {
       // During recording: 프론트엔드 상태에 삽입(afterIndex 있으면 지정 위치, 없으면 맨 뒤)
       // + 백엔드에도 addStep 호출. 순서 차이는 저장 시점에 frontend state가 일괄 push됨.
       if (afterIndex !== undefined) {
+        const insertPos1Based = afterIndex + 2;
         setSteps((prev) => {
           const arr = [...prev];
-          const insertPos1Based = afterIndex + 2;
           arr.splice(afterIndex + 1, 0, waitStep);
           return arr.map((s, i) => ({
             ...s,
@@ -4420,6 +4530,7 @@ export default function RecordPage() {
             on_fail_goto: s.on_fail_goto != null && s.on_fail_goto !== -1 && s.on_fail_goto >= insertPos1Based ? s.on_fail_goto + 1 : s.on_fail_goto,
           }));
         });
+        setLoops((prev) => shiftLoopsOnInsert(prev, insertPos1Based));
       } else {
         setSteps((prev) => [...prev, waitStep]);
       }
@@ -4447,9 +4558,9 @@ export default function RecordPage() {
         }
       }
     } else if (afterIndex !== undefined) {
+      const insertPos1Based = afterIndex + 2;
       setSteps((prev) => {
         const arr = [...prev];
-        const insertPos1Based = afterIndex + 2;
         arr.splice(afterIndex + 1, 0, waitStep);
         // 삽입 위치 이후의 goto 참조를 +1 시프트 + ID 재번호
         return arr.map((s, i) => ({
@@ -4459,6 +4570,7 @@ export default function RecordPage() {
           on_fail_goto: s.on_fail_goto != null && s.on_fail_goto !== -1 && s.on_fail_goto >= insertPos1Based ? s.on_fail_goto + 1 : s.on_fail_goto,
         }));
       });
+      setLoops((prev) => shiftLoopsOnInsert(prev, insertPos1Based));
     } else {
       setSteps((prev) => [...prev, { ...waitStep, id: prev.length + 1 }]);
     }
@@ -4504,6 +4616,94 @@ export default function RecordPage() {
       }}>{t('record.addWait')}</Button>
     </div>
   );
+
+  // ── 구간반복 ──
+  const openLoopModal = () => {
+    setEditingLoopIdx(null);
+    setLoopSelStart(null);
+    setLoopSelEnd(null);
+    setLoopSelAnchor(null);
+    setLoopCount(2);
+    setLoopModalOpen(true);
+  };
+
+  // 스텝 리스트에서 클릭 선택 — 첫 클릭=단일, 두 번째 클릭=범위, 이후 클릭=새로 시작
+  const clickLoopStep = (i: number) => {
+    if (loopSelAnchor === null) {
+      setLoopSelAnchor(i);
+      setLoopSelStart(i);
+      setLoopSelEnd(i);
+    } else {
+      setLoopSelStart(Math.min(loopSelAnchor, i));
+      setLoopSelEnd(Math.max(loopSelAnchor, i));
+      setLoopSelAnchor(null); // 다음 클릭은 새 선택 시작
+    }
+  };
+
+  // 현재 선택으로 만들 후보 구간 (1-based)
+  const loopCandidate = useMemo<LoopRange | null>(() => {
+    if (loopSelStart === null || loopSelEnd === null) return null;
+    return { start: Math.min(loopSelStart, loopSelEnd) + 1, end: Math.max(loopSelStart, loopSelEnd) + 1, count: loopCount };
+  }, [loopSelStart, loopSelEnd, loopCount]);
+
+  // 후보 구간이 (편집 대상 제외) 기존 구간과 겹치는지
+  const loopOverlapError = useMemo(() => {
+    if (!loopCandidate) return false;
+    return loops.some((lp, i) => i !== editingLoopIdx && loopsOverlap(lp, loopCandidate));
+  }, [loopCandidate, loops, editingLoopIdx]);
+
+  const confirmLoop = () => {
+    if (!loopCandidate) { message.warning(t('record.loopSelectSteps')); return; }
+    if (loopOverlapError) { message.error(t('record.loopOverlap')); return; }
+    const count = Math.max(2, Math.floor(loopCount || 2));
+    const next: LoopRange = { start: loopCandidate.start, end: loopCandidate.end, count };
+    setLoops(prev => {
+      const arr = editingLoopIdx !== null
+        ? prev.map((lp, i) => i === editingLoopIdx ? next : lp)
+        : [...prev, next];
+      return [...arr].sort((a, b) => a.start - b.start);
+    });
+    // 선택 초기화 (모달은 유지 — 연속 추가 가능)
+    setEditingLoopIdx(null);
+    setLoopSelStart(null);
+    setLoopSelEnd(null);
+    setLoopSelAnchor(null);
+    setLoopCount(2);
+    message.success(editingLoopIdx !== null ? t('record.loopUpdated') : t('record.loopAdded'));
+  };
+
+  const editLoop = (idx: number) => {
+    const lp = loops[idx];
+    if (!lp) return;
+    setEditingLoopIdx(idx);
+    setLoopSelStart(lp.start - 1);
+    setLoopSelEnd(lp.end - 1);
+    setLoopSelAnchor(null);
+    setLoopCount(lp.count);
+  };
+
+  const deleteLoop = (idx: number) => {
+    setLoops(prev => prev.filter((_, i) => i !== idx));
+    if (editingLoopIdx === idx) {
+      setEditingLoopIdx(null);
+      setLoopSelStart(null);
+      setLoopSelEnd(null);
+      setLoopSelAnchor(null);
+      setLoopCount(2);
+    }
+  };
+
+  // 스텝 인덱스(0-based) → 소속 구간반복 시각 정보 (테두리/배경/배지)
+  const loopStyleByIndex = useMemo(() => {
+    const map = new Map<number, { color: string; isStart: boolean; isEnd: boolean; count: number; loopIdx: number }>();
+    loops.forEach((lp, li) => {
+      const color = loopColorAt(li);
+      for (let pos = lp.start; pos <= lp.end; pos++) {
+        map.set(pos - 1, { color, isStart: pos === lp.start, isEnd: pos === lp.end, count: lp.count, loopIdx: li });
+      }
+    });
+    return map;
+  }, [loops]);
 
   // ── Device 일괄 전환 ──
   const [deviceSwapOpen, setDeviceSwapOpen] = useState(false);
@@ -4832,6 +5032,8 @@ export default function RecordPage() {
     setOriginalScenarioName('');
     setDescription('');
     setSteps([]);
+    setLoops([]);
+    savedLoopsRef.current = '[]';
     setEditingExisting(false);
   };
 
@@ -4953,6 +5155,8 @@ export default function RecordPage() {
       setDescription('');
       setSteps([]);
       savedStepsRef.current = '[]';
+      setLoops([]);
+      savedLoopsRef.current = '[]';
       setEditingExisting(true);
       setSavedScenarios(prev => prev.includes(name) ? prev : [...prev, name]);
       setScenarioName(name);
@@ -5128,8 +5332,25 @@ export default function RecordPage() {
     <SortableContext items={steps.map((_, i) => `step-${i}`)} strategy={verticalListSortingStrategy}>
     <div className="ant-list ant-list-sm">
       {steps.length === 0 && <div style={{ padding: 13, textAlign: 'center', color: '#888' }}>{t('record.noSteps')}</div>}
-      {steps.map((s, index) => (
-        <SortableStepItem key={`step-${index}`} id={`step-${index}`} index={index} isDark={isDark}>
+      {steps.map((s, index) => {
+        const ls = loopStyleByIndex.get(index);
+        return (
+        <React.Fragment key={`step-${index}`}>
+        {ls?.isStart && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '2px 8px 2px 10px', fontSize: 11, fontWeight: 600,
+            color: ls.color, background: hexToRgba(ls.color, isDark ? 0.18 : 0.1),
+            borderLeft: `3px solid ${ls.color}`, borderTop: `1px solid ${ls.color}`,
+          }}>
+            <RetweetOutlined />
+            <span>{t('record.loopBannerLabel', { start: loops[ls.loopIdx]?.start ?? index + 1, end: loops[ls.loopIdx]?.end ?? index + 1, count: ls.count })}</span>
+            <Button size="small" type="text" style={{ color: ls.color, marginLeft: 'auto', height: 18, padding: '0 6px', fontSize: 11 }}
+              onClick={() => { editLoop(ls.loopIdx); setLoopModalOpen(true); }}
+            >{t('common.edit')}</Button>
+          </div>
+        )}
+        <SortableStepItem id={`step-${index}`} index={index} isDark={isDark} loopStyle={ls ? { color: ls.color, isStart: ls.isStart, isEnd: ls.isEnd } : null}>
           {/* 좌측: 스텝 정보 */}
           <div style={{ flex: 1, minWidth: 0 }}>
             {/* 1행: 설명, 함수(인자), delay(우측정렬) */}
@@ -5320,11 +5541,13 @@ export default function RecordPage() {
             </div>
           </div>
         </SortableStepItem>
-      ))}
+        </React.Fragment>
+        );
+      })}
     </div>
     </SortableContext>
     </DndContext>
-  ), [steps, recording, updateStepJump, updateStepExclude, updateStepDescription, openEditStepModal, openRoiModal, screenshotDeviceId, scenarioName, saveExpectedFull, openCaptureModal, testStep, testingStepIndex, updateCompareMode, openExcludeRoiModal, openMultiCropModal, showAnnotatedPreview, selectCompareMode, compareModePopoverIndex, waitPopoverIndex, wMode, wDuration, wStart, wInterval, wMin, wMax, allDevices, t, dndSensors, handleDragEnd, openImportStepModal]);
+  ), [steps, loops, loopStyleByIndex, isDark, recording, updateStepJump, updateStepExclude, updateStepDescription, openEditStepModal, openRoiModal, screenshotDeviceId, scenarioName, saveExpectedFull, openCaptureModal, testStep, testingStepIndex, updateCompareMode, openExcludeRoiModal, openMultiCropModal, showAnnotatedPreview, selectCompareMode, compareModePopoverIndex, waitPopoverIndex, wMode, wDuration, wStart, wInterval, wMin, wMax, allDevices, t, dndSensors, handleDragEnd, openImportStepModal]);
 
   return (
     <div className="record-page" style={{ height: 'calc(100vh - 80px)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -6910,6 +7133,12 @@ export default function RecordPage() {
                     <Button size="small" icon={<SwapOutlined />} disabled={steps.length === 0}>{t('record.screenSwap')}</Button>
                   </Popover>
                 )}
+                <Button
+                  size="small"
+                  icon={<RetweetOutlined />}
+                  disabled={steps.length === 0}
+                  onClick={openLoopModal}
+                >{t('record.loopSection')}{loops.length > 0 ? ` (${loops.length})` : ''}</Button>
                 <Popover
                   open={waitPopoverIndex === 'end'}
                   onOpenChange={(v) => setWaitPopoverIndex(v ? 'end' : null)}
@@ -6926,6 +7155,92 @@ export default function RecordPage() {
           </Card>
         </Splitter.Panel>
       </Splitter>
+
+      {/* 구간반복 모달 — 연속 스텝 구간을 선택해 N회 반복 정의/편집/삭제 */}
+      <Modal
+        title={<span><RetweetOutlined /> {t('record.loopModalTitle')}</span>}
+        open={loopModalOpen}
+        onCancel={() => setLoopModalOpen(false)}
+        footer={<Button onClick={() => setLoopModalOpen(false)}>{t('common.close')}</Button>}
+        width={640}
+        styles={{ body: { maxHeight: '70vh', overflow: 'auto' } }}
+      >
+        <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>{t('record.loopSelectHint')}</div>
+        {/* 스텝 선택 리스트 */}
+        <div style={{ border: '1px solid', borderColor: isDark ? '#303030' : '#f0f0f0', borderRadius: 4, maxHeight: 240, overflow: 'auto', marginBottom: 10 }}>
+          {steps.length === 0 && <div style={{ padding: 12, textAlign: 'center', color: '#888' }}>{t('record.noSteps')}</div>}
+          {steps.map((s, i) => {
+            const lo = Math.min(loopSelStart ?? Infinity, loopSelEnd ?? Infinity);
+            const hi = Math.max(loopSelStart ?? -Infinity, loopSelEnd ?? -Infinity);
+            const inSel = loopSelStart !== null && loopSelEnd !== null && i >= lo && i <= hi;
+            const existing = loopStyleByIndex.get(i);
+            return (
+              <div
+                key={`loopsel-${i}`}
+                onClick={() => clickLoopStep(i)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', cursor: 'pointer',
+                  fontSize: 12, borderBottom: isDark ? '1px solid #262626' : '1px solid #fafafa',
+                  background: inSel ? hexToRgba('#1677ff', isDark ? 0.28 : 0.14) : undefined,
+                  borderLeft: existing ? `3px solid ${existing.color}` : '3px solid transparent',
+                }}
+              >
+                <Tag color={s.type === 'wait' ? 'cyan' : 'blue'} style={{ margin: 0, minWidth: 30, textAlign: 'center' }}>{i + 1}</Tag>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {s.description || (s.type === 'module_command' ? `${s.params?.module || ''}.${s.params?.function || ''}` : s.type)}
+                </span>
+                {existing && <Tag style={{ margin: 0, color: existing.color, borderColor: existing.color }} bordered><RetweetOutlined /> ×{existing.count}</Tag>}
+                {inSel && <CheckCircleOutlined style={{ color: '#1677ff' }} />}
+              </div>
+            );
+          })}
+        </div>
+        {/* 선택 요약 + 반복 횟수 + 추가/수정 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+          <span style={{ fontSize: 12 }}>
+            {loopCandidate
+              ? (loopCandidate.start === loopCandidate.end
+                  ? t('record.loopSelSingle', { step: loopCandidate.start })
+                  : t('record.loopSelRange', { start: loopCandidate.start, end: loopCandidate.end }))
+              : t('record.loopSelNone')}
+          </span>
+          <span style={{ marginLeft: 'auto', fontSize: 12 }}>{t('record.loopCount')}:</span>
+          <InputNumber size="small" min={2} max={9999} value={loopCount} onChange={(v) => setLoopCount(Math.max(2, Math.floor(v || 2)))} style={{ width: 90 }} />
+          <Button type="primary" size="small" disabled={!loopCandidate || loopOverlapError} onClick={confirmLoop}>
+            {editingLoopIdx !== null ? t('record.loopUpdate') : t('record.loopAdd')}
+          </Button>
+          {(loopSelStart !== null || editingLoopIdx !== null) && (
+            <Button size="small" onClick={() => { setEditingLoopIdx(null); setLoopSelStart(null); setLoopSelEnd(null); setLoopSelAnchor(null); setLoopCount(2); }}>
+              {t('common.cancel')}
+            </Button>
+          )}
+        </div>
+        {loopOverlapError && <div style={{ color: '#ff4d4f', fontSize: 12, marginBottom: 6 }}>{t('record.loopOverlap')}</div>}
+
+        {/* 현재 구간반복 리스트 */}
+        <div style={{ marginTop: 12, borderTop: isDark ? '1px solid #303030' : '1px solid #f0f0f0', paddingTop: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{t('record.loopListTitle', { count: loops.length })}</div>
+          {loops.length === 0 && <div style={{ color: '#888', fontSize: 12 }}>{t('record.loopListEmpty')}</div>}
+          {loops.map((lp, i) => (
+            <div key={`looplist-${i}`} style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', marginBottom: 4,
+              borderRadius: 4, background: hexToRgba(loopColorAt(i), isDark ? 0.16 : 0.08),
+              borderLeft: `3px solid ${loopColorAt(i)}`,
+              outline: editingLoopIdx === i ? `1px dashed ${loopColorAt(i)}` : undefined,
+            }}>
+              <RetweetOutlined style={{ color: loopColorAt(i) }} />
+              <span style={{ flex: 1, fontSize: 12 }}>
+                {lp.start === lp.end
+                  ? t('record.loopSelSingle', { step: lp.start })
+                  : t('record.loopSelRange', { start: lp.start, end: lp.end })}
+                {' '}<b style={{ color: loopColorAt(i) }}>×{lp.count}</b>
+              </span>
+              <Button size="small" type="text" icon={<EditOutlined />} onClick={() => editLoop(i)} style={{ color: '#1890ff' }} />
+              <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => deleteLoop(i)} />
+            </div>
+          ))}
+        </div>
+      </Modal>
 
       {/* Image Touch Modal — 새 IMAGE_TAP 녹화 또는 기존 스텝 템플릿 교체 (편집). */}
       <Modal
