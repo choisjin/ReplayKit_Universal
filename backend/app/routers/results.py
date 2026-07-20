@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
@@ -1466,18 +1466,104 @@ async def list_recordings_for_result(result_filename: str):
     if rec_dir and rec_dir.is_dir():
         for pattern in ("*.webm", "*.mp4"):
             for f in rec_dir.glob(pattern):
-                _consider(f, f"/results-files/{base}/recordings/{f.name}")
+                # Range를 지원하는 전용 엔드포인트로 서빙 (StaticFiles는 206을 못 준다)
+                _consider(f, f"/api/results/video/{quote(f'{base}/recordings/{f.name}')}")
 
     # 레거시: Results/Video/ 에서도 탐색 (webm + mp4)
     for pattern in (f"{base}_webcam_*.webm", f"{base}_webcam_*.mp4"):
         for f in RECORDINGS_DIR.glob(pattern):
-            _consider(f, f"/recordings/{f.name}")
+            _consider(f, f"/api/results/video/{quote(f.name)}")
 
     recordings = [
         {k: v for k, v in rec.items() if k != "_is_mp4"}
         for _, rec in sorted(candidates.items(), key=lambda kv: kv[0])
     ]
     return {"recordings": recordings}
+
+
+_RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
+_VIDEO_MIME = {".mp4": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska"}
+
+
+@router.get("/video/{rel_path:path}")
+def stream_recording(rel_path: str, request: Request):
+    """녹화 영상을 **Range 지원**으로 서빙한다.
+
+    starlette 0.35의 StaticFiles는 Range를 처리하지 못해 206을 못 준다. 그러면
+    브라우저가 `video.seekable`을 비워버려 seek이 0으로 snap되고, 프론트는 이를
+    피하려고 **파일 전체를 blob으로 받아야만** 했다. 회차가 많은 에이징 결과에서는
+    회차를 옮길 때마다 수십~수백 MB를 통째로 받느라 10초 seek 예산을 넘기고,
+    그 다운로드들이 브라우저의 호스트당 6개 연결을 물고 있어 스크린샷 이미지까지
+    같이 굶었다. 여기서 206을 제대로 주면 브라우저가 필요한 구간만 집어간다.
+
+    sync def라 FastAPI가 스레드풀에서 실행 → 파일 IO가 이벤트 루프를 막지 않는다.
+    """
+    # 런 폴더(results/) → 레거시(Results/Video/) 순으로 탐색. 경로 이탈은 차단.
+    filepath: Path | None = None
+    for root in (RESULTS_DIR, RECORDINGS_DIR):
+        try:
+            candidate = (root / rel_path).resolve()
+            candidate.relative_to(root.resolve())
+        except (ValueError, OSError):
+            continue
+        if candidate.is_file():
+            filepath = candidate
+            break
+    if filepath is None:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    media_type = _VIDEO_MIME.get(filepath.suffix.lower(), "application/octet-stream")
+    file_size = filepath.stat().st_size
+    base_headers = {"Accept-Ranges": "bytes", "Cache-Control": "no-cache"}
+
+    range_header = request.headers.get("range")
+    if not range_header:
+        return FileResponse(str(filepath), media_type=media_type, headers=base_headers)
+
+    m = _RANGE_RE.fullmatch(range_header.strip())
+    if not m or file_size == 0:
+        # 파싱 불가한 Range는 전체를 돌려준다(브라우저가 알아서 재시도).
+        return FileResponse(str(filepath), media_type=media_type, headers=base_headers)
+
+    start_s, end_s = m.groups()
+    if start_s == "":
+        # suffix range: 마지막 N 바이트 (moov atom이 뒤에 있는 mp4에서 실제로 쓰인다)
+        if end_s == "":
+            return FileResponse(str(filepath), media_type=media_type, headers=base_headers)
+        start = max(0, file_size - int(end_s))
+        end = file_size - 1
+    else:
+        start = int(start_s)
+        end = int(end_s) if end_s else file_size - 1
+    end = min(end, file_size - 1)
+
+    if start >= file_size or start > end:
+        return Response(status_code=416, headers={**base_headers,
+                                                  "Content-Range": f"bytes */{file_size}"})
+
+    length = end - start + 1
+
+    def _iter_slice():
+        remaining = length
+        with open(filepath, "rb") as fh:
+            fh.seek(start)
+            while remaining > 0:
+                chunk = fh.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    return StreamingResponse(
+        _iter_slice(),
+        status_code=206,
+        media_type=media_type,
+        headers={
+            **base_headers,
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(length),
+        },
+    )
 
 
 @router.delete("/recordings/{filename}")

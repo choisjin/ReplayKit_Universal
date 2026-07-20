@@ -287,6 +287,9 @@ export default function ResultsPage() {
   // 백그라운드 CMD/SSH 폴링 (task_id도 함께 추적해서 취소 가능)
   const bgPollTimers = useRef<ReturnType<typeof setInterval>[]>([]);
   const bgPollTaskIds = useRef<string[]>([]);
+  // 404로 확정된 태스크(서버 재시작으로 소실). effect가 재실행돼도 다시 폴링하지
+  // 않도록 세션 내내 유지한다 — 안 그러면 상세를 다시 열 때마다 수백 개를 재조회한다.
+  const bgDeadTaskIds = useRef<Set<string>>(new Set());
   const stopAllResultBgPolls = (cancelBackend: boolean = true) => {
     bgPollTimers.current.forEach(t => clearInterval(t));
     bgPollTimers.current = [];
@@ -620,72 +623,16 @@ export default function ResultsPage() {
     }
   };
 
-  // activeRecUrl이 바뀔 때마다 해당 파일을 fetch해서 Blob URL로 변환.
-  // 이렇게 해야 video.seekable이 정상적으로 [0,duration] 범위를 가진다 (Range 응답 무관).
+  // 영상 URL을 그대로 <video src>에 물린다.
+  // 예전엔 파일 전체를 fetch → Blob URL로 바꿔야 video.seekable이 채워졌다.
+  // StaticFiles(starlette 0.35)가 Range/206을 못 줬기 때문인데, 회차가 많은
+  // 에이징 결과에서는 회차를 옮길 때마다 수십~수백 MB를 통째로 받느라
+  // 10초 seek 예산을 넘겨 "로드 실패"가 나고, 그 다운로드가 브라우저의
+  // 호스트당 6개 연결을 물고 있어 스크린샷 이미지까지 같이 굶었다.
+  // 이제 /api/results/video 가 206을 주므로 브라우저가 필요한 구간만 받는다.
   useEffect(() => {
-    if (!activeRecUrl) {
-      setActiveRecBlobUrl('');
-      return;
-    }
-    const cached = blobUrlMapRef.current.get(activeRecUrl);
-    if (cached) {
-      setActiveRecBlobUrl(cached);
-      return;
-    }
-    let cancelled = false;
-    fetch(activeRecUrl)
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.blob().then(b => ({ blob: b, contentType: r.headers.get('content-type') || '' }));
-      })
-      .then(({ blob, contentType }) => {
-        if (cancelled) return;
-        // 빈 파일/0바이트 응답은 디코드 불가 — 명시적으로 에러 처리해서 readyState<1 무한 폴링 방지.
-        if (blob.size === 0) {
-          console.error('[video] blob empty — recording file likely missing or zero bytes', { url: activeRecUrl });
-          message.error('녹화 파일이 비어 있습니다 (0 bytes)');
-          setActiveRecBlobUrl('');
-          // 보류 중인 seek를 반드시 취소한다. 안 그러면 src가 영영 안 붙은 채
-          // tryApplyPendingSeek가 10초간 폴링하다 "코덱 문제" 오진 메시지를 띄운다.
-          cancelPendingSeek();
-          return;
-        }
-        // 서버가 영상 대신 HTML(SPA catch-all/에러페이지)을 돌려준 경우 —
-        // blob은 만들어지지만 디코드가 불가능해 원인 불명의 timeout으로 보인다.
-        // allow-list가 아니라 deny-list로 판정한다 — 서버/OS에 따라 video mime이
-        // 비어 오거나 낯선 값일 수 있어 정상 파일을 거부하면 안 된다.
-        if (/^(text\/|application\/(json|xhtml))/.test(contentType)) {
-          console.error('[video] unexpected content-type — not a video response',
-            { url: activeRecUrl, contentType });
-          message.error(`녹화 파일 대신 다른 응답을 받았습니다 (content-type: ${contentType}). `
-            + `URL이 서버로 전달되지 않았을 수 있습니다: ${activeRecUrl}`);
-          setActiveRecBlobUrl('');
-          cancelPendingSeek();
-          return;
-        }
-        console.log('[video] blob loaded', { url: activeRecUrl, size: blob.size, contentType });
-        const blobUrl = URL.createObjectURL(blob);
-        blobUrlMapRef.current.set(activeRecUrl, blobUrl);
-        setActiveRecBlobUrl(blobUrl);
-      })
-      .catch(err => {
-        if (cancelled) return;
-        console.warn('[video] blob fetch failed, falling back to direct URL',
-          { url: activeRecUrl, error: String(err) });
-        // 실패 시 직접 URL 사용 (seek 안 될 수 있지만 재생은 됨)
-        setActiveRecBlobUrl(activeRecUrl);
-      });
-    return () => { cancelled = true; };
+    setActiveRecBlobUrl(activeRecUrl || '');
   }, [activeRecUrl]);
-
-  // 컴포넌트 unmount 시 blob URL 해제 (메모리 leak 방지).
-  useEffect(() => {
-    const map = blobUrlMapRef.current;
-    return () => {
-      map.forEach(url => { try { URL.revokeObjectURL(url); } catch { /* ignore */ } });
-      map.clear();
-    };
-  }, []);
 
   // React 커밋 후 보류 중인 seek 적용 시도. 패널 마운트/URL 변경/리렌더 모두 커버.
   useEffect(() => {
@@ -956,7 +903,9 @@ export default function ResultsPage() {
     const pending: { taskId: string; idx: number }[] = [];
     detail.step_results.forEach((sr, idx) => {
       const bgMatch = sr.message?.match?.(/\[BG_TASK:(bg_\d+)\]/);
-      if (bgMatch) pending.push({ taskId: bgMatch[1], idx });
+      if (bgMatch && !bgDeadTaskIds.current.has(bgMatch[1])) {
+        pending.push({ taskId: bgMatch[1], idx });
+      }
     });
     if (pending.length === 0) return;
 
@@ -1022,6 +971,7 @@ export default function ResultsPage() {
         // 그 외(네트워크 오류 등)도 재시도하지 않는다. 재시도 폭주가 바로 이 버그의 원인이었다.
         alive.delete(taskId);
         bgPollTaskIds.current = bgPollTaskIds.current.filter(id => id !== taskId);
+        bgDeadTaskIds.current.add(taskId);   // 재시도 금지 (effect 재실행에도 유지)
         if (err?.response?.status === 404) {
           const lostMsg = `[BG_TASK:${taskId}] 결과 소실 (서버 재시작)`;
           setDetail(prev => {
