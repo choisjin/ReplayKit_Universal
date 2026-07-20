@@ -117,6 +117,33 @@ def _migrate_step_identity(data: dict) -> bool:
             s[key] = GOTO_END if gi == -1 else uid_by_id.get(gi)
             changed = True
 
+    # ④ 레거시 loops(정수 start/end = step.id 위치) → 경계 uid 변환.
+    #    경계 스텝을 못 찾으면 그 구간은 폐기한다(무엇을 반복할지 특정 불가).
+    loops = data.get("loops")
+    if isinstance(loops, list) and loops:
+        new_loops = []
+        for lp in loops:
+            if not isinstance(lp, dict):
+                continue
+            if "start_uid" in lp and "end_uid" in lp:
+                new_loops.append(lp)      # 이미 변환됨
+                continue
+            try:
+                s_uid = uid_by_id.get(int(lp.get("start")))
+                e_uid = uid_by_id.get(int(lp.get("end")))
+            except (TypeError, ValueError):
+                s_uid = e_uid = None
+            changed = True
+            if not s_uid or not e_uid:
+                logger.warning(
+                    "구간반복 폐기: 경계 스텝을 찾을 수 없습니다 "
+                    f"(start={lp.get('start')}, end={lp.get('end')})"
+                )
+                continue
+            new_loops.append({"start_uid": s_uid, "end_uid": e_uid,
+                              "count": lp.get("count", 2)})
+        data["loops"] = new_loops
+
     return changed
 
 

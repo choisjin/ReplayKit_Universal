@@ -286,10 +286,39 @@ interface Step {
 // 구간반복 — start~end(1-based 스텝 위치, 포함) 구간을 count회 실행.
 // 백엔드 Scenario.loops 와 동일 형식. step.id 는 저장 시 위치로 재번호되므로
 // start/end 는 스텝 위치(1-based)와 일치한다.
+// 저장 형식 — 경계는 step.uid (위치가 아님). 스텝 삽입/삭제로 밀리지 않는다.
 interface LoopRange {
+  start_uid: string;
+  end_uid: string;
+  count: number;
+}
+
+// UI 용 파생 형식 — 현재 스텝 배열 기준 1-based 위치를 얹은 것.
+// 위치 기반 UI 로직(테두리/배지/겹침검사)은 전부 이쪽을 쓴다.
+interface ResolvedLoop extends LoopRange {
   start: number;
   end: number;
-  count: number;
+}
+
+/** loops(uid) + steps → UI 용 위치를 해석. 경계 스텝이 사라진 구간은 제외한다. */
+function resolveLoops(loops: LoopRange[], steps: { uid?: string }[]): ResolvedLoop[] {
+  const posOf = new Map<string, number>();
+  steps.forEach((s, i) => { if (s.uid) posOf.set(s.uid, i + 1); });
+  const out: ResolvedLoop[] = [];
+  for (const lp of loops) {
+    const a = posOf.get(lp.start_uid);
+    const b = posOf.get(lp.end_uid);
+    if (a == null || b == null) continue;          // 경계 삭제됨 → 폐기
+    out.push({ ...lp, start: Math.min(a, b), end: Math.max(a, b) });
+  }
+  return out.sort((x, y) => x.start - y.start);
+}
+
+/** 경계 스텝이 남아 있는 구간만 유지. 삭제된 개수를 함께 반환(경고용). */
+function pruneLoops(loops: LoopRange[], steps: { uid?: string }[]): { kept: LoopRange[]; dropped: number } {
+  const alive = new Set(steps.map((s) => s.uid).filter(Boolean));
+  const kept = loops.filter((lp) => alive.has(lp.start_uid) && alive.has(lp.end_uid));
+  return { kept, dropped: loops.length - kept.length };
 }
 
 // 구간반복 시각 표시용 색상 팔레트 (loops 배열 순서대로 순환)
@@ -306,44 +335,10 @@ function hexToRgba(hex: string, a: number): string {
 const loopsOverlap = (a: { start: number; end: number }, b: { start: number; end: number }) =>
   a.start <= b.end && b.start <= a.end;
 
-// ── 구간반복 위치 리맵 헬퍼 (스텝 삽입/삭제/재정렬 시 start/end 유지) ──
-// 스텝 삽입: insertPos1(1-based) 이상 경계를 count 만큼 밀어냄
-function shiftLoopsOnInsert(loops: LoopRange[], insertPos1: number, count = 1): LoopRange[] {
-  return loops.map(lp => ({
-    ...lp,
-    start: lp.start >= insertPos1 ? lp.start + count : lp.start,
-    end: lp.end >= insertPos1 ? lp.end + count : lp.end,
-  }));
-}
-// 스텝 삭제: delIdx0(0-based) 위치 제거 → 구간 축소/이동, 비면 드롭
-function remapLoopsOnDelete(loops: LoopRange[], delIdx0: number): LoopRange[] {
-  const del1 = delIdx0 + 1;
-  const out: LoopRange[] = [];
-  for (const lp of loops) {
-    let { start, end } = lp;
-    if (del1 < start) { start -= 1; end -= 1; }
-    else if (del1 <= end) { end -= 1; } // 구간 내부/시작 삭제 → 뒤 경계 축소
-    if (end >= start) out.push({ ...lp, start, end });
-  }
-  return out;
-}
-// 스텝 재정렬: posMapping(old 1-based → new 1-based)로 경계를 이동, 없어지면 드롭
-function remapLoopsOnReorder(loops: LoopRange[], posMapping: Map<number, number>): LoopRange[] {
-  const out: LoopRange[] = [];
-  for (const lp of loops) {
-    const ns = posMapping.get(lp.start);
-    const ne = posMapping.get(lp.end);
-    if (ns == null || ne == null || ns < 1 || ne < 1) continue;
-    out.push({ ...lp, start: Math.min(ns, ne), end: Math.max(ns, ne) });
-  }
-  return out;
-}
-// 최종 안전망: 현재 스텝 수 범위로 클램프, 무효 구간 드롭
-function clampLoops(loops: LoopRange[], len: number): LoopRange[] {
-  return loops
-    .filter(lp => lp.start >= 1 && lp.end >= lp.start && lp.end <= len)
-    .map(lp => ({ ...lp, count: Math.max(2, Math.floor(lp.count || 2)) }));
-}
+// 구간반복 경계는 uid 이므로 스텝 삽입/삭제/재정렬 시 리맵이 필요 없다.
+// (예전에는 shiftLoopsOnInsert / remapLoopsOnDelete / remapLoopsOnReorder /
+//  clampLoops 4종이 있었고, 프론트를 거치지 않는 백엔드 경로에서는 아예 적용되지
+//  않아 구간이 조용히 어긋났다. pruneLoops/resolveLoops 로 대체.)
 
 interface HkmcKeyInfo {
   name: string;
@@ -543,6 +538,10 @@ export default function RecordPage() {
   loopsRef.current = loops; // 콜백(updateStepJump)에서 최신 loops 참조용
   const stepsRef = useRef<Step[]>([]);
   stepsRef.current = steps;  // 콜백에서 uid → 현재 위치 해석용 (loopsRef 와 동일 패턴)
+  // 위치 기반 UI 로직용 파생값 — 저장은 uid, 표시/판정은 현재 위치.
+  const rLoops = useMemo(() => resolveLoops(loops, steps), [loops, steps]);
+  const rLoopsRef = useRef<ResolvedLoop[]>([]);
+  rLoopsRef.current = rLoops;  // 콜백(updateStepJump)에서 최신 위치 참조용
   const savedLoopsRef = useRef<string>('[]');
   // 구간반복 모달 상태
   const [loopModalOpen, setLoopModalOpen] = useState(false);
@@ -4014,7 +4013,7 @@ export default function RecordPage() {
       const loadedSteps = res.data.steps || [];
       setSteps(loadedSteps);
       savedStepsRef.current = JSON.stringify(loadedSteps.map(({ _imageVer, ...rest }: any) => rest));
-      const loadedLoops: LoopRange[] = clampLoops(res.data.loops || [], loadedSteps.length);
+      const loadedLoops: LoopRange[] = pruneLoops(res.data.loops || [], loadedSteps).kept;
       setLoops(loadedLoops);
       savedLoopsRef.current = JSON.stringify(loadedLoops);
       // 프론트엔드에서 편집하지 않는 시나리오 메타데이터 보존 (loops 는 별도 관리하므로 제외)
@@ -4059,7 +4058,7 @@ export default function RecordPage() {
         }
         return out;
       });
-      const savedLoops = clampLoops(loops, reindexed.length);
+      const savedLoops = pruneLoops(loops, reindexed).kept;
       await scenarioApi.update(newName, {
         ...scenarioMetaRef.current,
         name: newName,
@@ -4111,7 +4110,7 @@ export default function RecordPage() {
     if (editingExisting) {
       try {
         const newName = scenarioName.trim();
-        const syncedLoops = clampLoops(loops, reindexed.length);
+        const syncedLoops = pruneLoops(loops, reindexed).kept;
         await scenarioApi.update(newName, {
           ...scenarioMetaRef.current,
           name: newName,
@@ -4178,7 +4177,13 @@ export default function RecordPage() {
         id: i + 1,
       }));
     });
-    setLoops((prev) => remapLoopsOnDelete(prev, index));
+    // 경계 스텝이 삭제된 구간반복은 폐기 + 경고 (무엇을 반복할지 특정할 수 없으므로)
+    setLoops((prev) => {
+      const survivors = stepsRef.current.filter((_, i) => i !== index);
+      const { kept, dropped } = pruneLoops(prev, survivors);
+      if (dropped > 0) message.warning(t('record.loopDroppedOnDelete', { count: dropped }));
+      return kept;
+    });
     message.success(t('record.stepDeleted', { index: index + 1 }));
   };
 
@@ -4212,7 +4217,6 @@ export default function RecordPage() {
       newIds.splice(newIndex, 0, oldIds[oldIndex]);
       const posMapping = new Map<number, number>();
       for (let i = 0; i < steps.length; i++) posMapping.set(i + 1, newIds.indexOf(i + 1) + 1);
-      setLoops((prevL) => remapLoopsOnReorder(prevL, posMapping));
     }
     // 녹화/편집 모드 모두에서 즉시 백엔드 동기화 (in-memory 또는 디스크)
     if (scenarioName.trim() && reordered.length > 0) {
@@ -4464,10 +4468,8 @@ export default function RecordPage() {
       });
       // 벌크 이동은 위치가 크게 재배열되므로 구간반복 경계 추적이 어렵다.
       // 이동된 스텝과 겹치는 구간은 드롭하고, 나머지는 새 스텝 수로 클램프한다.
-      setLoops(prev => clampLoops(
-        prev.filter(lp => !sortedIndices.some(mi => mi + 1 >= lp.start && mi + 1 <= lp.end)),
-        reordered.length,
-      ));
+      // 이동으로 경계 스텝이 사라진 구간은 폐기 (uid 라 위치 재계산은 불필요)
+      setLoops(prev => pruneLoops(prev, reordered).kept);
       setImportStepModalOpen(false);
       message.success(t('record.stepsMoved', { count: sortedIndices.length }));
       // 녹화/편집 모드 모두에서 즉시 백엔드 동기화
@@ -4493,7 +4495,6 @@ export default function RecordPage() {
         return merged;
       });
       // 삽입 위치(importInsertIndex+2) 이후 구간반복 경계를 imported.length 만큼 시프트
-      setLoops(prev => shiftLoopsOnInsert(prev, importInsertIndex + 2, imported.length));
       setImportStepModalOpen(false);
       message.success(t('record.stepsImported', { count: imported.length }));
       // 녹화/편집 모드 모두에서 즉시 백엔드 동기화 (import-steps는 target을 변경하지 않음)
@@ -4553,7 +4554,6 @@ export default function RecordPage() {
             id: i + 1,
           }));
         });
-        setLoops((prev) => shiftLoopsOnInsert(prev, insertPos1Based));
       } else {
         setSteps((prev) => [...prev, waitStep]);
       }
@@ -4591,7 +4591,6 @@ export default function RecordPage() {
           id: i + 1,
         }));
       });
-      setLoops((prev) => shiftLoopsOnInsert(prev, insertPos1Based));
     } else {
       setSteps((prev) => [...prev, { ...waitStep, id: prev.length + 1 }]);
     }
@@ -4661,8 +4660,8 @@ export default function RecordPage() {
     }
   };
 
-  // 현재 선택으로 만들 후보 구간 (1-based)
-  const loopCandidate = useMemo<LoopRange | null>(() => {
+  // 현재 선택으로 만들 후보 구간 (1-based 위치). 확정 시 경계 uid 로 변환해 저장한다.
+  const loopCandidate = useMemo<{ start: number; end: number; count: number } | null>(() => {
     if (loopSelStart === null || loopSelEnd === null) return null;
     return { start: Math.min(loopSelStart, loopSelEnd) + 1, end: Math.max(loopSelStart, loopSelEnd) + 1, count: loopCount };
   }, [loopSelStart, loopSelEnd, loopCount]);
@@ -4670,8 +4669,8 @@ export default function RecordPage() {
   // 후보 구간이 (편집 대상 제외) 기존 구간과 겹치는지
   const loopOverlapError = useMemo(() => {
     if (!loopCandidate) return false;
-    return loops.some((lp, i) => i !== editingLoopIdx && loopsOverlap(lp, loopCandidate));
-  }, [loopCandidate, loops, editingLoopIdx]);
+    return rLoops.some((lp, i) => i !== editingLoopIdx && loopsOverlap(lp, loopCandidate));
+  }, [loopCandidate, rLoops, editingLoopIdx]);
 
   // 구간 내 스텝의 조건부 이동(on_pass/fail_goto)이 구간 밖(또는 END)을 가리키면 설정 불가.
   // 반복 되감기는 자연 진행 시에만 동작하므로, 구간을 벗어나는 점프가 있으면
@@ -4702,12 +4701,18 @@ export default function RecordPage() {
     if (loopOverlapError) { message.error(t('record.loopOverlap')); return; }
     if (loopJumpError) { message.error(loopJumpErrorText(loopJumpError)); return; }
     const count = Math.max(2, Math.floor(loopCount || 2));
-    const next: LoopRange = { start: loopCandidate.start, end: loopCandidate.end, count };
+    // 선택한 위치를 그 시점의 경계 스텝 uid 로 굳힌다 (이후 삽입/삭제에 영향받지 않도록)
+    const startUid = steps[loopCandidate.start - 1]?.uid;
+    const endUid = steps[loopCandidate.end - 1]?.uid;
+    if (!startUid || !endUid) { message.error(t('record.loopSelectSteps')); return; }
+    const next: LoopRange = { start_uid: startUid, end_uid: endUid, count };
     setLoops(prev => {
       const arr = editingLoopIdx !== null
         ? prev.map((lp, i) => i === editingLoopIdx ? next : lp)
         : [...prev, next];
-      return [...arr].sort((a, b) => a.start - b.start);
+      // 저장 순서는 현재 위치 기준으로 정렬 (표시 일관성)
+      const posOf = new Map(steps.map((st, i) => [st.uid, i + 1]));
+      return [...arr].sort((a, b) => (posOf.get(a.start_uid) ?? 0) - (posOf.get(b.start_uid) ?? 0));
     });
     // 선택 초기화 (모달은 유지 — 연속 추가 가능)
     setEditingLoopIdx(null);
@@ -4719,7 +4724,7 @@ export default function RecordPage() {
   };
 
   const editLoop = (idx: number) => {
-    const lp = loops[idx];
+    const lp = rLoops[idx];
     if (!lp) return;
     setEditingLoopIdx(idx);
     setLoopSelStart(lp.start - 1);
@@ -4742,14 +4747,14 @@ export default function RecordPage() {
   // 스텝 인덱스(0-based) → 소속 구간반복 시각 정보 (테두리/배경/배지)
   const loopStyleByIndex = useMemo(() => {
     const map = new Map<number, { color: string; isStart: boolean; isEnd: boolean; count: number; loopIdx: number }>();
-    loops.forEach((lp, li) => {
+    rLoops.forEach((lp, li) => {
       const color = loopColorAt(li);
       for (let pos = lp.start; pos <= lp.end; pos++) {
         map.set(pos - 1, { color, isStart: pos === lp.start, isEnd: pos === lp.end, count: lp.count, loopIdx: li });
       }
     });
     return map;
-  }, [loops]);
+  }, [rLoops]);
 
   // ── Device 일괄 전환 ──
   const [deviceSwapOpen, setDeviceSwapOpen] = useState(false);
@@ -4917,7 +4922,7 @@ export default function RecordPage() {
     // (반복 되감기는 자연 진행 시에만 동작하므로 구간을 벗어나면 반복이 깨진다)
     if (value != null) {
       const pos = index + 1;
-      const lp = loopsRef.current.find(l => pos >= l.start && pos <= l.end);
+      const lp = rLoopsRef.current.find(l => pos >= l.start && pos <= l.end);
       if (lp) {
         const targetPos = value === GOTO_END ? null : gotoPos(stepsRef.current, value);
         const escapes = value === GOTO_END || targetPos == null || targetPos < lp.start || targetPos > lp.end;
@@ -5406,7 +5411,7 @@ export default function RecordPage() {
             borderLeft: `3px solid ${ls.color}`, borderTop: `1px solid ${ls.color}`,
           }}>
             <RetweetOutlined />
-            <span>{t('record.loopBannerLabel', { start: loops[ls.loopIdx]?.start ?? index + 1, end: loops[ls.loopIdx]?.end ?? index + 1, count: ls.count })}</span>
+            <span>{t('record.loopBannerLabel', { start: rLoops[ls.loopIdx]?.start ?? index + 1, end: rLoops[ls.loopIdx]?.end ?? index + 1, count: ls.count })}</span>
             <Button size="small" type="text" style={{ color: ls.color, marginLeft: 'auto', height: 18, padding: '0 6px', fontSize: 11 }}
               onClick={() => { editLoop(ls.loopIdx); setLoopModalOpen(true); }}
             >{t('common.edit')}</Button>
@@ -5556,7 +5561,7 @@ export default function RecordPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 2, justifyContent: 'flex-end' }}>
               <Button size="small" type="text" icon={<EditOutlined />} title={t('record.editCommand')} onClick={() => openEditStepModal(index)} style={{ color: '#1890ff', width: 28 }} />
               <Popover
-                content={<JumpEditorInner step={s} index={index} steps={steps} onUpdate={updateStepJump} onToggleExclude={updateStepExclude} t={t} loopRange={ls ? { start: loops[ls.loopIdx].start, end: loops[ls.loopIdx].end } : null} />}
+                content={<JumpEditorInner step={s} index={index} steps={steps} onUpdate={updateStepJump} onToggleExclude={updateStepExclude} t={t} loopRange={ls && rLoops[ls.loopIdx] ? { start: rLoops[ls.loopIdx].start, end: rLoops[ls.loopIdx].end } : null} />}
                 trigger="click"
                 placement="left"
               >
@@ -7284,7 +7289,7 @@ export default function RecordPage() {
         <div style={{ marginTop: 12, borderTop: isDark ? '1px solid #303030' : '1px solid #f0f0f0', paddingTop: 8 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{t('record.loopListTitle', { count: loops.length })}</div>
           {loops.length === 0 && <div style={{ color: '#888', fontSize: 12 }}>{t('record.loopListEmpty')}</div>}
-          {loops.map((lp, i) => (
+          {rLoops.map((lp, i) => (
             <div key={`looplist-${i}`} style={{
               display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', marginBottom: 4,
               borderRadius: 4, background: hexToRgba(loopColorAt(i), isDark ? 0.16 : 0.08),

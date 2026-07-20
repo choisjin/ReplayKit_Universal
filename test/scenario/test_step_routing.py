@@ -32,6 +32,11 @@ def mk_scenario(steps, loops=None) -> Scenario:
     return Scenario(name="T", steps=steps, loops=loops or [])
 
 
+def loop(start: Step, end: Step, count: int) -> LoopRange:
+    """경계 스텝 객체로 구간반복을 만든다 (경계는 uid)."""
+    return LoopRange(start_uid=start.uid, end_uid=end.uid, count=count)
+
+
 def step_index_map(scenario: Scenario) -> dict[str, int]:
     return {s.uid: i for i, s in enumerate(scenario.steps)}
 
@@ -42,7 +47,7 @@ def run_route(scenario: Scenario, statuses: dict[int, str], max_steps: int = 50)
     statuses: step.id -> "pass" | "fail" | "error" (미지정은 pass)
     """
     by_uid = step_index_map(scenario)
-    loop_map = PlaybackService._build_loop_map(scenario, {s.id: i for i, s in enumerate(scenario.steps)})
+    loop_map = PlaybackService._build_loop_map(scenario, by_uid)
     loop_remaining: dict[int, int] = {}
 
     visited: list[int] = []
@@ -114,34 +119,35 @@ def test_unresolvable_goto_target_falls_through():
 
 def test_loop_repeats_section_count_times():
     """count 는 '총 실행 횟수' — 2 면 구간을 두 번 실행."""
-    sc = mk_scenario([mk_step(1), mk_step(2), mk_step(3), mk_step(4)],
-                     loops=[LoopRange(start=2, end=3, count=2)])
+    steps = [mk_step(i) for i in range(1, 5)]
+    sc = mk_scenario(steps, loops=[loop(steps[1], steps[2], 2)])
     assert run_route(sc, {}) == [1, 2, 3, 2, 3, 4]
 
 
 def test_loop_count_three():
-    sc = mk_scenario([mk_step(1), mk_step(2), mk_step(3)],
-                     loops=[LoopRange(start=1, end=2, count=3)])
+    steps = [mk_step(i) for i in range(1, 4)]
+    sc = mk_scenario(steps, loops=[loop(steps[0], steps[1], 3)])
     assert run_route(sc, {}) == [1, 2, 1, 2, 1, 2, 3]
 
 
 def test_loop_count_one_or_less_is_ignored():
-    sc = mk_scenario([mk_step(1), mk_step(2), mk_step(3)],
-                     loops=[LoopRange(start=1, end=2, count=1)])
+    steps = [mk_step(i) for i in range(1, 4)]
+    sc = mk_scenario(steps, loops=[loop(steps[0], steps[1], 1)])
     assert run_route(sc, {}) == [1, 2, 3]
 
 
 def test_loop_with_missing_boundary_is_ignored():
-    """경계 스텝이 없으면 해당 구간반복은 무시된다."""
-    sc = mk_scenario([mk_step(1), mk_step(2)],
-                     loops=[LoopRange(start=1, end=99, count=3)])
+    """경계 스텝이 삭제되면(uid 해결 불가) 해당 구간반복은 무시된다."""
+    steps = [mk_step(1), mk_step(2)]
+    sc = mk_scenario(steps, loops=[LoopRange(start_uid=steps[0].uid,
+                                             end_uid="deadbeef", count=3)])
     assert run_route(sc, {}) == [1, 2]
 
 
 def test_loop_inverted_boundaries_are_swapped():
-    """start > end 로 저장돼도 스왑해서 정상 구간으로 처리한다."""
-    sc = mk_scenario([mk_step(1), mk_step(2), mk_step(3)],
-                     loops=[LoopRange(start=2, end=1, count=2)])
+    """경계가 역전되도록 순서변경돼도 스왑해서 정상 구간으로 처리한다."""
+    steps = [mk_step(i) for i in range(1, 4)]
+    sc = mk_scenario(steps, loops=[loop(steps[1], steps[0], 2)])
     assert run_route(sc, {}) == [1, 2, 1, 2, 3]
 
 
@@ -153,7 +159,7 @@ def test_goto_takes_precedence_over_loop():
     """구간 끝 스텝에 goto 가 걸려 있으면 반복하지 않고 점프한다."""
     steps = [mk_step(i) for i in range(1, 6)]
     link(steps[2], on_pass=steps[4])
-    sc = mk_scenario(steps, loops=[LoopRange(start=2, end=3, count=3)])
+    sc = mk_scenario(steps, loops=[loop(steps[1], steps[2], 3)])
     assert run_route(sc, {}) == [1, 2, 3, 5]
 
 
@@ -161,5 +167,63 @@ def test_loop_applies_when_goto_not_triggered():
     """on_fail_goto 가 있어도 pass 면 자연 진행이므로 반복이 적용된다."""
     steps = [mk_step(i) for i in range(1, 6)]
     link(steps[2], on_fail=steps[4])
-    sc = mk_scenario(steps, loops=[LoopRange(start=2, end=3, count=2)])
+    sc = mk_scenario(steps, loops=[loop(steps[1], steps[2], 2)])
     assert run_route(sc, {}) == [1, 2, 3, 2, 3, 4, 5]
+
+
+# ----------------------------------------------------------------------
+# 구간반복의 편집 내성 — 2c 의 존재 이유
+# ----------------------------------------------------------------------
+
+def test_loop_survives_insertion_before_section():
+    """구간 앞에 스텝을 삽입해도 같은 스텝들을 반복해야 한다.
+    (예전에는 위치 기준이라 프론트가 shiftLoopsOnInsert 로 밀어줘야 했고,
+     백엔드 경로는 그 리맵을 아예 하지 않아 조용히 어긋났다)"""
+    steps = [mk_step(i) for i in range(1, 5)]
+    lp = loop(steps[1], steps[2], 2)          # 2~3 구간
+
+    steps.insert(0, mk_step(0))               # 맨 앞 삽입
+    for i, st in enumerate(steps):
+        st.id = i + 1                         # 프론트의 재부여 흉내
+
+    sc = mk_scenario(steps, loops=[lp])
+    # 원래 2,3 이던 스텝이 이제 3,4 — 그래도 그 둘을 반복해야 한다
+    assert run_route(sc, {}) == [1, 2, 3, 4, 3, 4, 5]
+
+
+def test_step_inserted_inside_section_joins_the_loop():
+    """구간 내부로 삽입된 스텝은 자동으로 반복에 포함된다."""
+    steps = [mk_step(i) for i in range(1, 5)]
+    lp = loop(steps[1], steps[2], 2)          # 2~3 구간
+
+    steps.insert(2, mk_step(99))              # 2번과 3번 사이에 삽입
+    for i, st in enumerate(steps):
+        st.id = i + 1
+
+    sc = mk_scenario(steps, loops=[lp])
+    assert run_route(sc, {}) == [1, 2, 3, 4, 2, 3, 4, 5]
+
+
+def test_step_inserted_after_end_stays_outside():
+    """end 경계 '직후' 삽입은 구간 밖 — uid 기준에서 결정론적으로 제외된다."""
+    steps = [mk_step(i) for i in range(1, 4)]
+    lp = loop(steps[0], steps[1], 2)          # 1~2 구간
+
+    steps.insert(2, mk_step(99))              # end(2번) 바로 뒤에 삽입
+    for i, st in enumerate(steps):
+        st.id = i + 1
+
+    sc = mk_scenario(steps, loops=[lp])
+    assert run_route(sc, {}) == [1, 2, 1, 2, 3, 4]
+
+
+def test_loop_survives_reorder_of_unrelated_step():
+    steps = [mk_step(i) for i in range(1, 5)]
+    lp = loop(steps[1], steps[2], 2)
+
+    steps.append(steps.pop(0))                # 1번을 맨 뒤로
+    for i, st in enumerate(steps):
+        st.id = i + 1
+
+    sc = mk_scenario(steps, loops=[lp])
+    assert run_route(sc, {}) == [1, 2, 1, 2, 3, 4]

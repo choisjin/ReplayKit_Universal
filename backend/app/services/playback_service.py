@@ -573,18 +573,19 @@ class PlaybackService:
         return next_idx, False
 
     @staticmethod
-    def _build_loop_map(scenario: Scenario, step_by_id: dict[int, int]) -> dict[int, tuple[int, int]]:
+    def _build_loop_map(scenario: Scenario, step_by_uid: dict[str, int]) -> dict[int, tuple[int, int]]:
         """구간반복 정의를 { end_idx: (start_idx, count) } 로 변환.
 
-        start/end 는 step.id(1-based 위치)이며 step_by_id 로 실제 인덱스로 변환한다.
-        count<=1 이거나 스텝이 없으면 무시. 비겹침을 가정하므로 end_idx 키가 겹치면
-        마지막 정의가 우선한다. 실행부는 자연 진행(다음 스텝) 시에만 이 맵을 참조해
-        조건부이동(goto)이 항상 반복보다 우선하도록 한다.
+        경계는 step.uid 이며 step_by_uid 로 현재 인덱스를 찾는다. 경계 스텝이
+        삭제되어 uid 를 못 찾으면 그 구간은 무시한다.
+        count<=1 이면 무시. 비겹침을 가정하므로 end_idx 키가 겹치면 마지막 정의가
+        우선한다. 실행부는 자연 진행(다음 스텝) 시에만 이 맵을 참조해 조건부이동(goto)이
+        항상 반복보다 우선하도록 한다.
         """
         loop_by_end_idx: dict[int, tuple[int, int]] = {}
         for lp in (getattr(scenario, "loops", None) or []):
-            s_idx = step_by_id.get(lp.start)
-            e_idx = step_by_id.get(lp.end)
+            s_idx = step_by_uid.get(lp.start_uid)
+            e_idx = step_by_uid.get(lp.end_uid)
             if s_idx is None or e_idx is None:
                 continue
             if s_idx > e_idx:
@@ -630,11 +631,9 @@ class PlaybackService:
             started_at=started_at,
         )
 
-        # 조건부이동은 uid 기준(step.id 는 편집 때마다 재부여되므로 참조로 못 씀).
-        # 구간반복(loops)은 아직 step.id 기준이라 두 맵을 함께 만든다.
+        # 조건부이동·구간반복 모두 uid 기준 (step.id 는 편집 때마다 재부여되므로 참조 불가).
         step_by_uid: dict[str, int] = {s.uid: i for i, s in enumerate(scenario.steps)}
-        step_by_id: dict[int, int] = {s.id: i for i, s in enumerate(scenario.steps)}
-        loop_by_end_idx = self._build_loop_map(scenario, step_by_id)
+        loop_by_end_idx = self._build_loop_map(scenario, step_by_uid)
         loop_remaining: dict[int, int] = {}  # start_idx -> 남은 추가 반복 횟수
 
         try:
@@ -740,11 +739,9 @@ class PlaybackService:
         else:
             self._run_output_dir_owned = False
 
-        # 조건부이동은 uid 기준(step.id 는 편집 때마다 재부여되므로 참조로 못 씀).
-        # 구간반복(loops)은 아직 step.id 기준이라 두 맵을 함께 만든다.
+        # 조건부이동·구간반복 모두 uid 기준 (step.id 는 편집 때마다 재부여되므로 참조 불가).
         step_by_uid: dict[str, int] = {s.uid: i for i, s in enumerate(scenario.steps)}
-        step_by_id: dict[int, int] = {s.id: i for i, s in enumerate(scenario.steps)}
-        loop_by_end_idx = self._build_loop_map(scenario, step_by_id)
+        loop_by_end_idx = self._build_loop_map(scenario, step_by_uid)
         loop_remaining: dict[int, int] = {}  # start_idx -> 남은 추가 반복 횟수
 
         # 그룹 재생 시 호출자(main.py)가 _result_timestamp를 미리 설정하므로

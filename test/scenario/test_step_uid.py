@@ -253,19 +253,53 @@ def test_goto_to_deleted_step_becomes_unresolvable():
     assert not any(s.uid == s1.on_pass_goto for s in steps)
 
 
-@pytest.mark.xfail(
-    reason="2c 미완료: LoopRange.start/end 가 step.id(위치) 기준이라 삽입 시 구간이 밀린다",
-    strict=True,
-)
 def test_loop_range_survives_step_insertion():
     """2~3 구간반복 상태에서 맨 앞에 스텝을 삽입해도 같은 스텝들을 감싸야 한다."""
     steps = [mk_step(1), mk_step(2), mk_step(3), mk_step(4)]
-    loop = LoopRange(start=2, end=3, count=2)
-    start_uid = steps[1].uid
-    end_uid = steps[2].uid
+    loop = LoopRange(start_uid=steps[1].uid, end_uid=steps[2].uid, count=2)
+    boundary = (steps[1], steps[2])
 
     steps.insert(0, mk_step(0))
-    reindex(steps)
+    reindex(steps)   # 경계 스텝의 id 는 2,3 → 3,4 로 밀림
 
-    assert next(s for s in steps if s.id == loop.start).uid == start_uid
-    assert next(s for s in steps if s.id == loop.end).uid == end_uid
+    assert next(s for s in steps if s.uid == loop.start_uid) is boundary[0]
+    assert next(s for s in steps if s.uid == loop.end_uid) is boundary[1]
+    assert [boundary[0].id, boundary[1].id] == [3, 4]
+
+
+# ----------------------------------------------------------------------
+# 레거시 loops(정수 위치) → 경계 uid 변환
+# ----------------------------------------------------------------------
+
+LEGACY_LOOPS = {
+    "name": "L",
+    "steps": [{"id": i, "type": "wait", "params": {}} for i in range(1, 5)],
+    "loops": [
+        {"start": 2, "end": 3, "count": 3},
+        {"start": 1, "end": 99, "count": 2},   # 경계 없음 → 폐기 대상
+    ],
+}
+
+
+def test_legacy_loops_converted_to_uids(svc, tmp_path):
+    write_scenario_json(tmp_path, "L", LEGACY_LOOPS)
+    sc = asyncio.run(svc.load_scenario("L"))
+
+    assert len(sc.loops) == 1, "경계를 못 찾은 구간은 폐기되어야 한다"
+    lp = sc.loops[0]
+    assert lp.start_uid == sc.steps[1].uid
+    assert lp.end_uid == sc.steps[2].uid
+    assert lp.count == 3
+
+
+def test_legacy_loops_migration_persisted_and_idempotent(svc, tmp_path):
+    write_scenario_json(tmp_path, "L", LEGACY_LOOPS)
+    first = asyncio.run(svc.load_scenario("L"))
+    expected = (first.loops[0].start_uid, first.loops[0].end_uid)
+
+    saved = json.loads((tmp_path / "scenarios" / "L.json").read_text(encoding="utf-8"))
+    assert saved["loops"][0]["start_uid"] == expected[0]
+    assert "start" not in saved["loops"][0], "레거시 정수 필드가 남아 있으면 안 된다"
+
+    second = asyncio.run(svc.load_scenario("L"))
+    assert (second.loops[0].start_uid, second.loops[0].end_uid) == expected

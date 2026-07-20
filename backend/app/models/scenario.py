@@ -149,14 +149,18 @@ class Step(BaseModel):
 
 
 class LoopRange(BaseModel):
-    """구간반복 — start~end(1-based, step.id 기준, 포함) 구간을 count회 반복 실행.
+    """구간반복 — 경계 스텝 두 개(포함) 사이를 count회 반복 실행.
 
-    step.id 는 저장 시 항상 1-based 위치로 재번호되므로 start/end 는 스텝 위치와
-    동일하다. count 는 구간의 '총 실행 횟수'(예: 2 = 두 번 실행)이며 1 이하이면
-    반복 없음으로 취급한다.
+    경계는 **step.uid** 로 지정한다. step.id(위치)로 잡으면 스텝을 삽입/삭제할 때마다
+    구간이 밀려 엉뚱한 범위를 반복하게 된다(백엔드 경로는 리맵조차 하지 않았다).
+    실제 감싸는 스텝 집합은 재생 시점의 순서로 결정되므로, 구간 안으로 삽입된
+    스텝은 자동으로 반복에 포함된다.
+
+    count 는 구간의 '총 실행 횟수'(예: 2 = 두 번 실행)이며 1 이하이면 반복 없음.
+    경계 스텝이 삭제되면 해당 구간은 폐기된다.
     """
-    start: int
-    end: int
+    start_uid: str
+    end_uid: str
     count: int = 2
 
 
