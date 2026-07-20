@@ -1451,6 +1451,16 @@
         "description": "Broadcasts a time-sync packet over UDP to all bench equipment. Automatically called on Connect, so manual invocation is usually unnecessary.",
         "params": {}
       },
+      "canmsg": {
+        "description": "Verifies CAN message reception. Buffers packets received on the given MCU/channel for the specified time (ms), then checks whether any message matched msg_id and the data pattern. Returns PASS on a match, or a 'FAIL:' string so the step is marked failed.",
+        "params": {
+          "mcu": "Target MCU to listen on (default: 'mcu1' / e.g. 'mcu1', 'mcu2', 'mcu3')",
+          "channel": "Rx channel (default: 'A' / 'A', 'B', 'C', 'D')",
+          "time": "Collection window in milliseconds (default: 1000)",
+          "msg_id": "CAN ID to verify. Integer or hex string (with or without '0x'. e.g. '0x12F', '47A', 1146)",
+          "data": "Data pattern to match. Hex bytes separated by spaces/commas. '*' or '**' positions are wildcards (ignored), and received bytes beyond the pattern length are not compared. e.g. '00 00 00 00 05 00 00 00' or '** ** ** ** 05'"
+        }
+      },
       "SendCan": {
         "description": "Sends a raw CAN frame. Transmits a standard/extended/FD frame to the given device (mcu) and channel, either once or periodically.",
         "params": {

@@ -1907,6 +1907,20 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
         _redirect_path_args_to_run_dir(call_args, module_name, function_name)
 
     result = func(**call_args)
+
+    # WoohyunBench.canmsg 는 (bool, time, id, data) 튜플을 반환한다. 튜플을 그대로 넘기면
+    # 재생 엔진이 문자열 "FAIL:" 규약으로 합부를 판정할 수 없어 항상 PASS 가 되므로,
+    # 여기서 PASS/FAIL 문자열로 변환한다 (CANAT.check_can_message 와 동일 규약).
+    if module_name == "WoohyunBench" and function_name == "canmsg":
+        try:
+            ok, recv_time, hit_id, hit_data = result
+        except (TypeError, ValueError):
+            return result
+        if ok:
+            return f"OK: canmsg matched — {hit_id} [{hit_data}] @ {recv_time}"
+        return (f"FAIL: canmsg no match — id={args.get('msg_id', '')} "
+                f"data='{args.get('data', '')}' within {args.get('time', '')}ms")
+
     return result
 
 
