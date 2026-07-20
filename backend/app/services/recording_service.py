@@ -772,6 +772,7 @@ class RecordingService:
         Old format v1: list[str] (just scenario names)
         Old format v2: on_pass_goto / on_fail_goto = int | null (scenario index only)
         Old format v3: play_count 필드 부재
+        Old format v4: step_jumps 키가 step.id(정수) — uid 전환 불가라 폐기
         """
         raw = self._load_groups_raw()
         migrated = False
@@ -797,6 +798,23 @@ class RecordingService:
                     if "play_count" not in entry:
                         entry["play_count"] = 1
                         migrated = True
+                    # v4 → 현재: step_jumps 키가 step.id(정수) → step.uid(8자리 hex).
+                    # 위치 기반 키는 스텝을 삽입/삭제하면 조용히 다른 스텝을 가리키므로
+                    # 안전하게 되살릴 수 없다. 레거시 정수 키 항목은 폐기한다.
+                    sj = entry.get("step_jumps")
+                    if isinstance(sj, dict) and sj:
+                        kept = {k: v for k, v in sj.items() if not str(k).isdigit()}
+                        if len(kept) != len(sj):
+                            logger.warning(
+                                f"[{gname}] 그룹 스텝점프 {len(sj) - len(kept)}건 폐기 — "
+                                "레거시 step.id 키는 uid 로 안전하게 변환할 수 없습니다. "
+                                "필요하면 다시 설정하세요."
+                            )
+                            migrated = True
+                        if kept:
+                            entry["step_jumps"] = kept
+                        else:
+                            entry.pop("step_jumps", None)
                 result[gname] = entries
         if migrated:
             self._save_groups(result)
@@ -967,7 +985,7 @@ class RecordingService:
         self,
         group_name: str,
         index: int,
-        step_id: int,
+        step_uid: str,
         on_pass_goto,
         on_fail_goto,
         exclude_pass_from_result: bool = False,
@@ -984,7 +1002,7 @@ class RecordingService:
             entry = groups[group_name][index]
             if "step_jumps" not in entry:
                 entry["step_jumps"] = {}
-            key = str(step_id)
+            key = str(step_uid)
             has_jump = on_pass_goto is not None or on_fail_goto is not None
             has_exclude = bool(exclude_pass_from_result) or bool(exclude_fail_from_result)
             if not has_jump and not has_exclude:

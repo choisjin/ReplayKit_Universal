@@ -2283,6 +2283,8 @@ async def _run_play_group_job(data: dict):
                             continue
                         step_result = item
                         original_step_id = step_result.step_id
+                        # 그룹 step_jumps 는 uid 키 (step_id 는 편집 시 재부여되어 어긋남)
+                        original_step_uid = step_result.step_uid
                         is_runtime_fail = step_result.parent_step_id is not None
                         if is_runtime_fail:
                             # parent를 직전 일반 스텝의 _pending_seq로 remap, step_id(9000+)는 보존
@@ -2296,7 +2298,7 @@ async def _run_play_group_job(data: dict):
                         # excluded_from_result만 True로 마킹한다. (Step 모델 자체 exclude는
                         # playback_service가 yield 시점에 이미 마킹함 — 여기선 그룹 설정만 추가 반영)
                         real_status = step_result.status
-                        _sj = None if is_runtime_fail else step_jumps.get(str(original_step_id))
+                        _sj = None if is_runtime_fail else step_jumps.get(original_step_uid)
                         if _sj:
                             if real_status == "pass" and _sj.get("exclude_pass_from_result"):
                                 step_result.excluded_from_result = True
@@ -2338,7 +2340,7 @@ async def _run_play_group_job(data: dict):
                             continue
                         # 멤버/스텝 점프는 실제 결과(real_status) 기준 — 미반영은 집계·표시 전용
                         last_step_status = real_status
-                        sj = step_jumps.get(str(original_step_id))
+                        sj = step_jumps.get(original_step_uid)
                         if sj:
                             if real_status == "pass":
                                 sj_jump = sj.get("on_pass_goto")

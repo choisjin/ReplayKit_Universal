@@ -973,9 +973,9 @@ export default function ScenarioPage() {
     reorderGroup(gName, perm);
   };
 
-  const updateGroupStepJumps = async (gName: string, entryIdx: number, stepId: number, on_pass_goto: JumpTarget | null, on_fail_goto: JumpTarget | null, exclude_pass_from_result = false, exclude_fail_from_result = false) => {
+  const updateGroupStepJumps = async (gName: string, entryIdx: number, stepUid: string, on_pass_goto: JumpTarget | null, on_fail_goto: JumpTarget | null, exclude_pass_from_result = false, exclude_fail_from_result = false) => {
     try {
-      const res = await scenarioApi.updateGroupStepJumps(gName, entryIdx, stepId, on_pass_goto, on_fail_goto, exclude_pass_from_result, exclude_fail_from_result);
+      const res = await scenarioApi.updateGroupStepJumps(gName, entryIdx, stepUid, on_pass_goto, on_fail_goto, exclude_pass_from_result, exclude_fail_from_result);
       setGroups(res.data.groups);
     } catch { message.error(t('scenario.stepJumpFailed')); }
   };
@@ -2663,7 +2663,7 @@ export default function ScenarioPage() {
                                 </div>
                               )}
                               {steps.map((step: any, si: number) => {
-                                const sid = step.id;
+                                const sid = step.uid;  // 그룹 스텝점프 키는 불변 uid
                                 const sj = stepJumps[String(sid)] || { on_pass_goto: null, on_fail_goto: null };
                                 const hasSJ = sj.on_pass_goto != null || sj.on_fail_goto != null;
                                 return (
@@ -3501,7 +3501,7 @@ export default function ScenarioPage() {
                               </div>
                             )}
                             {steps.map((step: any, si: number) => {
-                              const sid = step.id;
+                              const sid = step.uid;  // 그룹 스텝점프 키는 불변 uid
                               const sj = stepJumps[String(sid)] || { on_pass_goto: null, on_fail_goto: null };
                               const hasSJ = sj.on_pass_goto != null || sj.on_fail_goto != null;
                               return (

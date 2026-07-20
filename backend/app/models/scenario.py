@@ -188,6 +188,10 @@ class SubResult(BaseModel):
 
 class StepResult(BaseModel):
     step_id: int
+    # 스텝 고유 ID. step_id 는 그 시점의 표시용 순번이라 시나리오를 편집하면
+    # 의미가 어긋나므로, 스텝을 되짚어야 하는 곳(그룹 step_jumps 등)은 이 값을 쓴다.
+    # 과거 결과 파일에는 없으므로 기본값 "" (리포트 표시는 계속 step_id 사용).
+    step_uid: str = ""
     repeat_index: int = 1  # which cycle (1-based)
     timestamp: Optional[str] = None  # ISO timestamp when step started
     device_id: str = ""  # which device executed this step

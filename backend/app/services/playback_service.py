@@ -857,6 +857,7 @@ class PlaybackService:
         start_time = time.time()
         step_result = StepResult(
             step_id=step.id,
+            step_uid=step.uid,
             repeat_index=repeat_index,
             status="pass",
             timestamp=datetime.now(timezone.utc).isoformat(),
