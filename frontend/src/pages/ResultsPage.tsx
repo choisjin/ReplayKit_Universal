@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, Collapse, Col, Descriptions, Image, Input, InputNumber, Modal, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
-import { DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, ShrinkOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import { Button, Card, Checkbox, Collapse, Col, Descriptions, Image, Input, InputNumber, Modal, Popover, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
+import { DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, SettingOutlined, ShrinkOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { resultsApi, scenarioApi } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
@@ -292,6 +292,29 @@ export default function ResultsPage() {
   const bgDeadTaskIds = useRef<Set<string>>(new Set());
   // 상세 오픈 직후 BG_TASK 일괄 확정 진행률 (null = 준비 불필요/완료)
   const [bgPrep, setBgPrep] = useState<{ done: number; total: number } | null>(null);
+
+  // 상세 결과 테이블에서 접어둔 컬럼 (localStorage 유지)
+  const STEP_COL_HIDDEN_KEY = 'replaykit.resultStepCols.hidden';
+  const [hiddenStepCols, setHiddenStepCols] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(STEP_COL_HIDDEN_KEY);
+      return new Set<string>(raw ? JSON.parse(raw) : []);
+    } catch {
+      return new Set<string>();
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(STEP_COL_HIDDEN_KEY, JSON.stringify([...hiddenStepCols]));
+    } catch { /* 저장 실패는 무시 — 표시에는 영향 없음 */ }
+  }, [hiddenStepCols]);
+  const toggleStepCol = (key: string) => {
+    setHiddenStepCols(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
   const stopAllResultBgPolls = (cancelBackend: boolean = true) => {
     bgPollTimers.current.forEach(t => clearInterval(t));
     bgPollTimers.current = [];
@@ -1300,12 +1323,12 @@ export default function ResultsPage() {
   const _uniqueDevices = [...new Set(_allSteps.map(s => s.device_id).filter(Boolean))].sort();
   const _uniqueRepeats = [...new Set(_allSteps.map(s => s.repeat_index ?? 1))].sort((a, b) => a - b);
 
-  const stepColumns = ([
+  const _allStepColumns = ([
     {
       title: _colTitle('Time Stamp', t('results.timestamp')),
       dataIndex: 'timestamp',
       key: 'timestamp',
-      width: 95,
+      width: 76,
       align: 'center' as const,
       render: (v: string | null) => <span style={{ fontSize: 11, lineHeight: 1.4 }}>{v ? formatTime(v) : '-'}</span>,
       _hide: false,
@@ -1313,7 +1336,7 @@ export default function ResultsPage() {
     {
       title: _colTitle('Repeat', t('results.repeat')),
       key: 'repeat',
-      width: 80,
+      width: 58,
       align: 'center' as const,
       filters: _uniqueRepeats.map(r => ({ text: `#${r}`, value: r })),
       onFilter: (value: any, record: any) => (record.repeat_index ?? 1) === value,
@@ -1327,7 +1350,7 @@ export default function ResultsPage() {
       title: _colTitle('Step', t('results.step')),
       dataIndex: 'step_id',
       key: 'step_id',
-      width: 90,
+      width: 62,
       align: 'center' as const,
       render: (_: any, r: any) => {
         // 인라인 runtime fail (sync 모드 fail_on_keyword 결과)은 Fail_Count_N으로 표시.
@@ -1342,7 +1365,7 @@ export default function ResultsPage() {
       title: _colTitle('Device', t('results.deviceCol')),
       dataIndex: 'device_id',
       key: 'device_id',
-      width: 120,
+      width: 92,
       align: 'center' as const,
       filters: _uniqueDevices.map(d => ({ text: d, value: d })),
       onFilter: (value: any, record: any) => (record.device_id || '') === value,
@@ -1353,7 +1376,7 @@ export default function ResultsPage() {
       title: _colTitle('Command', 'action'),
       dataIndex: 'command',
       key: 'command',
-      width: 200,
+      width: 170,
       ellipsis: true,
       align: 'center' as const,
       render: (v: string, r: StepResultDetail) => {
@@ -1372,17 +1395,24 @@ export default function ResultsPage() {
       title: _colTitle('Remark', t('results.remark')),
       dataIndex: 'description',
       key: 'description',
-      width: 200,
+      // width 를 주지 않아 남는 가로 공간을 전부 흡수한다 (다른 컬럼은 고정폭).
+      // 가상 스크롤은 행 높이가 일정해야 하므로 줄바꿈 대신 ellipsis + 툴팁으로 전문 확인.
       ellipsis: true,
       align: 'center' as const,
-      render: (v: string) => <span style={{ textAlign: 'left', display: 'block' }}>{v || '-'}</span>,
+      render: (v: string) => (
+        v
+          ? <Tooltip title={<span style={{ whiteSpace: 'pre-wrap' }}>{v}</span>} placement="topLeft">
+              <span style={{ textAlign: 'left', display: 'block' }}>{v}</span>
+            </Tooltip>
+          : <span style={{ textAlign: 'left', display: 'block' }}>-</span>
+      ),
       _hide: webcamExpanded,
     },
     {
       title: _colTitle('Status', t('results.resultCol')),
       dataIndex: 'status',
       key: 'status',
-      width: 100,
+      width: 74,
       align: 'center' as const,
       filters: _uniqueStatuses.map(s => ({ text: statusText(s, t), value: s })),
       onFilter: (value: any, record: any) => effStatus(record) === value,
@@ -1394,7 +1424,7 @@ export default function ResultsPage() {
       title: _colTitle('Delay', t('results.delaySet')),
       dataIndex: 'delay_ms',
       key: 'delay',
-      width: 90,
+      width: 66,
       align: 'center' as const,
       render: (v: number) => v ? formatDuration(v) : '-',
       _hide: webcamExpanded,
@@ -1403,7 +1433,7 @@ export default function ResultsPage() {
       title: _colTitle('Duration', t('results.duration')),
       dataIndex: 'execution_time_ms',
       key: 'duration',
-      width: 100,
+      width: 72,
       align: 'center' as const,
       render: (v: number) => formatDuration(v),
       _hide: webcamExpanded,
@@ -1411,7 +1441,7 @@ export default function ResultsPage() {
     {
       title: _colTitle('', t('scenario.compare')),
       key: 'compare',
-      width: 130,
+      width: 92,
       align: 'center' as const,
       render: (_: any, r: StepResultDetail) => {
         // 모듈 명령(cmd, adb_send 등)의 출력값을 LOG 버튼으로 노출
@@ -1429,7 +1459,62 @@ export default function ResultsPage() {
       },
       _hide: false,
     },
-  ] as any[]).filter((c: any) => !c._hide);
+  ] as any[]);
+
+  // 사용자가 접은 컬럼을 제외. Remark(description)는 남는 폭을 흡수하므로,
+  // 다른 컬럼을 접을수록 Remark 가 넓어진다.
+  const stepColumns = _allStepColumns.filter(
+    (c: any) => !c._hide && !hiddenStepCols.has(c.key),
+  );
+
+  // Remark(width 없음)를 제외한 고정폭 합계 — 테이블 scroll.x 계산용
+  const _stepColsFixedWidth = stepColumns.reduce(
+    (sum: number, c: any) => sum + (typeof c.width === 'number' ? c.width : 0), 0,
+  );
+
+  // 컬럼 접기/펴기 UI — 라벨은 컬럼 정의(_colTitle)와 중복되지 않도록 여기서만 관리.
+  const STEP_COL_LABELS: Record<string, string> = {
+    timestamp: `Time Stamp / ${t('results.timestamp')}`,
+    repeat: `Repeat / ${t('results.repeat')}`,
+    step_id: `Step / ${t('results.step')}`,
+    device_id: `Device / ${t('results.deviceCol')}`,
+    command: 'Command / action',
+    description: `Remark / ${t('results.remark')}`,
+    status: `Status / ${t('results.resultCol')}`,
+    delay: `Delay / ${t('results.delaySet')}`,
+    duration: `Duration / ${t('results.duration')}`,
+    compare: t('scenario.compare'),
+  };
+  const _toggleableCols = _allStepColumns.filter((c: any) => !c._hide);
+  const stepColumnToggle = (
+    <Popover
+      trigger="click"
+      placement="bottomRight"
+      content={
+        <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+          <Space direction="vertical" size={2}>
+            {_toggleableCols.map((c: any) => (
+              <Checkbox
+                key={c.key}
+                checked={!hiddenStepCols.has(c.key)}
+                onChange={() => toggleStepCol(c.key)}
+              >
+                {STEP_COL_LABELS[c.key] || c.key}
+              </Checkbox>
+            ))}
+            <Button size="small" style={{ marginTop: 6 }} onClick={() => setHiddenStepCols(new Set())}>
+              {t('results.showAllColumns')}
+            </Button>
+          </Space>
+        </div>
+      }
+    >
+      <Button size="small" icon={<SettingOutlined />}>
+        {t('results.columns')}
+        {hiddenStepCols.size > 0 ? ` (${_toggleableCols.length - hiddenStepCols.size}/${_toggleableCols.length})` : ''}
+      </Button>
+    </Popover>
+  );
 
   return (
     <div>
@@ -1657,6 +1742,9 @@ export default function ResultsPage() {
                   }]}
                 />
               )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+                {stepColumnToggle}
+              </div>
               <Table
                 columns={stepColumns as any}
                 dataSource={cycleSteps}
@@ -1909,13 +1997,17 @@ export default function ResultsPage() {
 
               {/* 우측: 스텝 결과 테이블 (스크롤) */}
               <div style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+                  {stepColumnToggle}
+                </div>
                 <Table
                   columns={stepColumns}
                   dataSource={detail.step_results}
                   rowKey={(r: StepResultDetail) => `${r.step_id}_${r.repeat_index}`}
                   size="small"
                   virtual
-                  scroll={{ x: 1205, y: detailTableY }}
+                  // 고정폭 합계 + Remark 최소폭. 컬럼을 접으면 x 가 줄어 Remark 가 그만큼 넓어진다.
+                  scroll={{ x: _stepColsFixedWidth + 320, y: detailTableY }}
                   pagination={false}
                   rowClassName={(r: StepResultDetail) => {
                     const statusCls = r.excluded_from_result ? '' :
