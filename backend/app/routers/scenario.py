@@ -16,7 +16,7 @@ from ..dependencies import adb_service as adb_svc
 from ..dependencies import device_manager as dm
 from ..dependencies import playback_service as playback_svc
 from ..dependencies import recording_service as recording_svc
-from ..models.scenario import ROI, CompareMode, CropItem, Scenario, StepType
+from ..models.scenario import ROI, CompareMode, CropItem, Scenario, StepType, _new_step_uid
 from ..services.image_compare_service import ImageCompareService
 from ..services.recording_service import SCREENSHOTS_DIR
 
@@ -34,12 +34,12 @@ router = APIRouter(prefix="/api/scenario", tags=["scenario"])
 #    → 단일 이미지 경로와 동일하게 타임스탬프를 붙여 유일성을 보장한다.
 
 def _unique_crop_filename(scenario_name: str, step, save_dir: Path) -> str:
-    """멀티크롭 기대이미지용 충돌 없는 파일명 생성."""
+    """멀티크롭 기대이미지용 충돌 없는 파일명 생성 (step.uid 기준)."""
     import time as _time
     crop_idx = len(step.expected_images)
     while True:
         ts = int(_time.time() * 1000) % 1000000
-        name = f"{scenario_name}_step_{step.id:03d}_crop_{crop_idx:02d}_{ts}.png"
+        name = f"{scenario_name}_{step.uid}_crop_{crop_idx:02d}_{ts}.png"
         if not (save_dir / name).exists():
             return name
         _time.sleep(0.001)
@@ -335,7 +335,7 @@ async def save_expected_image(req: SaveExpectedImageRequest):
         # 타임스탬프로 캐시 충돌 방지 (capture-expected-image와 동일 패턴)
         import time as _time
         ts = int(_time.time() * 1000) % 1000000
-        filename = f"{req.scenario_name}_step_{step.id:03d}_{ts}.png"
+        filename = f"{req.scenario_name}_{step.uid}_{ts}.png"
         # 이전 기대이미지 파일 삭제
         if step.expected_image and step.expected_image != filename:
             _safe_unlink_expected(scenario, save_dir, step.expected_image, step)
@@ -532,7 +532,7 @@ async def capture_expected_image(req: CaptureExpectedImageRequest):
         # Single image (full or single_crop) — 타임스탬프 포함으로 캐시 충돌 방지
         import time as _time
         ts = int(_time.time() * 1000) % 1000000
-        filename = f"{scenario_name}_step_{step.id:03d}_{ts}.png"
+        filename = f"{scenario_name}_{step.uid}_{ts}.png"
         # 이전 기대이미지 파일 삭제
         if step.expected_image and step.expected_image != filename:
             _safe_unlink_expected(scenario, save_dir, step.expected_image, step)
@@ -879,7 +879,7 @@ async def update_image_tap(req: UpdateImageTapRequest):
     save_dir = SCREENSHOTS_DIR / scenario.name
     save_dir.mkdir(parents=True, exist_ok=True)
     ts = int(_time.time() * 1000) % 1000000
-    new_tpl = f"{scenario.name}_step_{step.id:03d}_imgtap_{ts}.png"
+    new_tpl = f"{scenario.name}_{step.uid}_imgtap_{ts}.png"
     ok, buf = cv2.imencode(".png", cropped)
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to encode template image")
@@ -1033,11 +1033,15 @@ async def import_steps(req: ImportStepsRequest):
         # 새 타임스탬프 기반 ID (충돌 방지)
         ts = int(_time.time() * 1000) % 1000000
         new_id = 900 + len(imported)  # 프론트에서 재인덱싱하므로 임시값
+        # 복사본은 원본과 다른 스텝이므로 반드시 새 uid 를 부여한다.
+        # (uid 를 그대로 복제하면 원본과 같은 기대이미지 파일을 가리켜 교차오염)
+        new_uid = _new_step_uid()
+        step_data["uid"] = new_uid
 
         # 기대이미지 복사
         if step_data.get("expected_image"):
             old_file = src_ss_dir / step_data["expected_image"]
-            new_filename = f"{req.target_name}_step_{new_id:03d}_{ts}.png"
+            new_filename = f"{req.target_name}_{new_uid}_{ts}.png"
             new_file = tgt_ss_dir / new_filename
             if old_file.exists():
                 shutil.copy2(str(old_file), str(new_file))
@@ -1051,9 +1055,7 @@ async def import_steps(req: ImportStepsRequest):
         for ci_idx, ci in enumerate(step_data.get("expected_images", [])):
             if ci.get("image"):
                 old_ci = src_ss_dir / ci["image"]
-                # ts 를 포함해 유일성 확보 — new_id 는 프론트가 곧바로 i+1 로 재부여하므로
-                # step.id 기반 이름만으로는 기존 스텝과 충돌한다.
-                new_ci_name = f"{req.target_name}_step_{new_id:03d}_crop_{ci_idx:02d}_{ts}.png"
+                new_ci_name = f"{req.target_name}_{new_uid}_crop_{ci_idx:02d}_{ts}.png"
                 new_ci = tgt_ss_dir / new_ci_name
                 if old_ci.exists():
                     shutil.copy2(str(old_ci), str(new_ci))
@@ -1068,7 +1070,7 @@ async def import_steps(req: ImportStepsRequest):
             tpl = params.get("template")
             if tpl:
                 old_tpl = src_ss_dir / tpl
-                new_tpl_name = f"{req.target_name}_step_{new_id:03d}_imgtap_{ts}.png"
+                new_tpl_name = f"{req.target_name}_{new_uid}_imgtap_{ts}.png"
                 new_tpl = tgt_ss_dir / new_tpl_name
                 if old_tpl.exists():
                     shutil.copy2(str(old_tpl), str(new_tpl))

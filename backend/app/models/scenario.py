@@ -107,8 +107,19 @@ class CropItem(BaseModel):
     roi: Optional[ROI] = None  # crop region on the source screenshot
 
 
+def _new_step_uid() -> str:
+    """스텝 고유 식별자 생성 (파일명에 그대로 쓸 수 있는 8자리 hex)."""
+    import uuid
+    return uuid.uuid4().hex[:8]
+
+
 class Step(BaseModel):
+    # ⚠️ id 는 '표시용 순번'이다. 프론트가 스텝 삽입/삭제/순서변경 때마다 배열 위치(i+1)로
+    #    재부여하므로 안정적인 식별자가 아니며, 파일명 등 영속 참조에 쓰면 안 된다.
+    #    영속 참조(기대이미지 파일명 등)에는 반드시 불변인 uid 를 사용한다.
+    #    (과거 사고: _step_020_crop_00.png 가 번호 밀린 다른 스텝과 충돌 → 기대이미지 교차오염)
     id: int
+    uid: str = Field(default_factory=_new_step_uid)  # 불변 고유 ID (생성 후 절대 변경 금지)
     type: StepType
     device_id: Optional[str] = None  # target device for this step
     screen_type: Optional[str] = None  # front_center|rear_left|rear_right|cluster (HKMC only)

@@ -47,6 +47,23 @@ def validate_entity_name(name: str, kind: str = "이름") -> str:
     return cleaned
 
 
+def _dedupe_step_uids(scenario: "Scenario") -> bool:
+    """중복된 step.uid 를 재부여한다. 변경 시 True.
+
+    스텝 복사/붙여넣기는 uid 까지 그대로 복제하므로, 그대로 두면 두 스텝이 같은
+    기대이미지 파일을 가리켜 다시 교차오염이 발생한다. 뒤에 오는 쪽에 새 uid 를 준다.
+    """
+    from ..models.scenario import _new_step_uid
+    seen: set[str] = set()
+    changed = False
+    for s in scenario.steps:
+        if not s.uid or s.uid in seen:
+            s.uid = _new_step_uid()
+            changed = True
+        seen.add(s.uid)
+    return changed
+
+
 def _migrate_legacy_step_types(data: dict) -> bool:
     """레거시 cmd_send / cmd_check 스텝을 module_command (CMD 모듈)으로 변환.
 
@@ -269,6 +286,9 @@ class RecordingService:
         키를 생략한다 (가독성).
         """
         self._prune_unused_device_map(scenario)
+        # 스텝 복사/붙여넣기로 uid 가 중복 유입될 수 있으므로 저장 직전 항상 유일성 보장.
+        # (어떤 경로로 들어와도 uid 는 시나리오 내에서 유일하다는 불변식을 여기서 확정)
+        _dedupe_step_uids(scenario)
         SCENARIOS_DIR.mkdir(parents=True, exist_ok=True)
         filepath = SCENARIOS_DIR / f"{scenario.name}.json"
 
@@ -318,10 +338,15 @@ class RecordingService:
             data = json.loads(filepath.read_text(encoding="utf-8"))
             # 레거시 cmd_send / cmd_check → module_command CMD.* 로 자동 마이그레이션
             migrated = _migrate_legacy_step_types(data)
+            # uid 없는 레거시 스텝 감지 — Step 모델의 default_factory 가 채워주지만,
+            # 저장하지 않으면 로드할 때마다 새 uid 가 부여되어 uid 기반 파일명이 고아가 된다.
+            # 따라서 '원본 JSON 에 uid 가 없었다'를 여기서 판정해 반드시 1회 영속화한다.
+            uid_added = any("uid" not in s for s in data.get("steps", []) if isinstance(s, dict))
             scenario = Scenario(**data)
+            deduped = _dedupe_step_uids(scenario)
             # 이미지 참조 자동 수리: 파일이 없으면 폴더 내에서 같은 step ID 파일 탐색
             changed = self._repair_image_refs(name, scenario)
-            return scenario, (changed or migrated)
+            return scenario, (changed or migrated or uid_added or deduped)
 
         scenario, needs_save = await asyncio.to_thread(_load_sync)
         if needs_save:
@@ -337,15 +362,30 @@ class RecordingService:
         for step in scenario.steps:
             if step.expected_image:
                 if not (ss_dir / step.expected_image).exists():
-                    # step ID로 매칭되는 파일 탐색
-                    pattern = f"*_step_{step.id:03d}_*"
-                    candidates = [f for f in ss_dir.glob(pattern) if "crop" not in f.name and "annotated" not in f.name and "actual" not in f.stem]
-                    if candidates:
+                    # uid 로 매칭되는 파일 탐색.
+                    # uid 는 불변이라 `*_{uid}_*` 는 반드시 이 스텝이 만든 파일만 잡는다.
+                    # (옛 `*_step_NNN_*` 매칭은 step.id 재부여 탓에 남의 이미지를 물어
+                    #  오결합을 일으켰다. 레거시 파일은 uid 가 없으므로 애초에 잡히지 않는다.)
+                    # 그래도 안전하게 ① 후보 1개 ② 다른 스텝 미참조 조건을 유지하고,
+                    # 애매하면 None 으로 비워 사용자가 재캡처하도록 유도한다.
+                    pattern = f"*_{step.uid}*"
+                    in_use = {s.expected_image for s in scenario.steps if s.expected_image}
+                    in_use |= {ci.image for s in scenario.steps for ci in s.expected_images if ci.image}
+                    candidates = [
+                        f for f in ss_dir.glob(pattern)
+                        if "crop" not in f.name and "annotated" not in f.name and "actual" not in f.stem
+                        and f.name not in in_use
+                    ]
+                    if len(candidates) == 1:
                         step.expected_image = candidates[0].name
-                        changed = True
                     else:
+                        if candidates:
+                            logger.warning(
+                                f"[{name}] step {step.id}: 기대이미지 후보가 {len(candidates)}개라 자동 수리를 "
+                                f"보류합니다(오결합 방지). 재캡처가 필요합니다."
+                            )
                         step.expected_image = None
-                        changed = True
+                    changed = True
             for ci in step.expected_images:
                 if ci.image and not (ss_dir / ci.image).exists():
                     ci.image = None
@@ -898,14 +938,13 @@ class RecordingService:
         tgt_ss_dir.mkdir(parents=True, exist_ok=True)
 
         for step in source.steps:
+            # 파일명은 step.uid 기준 — uid 는 불변이고 시나리오 내에서 유일하므로
+            # 옛 `_step_NNN_` 방식처럼 번호가 밀려 충돌할 여지가 없다.
+            # 대상 폴더가 새 폴더라 uid 만으로 유일성이 보장된다(접미사 파싱 불필요).
             if step.expected_image:
                 old_file = src_ss_dir / step.expected_image
-                # 새 파일명 생성 (replace 대신 step ID 기반으로 안전하게)
-                stem = Path(step.expected_image).stem
                 ext = Path(step.expected_image).suffix or ".png"
-                m = re.search(r'_step_\d+(.*)', stem)
-                suffix = m.group(1) if m else ""
-                new_filename = f"{target_name}_step_{step.id:03d}{suffix}{ext}"
+                new_filename = f"{target_name}_{step.uid}{ext}"
                 new_file = tgt_ss_dir / new_filename
                 if old_file.exists():
                     shutil.copy2(str(old_file), str(new_file))
@@ -914,7 +953,7 @@ class RecordingService:
             for ci_idx, ci in enumerate(step.expected_images):
                 if ci.image:
                     old_ci = src_ss_dir / ci.image
-                    new_ci_name = f"{target_name}_step_{step.id:03d}_crop_{ci_idx:02d}.png"
+                    new_ci_name = f"{target_name}_{step.uid}_crop_{ci_idx:02d}.png"
                     new_ci = tgt_ss_dir / new_ci_name
                     if old_ci.exists():
                         shutil.copy2(str(old_ci), str(new_ci))
@@ -924,11 +963,8 @@ class RecordingService:
                 tpl = step.params.get("template")
                 if tpl:
                     old_tpl = src_ss_dir / tpl
-                    stem = Path(tpl).stem
                     ext = Path(tpl).suffix or ".png"
-                    m = re.search(r'_step_\d+(.*)', stem)
-                    suffix = m.group(1) if m else "_imgtap"
-                    new_tpl_name = f"{target_name}_step_{step.id:03d}{suffix}{ext}"
+                    new_tpl_name = f"{target_name}_{step.uid}_imgtap{ext}"
                     new_tpl = tgt_ss_dir / new_tpl_name
                     if old_tpl.exists():
                         shutil.copy2(str(old_tpl), str(new_tpl))

@@ -242,7 +242,9 @@ interface ROI { x: number; y: number; width: number; height: number }
 interface CropItem { image: string; label: string; roi?: ROI | null }
 
 interface Step {
-  id: number;
+  id: number;              // 표시용 순번 — 삽입/삭제/순서변경 때마다 i+1 로 재부여됨
+  uid?: string;            // 불변 고유 ID (백엔드가 부여). 기대이미지 파일명의 기준.
+                           // 스텝을 spread 로 재생성할 때 절대 누락시키지 말 것.
   type: string;
   device_id: string | null;
   screen_type?: string | null;
