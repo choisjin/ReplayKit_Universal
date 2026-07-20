@@ -1621,15 +1621,31 @@ def trim_recording(   # sync def: ffmpeg subprocess 가 블로킹이라 스레�
     output_name = f"trim_{start:.1f}_{end:.1f}_{safe_name}"
     # 원본과 같은 폴더에 저장 — 런 폴더 녹화를 레거시 폴더에 흘리지 않는다.
     output_path = filepath.parent / output_name
+
+    # -ss/-to 는 반드시 **-i 앞**(입력 seek). 뒤에 두면(출력 seek) `-c copy` 와 겹쳐
+    # 패킷이 잘못 버려져 2초를 요청해도 0.5초짜리 깨진 파일이 나온다(실측).
+    # 또한 웹캠 녹화는 -g 를 지정하지 않아 키프레임 간격이 수 초~십수 초라
+    # stream copy 로는 자를 위치가 크게 어긋난다 → 재인코딩으로 정확히 자른다.
+    cmd = [
+        ffmpeg_path,
+        "-ss", str(start), "-to", str(end),
+        "-i", str(filepath),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+        "-c:a", "aac",              # 오디오가 없으면 무시된다
+        "-movflags", "+faststart",
+        str(output_path), "-y",
+    ]
     try:
         subprocess.run(
-            [ffmpeg_path, "-i", str(filepath), "-ss", str(start), "-to", str(end),
-             "-c", "copy", "-movflags", "+faststart", str(output_path), "-y"],
-            check=True, capture_output=True,
+            cmd, check=True, capture_output=True,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"ffmpeg error: {e.stderr.decode(errors='replace')[:300]}")
+
+    # rc=0 이어도 스트림이 없는 깨진 파일이 나올 수 있어 결과를 확인한다.
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        raise HTTPException(status_code=500, detail="구간 저장 결과 파일이 비어 있습니다.")
 
     # 서빙용 상대경로 — Range 지원 엔드포인트 기준
     for root in (RESULTS_DIR, RECORDINGS_DIR):
