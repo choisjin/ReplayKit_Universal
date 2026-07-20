@@ -988,8 +988,13 @@ def _find_git_root() -> Optional[Path]:
 
 
 @router.get("/git-log")
-async def git_log(limit: int = 100, fetch: bool = False):
+def git_log(limit: int = 100, fetch: bool = False):
     """Git 커밋 내역 조회.
+
+    sync def인 이유: 본문이 전부 블로킹 subprocess.run(git fetch/log/tag)이다.
+    async def면 이벤트 루프 위에서 그대로 돌아 /api/health가 굶고 프론트가
+    "서버 연결 중..."을 띄운다. sync def면 FastAPI가 스레드풀에서 실행한다.
+    (본문에 await가 없으므로 안전하게 전환 가능)
 
     OS 분기:
       - Linux: _CHANGELOG_REMOTE_URL (replay_kit_linux.git) 고정 캐시. 어떤 환경 (.deb,
