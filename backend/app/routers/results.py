@@ -1,5 +1,6 @@
 """Test results API routes."""
 
+import asyncio
 import base64
 import gzip
 import html as _html
@@ -20,7 +21,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,15 @@ def _content_disposition(filename: str) -> str:
 
 @router.get("/list")
 async def list_results():
-    """List all test result files (런 폴더 + 레거시 플랫 파일 모두 탐색)."""
+    """List all test result files (런 폴더 + 레거시 플랫 파일 모두 탐색).
+
+    결과가 쌓이면 전체 result.json을 요약용으로 파싱하는 비용이 커서
+    이벤트 루프를 막는다 → 스레드로 오프로드.
+    """
+    return await asyncio.to_thread(_list_results_sync)
+
+
+def _list_results_sync():
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     results = []
     seen: set[str] = set()
@@ -909,16 +918,19 @@ async def export_result_excel(filename: str):
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Result not found")
 
-    data = json.loads(filepath.read_text(encoding="utf-8"))
+    def _build() -> io.BytesIO:
+        data = json.loads(filepath.read_text(encoding="utf-8"))
+        wb = _build_excel_workbook(data, filepath)
+        b = io.BytesIO()
+        wb.save(b)
+        b.seek(0)
+        return b
 
     try:
-        wb = _build_excel_workbook(data, filepath)
+        # 대용량 결과의 JSON 파싱 + 엑셀 생성은 스레드로 — 이벤트 루프 보호
+        buf = await asyncio.to_thread(_build)
     except ImportError:
         raise HTTPException(status_code=500, detail="openpyxl not installed")
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
 
     export_name = Path(filename.replace(".json", ".xlsx")).name
     return StreamingResponse(
@@ -1519,42 +1531,75 @@ async def trim_recording(
     return {"filename": output_name, "url": f"/recordings/{output_name}"}
 
 
+# update-step는 상세 모달의 BG_TASK 폴링이 스텝마다 호출한다. result.json이
+# 에이징 결과처럼 수십~수백 MB면 read+dumps+write 한 번에 수 초가 걸리므로
+# ① 스레드로 오프로드해 이벤트 루프를 막지 않고("서버 연결 중" 원인)
+# ② 파일별 락으로 직렬화해 read-modify-write 유실을 막고
+# ③ 락 대기 중 쌓인 요청을 한 번의 RMW로 합쳐 O(N²) 재직렬화를 없앤다.
+_STEP_UPDATE_LOCKS: dict[str, asyncio.Lock] = {}
+_STEP_UPDATE_PENDING: dict[str, list[dict]] = {}
+_STEP_UPDATE_LAST_STATUS: dict[str, str] = {}
+
+
+def _apply_step_updates(filepath: Path, updates: list[dict]) -> str:
+    """큐에 쌓인 스텝 업데이트를 한 번의 읽기-쓰기로 모두 적용. (스레드 실행 전용)"""
+    data = json.loads(filepath.read_text(encoding="utf-8"))
+    step_results = data.get("step_results", [])
+    status_map = {"pass": "passed_steps", "fail": "failed_steps",
+                  "warning": "warning_steps", "error": "error_steps"}
+
+    for body in updates:
+        step_index = body.get("step_index")
+        if step_index is None or step_index < 0 or step_index >= len(step_results):
+            continue  # 이미 검증했지만 배치 중 하나가 어긋나도 나머지는 살린다
+        sr = step_results[step_index]
+        if "message" in body:
+            sr["message"] = body["message"]
+        if "status" in body:
+            old_status = sr["status"]
+            new_status = body["status"]
+            sr["status"] = new_status
+            # 카운트 재계산
+            if old_status != new_status:
+                if old_status in status_map:
+                    data[status_map[old_status]] = max(0, data.get(status_map[old_status], 0) - 1)
+                if new_status in status_map:
+                    data[status_map[new_status]] = data.get(status_map[new_status], 0) + 1
+                # 전체 상태 재평가
+                if data.get("failed_steps", 0) > 0 or data.get("error_steps", 0) > 0:
+                    data["status"] = "fail"
+                elif data.get("warning_steps", 0) > 0:
+                    data["status"] = "warning"
+                else:
+                    data["status"] = "pass"
+
+    filepath.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return data.get("status", "")
+
+
 @router.post("/update-step/{filename:path}")
 async def update_step_result(filename: str, body: dict):
     """백그라운드 CMD 완료 후 스텝 결과를 영구 업데이트."""
     filepath = RESULTS_DIR / filename
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Result not found")
-    data = json.loads(filepath.read_text(encoding="utf-8"))
     step_index = body.get("step_index")
-    if step_index is None or step_index < 0 or step_index >= len(data.get("step_results", [])):
+    if step_index is None or step_index < 0:
         raise HTTPException(status_code=400, detail="Invalid step_index")
 
-    sr = data["step_results"][step_index]
-    if "message" in body:
-        sr["message"] = body["message"]
-    if "status" in body:
-        old_status = sr["status"]
-        new_status = body["status"]
-        sr["status"] = new_status
-        # 카운트 재계산
-        if old_status != new_status:
-            status_map = {"pass": "passed_steps", "fail": "failed_steps",
-                          "warning": "warning_steps", "error": "error_steps"}
-            if old_status in status_map:
-                data[status_map[old_status]] = max(0, data.get(status_map[old_status], 0) - 1)
-            if new_status in status_map:
-                data[status_map[new_status]] = data.get(status_map[new_status], 0) + 1
-            # 전체 상태 재평가
-            if data.get("failed_steps", 0) > 0 or data.get("error_steps", 0) > 0:
-                data["status"] = "fail"
-            elif data.get("warning_steps", 0) > 0:
-                data["status"] = "warning"
-            else:
-                data["status"] = "pass"
+    key = str(filepath)
+    lock = _STEP_UPDATE_LOCKS.setdefault(key, asyncio.Lock())
+    _STEP_UPDATE_PENDING.setdefault(key, []).append(body)
 
-    filepath.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    return {"status": "ok", "result_status": data["status"]}
+    async with lock:
+        batch = _STEP_UPDATE_PENDING.pop(key, [])
+        if not batch:
+            # 앞선 요청이 내 업데이트까지 합쳐서 이미 기록함
+            return {"status": "ok", "result_status": _STEP_UPDATE_LAST_STATUS.get(key, "")}
+        result_status = await asyncio.to_thread(_apply_step_updates, filepath, batch)
+        _STEP_UPDATE_LAST_STATUS[key] = result_status
+
+    return {"status": "ok", "result_status": result_status}
 
 
 @router.post("/migrate-legacy")
@@ -1657,8 +1702,10 @@ async def get_result(filename: str):
     filepath = RESULTS_DIR / filename
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Result not found")
-    data = json.loads(filepath.read_text(encoding="utf-8"))
-    return data
+    # 에이징 결과는 수십 MB — 파싱/재직렬화 없이 원본 바이트를 그대로 흘려보낸다.
+    # (dict로 반환하면 FastAPI가 이벤트 루프에서 다시 json.dumps 해 루프를 막는다)
+    raw = await asyncio.to_thread(filepath.read_bytes)
+    return Response(content=raw, media_type="application/json")
 
 
 @router.get("/image/{scenario_name}/{image_path:path}")
