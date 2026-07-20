@@ -1641,10 +1641,20 @@ def trim_recording(   # sync def: ffmpeg subprocess 가 블로킹이라 스레�
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
     except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"ffmpeg error: {e.stderr.decode(errors='replace')[:300]}")
+        stderr = (e.stderr or b"").decode(errors="replace").strip()
+        # 전체를 로그로 남긴다 — 원인 규명은 보통 stderr 마지막 줄에 있다.
+        logger.error("[trim] ffmpeg 실패 rc=%s\n  cmd: %s\n  stderr:\n%s",
+                     e.returncode, " ".join(cmd), stderr)
+        # 응답에는 **끝부분**을 싣는다. 앞 300자는 ffmpeg 버전 배너라 진단에 쓸모없다.
+        tail = "\n".join(stderr.splitlines()[-6:])[-400:]
+        raise HTTPException(status_code=500, detail=f"ffmpeg 실패 (rc={e.returncode}): {tail}")
+    except OSError as e:
+        logger.exception("[trim] ffmpeg 실행 불가: %s", ffmpeg_path)
+        raise HTTPException(status_code=500, detail=f"ffmpeg 실행 실패: {e}")
 
     # rc=0 이어도 스트림이 없는 깨진 파일이 나올 수 있어 결과를 확인한다.
     if not output_path.exists() or output_path.stat().st_size == 0:
+        logger.error("[trim] 결과 파일이 비어 있음: %s (cmd: %s)", output_path, " ".join(cmd))
         raise HTTPException(status_code=500, detail="구간 저장 결과 파일이 비어 있습니다.")
 
     # 서빙용 상대경로 — Range 지원 엔드포인트 기준
