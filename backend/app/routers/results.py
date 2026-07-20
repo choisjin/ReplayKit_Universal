@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys          # sys.platform — open_folder(1270행)/trim_recording 의 Windows 분기
 import tempfile
 import threading
 import time
