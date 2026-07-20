@@ -303,3 +303,41 @@ def test_legacy_loops_migration_persisted_and_idempotent(svc, tmp_path):
 
     second = asyncio.run(svc.load_scenario("L"))
     assert (second.loops[0].start_uid, second.loops[0].end_uid) == expected
+
+
+# ----------------------------------------------------------------------
+# 스키마 버전
+# ----------------------------------------------------------------------
+
+def test_legacy_scenario_gets_current_schema_version(svc, tmp_path):
+    """구형 파일(버전 필드 없음)은 마이그레이션 후 현재 버전으로 기록된다."""
+    # ⚠️ 파일명은 scenario.name 과 일치해야 한다 — save_scenario 가 name 기준으로 쓰므로
+    #    엉뚱한 파일명을 쓰면 원본이 그대로 남아 테스트가 거짓 통과한다.
+    write_scenario_json(tmp_path, "G", LEGACY_GOTO)
+    sc = asyncio.run(svc.load_scenario("G"))
+    assert sc.schema_version == rs.SCENARIO_SCHEMA_VERSION
+
+    saved = json.loads((tmp_path / "scenarios" / "G.json").read_text(encoding="utf-8"))
+    assert saved["schema_version"] == rs.SCENARIO_SCHEMA_VERSION
+
+
+def test_future_schema_version_is_rejected(svc, tmp_path):
+    """아는 것보다 새로운 스키마는 조용히 오해석하지 않고 거부한다."""
+    payload = dict(LEGACY_GOTO)
+    payload["schema_version"] = rs.SCENARIO_SCHEMA_VERSION + 1
+    write_scenario_json(tmp_path, "G", payload)
+
+    with pytest.raises(ValueError, match="최신 형식"):
+        asyncio.run(svc.load_scenario("G"))
+
+
+def test_current_version_file_is_not_rewritten(svc, tmp_path):
+    """이미 최신 형식이면 로드만으로 다시 저장하지 않는다(불필요한 쓰기 방지)."""
+    write_scenario_json(tmp_path, "G", LEGACY_GOTO)
+    asyncio.run(svc.load_scenario("G"))          # 1회차: 마이그레이션 + 저장
+    path = tmp_path / "scenarios" / "G.json"
+    before = path.read_bytes()
+    assert b"schema_version" in before, "1회차에서 실제로 저장되었는지 먼저 확인"
+
+    asyncio.run(svc.load_scenario("G"))          # 2회차: 변경 없어야 함
+    assert path.read_bytes() == before

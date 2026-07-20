@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from ..models.scenario import GOTO_END, ROI, Scenario, Step, StepType
+from ..models.scenario import GOTO_END, ROI, SCENARIO_SCHEMA_VERSION, Scenario, Step, StepType
 from .adb_service import ADBService
 from .device_manager import DeviceManager
 
@@ -143,6 +143,11 @@ def _migrate_step_identity(data: dict) -> bool:
             new_loops.append({"start_uid": s_uid, "end_uid": e_uid,
                               "count": lp.get("count", 2)})
         data["loops"] = new_loops
+
+    # ⑤ 스키마 버전 기록 — 위 변환이 모두 끝난 상태가 곧 현재 버전이다.
+    if data.get("schema_version") != SCENARIO_SCHEMA_VERSION:
+        data["schema_version"] = SCENARIO_SCHEMA_VERSION
+        changed = True
 
     return changed
 
@@ -420,6 +425,19 @@ class RecordingService:
         def _load_sync() -> tuple[Scenario, bool]:
             data = json.loads(filepath.read_text(encoding="utf-8"))
             # 레거시 cmd_send / cmd_check → module_command CMD.* 로 자동 마이그레이션
+            # 이 코드가 아는 것보다 새로운 스키마면 해석을 시도하지 않는다.
+            # (조용히 오해석하면 goto/loops 참조가 망가지고 되돌릴 수 없다)
+            try:
+                file_ver = int(data.get("schema_version", 1))
+            except (TypeError, ValueError):
+                file_ver = 1
+            if file_ver > SCENARIO_SCHEMA_VERSION:
+                raise ValueError(
+                    f"시나리오 '{name}' 은 최신 형식(schema_version={file_ver}) 입니다. "
+                    f"이 버전은 {SCENARIO_SCHEMA_VERSION} 까지만 지원합니다 — "
+                    "ReplayKit 을 업데이트하세요."
+                )
+
             migrated = _migrate_legacy_step_types(data)
             # 스텝 식별자(uid) 부여 + 레거시 goto(정수) → uid 변환.
             # 반드시 파싱 전에 raw dict 에서 수행한다 (_migrate_step_identity 주석 참조).

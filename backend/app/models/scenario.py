@@ -110,6 +110,14 @@ class CropItem(BaseModel):
 #: 조건부이동의 '재생 종료' 센티널. (레거시 정수 표현 -1 을 대체)
 GOTO_END = "END"
 
+#: 시나리오 JSON 스키마 버전.
+#:   1 = (암묵) uid 이전. step.id(위치)로 파일명·goto·loops 를 참조하던 형식.
+#:   2 = step.uid 도입. goto = 대상 uid | GOTO_END, loops = 경계 uid.
+#: 로드 시 1(=필드 없음)이면 _migrate_step_identity 가 2로 올린 뒤 1회 저장한다.
+#: 이 값보다 큰 버전을 만나면 해석을 시도하지 않고 명확히 거부한다 —
+#: 신형 파일을 구형 코드가 조용히 오해석해 참조를 망가뜨리는 것을 막기 위함.
+SCENARIO_SCHEMA_VERSION = 2
+
 
 def _new_step_uid() -> str:
     """스텝 고유 식별자 생성 (파일명에 그대로 쓸 수 있는 8자리 hex)."""
@@ -165,6 +173,7 @@ class LoopRange(BaseModel):
 
 
 class Scenario(BaseModel):
+    schema_version: int = SCENARIO_SCHEMA_VERSION
     name: str
     description: str = ""
     device_serial: Optional[str] = None
