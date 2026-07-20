@@ -1801,7 +1801,11 @@ async def _run_play_job(data: dict):
     repeat = data.get("repeat", 1)
     until_time = _parse_until_time(data.get("until_time"))
     device_map_override = data.get("device_map")
-    skip_steps: set[int] = set(data.get("skip_steps", []))
+    # 건너뛸 스텝 — step.uid 기준. step.id 는 편집 때마다 재부여되므로,
+    # 선택 시점과 재생 시점 사이에 시나리오가 편집되면 엉뚱한 스텝을 건너뛴다.
+    # (구버전 프론트/오래된 탭이 보내는 정수 id 도 관용 처리 — uid 는 8자리 hex 라
+    #  작은 정수 문자열과 절대 겹치지 않으므로 오탐 위험이 없다)
+    skip_steps: set[str] = {str(x) for x in data.get("skip_steps", [])}
     _is_multi_cycle = False
     result_path: Optional[str] = None
     webcam_session: Optional[_WebcamPlaybackSession] = None
@@ -1830,7 +1834,10 @@ async def _run_play_job(data: dict):
         publish_event({"type": "prepare", "key": "load", "index": 2, "total": 3})
         scen = await recording_service.load_scenario(scenario_name)
         if skip_steps:
-            scen.steps = [s for s in scen.steps if s.id not in skip_steps]
+            scen.steps = [
+                s for s in scen.steps
+                if s.uid not in skip_steps and str(s.id) not in skip_steps
+            ]
 
         publish_event({"type": "prepare", "key": "check", "index": 3, "total": 3})
         preflight_errors = await playback_service.preflight_check(scen, device_map_override)

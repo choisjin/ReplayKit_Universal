@@ -522,6 +522,57 @@ class PlaybackService:
         return errors
 
     @staticmethod
+    def _resolve_next_index(
+        idx: int,
+        step,
+        status: str,
+        step_by_id: dict[int, int],
+        loop_by_end_idx: dict[int, tuple[int, int]],
+        loop_remaining: dict[int, int],
+    ) -> tuple[int, bool]:
+        """다음에 실행할 스텝 인덱스를 결정한다. 반환 (next_idx, stop).
+
+        stop=True 면 END 센티널(goto == -1)이므로 재생을 종료한다.
+        loop_remaining 은 진행 상태이므로 제자리에서 갱신된다.
+
+        규칙:
+          1) 조건부이동(goto)이 지정되어 있으면 그쪽으로 이동. -1 은 END.
+             대상 스텝을 찾지 못하면 무시하고 자연 진행.
+          2) 구간반복은 '자연 진행'일 때만 적용 — goto 가 항상 반복보다 우선한다.
+
+        ⚠️ 스트리밍/비스트리밍 두 실행 경로가 이 함수를 공유한다. 예전에는 동일 로직이
+           양쪽에 복제되어 있어 한쪽만 고치면 조용히 어긋났다. 반드시 여기만 수정할 것.
+        """
+        next_idx = idx + 1
+        if status == "pass" and step.on_pass_goto is not None:
+            if step.on_pass_goto == -1:
+                return next_idx, True
+            target = step_by_id.get(step.on_pass_goto)
+            if target is not None:
+                next_idx = target
+        elif status in ("fail", "error") and step.on_fail_goto is not None:
+            if step.on_fail_goto == -1:
+                return next_idx, True
+            target = step_by_id.get(step.on_fail_goto)
+            if target is not None:
+                next_idx = target
+
+        # 구간반복 — 명시적 조건부이동이 없을 때(자연 진행)만 적용.
+        # 반복 각 회차는 새 exec_seq 로 step_start/step_result 를 다시 흘려보내므로
+        # 조건부이동 revisit 과 동일하게 프론트/집계가 그대로 처리한다.
+        if next_idx == idx + 1 and idx in loop_by_end_idx:
+            s_idx, cnt = loop_by_end_idx[idx]
+            rem = loop_remaining.get(s_idx)
+            if rem is None:
+                rem = cnt - 1  # 첫 통과 완료 → 남은 반복
+            if rem > 0:
+                loop_remaining[s_idx] = rem - 1
+                next_idx = s_idx
+            else:
+                loop_remaining.pop(s_idx, None)
+        return next_idx, False
+
+    @staticmethod
     def _build_loop_map(scenario: Scenario, step_by_id: dict[int, int]) -> dict[int, tuple[int, int]]:
         """구간반복 정의를 { end_idx: (start_idx, count) } 로 변환.
 
@@ -623,31 +674,12 @@ class PlaybackService:
                     else:
                         result.error_steps += 1
 
-                # Conditional jump
-                next_idx = idx + 1
-                if step_result.status == "pass" and step.on_pass_goto is not None:
-                    if step.on_pass_goto == -1:
-                        break
-                    target = step_by_id.get(step.on_pass_goto)
-                    if target is not None:
-                        next_idx = target
-                elif step_result.status in ("fail", "error") and step.on_fail_goto is not None:
-                    if step.on_fail_goto == -1:
-                        break
-                    target = step_by_id.get(step.on_fail_goto)
-                    if target is not None:
-                        next_idx = target
-                # 구간반복 — 명시적 조건부이동이 없을 때(자연 진행)만 적용
-                if next_idx == idx + 1 and idx in loop_by_end_idx:
-                    s_idx, cnt = loop_by_end_idx[idx]
-                    rem = loop_remaining.get(s_idx)
-                    if rem is None:
-                        rem = cnt - 1  # 첫 통과 완료 → 남은 반복
-                    if rem > 0:
-                        loop_remaining[s_idx] = rem - 1
-                        next_idx = s_idx
-                    else:
-                        loop_remaining.pop(s_idx, None)
+                # 다음 스텝 결정 (조건부이동 + 구간반복) — 공유 로직
+                next_idx, _stop = self._resolve_next_index(
+                    idx, step, step_result.status, step_by_id, loop_by_end_idx, loop_remaining
+                )
+                if _stop:
+                    break
                 idx = next_idx
         except Exception as e:
             logger.error("Playback error: %s", e)
@@ -749,33 +781,12 @@ class PlaybackService:
                         f_sr.excluded_from_result = True
                     yield f_sr
 
-                # Determine next step based on conditional jump
-                next_idx = idx + 1
-                if step_result.status == "pass" and step.on_pass_goto is not None:
-                    if step.on_pass_goto == -1:
-                        break  # END
-                    target = step_by_id.get(step.on_pass_goto)
-                    if target is not None:
-                        next_idx = target
-                elif step_result.status in ("fail", "error") and step.on_fail_goto is not None:
-                    if step.on_fail_goto == -1:
-                        break  # END
-                    target = step_by_id.get(step.on_fail_goto)
-                    if target is not None:
-                        next_idx = target
-                # 구간반복 — 명시적 조건부이동이 없을 때(자연 진행)만 적용.
-                # 반복 각 회차는 새 exec_seq 로 step_start/step_result 를 다시 흘려보내므로
-                # 조건부이동 revisit 과 동일하게 프론트/집계가 그대로 처리한다.
-                if next_idx == idx + 1 and idx in loop_by_end_idx:
-                    s_idx, cnt = loop_by_end_idx[idx]
-                    rem = loop_remaining.get(s_idx)
-                    if rem is None:
-                        rem = cnt - 1  # 첫 통과 완료 → 남은 반복
-                    if rem > 0:
-                        loop_remaining[s_idx] = rem - 1
-                        next_idx = s_idx
-                    else:
-                        loop_remaining.pop(s_idx, None)
+                # 다음 스텝 결정 (조건부이동 + 구간반복) — 공유 로직
+                next_idx, _stop = self._resolve_next_index(
+                    idx, step, step_result.status, step_by_id, loop_by_end_idx, loop_remaining
+                )
+                if _stop:
+                    break
                 idx = next_idx
         finally:
             self._running = False

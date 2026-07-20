@@ -179,6 +179,10 @@ const statusLabel = (s: string, t: (k: TranslationKey) => string) =>
 // 백엔드 로직·결과 표시는 그대로 유지되며 설정 체크박스만 숨긴다.
 const BRANCH_MODE_ENABLED = true;
 
+/** 건너뛰기 선택의 안정적 키 — step.uid 우선, 없으면(레거시) id 문자열 폴백.
+ *  step.id 는 스텝 삽입/삭제 때마다 재부여되므로 선택 상태의 키로 쓰면 안 된다. */
+const stepSkipKey = (s: any): string => String(s?.uid ?? s?.id ?? '');
+
 // 결과 미반영 스텝은 status(실제 pass/fail)와 무관하게 '분기'로 표시
 const effStatus = (r: { status: string; excluded_from_result?: boolean }) =>
   r.excluded_from_result ? 'branch' : r.status;
@@ -462,7 +466,9 @@ export default function ScenarioPage() {
 
   // 시나리오 스텝 미리보기
   const [previewSteps, setPreviewSteps] = useState<any[]>([]);
-  const [skipStepIds, setSkipStepIds] = useState<Set<number>>(new Set());
+  // 건너뛸 스텝 — step.uid 기준(step.id 는 편집 시 재부여되어 선택이 어긋남).
+  // uid 가 없는 레거시 스텝은 id 문자열로 폴백(백엔드가 양쪽 모두 관용 처리).
+  const [skipStepIds, setSkipStepIds] = useState<Set<string>>(new Set());
   const selectedNameRef = useRef(selectedName);
   selectedNameRef.current = selectedName;
   // 트리 다중 선택 anchor — Shift 범위 선택의 시작점. 일반 클릭/Ctrl 클릭 시 갱신.
@@ -2706,7 +2712,7 @@ export default function ScenarioPage() {
                 pagination={false}
                 dataSource={previewSteps}
                 rowKey="id"
-                rowClassName={(r: any) => skipStepIds.has(r.id) ? 'row-skip' : ''}
+                rowClassName={(r: any) => skipStepIds.has(stepSkipKey(r)) ? 'row-skip' : ''}
                 columns={[
                   {
                     title: <Checkbox
@@ -2714,18 +2720,18 @@ export default function ScenarioPage() {
                       indeterminate={skipStepIds.size > 0 && skipStepIds.size < previewSteps.length}
                       onChange={(e) => {
                         if (e.target.checked) setSkipStepIds(new Set());
-                        else setSkipStepIds(new Set(previewSteps.map((s: any) => s.id)));
+                        else setSkipStepIds(new Set(previewSteps.map((s: any) => stepSkipKey(s))));
                       }}
                     />,
                     key: 'check', width: 32, align: 'center' as const,
                     render: (_: any, r: any) => (
                       <Checkbox
-                        checked={!skipStepIds.has(r.id)}
+                        checked={!skipStepIds.has(stepSkipKey(r))}
                         onChange={(e) => {
                           setSkipStepIds(prev => {
                             const next = new Set(prev);
-                            if (e.target.checked) next.delete(r.id);
-                            else next.add(r.id);
+                            if (e.target.checked) next.delete(stepSkipKey(r));
+                            else next.add(stepSkipKey(r));
                             return next;
                           });
                         }}
