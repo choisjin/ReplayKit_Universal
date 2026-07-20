@@ -33,7 +33,6 @@ import AdminPage from './pages/AdminPage';
 import WebcamPip from './components/WebcamPip';
 import CompositorEditor from './components/CompositorEditor';
 import AnnouncementBanner from './components/AnnouncementBanner';
-import PopupNotice from './components/PopupNotice';
 import AnnouncementListModal from './components/AnnouncementListModal';
 import { AnnouncementsProvider, useAnnouncements } from './context/AnnouncementsContext';
 import PlaybackStatusBanner from './components/PlaybackStatusBanner';
@@ -453,7 +452,7 @@ function AppContent() {
               <Button
                 block
                 icon={<NotificationOutlined />}
-                onClick={openAnnouncements}
+                onClick={() => openAnnouncements()}
               >
                 {!siderCollapsed && t('announce.title')}
               </Button>
@@ -514,7 +513,6 @@ function AppContent() {
         <Layout style={layoutBg ? { background: layoutBg } : undefined}>
           <Content style={{ margin: 6, padding: 10, background: contentBg, borderRadius: 8 }}>
             <AnnouncementBanner />
-            <PopupNotice />
             <PlaybackStatusBanner />
             {everReady ? (
               // 한 번이라도 연결됐으면 페이지는 항상 마운트 유지(로컬 상태 보존).

@@ -44,7 +44,7 @@ export default function AnnouncementBanner() {
               <Badge count={visible.length} size="small" style={{ backgroundColor: '#1677ff' }} />
             )}
           </Space>
-          <Button type="text" size="small" icon={<ExpandOutlined />} onClick={openList} style={{ color: 'inherit' }}>
+          <Button type="text" size="small" icon={<ExpandOutlined />} onClick={() => openList()} style={{ color: 'inherit' }}>
             {t('announce.expand')}
           </Button>
         </div>
