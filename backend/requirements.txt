@@ -1,4 +1,6 @@
-fastapi==0.109.0
+# fastapi 0.115.x = starlette 0.37+ (Range/206 지원). 0.109 는 starlette<0.36 을
+# 강제해서 영상 seek 이 불가능했다 — 루트 requirements.txt 의 주석 참고.
+fastapi==0.115.6
 uvicorn[standard]==0.27.0
 websockets==12.0
 opencv-python-headless==4.9.0.80

@@ -22,7 +22,7 @@ decorator==5.2.1
 dohq-artifactory==1.0.1
 et_xmlfile==2.0.0
 exceptiongroup==1.3.1
-fastapi==0.109.0
+fastapi==0.115.6
 genicam==1.5.1
 h11==0.16.0
 harvesters==1.4.3
@@ -119,7 +119,10 @@ sortedcontainers==2.4.0
 soundfile==0.13.1
 soxr==1.0.0
 SpeechRecognition==3.15.0
-starlette==0.35.1
+# starlette 0.37.0 부터 FileResponse/StaticFiles 가 Range(206) 를 지원한다.
+# 0.35 에서는 206 을 못 줘서 브라우저가 video.seekable 을 비웠고, 프론트가 영상
+# 파일 전체를 blob 으로 받아야만 seek 이 가능했다 (에이징 결과에서 회차 이동 실패 원인).
+starlette==0.41.3
 threadpoolctl==3.6.0
 tifffile==2025.5.10
 trio==0.33.0
