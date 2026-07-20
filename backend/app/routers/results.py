@@ -1252,24 +1252,31 @@ def regenerate_result_html(filename: str):
 
 @router.post("/open-folder")
 async def open_result_folder(body: dict):
-    """결과 폴더를 파일 탐색기로 열기."""
-    import os, sys
+    """결과 파일이 있는 폴더를 파일 탐색기로 연다.
+
+    filename 은 RESULTS_DIR 기준 상대경로. 파일이면 그 파일이 **선택된 상태**로
+    부모 폴더를 열고(Windows: explorer /select), 폴더면 그 폴더를 연다.
+    구간 저장 결과처럼 런 폴더 하위(`{run}/recordings/x.mp4`)도 바로 열 수 있다.
+    """
     filename = body.get("filename", "")
     if not filename:
         raise HTTPException(status_code=400, detail="filename required")
 
-    filepath = RESULTS_DIR / filename
+    try:
+        filepath = (RESULTS_DIR / filename).resolve()
+        filepath.relative_to(RESULTS_DIR.resolve())   # 경로 이탈 차단
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid path")
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Result not found")
 
-    # 런 폴더면 그 폴더, 레거시면 RESULTS_DIR
-    if filepath.name == "result.json" and filepath.parent != RESULTS_DIR:
-        target = filepath.parent
-    else:
-        target = RESULTS_DIR
-
+    target = filepath if filepath.is_dir() else filepath.parent
     if sys.platform == "win32":
-        os.startfile(str(target))
+        if filepath.is_dir():
+            os.startfile(str(target))
+        else:
+            # 파일을 선택된 상태로 열기 — 결과물이 어느 것인지 바로 보인다.
+            subprocess.Popen(["explorer", f"/select,{filepath}"])
     else:
         subprocess.Popen(["xdg-open", str(target)])
     return {"status": "ok", "path": str(target)}

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, Checkbox, Collapse, Col, Descriptions, Image, Input, InputNumber, Modal, Popover, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
+import { Button, Card, Checkbox, Collapse, Col, Descriptions, Image, Input, InputNumber, Modal, Popover, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message, notification } from 'antd';
 import { DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, SettingOutlined, ShrinkOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { resultsApi, scenarioApi } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
@@ -2048,9 +2048,23 @@ export default function ResultsPage() {
           if (!trimFile || trimEnd <= trimStart) return;
           try {
             const res = await resultsApi.trimRecording(trimFile, trimStart, trimEnd);
-            // 저장 위치를 알려준다 — 경로가 길어 기본 3초로는 짧아 6초 노출.
+            // 저장 위치를 보여주고, 그 폴더를 바로 열 수 있게 한다.
+            // message 는 버튼을 못 넣어 notification 사용.
             const savedPath = res.data?.path || res.data?.rel_path || res.data?.filename || '';
-            message.success(t('webcam.trimSuccess', { path: savedPath }), 6);
+            const savedRel = res.data?.rel_path || '';
+            notification.success({
+              message: t('webcam.trimSuccess'),
+              description: (
+                <span style={{ wordBreak: 'break-all', fontSize: 12 }}>{savedPath}</span>
+              ),
+              btn: savedRel ? (
+                <Button size="small" icon={<FolderOpenOutlined />}
+                  onClick={() => { openFolder(savedRel); notification.destroy(); }}>
+                  {t('results.openFolder')}
+                </Button>
+              ) : undefined,
+              duration: 8,
+            });
             setTrimFile(null);
             fetchRecordings(detailFilename);
           } catch (e: any) {
