@@ -275,6 +275,11 @@ export const resultsApi = {
   // 완료된 번들 ZIP 다운로드
   exportJobDownload: (jobId: string) =>
     api.get(`/results/export-job/${jobId}/download`, { responseType: 'blob' }),
+  // 여러 스텝을 한 번의 파일 쓰기로 반영. 대형 result.json 을 반복 재직렬화하지 않기 위함.
+  updateStepResultsBulk: (
+    filename: string,
+    updates: { step_index: number; message?: string; status?: string }[],
+  ) => api.post(`/results/update-steps/${filename}`, { updates }),
   updateStepResult: (filename: string, stepIndex: number, message: string, status?: string) =>
     api.post(`/results/update-step/${filename}`, { step_index: stepIndex, message, ...(status ? { status } : {}) }),
   // result.html 재생성 (상세 모달 'HTML 생성' 버튼)

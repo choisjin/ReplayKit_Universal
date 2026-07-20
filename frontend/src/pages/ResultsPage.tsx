@@ -924,6 +924,17 @@ export default function ResultsPage() {
     const alive = new Map(pending.map(p => [p.taskId, p.idx]));
     let roundRunning = false;
 
+    // 소실(404) 표시는 모아서 한 번에 저장한다. 스텝마다 update-step 을 부르면
+    // 백엔드가 대형 result.json 을 그 횟수만큼 통째로 재직렬화해(1회 수 초)
+    // 서버가 밀리고, 같은 스레드풀을 쓰는 영상 스트리밍까지 굶는다.
+    let lostBuffer: { step_index: number; message: string }[] = [];
+    const flushLost = () => {
+      if (lostBuffer.length === 0) return;
+      const batch = lostBuffer;
+      lostBuffer = [];
+      resultsApi.updateStepResultsBulk(detailFilename, batch).catch(() => {});
+    };
+
     const applyFinal = (idx: number, finalMsg: string,
                         finalStatus: 'pass' | 'fail' | null | undefined) => {
       setDetail(prev => {
@@ -980,14 +991,14 @@ export default function ResultsPage() {
             updated.step_results[idx] = { ...updated.step_results[idx], message: lostMsg };
             return updated;
           });
-          resultsApi.updateStepResult(detailFilename, idx, lostMsg).catch(() => {});
+          lostBuffer.push({ step_index: idx, message: lostMsg });
         }
       }
     };
 
     const tick = async () => {
       if (roundRunning) return;          // 이전 라운드가 안 끝났으면 건너뛴다
-      if (alive.size === 0) { stopAllResultBgPolls(false); return; }
+      if (alive.size === 0) { flushLost(); stopAllResultBgPolls(false); return; }
       roundRunning = true;
       try {
         const entries = [...alive.entries()];
@@ -1005,6 +1016,7 @@ export default function ResultsPage() {
     pending.forEach(p => bgPollTaskIds.current.push(p.taskId));
 
     return () => {
+      flushLost();   // 드레인 중 모달이 닫혀도 지금까지의 소실 표시는 저장
       stopAllResultBgPolls();
     };
   }, [detail?.scenario_name, detailFilename, detailVisible]);

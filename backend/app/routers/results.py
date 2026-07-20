@@ -1688,6 +1688,41 @@ async def update_step_result(filename: str, body: dict):
     return {"status": "ok", "result_status": result_status}
 
 
+@router.post("/update-steps/{filename:path}")
+async def update_step_results_bulk(filename: str, body: dict):
+    """여러 스텝 결과를 **한 번의 읽기-쓰기**로 업데이트.
+
+    서버 재시작으로 BG_TASK 수백 개가 한꺼번에 소실되는 경우, 스텝마다
+    update-step 을 부르면 대형 result.json 을 수백 번 재직렬화하게 된다
+    (1회에 수 초 → 서버 전체가 밀려 영상 스트리밍까지 굶는다). 프론트가 모아서
+    이 엔드포인트로 한 번에 보내면 쓰기는 1회로 끝난다.
+    """
+    filepath = RESULTS_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Result not found")
+    updates = body.get("updates")
+    if not isinstance(updates, list) or not updates:
+        raise HTTPException(status_code=400, detail="updates must be a non-empty list")
+    for u in updates:
+        si = u.get("step_index") if isinstance(u, dict) else None
+        if si is None or si < 0:
+            raise HTTPException(status_code=400, detail="Invalid step_index in updates")
+
+    key = str(filepath)
+    lock = _STEP_UPDATE_LOCKS.setdefault(key, asyncio.Lock())
+    _STEP_UPDATE_PENDING.setdefault(key, []).extend(updates)
+
+    async with lock:
+        batch = _STEP_UPDATE_PENDING.pop(key, [])
+        if not batch:
+            return {"status": "ok", "applied": 0,
+                    "result_status": _STEP_UPDATE_LAST_STATUS.get(key, "")}
+        result_status = await asyncio.to_thread(_apply_step_updates, filepath, batch)
+        _STEP_UPDATE_LAST_STATUS[key] = result_status
+
+    return {"status": "ok", "applied": len(batch), "result_status": result_status}
+
+
 @router.post("/migrate-legacy")
 async def migrate_legacy():
     """레거시 결과 파일을 새 구조로 마이그레이션.
