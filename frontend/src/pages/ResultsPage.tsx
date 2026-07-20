@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, Collapse, Col, Descriptions, Image, Input, InputNumber, Modal, Row, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
+import { Button, Card, Collapse, Col, Descriptions, Image, Input, InputNumber, Modal, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
 import { DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, ShrinkOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { resultsApi, scenarioApi } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
@@ -290,6 +290,8 @@ export default function ResultsPage() {
   // 404로 확정된 태스크(서버 재시작으로 소실). effect가 재실행돼도 다시 폴링하지
   // 않도록 세션 내내 유지한다 — 안 그러면 상세를 다시 열 때마다 수백 개를 재조회한다.
   const bgDeadTaskIds = useRef<Set<string>>(new Set());
+  // 상세 오픈 직후 BG_TASK 일괄 확정 진행률 (null = 준비 불필요/완료)
+  const [bgPrep, setBgPrep] = useState<{ done: number; total: number } | null>(null);
   const stopAllResultBgPolls = (cancelBackend: boolean = true) => {
     bgPollTimers.current.forEach(t => clearInterval(t));
     bgPollTimers.current = [];
@@ -921,8 +923,9 @@ export default function ResultsPage() {
     });
 
     const MAX_INFLIGHT = 6;
-    const alive = new Map(pending.map(p => [p.taskId, p.idx]));
+    const alive = new Map<string, number>();
     let roundRunning = false;
+    let cancelled = false;
 
     // 소실(404) 표시는 모아서 한 번에 저장한다. 스텝마다 update-step 을 부르면
     // 백엔드가 대형 result.json 을 그 횟수만큼 통째로 재직렬화해(1회 수 초)
@@ -933,6 +936,87 @@ export default function ResultsPage() {
       const batch = lostBuffer;
       lostBuffer = [];
       resultsApi.updateStepResultsBulk(detailFilename, batch).catch(() => {});
+    };
+
+    // ── 준비 단계 ────────────────────────────────────────────────
+    // 상세를 열자마자 BG_TASK 를 개별 GET 으로 훑으면 수백 요청 × 수십 초가 걸리고,
+    // 그동안 브라우저 연결을 물고 있어 이미지/영상까지 밀린다. 여기서 일괄 조회로
+    // 한 번에 확정하고(청크당 요청 1개), 저장도 1회로 끝낸 뒤 상세를 보여준다.
+    // 준비가 끝나도 여전히 running 인 것만 아래 폴러가 이어받는다.
+    const PREP_CHUNK = 100;
+
+    const runPrep = async () => {
+      setBgPrep({ done: 0, total: pending.length });
+      const finals: { idx: number; message: string; status?: 'pass' | 'fail' }[] = [];
+      const persist: { step_index: number; message?: string; status?: string }[] = [];
+
+      for (let i = 0; i < pending.length; i += PREP_CHUNK) {
+        if (cancelled) return;
+        const chunk = pending.slice(i, i + PREP_CHUNK);
+        try {
+          const r = await scenarioApi.getCmdResultsBatch(chunk.map(p => p.taskId));
+          const map = (r.data?.results ?? {}) as Record<string, any>;
+          chunk.forEach(({ taskId, idx }) => {
+            const res = map[taskId];
+            if (res == null) {
+              // 서버 메모리에 없음 = 재시작으로 소실. 재조회해도 영원히 없다.
+              bgDeadTaskIds.current.add(taskId);
+              const lostMsg = `[BG_TASK:${taskId}] 결과 소실 (서버 재시작)`;
+              finals.push({ idx, message: lostMsg });
+              lostBuffer.push({ step_index: idx, message: lostMsg });
+            } else if (res.status === 'running') {
+              alive.set(taskId, idx);   // 폴러가 이어받음
+            } else {
+              const msg = res.final_message ?? res.stdout ?? '';
+              const st = res.final_status as 'pass' | 'fail' | null | undefined;
+              finals.push({ idx, message: msg, status: st ?? undefined });
+              persist.push({ step_index: idx, message: msg, ...(st ? { status: st } : {}) });
+            }
+          });
+        } catch {
+          // 일괄 조회 실패(구버전 서버 등) → 이 청크는 기존 폴러에 맡긴다.
+          chunk.forEach(({ taskId, idx }) => alive.set(taskId, idx));
+        }
+        setBgPrep({ done: Math.min(i + PREP_CHUNK, pending.length), total: pending.length });
+      }
+      if (cancelled) return;
+
+      // 확정된 결과를 한 번의 setDetail 로 반영 (카운트도 함께 재계산)
+      if (finals.length > 0) {
+        setDetail(prev => {
+          if (!prev) return prev;
+          const updated = { ...prev, step_results: [...prev.step_results] };
+          finals.forEach(({ idx, message, status }) => {
+            const step = updated.step_results[idx];
+            if (!step) return;
+            const newStatus = status ?? step.status;
+            updated.step_results[idx] = { ...step, message, status: newStatus };
+            if (status === 'fail' && step.status !== 'fail') {
+              updated.failed_steps += 1;
+              if (step.status === 'pass') updated.passed_steps = Math.max(0, updated.passed_steps - 1);
+              else if (step.status === 'warning') updated.warning_steps = Math.max(0, updated.warning_steps - 1);
+            }
+          });
+          if (updated.failed_steps > 0 || updated.error_steps > 0) updated.status = 'fail';
+          return updated;
+        });
+      }
+
+      // 저장은 1회 (소실 표시 + 확정 결과를 합쳐서)
+      const allPersist = [...persist, ...lostBuffer];
+      lostBuffer = [];
+      if (allPersist.length > 0) {
+        resultsApi.updateStepResultsBulk(detailFilename, allPersist).catch(() => {});
+      }
+
+      setBgPrep(null);
+
+      // 아직 실행 중인 태스크가 있을 때만 폴러 가동
+      if (alive.size > 0) {
+        alive.forEach((_, tid) => bgPollTaskIds.current.push(tid));
+        const poll = setInterval(tick, 1000);
+        bgPollTimers.current.push(poll);
+      }
     };
 
     const applyFinal = (idx: number, finalMsg: string,
@@ -1011,12 +1095,12 @@ export default function ResultsPage() {
       }
     };
 
-    const poll = setInterval(tick, 1000);
-    bgPollTimers.current.push(poll);
-    pending.forEach(p => bgPollTaskIds.current.push(p.taskId));
+    void runPrep();
 
     return () => {
-      flushLost();   // 드레인 중 모달이 닫혀도 지금까지의 소실 표시는 저장
+      cancelled = true;
+      setBgPrep(null);
+      flushLost();   // 준비 중 모달이 닫혀도 지금까지의 소실 표시는 저장
       stopAllResultBgPolls();
     };
   }, [detail?.scenario_name, detailFilename, detailVisible]);
@@ -1481,6 +1565,22 @@ export default function ResultsPage() {
         {detailLoading && !detail && !groupDetail && (
           <div style={{ textAlign: 'center', padding: '60px 0' }}>
             <Spin size="large" tip={t('results.loading')} />
+          </div>
+        )}
+        {/* BG_TASK 일괄 확정 진행률 — 스텝이 수백 개인 에이징 결과에서 상세가
+            멈춘 것처럼 보이지 않도록 준비 중임을 알린다. */}
+        {bgPrep && bgPrep.total > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ marginBottom: 4 }}>
+              {t('results.preparingDetail')} — {t('results.preparingBgTasks')
+                .replace('{done}', String(bgPrep.done))
+                .replace('{total}', String(bgPrep.total))}
+            </div>
+            <Progress
+              percent={Math.round((bgPrep.done / bgPrep.total) * 100)}
+              status="active"
+              size="small"
+            />
           </div>
         )}
         {groupDetail && groupDetail.length > 0 && (() => {

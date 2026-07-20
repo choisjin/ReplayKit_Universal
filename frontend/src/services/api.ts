@@ -125,6 +125,9 @@ export const scenarioApi = {
     api.post('/scenario/record/crop-from-expected', { scenario_name: scenarioName, step_index: stepIndex, crop, crop_label: cropLabel || '', replace_index: replaceIndex }),
   updateStep: (scenarioName: string, stepIndex: number, updates: Record<string, any>) =>
     api.post('/scenario/record/update-step', { scenario_name: scenarioName, step_index: stepIndex, updates }),
+  // BG_TASK 상태 일괄 조회 — 수백 개를 개별 GET 하지 않기 위함 (없으면 null)
+  getCmdResultsBatch: (taskIds: string[]) =>
+    api.post('/scenario/cmd-results/batch', { task_ids: taskIds }),
   testStep: (scenarioName: string, stepIndex: number, stepData?: any, overrides?: { screenshotDeviceId?: string; screenType?: string }) =>
     api.post('/scenario/test-step', {
       scenario_name: scenarioName,

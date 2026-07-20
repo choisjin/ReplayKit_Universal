@@ -1579,18 +1579,12 @@ async def cancel_cmd_task(task_id: str):
     return {"cancelled": True, "task_id": task_id}
 
 
-@router.get("/cmd-result/{task_id}")
-async def get_cmd_result(task_id: str):
-    """백그라운드 CMD 결과 폴링.
+def _finalize_cmd_result(result: dict, task_id: str) -> dict:
+    """완료된 태스크의 final_message/final_status 계산 후 store에서 정리.
 
-    완료 시 expected/match_mode가 저장되어 있으면 서버에서 비교까지 수행하여
-    final_message와 final_status를 반환한다. 프론트엔드는 이 값을 step result에
-    그대로 반영하기만 하면 된다.
+    running 이면 그대로 반환. 단건 조회와 일괄 조회가 같은 판정을 쓰도록 분리했다.
     """
     from ..services import bg_task_store
-    result = bg_task_store.get_task(task_id)
-    if result is None:
-        raise HTTPException(status_code=404, detail="Task not found")
 
     if result["status"] != "running":
         # 완료된 태스크: 최종 메시지/판정 계산
@@ -1636,6 +1630,42 @@ async def get_cmd_result(task_id: str):
         # 반환 후 정리
         bg_task_store.cleanup_task(task_id)
     return result
+
+
+@router.get("/cmd-result/{task_id}")
+async def get_cmd_result(task_id: str):
+    """백그라운드 CMD 결과 폴링.
+
+    완료 시 expected/match_mode가 저장되어 있으면 서버에서 비교까지 수행하여
+    final_message와 final_status를 반환한다. 프론트엔드는 이 값을 step result에
+    그대로 반영하기만 하면 된다.
+    """
+    from ..services import bg_task_store
+    result = bg_task_store.get_task(task_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return _finalize_cmd_result(result, task_id)
+
+
+class CmdResultBatchRequest(BaseModel):
+    task_ids: list[str]
+
+
+@router.post("/cmd-results/batch")
+async def get_cmd_results_batch(req: CmdResultBatchRequest):
+    """여러 BG_TASK 상태를 **한 번에** 조회. 없는 태스크는 null.
+
+    에이징 결과 상세는 BG_TASK 스텝이 수백 개다. 개별 GET 으로 돌리면 요청이
+    수백 개 발생해 수십 초가 걸리고(서버 재시작 후엔 전부 404), 그 사이 브라우저
+    연결을 물고 있어 이미지/영상 로딩까지 밀린다. 상세를 열기 전 준비 단계에서
+    이 엔드포인트로 한 번에 확정한다.
+    """
+    from ..services import bg_task_store
+    out: dict[str, dict | None] = {}
+    for tid in req.task_ids[:5000]:      # 방어적 상한
+        r = bg_task_store.get_task(tid)
+        out[tid] = _finalize_cmd_result(r, tid) if r is not None else None
+    return {"results": out}
 
 
 class PlaybackRequest(BaseModel):
