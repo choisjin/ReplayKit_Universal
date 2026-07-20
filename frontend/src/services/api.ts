@@ -1,5 +1,9 @@
 import axios from 'axios';
 
+// 경로 세그먼트만 인코딩하고 슬래시는 구분자로 보존한다.
+export const encodePathSegments = (rel: string) =>
+  rel.split('/').map(encodeURIComponent).join('/');
+
 const api = axios.create({
   baseURL: '/api',
 });
@@ -264,10 +268,12 @@ export const resultsApi = {
   },
   listRecordings: (resultFilename: string) =>
     api.get(`/results/recordings-for/${encodeURIComponent(resultFilename)}`),
+  // filename 은 `{run}/recordings/x.mp4` 같은 상대경로일 수 있으므로 세그먼트 단위로 인코딩
+  // (encodeURIComponent 를 통째로 쓰면 슬래시까지 %2F 가 되어 경로가 깨진다).
   deleteRecording: (filename: string) =>
-    api.delete(`/results/recordings/${filename}`),
+    api.delete(`/results/recordings/${encodePathSegments(filename)}`),
   trimRecording: (filename: string, start: number, end: number) =>
-    api.post(`/results/recordings/${filename}/trim?start=${start}&end=${end}`),
+    api.post(`/results/recordings/${encodePathSegments(filename)}/trim?start=${start}&end=${end}`),
   // 내보내기 시작 — 백그라운드 잡 id 반환 ({ job_id })
   exportBundle: (filename: string, exportPath?: string) =>
     api.post(`/results/export-bundle/${filename}`, null,

@@ -955,6 +955,7 @@ const translations = {
     'webcam.trimSuccess': '구간 저장 완료',
     'webcam.deleteConfirm': '이 녹화를 삭제하시겠습니까?',
     'webcam.deleteSuccess': '녹화 삭제 완료',
+    'webcam.deleteFailed': '녹화 삭제 실패',
 
     // === Chat ===
     'chat.title': '문의하기',
@@ -1951,6 +1952,7 @@ const translations = {
     'webcam.trimSuccess': 'Trim saved',
     'webcam.deleteConfirm': 'Delete this recording?',
     'webcam.deleteSuccess': 'Recording deleted',
+    'webcam.deleteFailed': 'Failed to delete recording',
 
     // === Chat ===
     'chat.title': 'Support Chat',

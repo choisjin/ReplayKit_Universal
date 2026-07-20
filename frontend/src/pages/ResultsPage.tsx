@@ -32,6 +32,9 @@ interface ResultGroup {
 
 interface RecordingItem {
   filename: string;
+  // 서버가 파일을 특정할 수 있는 상대경로 (`{run}/recordings/x.mp4` 또는 레거시 파일명).
+  // 삭제/편집 API 는 파일명만으론 런 폴더 녹화를 못 찾아 404 가 났다.
+  rel_path?: string;
   size: number;
   url: string;
   started_at?: string | null;
@@ -1918,67 +1921,75 @@ export default function ResultsPage() {
                         onError={handleVideoError}
                         style={{ width: '100%', borderRadius: 4, background: '#000', display: 'block', marginBottom: 5 }}
                       />
-                      {recordings.length > 1 && (
-                        <Select
-                          size="small"
-                          value={activeRecRepeat}
-                          onChange={(v) => {
-                            const rec = recordings.find(r => cycleIndexOf(r.filename) === v);
-                            if (rec) { setActiveRecUrl(rec.url); setActiveRecRepeat(v); }
-                          }}
-                          style={{ width: '100%', marginBottom: 5 }}
-                          options={recordings.map(r => {
-                            const ri = cycleIndexOf(r.filename);
-                            return { value: ri, label: `${t('webcam.repeat')} ${ri}  (${(r.size / 1024 / 1024).toFixed(1)} MB)` };
-                          })}
-                        />
-                      )}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                        {recordings.map((rec) => {
-                          const ci = cycleIndexOf(rec.filename);
-                          const ri = ci === Number.MAX_SAFE_INTEGER ? '?' : String(ci);
-                          const isActive = rec.url === activeRecUrl;
-                          return (
-                            <div key={rec.filename} style={{
-                              display: 'flex', alignItems: 'center', gap: 3, fontSize: 10,
-                              padding: '2px 4px', borderRadius: 4,
-                              background: isActive ? 'var(--accent-light, #e6f4ff)' : 'transparent',
-                              border: isActive ? '1px solid var(--accent, #1677ff)' : '1px solid transparent',
-                              cursor: 'pointer',
-                            }}
-                              onClick={() => { setActiveRecUrl(rec.url); setActiveRecRepeat(ci === Number.MAX_SAFE_INTEGER ? 1 : ci); }}
-                            >
-                              <Tag color={isActive ? 'processing' : 'blue'} style={{ margin: 0, fontSize: 9 }}>R{ri}</Tag>
-                              <span style={{ flex: 1, color: isActive ? 'var(--accent, #1677ff)' : '#888', fontWeight: isActive ? 600 : 400 }}>{(rec.size / 1024 / 1024).toFixed(1)}MB</span>
-                              <Tooltip title={t('webcam.trimSave')}>
-                                <Button size="small" type="text" icon={<ScissorOutlined />} style={{ padding: '0 4px', height: 20 }}
-                                  onClick={() => {
-                                    setTrimFile(rec.filename);
-                                    setTrimStart(0);
-                                    // 비디오 길이를 임시 video 요소로 가져와 trimEnd 초기화
-                                    const tmpVideo = document.createElement('video');
-                                    tmpVideo.src = `/recordings/${rec.filename}`;
-                                    tmpVideo.onloadedmetadata = () => { setTrimEnd(Math.round(tmpVideo.duration * 10) / 10); tmpVideo.src = ''; };
-                                    tmpVideo.onerror = () => setTrimEnd(0);
-                                  }} />
-                              </Tooltip>
-                              <Tooltip title={t('common.delete')}>
-                                <Button size="small" type="text" danger icon={<DeleteOutlined />} style={{ padding: '0 4px', height: 20 }}
-                                  onClick={() => Modal.confirm({
-                                    title: t('webcam.deleteConfirm'), okType: 'danger',
-                                    onOk: async () => {
-                                      await resultsApi.deleteRecording(rec.filename);
+                      {/* 회차 선택은 드롭다운 하나로 충분하다 (예전의 R1/R2 목록은 제거).
+                          편집/삭제는 아래에 별도 버튼으로 분리 — 선택된 회차에 적용된다. */}
+                      {recordings.length > 0 && (() => {
+                        const selectedRec = recordings.find(r => r.url === activeRecUrl) || recordings[0];
+                        const recPath = (r: RecordingItem) => r.rel_path || r.filename;
+                        return (
+                          <>
+                            <Select
+                              size="small"
+                              value={activeRecRepeat}
+                              onChange={(v) => {
+                                const rec = recordings.find(r => cycleIndexOf(r.filename) === v);
+                                if (rec) { setActiveRecUrl(rec.url); setActiveRecRepeat(v); }
+                              }}
+                              style={{ width: '100%', marginBottom: 5 }}
+                              options={recordings.map(r => {
+                                const ri = cycleIndexOf(r.filename);
+                                const label = ri === Number.MAX_SAFE_INTEGER ? r.filename : `${t('webcam.repeat')} ${ri}`;
+                                return { value: ri, label: `${label}  (${(r.size / 1024 / 1024).toFixed(1)} MB)` };
+                              })}
+                            />
+                            <Space size={4} style={{ width: '100%' }}>
+                              <Button
+                                size="small"
+                                icon={<ScissorOutlined />}
+                                disabled={!selectedRec}
+                                onClick={() => {
+                                  if (!selectedRec) return;
+                                  setTrimFile(recPath(selectedRec));
+                                  setTrimStart(0);
+                                  // 비디오 길이를 임시 video 요소로 가져와 trimEnd 초기화.
+                                  // 서빙 URL(rec.url)을 그대로 써야 한다 — 레거시 /recordings/ 는
+                                  // 런 폴더 녹화에 존재하지 않아 항상 onerror 로 빠졌다.
+                                  const tmpVideo = document.createElement('video');
+                                  tmpVideo.src = selectedRec.url;
+                                  tmpVideo.onloadedmetadata = () => {
+                                    setTrimEnd(Math.round(tmpVideo.duration * 10) / 10);
+                                    tmpVideo.src = '';
+                                  };
+                                  tmpVideo.onerror = () => setTrimEnd(0);
+                                }}
+                              >
+                                {t('webcam.trimSave')}
+                              </Button>
+                              <Button
+                                size="small"
+                                danger
+                                icon={<DeleteOutlined />}
+                                disabled={!selectedRec}
+                                onClick={() => selectedRec && Modal.confirm({
+                                  title: t('webcam.deleteConfirm'), okType: 'danger',
+                                  onOk: async () => {
+                                    try {
+                                      await resultsApi.deleteRecording(recPath(selectedRec));
                                       message.success(t('webcam.deleteSuccess'));
-                                      // 삭제된 녹화가 현재 재생 중이면 URL 초기화
-                                      if (rec.url === activeRecUrl) setActiveRecUrl('');
+                                      if (selectedRec.url === activeRecUrl) setActiveRecUrl('');
                                       fetchRecordings(detailFilename);
-                                    },
-                                  })} />
-                              </Tooltip>
-                            </div>
-                          );
-                        })}
-                      </div>
+                                    } catch (e: any) {
+                                      message.error(e?.response?.data?.detail || t('webcam.deleteFailed'));
+                                    }
+                                  },
+                                })}
+                              >
+                                {t('common.delete')}
+                              </Button>
+                            </Space>
+                          </>
+                        );
+                      })()}
                     </Card>
                   ) : (
                     <Tooltip title={t('webcam.recordings')} placement="right">
@@ -2048,7 +2059,12 @@ export default function ResultsPage() {
       >
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
           <div>
-            <video src={trimFile ? `/recordings/${trimFile}` : undefined} controls style={{ width: '100%', borderRadius: 4 }} />
+            {/* Range 지원 엔드포인트로 재생 — 레거시 /recordings/ 는 런 폴더 녹화에 없다 */}
+            <video
+              src={trimFile ? `/api/results/video/${encodePathSegments(trimFile)}` : undefined}
+              controls
+              style={{ width: '100%', borderRadius: 4 }}
+            />
           </div>
           <Space>
             <span>{t('webcam.trimStart')}:</span>

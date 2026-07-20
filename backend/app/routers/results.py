@@ -1436,7 +1436,7 @@ async def list_recordings_for_result(result_filename: str):
     # 회차별 후보 수집 — key=cycle index, value=record dict
     candidates: dict[int, dict] = {}
 
-    def _consider(f: Path, url: str) -> None:
+    def _consider(f: Path, rel: str) -> None:
         try:
             size = f.stat().st_size
         except OSError:
@@ -1446,8 +1446,11 @@ async def list_recordings_for_result(result_filename: str):
         cycle = _recording_cycle_index(f.name)
         rec = {
             "filename": f.name,
+            # 삭제/편집 API 가 실제 파일을 찾을 수 있는 경로. 파일명만으로는
+            # 런 폴더 녹화를 특정할 수 없어 404 가 났었다.
+            "rel_path": rel,
             "size": size,
-            "url": url,
+            "url": f"/api/results/video/{quote(rel)}",
             "started_at": _read_recording_started_at(f),
             "_is_mp4": f.suffix.lower() == ".mp4",
         }
@@ -1467,12 +1470,12 @@ async def list_recordings_for_result(result_filename: str):
         for pattern in ("*.webm", "*.mp4"):
             for f in rec_dir.glob(pattern):
                 # Range를 지원하는 전용 엔드포인트로 서빙 (StaticFiles는 206을 못 준다)
-                _consider(f, f"/api/results/video/{quote(f'{base}/recordings/{f.name}')}")
+                _consider(f, f"{base}/recordings/{f.name}")
 
     # 레거시: Results/Video/ 에서도 탐색 (webm + mp4)
     for pattern in (f"{base}_webcam_*.webm", f"{base}_webcam_*.mp4"):
         for f in RECORDINGS_DIR.glob(pattern):
-            _consider(f, f"/api/results/video/{quote(f.name)}")
+            _consider(f, f.name)
 
     recordings = [
         {k: v for k, v in rec.items() if k != "_is_mp4"}
@@ -1483,6 +1486,23 @@ async def list_recordings_for_result(result_filename: str):
 
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 _VIDEO_MIME = {".mp4": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska"}
+
+
+def _resolve_recording(rel_path: str) -> Path | None:
+    """녹화 상대경로 → 실제 파일. 런 폴더(results/) → 레거시(Results/Video/) 순.
+
+    경로 이탈(../)은 relative_to 검사로 차단한다. 파일명만 주어지면 레거시에서만
+    찾히므로, 런 폴더 파일은 프론트가 `{run}/recordings/{name}` 형태로 넘겨야 한다.
+    """
+    for root in (RESULTS_DIR, RECORDINGS_DIR):
+        try:
+            candidate = (root / rel_path).resolve()
+            candidate.relative_to(root.resolve())
+        except (ValueError, OSError):
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 @router.get("/video/{rel_path:path}")
@@ -1498,17 +1518,7 @@ def stream_recording(rel_path: str, request: Request):
 
     sync def라 FastAPI가 스레드풀에서 실행 → 파일 IO가 이벤트 루프를 막지 않는다.
     """
-    # 런 폴더(results/) → 레거시(Results/Video/) 순으로 탐색. 경로 이탈은 차단.
-    filepath: Path | None = None
-    for root in (RESULTS_DIR, RECORDINGS_DIR):
-        try:
-            candidate = (root / rel_path).resolve()
-            candidate.relative_to(root.resolve())
-        except (ValueError, OSError):
-            continue
-        if candidate.is_file():
-            filepath = candidate
-            break
+    filepath = _resolve_recording(rel_path)
     if filepath is None:
         raise HTTPException(status_code=404, detail="Recording not found")
 
@@ -1566,13 +1576,18 @@ def stream_recording(rel_path: str, request: Request):
     )
 
 
-@router.delete("/recordings/{filename}")
+@router.delete("/recordings/{filename:path}")
 async def delete_recording(filename: str):
-    """Delete a webcam recording (and its sidecar .meta.json if any)."""
-    safe_name = _safe_filename(filename)
-    filepath = RECORDINGS_DIR / safe_name
-    if not filepath.exists():
+    """Delete a webcam recording (and its sidecar .meta.json if any).
+
+    filename 은 런 폴더 기준 상대경로(`{run}/recordings/x.mp4`) 또는 레거시
+    Results/Video 의 파일명. 예전엔 파일명만 받아 레거시 폴더에서만 찾았기 때문에
+    런 폴더에 저장된 최신 녹화는 삭제/편집이 404 로 실패했다.
+    """
+    filepath = _resolve_recording(filename)
+    if filepath is None:
         raise HTTPException(status_code=404, detail="Recording not found")
+    safe_name = filepath.name
     filepath.unlink()
     # 사이드카 메타 파일도 함께 정리
     meta_path = filepath.with_suffix(filepath.suffix + ".meta.json")
@@ -1584,17 +1599,17 @@ async def delete_recording(filename: str):
     return {"deleted": safe_name}
 
 
-@router.post("/recordings/{filename}/trim")
-async def trim_recording(
+@router.post("/recordings/{filename:path}/trim")
+def trim_recording(   # sync def: ffmpeg subprocess 가 블로킹이라 스레드풀에서 실행
     filename: str,
     start: float = Query(...),
     end: float = Query(...),
 ):
-    """Trim a webcam recording (requires ffmpeg)."""
-    safe_name = _safe_filename(filename)
-    filepath = RECORDINGS_DIR / safe_name
-    if not filepath.exists():
+    """Trim a webcam recording (requires ffmpeg). 결과는 원본과 같은 폴더에 저장."""
+    filepath = _resolve_recording(filename)
+    if filepath is None:
         raise HTTPException(status_code=404, detail="Recording not found")
+    safe_name = filepath.name
     if start >= end:
         raise HTTPException(status_code=400, detail="start must be less than end")
     ffmpeg_path = _find_ffmpeg()
@@ -1604,17 +1619,28 @@ async def trim_recording(
             detail="ffmpeg가 설치되어 있지 않습니다. tools/ 폴더에 ffmpeg.exe를 넣거나 시스템에 설치하세요."
         )
     output_name = f"trim_{start:.1f}_{end:.1f}_{safe_name}"
-    output_path = RECORDINGS_DIR / output_name
+    # 원본과 같은 폴더에 저장 — 런 폴더 녹화를 레거시 폴더에 흘리지 않는다.
+    output_path = filepath.parent / output_name
     try:
         subprocess.run(
             [ffmpeg_path, "-i", str(filepath), "-ss", str(start), "-to", str(end),
-             "-c", "copy", str(output_path), "-y"],
+             "-c", "copy", "-movflags", "+faststart", str(output_path), "-y"],
             check=True, capture_output=True,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"ffmpeg error: {e.stderr.decode(errors='replace')[:300]}")
-    return {"filename": output_name, "url": f"/recordings/{output_name}"}
+
+    # 서빙용 상대경로 — Range 지원 엔드포인트 기준
+    for root in (RESULTS_DIR, RECORDINGS_DIR):
+        try:
+            rel = output_path.resolve().relative_to(root.resolve())
+            break
+        except ValueError:
+            rel = None
+    rel_str = str(rel).replace("\\", "/") if rel else output_name
+    return {"filename": output_name, "rel_path": rel_str,
+            "url": f"/api/results/video/{quote(rel_str)}"}
 
 
 # update-step는 상세 모달의 BG_TASK 폴링이 스텝마다 호출한다. result.json이
