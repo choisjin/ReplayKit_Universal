@@ -228,9 +228,9 @@ export const scenarioApi = {
     api.post('/scenario/groups/remove', { group_name: groupName, index }),
   reorderGroup: (groupName: string, orderedIndices: number[]) =>
     api.post('/scenario/groups/reorder', { group_name: groupName, ordered_indices: orderedIndices }),
-  updateGroupJumps: (groupName: string, index: number, on_pass_goto: { scenario: number; step: number } | null, on_fail_goto: { scenario: number; step: number } | null) =>
+  updateGroupJumps: (groupName: string, index: number, on_pass_goto: { member_uid: string; scenario_name?: string; step_uid?: string | null } | null, on_fail_goto: { member_uid: string; scenario_name?: string; step_uid?: string | null } | null) =>
     api.post('/scenario/groups/jumps', { group_name: groupName, index, on_pass_goto, on_fail_goto }),
-  updateGroupStepJumps: (groupName: string, index: number, stepUid: string, on_pass_goto: { scenario: number; step: number } | null, on_fail_goto: { scenario: number; step: number } | null, exclude_pass_from_result = false, exclude_fail_from_result = false) =>
+  updateGroupStepJumps: (groupName: string, index: number, stepUid: string, on_pass_goto: { member_uid: string; scenario_name?: string; step_uid?: string | null } | null, on_fail_goto: { member_uid: string; scenario_name?: string; step_uid?: string | null } | null, exclude_pass_from_result = false, exclude_fail_from_result = false) =>
     api.post('/scenario/groups/step-jumps', { group_name: groupName, index, step_uid: stepUid, on_pass_goto, on_fail_goto, exclude_pass_from_result, exclude_fail_from_result }),
   updateGroupPlayCount: (groupName: string, index: number, playCount: number) =>
     api.post('/scenario/groups/play-count', { group_name: groupName, index, play_count: playCount }),

@@ -148,10 +148,34 @@ interface StepResultData {
   sub_results: SubResultData[];
 }
 
+// 그룹 점프 대상 — 위치가 아닌 불변 ID. 멤버 순서변경/삭제, 대상 시나리오의
+// 스텝 편집에도 어긋나지 않는다. (같은 시나리오를 중복으로 담을 수 있어
+//  이름만으로는 어느 멤버인지 특정할 수 없으므로 member_uid 를 쓴다)
 interface JumpTarget {
-  scenario: number;  // group index (0-based), -1 = END
-  step: number;      // step index within scenario (0-based)
+  member_uid: string;        // 대상 멤버 uid. GROUP_JUMP_END 면 재생 종료
+  scenario_name?: string;    // 안내 메시지용 (대상이 사라졌을 때 이름 표시)
+  step_uid?: string | null;  // 시작 스텝 uid. null 이면 시나리오 처음부터
 }
+
+const GROUP_JUMP_END = 'END';
+
+/** 같은 시나리오가 그룹에 중복으로 있으면 "(2/3)" 같은 구분 접미사를 반환. 없으면 빈 문자열. */
+const dupSuffix = (members: { name: string }[], mi: number): string => {
+  const name = members[mi]?.name ?? '';
+  const dupes = members.filter((m) => m.name === name);
+  if (dupes.length < 2) return '';
+  const nth = members.slice(0, mi + 1).filter((m) => m.name === name).length;
+  return ` (${nth}/${dupes.length})`;
+};
+
+/** 그룹 멤버 표시 라벨 — 같은 시나리오가 중복이면 몇 번째인지 함께 보여준다. */
+const memberLabel = (members: { name: string }[], mi: number): string => {
+  const name = members[mi]?.name ?? '';
+  const dupes = members.filter((m) => m.name === name);
+  if (dupes.length < 2) return `#${mi + 1} ${name}`;
+  const nth = members.slice(0, mi + 1).filter((m) => m.name === name).length;
+  return `#${mi + 1} ${name} (${nth}/${dupes.length})`;
+};
 
 interface StepJump {
   on_pass_goto: JumpTarget | null;
@@ -161,6 +185,7 @@ interface StepJump {
 }
 
 interface GroupEntry {
+  uid?: string;   // 불변 멤버 ID — 점프 대상 지정에 사용
   name: string;
   on_pass_goto: JumpTarget | null;
   on_fail_goto: JumpTarget | null;
@@ -1283,6 +1308,22 @@ export default function ScenarioPage() {
             webcamBlobsRef.current = [];
           });
         }
+      } else if (msg.type === 'group_jump_warning') {
+        // 그룹 점프 대상이 사라진 경우 안내 (재생은 계속 — 끊긴 점프는 자연 진행으로 폴백)
+        Modal.warning({
+          title: t('scenario.groupJumpBroken'),
+          content: (
+            <div>
+              <div style={{ maxHeight: 220, overflowY: 'auto', marginBottom: 10 }}>
+                {(msg.warnings || []).map((w: string, i: number) => (
+                  <div key={i} style={{ padding: '4px 0', color: '#fa8c16' }}>• {w}</div>
+                ))}
+              </div>
+              <div style={{ color: '#888', fontSize: 11 }}>{t('scenario.groupJumpBrokenHint')}</div>
+            </div>
+          ),
+          width: 560,
+        });
       } else if (msg.type === 'preflight_error') {
         endPlaying(); setCurrentStepId(null);
         Modal.confirm({
@@ -1600,6 +1641,22 @@ export default function ScenarioPage() {
             webcamBlobsRef.current = [];
           });
         }
+      } else if (msg.type === 'group_jump_warning') {
+        // 그룹 점프 대상이 사라진 경우 안내 (재생은 계속 — 끊긴 점프는 자연 진행으로 폴백)
+        Modal.warning({
+          title: t('scenario.groupJumpBroken'),
+          content: (
+            <div>
+              <div style={{ maxHeight: 220, overflowY: 'auto', marginBottom: 10 }}>
+                {(msg.warnings || []).map((w: string, i: number) => (
+                  <div key={i} style={{ padding: '4px 0', color: '#fa8c16' }}>• {w}</div>
+                ))}
+              </div>
+              <div style={{ color: '#888', fontSize: 11 }}>{t('scenario.groupJumpBrokenHint')}</div>
+            </div>
+          ),
+          width: 560,
+        });
       } else if (msg.type === 'preflight_error') {
         endPlaying(); setPlayingGroupName(null); setCurrentStepId(null);
         Modal.confirm({
@@ -2527,40 +2584,52 @@ export default function ScenarioPage() {
                         excludeChecked: boolean, onToggleExclude: (checked: boolean) => void,
                       ) => {
                         const jump = field === 'pass' ? passGoto : failGoto;
-                        const targetSteps = jump && jump.scenario >= 0 ? (scenarioStepsCache[members[jump.scenario]?.name] || []) : [];
+                        const jumpTargetMember = jump && jump.member_uid !== GROUP_JUMP_END
+                          ? members.find((m: any) => m.uid === jump.member_uid) : undefined;
+                        const targetSteps = jumpTargetMember ? (scenarioStepsCache[jumpTargetMember.name] || []) : [];
                         return (
                           <span key={field} style={{ display: 'inline-flex', flex: '1 1 280px', minWidth: 220, gap: 3, alignItems: 'center', fontSize: 11 }}>
                             <span style={{ color: jumpColor, fontWeight: 700, flexShrink: 0 }}>{jumpLabel}</span>
                             <Select
                               size="small"
                               style={{ flex: '1 1 0', minWidth: 0 }}
-                              value={jump ? jump.scenario : undefined}
+                              value={jump ? jump.member_uid : undefined}
                               allowClear
                               placeholder={t('scenario.nextTo')}
                               onChange={(v) => {
-                                const newJump = v == null ? null : { scenario: v as number, step: 0 };
+                                // 대상은 member_uid 로 고정. 이름은 안내 메시지용으로 함께 저장.
+                                const uid = v as string | undefined;
+                                const tgt = members.find((m: any) => m.uid === uid);
+                                const newJump: JumpTarget | null = uid == null ? null : {
+                                  member_uid: uid,
+                                  scenario_name: uid === GROUP_JUMP_END ? '' : (tgt?.name ?? ''),
+                                  step_uid: null,   // 기본은 시나리오 처음부터
+                                };
                                 if (field === 'pass') onUpdate(newJump, failGoto);
                                 else onUpdate(passGoto, newJump);
                               }}
                             >
-                              <Select.Option value={-1}>{t('scenario.end')} (END)</Select.Option>
-                              {members.map((m, mi) => (
-                                <Select.Option key={mi} value={mi}>#{mi + 1} {m.name}</Select.Option>
+                              <Select.Option value={GROUP_JUMP_END}>{t('scenario.end')} (END)</Select.Option>
+                              {members.map((m: any, mi: number) => (
+                                <Select.Option key={m.uid ?? mi} value={m.uid}>{memberLabel(members, mi)}</Select.Option>
                               ))}
                             </Select>
-                            {jump && jump.scenario >= 0 && targetSteps.length > 0 && (
+                            {jump && jumpTargetMember && targetSteps.length > 0 && (
                               <Select
                                 size="small"
                                 style={{ flex: '1 1 0', minWidth: 0 }}
-                                value={jump.step}
+                                value={jump.step_uid ?? undefined}
+                                allowClear
+                                placeholder={t('scenario.fromStart')}
                                 onChange={(stepVal) => {
-                                  const newJump = { scenario: jump.scenario, step: stepVal as number };
+                                  // 시작 스텝은 uid 로 저장 — 대상 시나리오를 편집해도 어긋나지 않는다
+                                  const newJump: JumpTarget = { ...jump, step_uid: (stepVal as string) ?? null };
                                   if (field === 'pass') onUpdate(newJump, failGoto);
                                   else onUpdate(passGoto, newJump);
                                 }}
                               >
                                 {targetSteps.map((s: any, si: number) => (
-                                  <Select.Option key={si} value={si}>{formatStepLabel(s, si)}</Select.Option>
+                                  <Select.Option key={s.uid ?? si} value={s.uid}>{formatStepLabel(s, si)}</Select.Option>
                                 ))}
                               </Select>
                             )}
@@ -2623,7 +2692,7 @@ export default function ScenarioPage() {
                               icon={isExpanded ? <DownOutlined /> : <RightOutlined />}
                             />
                             <GroupIcon />
-                            <span style={{ flex: 1, fontWeight: 500, color: isPlayingNow ? '#1677ff' : undefined }}>{entry.name}</span>
+                            <span style={{ flex: 1, fontWeight: 500, color: isPlayingNow ? '#1677ff' : undefined }}>{entry.name}{dupSuffix(members, idx)}</span>
                             {!scenarios.includes(entry.name) && <Tag color="red">{t('scenario.missing')}</Tag>}
                             {hasAnyJump && <BranchesOutlined style={{ color: '#722ed1', fontSize: 11 }} />}
                             {isPlayingNow && <Tag color="blue" style={{ margin: 0, fontSize: 10 }}>▶</Tag>}
@@ -3376,40 +3445,51 @@ export default function ScenarioPage() {
                       excludeChecked: boolean, onToggleExclude: (checked: boolean) => void,
                     ) => {
                       const jump = field === 'pass' ? passGoto : failGoto;
-                      const targetSteps = jump && jump.scenario >= 0 ? (scenarioStepsCache[members[jump.scenario]?.name] || []) : [];
+                      const jumpTargetMember = jump && jump.member_uid !== GROUP_JUMP_END
+                          ? members.find((m: any) => m.uid === jump.member_uid) : undefined;
+                        const targetSteps = jumpTargetMember ? (scenarioStepsCache[jumpTargetMember.name] || []) : [];
                       return (
                         <span key={field} style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontSize: 11 }}>
                           <span style={{ color: jumpColor, fontWeight: 700 }}>{jumpLabel}</span>
                           <Select
                             size="small"
                             style={{ width: 120 }}
-                            value={jump ? jump.scenario : undefined}
+                            value={jump ? jump.member_uid : undefined}
                             allowClear
                             placeholder={t('scenario.nextTo')}
                             onChange={(v) => {
-                              const newJump = v == null ? null : { scenario: v as number, step: 0 };
+                              const uid = v as string | undefined;
+                              const tgt = members.find((m: any) => m.uid === uid);
+                              const newJump: JumpTarget | null = uid == null ? null : {
+                                member_uid: uid,
+                                scenario_name: uid === GROUP_JUMP_END ? '' : (tgt?.name ?? ''),
+                                step_uid: null,
+                              };
                               if (field === 'pass') onUpdate(newJump, failGoto);
                               else onUpdate(passGoto, newJump);
                             }}
                           >
-                            <Select.Option value={-1}>{t('scenario.end')} (END)</Select.Option>
-                            {members.map((m, mi) => (
-                              <Select.Option key={mi} value={mi}>#{mi + 1} {m.name}</Select.Option>
+                            <Select.Option value={GROUP_JUMP_END}>{t('scenario.end')} (END)</Select.Option>
+                            {members.map((m: any, mi: number) => (
+                              <Select.Option key={m.uid ?? mi} value={m.uid}>{memberLabel(members, mi)}</Select.Option>
                             ))}
                           </Select>
-                          {jump && jump.scenario >= 0 && targetSteps.length > 0 && (
+                          {jump && jumpTargetMember && targetSteps.length > 0 && (
                             <Select
                               size="small"
                               style={{ width: 160 }}
-                              value={jump.step}
+                              value={jump.step_uid ?? undefined}
+                              allowClear
+                              placeholder={t('scenario.fromStart')}
                               onChange={(stepVal) => {
-                                const newJump = { scenario: jump.scenario, step: stepVal as number };
+                                // 시작 스텝은 uid 로 저장 — 대상 시나리오를 편집해도 어긋나지 않는다
+                                const newJump: JumpTarget = { ...jump, step_uid: (stepVal as string) ?? null };
                                 if (field === 'pass') onUpdate(newJump, failGoto);
                                 else onUpdate(passGoto, newJump);
                               }}
                             >
                               {targetSteps.map((s: any, si: number) => (
-                                <Select.Option key={si} value={si}>{formatStepLabel(s, si)}</Select.Option>
+                                <Select.Option key={s.uid ?? si} value={s.uid}>{formatStepLabel(s, si)}</Select.Option>
                               ))}
                             </Select>
                           )}
@@ -3462,7 +3542,7 @@ export default function ScenarioPage() {
                             icon={isExpanded ? <DownOutlined /> : <RightOutlined />}
                             onClick={() => { toggleExpandEntry(entryKey); if (!isExpanded && steps.length === 0) fetchScenarioStepsCache([entry.name]); }}
                           />
-                          <span style={{ flex: 1, fontWeight: 500 }}>{entry.name}</span>
+                          <span style={{ flex: 1, fontWeight: 500 }}>{entry.name}{dupSuffix(members, idx)}</span>
                           {!scenarios.includes(entry.name) && <Tag color="red">{t('scenario.missing')}</Tag>}
                           {hasAnyJump && <BranchesOutlined style={{ color: '#722ed1', fontSize: 11 }} />}
                           <span

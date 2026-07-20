@@ -64,6 +64,80 @@ def _dedupe_step_uids(scenario: "Scenario") -> bool:
     return changed
 
 
+#: 그룹 점프의 '재생 종료' 센티널 (기존 정수 -1 을 대체)
+GROUP_JUMP_END = "END"
+
+
+def _new_group_member_uid() -> str:
+    """그룹 멤버 고유 ID — 스텝 uid 와 같은 형식(8자리 hex)."""
+    from ..models.scenario import _new_step_uid
+    return _new_step_uid()
+
+
+def _migrate_group_identity(groups: dict) -> bool:
+    """그룹 멤버에 불변 uid 부여 + 점프 참조를 uid 기반으로 변환. 변경 시 True.
+
+    왜 필요한가:
+      · 멤버 인덱스는 순서변경/삭제 때마다 바뀌어, 지금까지 _remap_jump_idx /
+        _remap_jump_reorder 로 일일이 다시 계산해야 했다(그 리맵이 곧 버그 표면).
+      · 같은 시나리오를 중복으로 담을 수 있어(add_batch_to_group) 이름만으로는
+        어느 멤버인지 특정할 수 없다. 따라서 멤버 자체에 uid 를 준다.
+
+    변환 규칙:
+      · 멤버 인덱스 → member_uid : 안전하게 변환 가능(인덱스 리맵이 유지돼 왔음)
+      · 스텝 인덱스 → step_uid   : 변환 불가. 대상 시나리오가 그동안 편집됐는지
+        알 수 없어 어느 스텝이었는지 특정할 수 없다 → None(시나리오 처음부터)으로
+        초기화한다. 조용히 틀린 스텝을 가리키는 것보다 낫다.
+    """
+    from ..models.scenario import _new_step_uid
+
+    changed = False
+    for members in groups.values():
+        if not isinstance(members, list):
+            continue
+
+        # ① 멤버 uid 부여 + 중복 제거
+        seen: set[str] = set()
+        for m in members:
+            if not isinstance(m, dict):
+                continue
+            uid = m.get("uid")
+            if not uid or not isinstance(uid, str) or uid in seen:
+                m["uid"] = _new_step_uid()
+                changed = True
+            seen.add(m["uid"])
+
+        uid_by_idx = {i: m["uid"] for i, m in enumerate(members) if isinstance(m, dict)}
+
+        # ② 점프 참조 변환
+        def _convert(jump):
+            nonlocal changed
+            if jump is None or not isinstance(jump, dict):
+                return jump
+            if "member_uid" in jump or jump.get("member_uid") == GROUP_JUMP_END:
+                return jump                       # 이미 변환됨
+            changed = True
+            sc = jump.get("scenario", -1)
+            if sc == -1:
+                return {"member_uid": GROUP_JUMP_END, "scenario_name": "", "step_uid": None}
+            target_uid = uid_by_idx.get(sc)
+            if target_uid is None:
+                return None                        # 대상 멤버 없음 → 점프 해제
+            name = members[sc].get("name", "") if isinstance(members[sc], dict) else ""
+            # step 인덱스는 uid 로 복원 불가 → 시나리오 처음부터
+            return {"member_uid": target_uid, "scenario_name": name, "step_uid": None}
+
+        for m in members:
+            if not isinstance(m, dict):
+                continue
+            for key in ("on_pass_goto", "on_fail_goto"):
+                m[key] = _convert(m.get(key))
+            for sj in (m.get("step_jumps") or {}).values():
+                for key in ("on_pass_goto", "on_fail_goto"):
+                    sj[key] = _convert(sj.get(key))
+    return changed
+
+
 def _migrate_step_identity(data: dict) -> bool:
     """스텝 식별자 마이그레이션 — pydantic 파싱 **이전에** raw dict 위에서 수행한다.
 
@@ -791,6 +865,7 @@ class RecordingService:
         Old format v2: on_pass_goto / on_fail_goto = int | null (scenario index only)
         Old format v3: play_count 필드 부재
         Old format v4: step_jumps 키가 step.id(정수) — uid 전환 불가라 폐기
+        Old format v5: 멤버 uid 부재 + 점프가 {scenario:idx, step:idx}
         """
         raw = self._load_groups_raw()
         migrated = False
@@ -834,6 +909,9 @@ class RecordingService:
                         else:
                             entry.pop("step_jumps", None)
                 result[gname] = entries
+        # 멤버 uid 부여 + 점프 참조 uid 화 (v5)
+        if _migrate_group_identity(result):
+            migrated = True
         if migrated:
             self._save_groups(result)
         return result
@@ -902,6 +980,7 @@ class RecordingService:
             groups[group_name] = []
         for scenario_name in scenario_names:
             groups[group_name].append({
+                "uid": _new_group_member_uid(),
                 "name": scenario_name,
                 "on_pass_goto": None,
                 "on_fail_goto": None,
@@ -914,35 +993,11 @@ class RecordingService:
         groups = self._load_groups()
         if group_name in groups and 0 <= index < len(groups[group_name]):
             groups[group_name].pop(index)
-            # 제거된 멤버 이후의 goto 참조 재매핑
-            self._remap_group_jumps_after_remove(groups[group_name], index)
+            # 점프는 member_uid 참조라 인덱스 재매핑이 필요 없다.
+            # 삭제된 멤버를 가리키던 점프는 끊긴 채로 남고, 재생 전 검증
+            # (validate_group_jumps)이 사용자에게 안내한다.
         self._save_groups(groups)
         return groups
-
-    @staticmethod
-    def _remap_jump_idx(jump, removed_idx: int):
-        """제거된 인덱스 이후의 jump 참조를 -1 시프트. 제거 대상을 가리키면 None 반환."""
-        if jump is None:
-            return jump
-        if isinstance(jump, dict):
-            sc = jump.get("scenario", -1)
-            if sc == -1:
-                return jump
-            if sc == removed_idx:
-                return None
-            if sc > removed_idx:
-                return {**jump, "scenario": sc - 1}
-            return jump
-        return jump
-
-    def _remap_group_jumps_after_remove(self, members: list[dict], removed_idx: int):
-        """그룹 멤버 제거 후 모든 jump 참조를 재매핑."""
-        for m in members:
-            m["on_pass_goto"] = self._remap_jump_idx(m.get("on_pass_goto"), removed_idx)
-            m["on_fail_goto"] = self._remap_jump_idx(m.get("on_fail_goto"), removed_idx)
-            for sj in (m.get("step_jumps") or {}).values():
-                sj["on_pass_goto"] = self._remap_jump_idx(sj.get("on_pass_goto"), removed_idx)
-                sj["on_fail_goto"] = self._remap_jump_idx(sj.get("on_fail_goto"), removed_idx)
 
     def reorder_group(self, group_name: str, ordered_indices: list[int]) -> dict[str, list[dict]]:
         """기존 멤버 순서를 새 순서로 재배치. ordered_indices는 기존 인덱스의 순열."""
@@ -950,31 +1005,73 @@ class RecordingService:
         if group_name in groups:
             old_members = groups[group_name]
             # 이전 인덱스 → 새 인덱스 매핑
-            idx_remap = {old_i: new_i for new_i, old_i in enumerate(ordered_indices)}
+            # 점프는 member_uid 참조이므로 순서만 바꾸면 되고 재매핑이 필요 없다.
             new_members = [old_members[i] for i in ordered_indices if 0 <= i < len(old_members)]
-            # jump 참조의 scenario 인덱스를 새 인덱스로 재매핑
-            for m in new_members:
-                m["on_pass_goto"] = self._remap_jump_reorder(m.get("on_pass_goto"), idx_remap)
-                m["on_fail_goto"] = self._remap_jump_reorder(m.get("on_fail_goto"), idx_remap)
-                for sj in (m.get("step_jumps") or {}).values():
-                    sj["on_pass_goto"] = self._remap_jump_reorder(sj.get("on_pass_goto"), idx_remap)
-                    sj["on_fail_goto"] = self._remap_jump_reorder(sj.get("on_fail_goto"), idx_remap)
             groups[group_name] = new_members
         self._save_groups(groups)
         return groups
 
-    @staticmethod
-    def _remap_jump_reorder(jump, idx_remap: dict):
-        """순서 변경 시 jump의 scenario 인덱스를 새 인덱스로 매핑."""
-        if jump is None:
-            return jump
-        if isinstance(jump, dict):
-            sc = jump.get("scenario", -1)
-            if sc == -1:
-                return jump
-            new_sc = idx_remap.get(sc, sc)
-            return {**jump, "scenario": new_sc}
-        return jump
+    async def validate_group_jumps(self, group_name: str) -> list[str]:
+        """그룹 재생 전 점프 대상이 실제로 존재하는지 확인하고 문제 목록을 반환.
+
+        확인 대상:
+          · member_uid — 대상 멤버가 그룹에서 삭제되었는지
+          · step_uid   — 대상 시나리오에 그 스텝이 남아 있는지 (시나리오 편집으로 삭제 가능)
+          · 대상 시나리오 파일 자체가 사라졌는지
+
+        반환이 비어 있지 않으면 호출자가 사용자에게 안내한다. 재생을 막지는 않는다 —
+        끊긴 점프는 자연 진행으로 폴백하므로 계속 실행은 가능하지만, 사용자가
+        의도한 흐름이 아닐 수 있으므로 반드시 알려야 한다.
+        """
+        groups = self._load_groups()
+        members = groups.get(group_name) or []
+        alive_uids = {m.get("uid") for m in members if isinstance(m, dict) and m.get("uid")}
+
+        # 대상 시나리오는 여러 점프가 공유할 수 있으므로 1회만 읽어 캐시
+        step_uid_cache: dict[str, Optional[set[str]]] = {}
+
+        async def _step_uids(scenario_name: str) -> Optional[set[str]]:
+            if scenario_name not in step_uid_cache:
+                try:
+                    sc = await self.load_scenario(scenario_name)
+                    step_uid_cache[scenario_name] = {st.uid for st in sc.steps}
+                except Exception:
+                    step_uid_cache[scenario_name] = None   # 시나리오 없음
+            return step_uid_cache[scenario_name]
+
+        problems: list[str] = []
+
+        async def _check(jump, where: str) -> None:
+            if not isinstance(jump, dict):
+                return
+            tgt = jump.get("member_uid")
+            if not tgt or tgt == GROUP_JUMP_END:
+                return
+            name = jump.get("scenario_name") or "(이름 불명)"
+            if tgt not in alive_uids:
+                problems.append(f"{where}: 대상 시나리오 '{name}' 이(가) 그룹에서 삭제되었습니다.")
+                return
+            step_uid = jump.get("step_uid")
+            if not step_uid:
+                return                      # 시나리오 처음부터 — 검증 불필요
+            uids = await _step_uids(name)
+            if uids is None:
+                problems.append(f"{where}: 대상 시나리오 '{name}' 을(를) 찾을 수 없습니다.")
+            elif step_uid not in uids:
+                problems.append(
+                    f"{where}: '{name}' 의 대상 스텝이 삭제되었습니다 — 해당 시나리오 처음부터 재생됩니다."
+                )
+
+        for i, m in enumerate(members):
+            if not isinstance(m, dict):
+                continue
+            label = f"{i + 1}번째 '{m.get('name', '')}'"
+            for key, dirn in (("on_pass_goto", "Pass"), ("on_fail_goto", "Fail")):
+                await _check(m.get(key), f"{label} 의 {dirn} 점프")
+            for sid, sj in (m.get("step_jumps") or {}).items():
+                for key, dirn in (("on_pass_goto", "Pass"), ("on_fail_goto", "Fail")):
+                    await _check(sj.get(key), f"{label} 스텝점프({sid}) 의 {dirn}")
+        return problems
 
     def update_group_jumps(self, group_name: str, index: int, on_pass_goto, on_fail_goto) -> dict[str, list[dict]]:
         """Update conditional jump settings for a scenario in a group."""

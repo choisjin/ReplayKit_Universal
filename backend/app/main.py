@@ -44,6 +44,7 @@ from .services.adb_service import resolve_sf_display_id, resolve_input_display_i
 from .services.capture.ffmpeg_runtime import log_runtime_status as _log_capture_runtime_status
 from .services.capture.scrcpy_server import log_scrcpy_status as _log_scrcpy_status
 from .models.scenario import ScenarioResult
+from .services.recording_service import GROUP_JUMP_END
 from .services.playback_service import (
     RESULTS_DIR as _RESULTS_DIR,
     STEPS_NDJSON_NAME as _STEPS_NDJSON_NAME,
@@ -454,6 +455,27 @@ if _docs_dir.is_dir():
     logger.info("Docs mounted from %s", _docs_dir)
 else:
     logger.warning("Docs directory not found — /docs requests will fall through to SPA")
+
+
+async def _resolve_group_jump_step(scenario_name: str, step_uid: Optional[str]) -> int:
+    """그룹 점프의 step_uid 를 대상 시나리오의 0-based 인덱스로 해석.
+
+    step_uid 가 없거나(시나리오 처음부터) 찾지 못하면 0 을 반환한다.
+    찾지 못하는 경우는 재생 전 validate_group_jumps 가 미리 안내하므로,
+    여기서는 조용히 처음부터 재생하는 쪽으로 폴백한다.
+    """
+    if not step_uid:
+        return 0
+    try:
+        target = await recording_service.load_scenario(scenario_name)
+    except Exception:
+        return 0
+    for i, st in enumerate(target.steps):
+        if st.uid == step_uid:
+            return i
+    logger.warning(f"그룹 점프 대상 스텝을 찾을 수 없습니다 ({scenario_name} / {step_uid}) — 처음부터 재생")
+    return 0
+
 
 @app.get("/api/health")
 async def health_check():
@@ -2166,6 +2188,18 @@ async def _run_play_group_job(data: dict):
             return
 
         group_name = data.get("group_name", entries[0]["name"])
+
+        # 그룹 점프 대상 검증 — 멤버 삭제/시나리오 편집으로 끊긴 참조를 사용자에게 안내.
+        # 재생은 막지 않는다(끊긴 점프는 자연 진행으로 폴백). 다만 사용자가 의도한
+        # 흐름이 아닐 수 있으므로 조용히 넘어가지 않는다.
+        try:
+            jump_warnings = await recording_service.validate_group_jumps(group_name)
+            if jump_warnings:
+                publish_event({"type": "group_jump_warning", "warnings": jump_warnings})
+                logger.warning(f"[{group_name}] 끊긴 그룹 점프 {len(jump_warnings)}건: {jump_warnings}")
+        except Exception as e:
+            logger.warning(f"그룹 점프 검증 실패(무시하고 계속): {e}")
+
         total_steps = 0
         for entry in entries:
             try:
@@ -2224,6 +2258,7 @@ async def _run_play_group_job(data: dict):
 
             sc_idx = 0
             start_step = 0
+            uid_to_member_idx = {m.get("uid"): i for i, m in enumerate(entries) if m.get("uid")}
             while sc_idx < len(entries):
                 if playback_service._should_stop:
                     break
@@ -2373,16 +2408,24 @@ async def _run_play_group_job(data: dict):
                         jump = entry.get("on_fail_goto")
 
                 if jump is not None:
-                    if isinstance(jump, dict):
-                        target_sc = jump.get("scenario", -1)
-                        target_step = jump.get("step", 0)
-                    else:
-                        target_sc = jump
-                        target_step = 0
-                    if target_sc == -1:
+                    # 점프 대상은 member_uid + step_uid (인덱스가 아님).
+                    # 멤버 순서변경·삭제, 대상 시나리오의 스텝 편집에도 어긋나지 않는다.
+                    target_uid = jump.get("member_uid") if isinstance(jump, dict) else None
+                    if target_uid == GROUP_JUMP_END:
                         break
-                    next_idx = target_sc
-                    start_step = target_step
+                    next_idx = uid_to_member_idx.get(target_uid)
+                    if next_idx is None:
+                        # 재생 전 검증에서 걸러지지만, 방어적으로 자연 진행
+                        logger.warning(
+                            f"그룹 점프 대상 멤버를 찾을 수 없어 무시합니다 (uid={target_uid})"
+                        )
+                        next_idx = sc_idx + 1
+                        start_step = 0
+                    else:
+                        # step_uid 가 없으면(None) 대상 시나리오 처음부터
+                        start_step = await _resolve_group_jump_step(
+                            entries[next_idx]["name"], jump.get("step_uid")
+                        )
 
                 sc_idx = next_idx
 

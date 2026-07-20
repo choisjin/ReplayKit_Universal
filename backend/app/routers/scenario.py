@@ -1438,8 +1438,17 @@ async def reorder_group(req: ReorderGroupRequest):
 
 
 class JumpTarget(BaseModel):
-    scenario: int  # group index (0-based), -1 = END
-    step: int = 0  # step index within the scenario (0-based)
+    """그룹 점프 대상 — 위치가 아닌 불변 ID 로 지정한다.
+
+    member_uid: 대상 그룹 멤버의 uid. GROUP_JUMP_END("END") 면 재생 종료.
+                (멤버 인덱스는 순서변경/삭제로 바뀌고, 같은 시나리오가 중복으로
+                 담길 수 있어 이름만으로도 특정할 수 없다)
+    scenario_name: 안내 메시지용 — 대상이 사라졌을 때 이름을 알려주기 위해 함께 보관.
+    step_uid: 대상 시나리오 안에서 시작할 스텝의 uid. None 이면 처음부터.
+    """
+    member_uid: str
+    scenario_name: str = ""
+    step_uid: Optional[str] = None
 
 
 class UpdateGroupJumpsRequest(BaseModel):
