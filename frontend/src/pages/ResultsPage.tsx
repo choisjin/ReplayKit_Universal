@@ -2048,7 +2048,9 @@ export default function ResultsPage() {
           if (!trimFile || trimEnd <= trimStart) return;
           try {
             const res = await resultsApi.trimRecording(trimFile, trimStart, trimEnd);
-            message.success(t('webcam.trimSuccess'));
+            // 저장 위치를 알려준다 — 경로가 길어 기본 3초로는 짧아 6초 노출.
+            const savedPath = res.data?.path || res.data?.rel_path || res.data?.filename || '';
+            message.success(t('webcam.trimSuccess', { path: savedPath }), 6);
             setTrimFile(null);
             fetchRecordings(detailFilename);
           } catch (e: any) {

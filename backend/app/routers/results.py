@@ -1681,6 +1681,8 @@ def _trim_recording_impl(filename: str, start: float, end: float) -> dict:
             rel = None
     rel_str = str(rel).replace("\\", "/") if rel else output_name
     return {"filename": output_name, "rel_path": rel_str,
+            # path: 사용자가 탐색기에서 바로 찾아갈 수 있는 절대 경로 (완료 알림에 표시)
+            "path": str(output_path),
             "url": f"/api/results/video/{quote(rel_str)}"}
 
 
