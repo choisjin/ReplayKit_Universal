@@ -8220,7 +8220,9 @@ export default function RecordPage() {
                 background: testResult.status === 'fail' ? '#2a1215' : '#122010',
                 border: `1px solid ${testResult.status === 'fail' ? '#5c2024' : '#274916'}`,
                 color: testResult.status === 'fail' ? '#ff7875' : '#95de64',
-                whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                // OCR 인식 텍스트 목록처럼 결과가 길어질 수 있어 스크롤 처리
+                // (시나리오 결과 상세 패널과 동일한 규칙)
+                whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 400, overflow: 'auto',
               }}>{testResult.message}</div>
             )}
             <Row gutter={12}>

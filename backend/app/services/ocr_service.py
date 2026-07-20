@@ -185,19 +185,39 @@ def run_ocr(image_bytes: bytes, language: Optional[str] = None) -> List[OcrItem]
     return items
 
 
+def best_match(items: List[OcrItem], target: str) -> Tuple[float, Optional[Tuple[int, int]], str]:
+    """이미 실행한 OCR 결과에서 target 과 가장 잘 맞는 항목을 찾는다.
+
+    반환: (최고 유사도, 중심 좌표, 매칭된 텍스트)
+
+    OCR 을 다시 돌리지 않으므로, 여러 텍스트를 한 화면에서 검사할 때 OCR 1회로
+    끝낼 수 있다. (예전에는 has_text 가 호출마다 run_ocr 을 다시 돌려 N개 검사 =
+    OCR N회였다) 또한 호출자가 '무엇이 얼마나 비슷하게 잡혔는지'를 결과에 표시할 수 있다.
+    """
+    best_score = 0.0
+    best_center: Optional[Tuple[int, int]] = None
+    best_text = ""
+    for item in items:
+        score = _fuzzy_score(item.text, target)
+        if score > best_score:
+            best_score = score
+            best_center = item.center
+            best_text = item.text
+    return best_score, best_center, best_text
+
+
+def joined_text(items: List[OcrItem]) -> str:
+    """OCR 항목들의 텍스트를 한 줄로 합친다 (영역 검사용 — 항목 경계를 무시하고 매칭)."""
+    return " ".join(item.text for item in items).strip()
+
+
 def has_text(
     image_bytes: bytes, target: str, threshold: float = 0.8,
     language: Optional[str] = None,
 ) -> Tuple[bool, Optional[Tuple[int, int]]]:
     """이미지에서 target 텍스트 존재 여부 판단. (found, center_xy)"""
     items = run_ocr(image_bytes, language=language)
-    best_score = 0.0
-    best_center = None
-    for item in items:
-        score = _fuzzy_score(item.text, target)
-        if score > best_score:
-            best_score = score
-            best_center = item.center
+    best_score, best_center, _ = best_match(items, target)
     if best_score >= threshold:
         return True, best_center
     return False, None
@@ -272,8 +292,7 @@ def extract_region_text(
     _, buf = cv2.imencode(".png", crop)
     if buf is None:
         return ""
-    items = run_ocr(buf.tobytes(), language=language)
-    return " ".join(item.text for item in items).strip()
+    return joined_text(run_ocr(buf.tobytes(), language=language))
 
 
 def extract_region_items(

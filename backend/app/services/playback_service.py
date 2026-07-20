@@ -2334,8 +2334,7 @@ class PlaybackService:
     async def _execute_ocr_step(self, step: Step, func_name: str, func_args: dict) -> str:
         """OCR 가상 모듈 스텝 실행."""
         from .ocr_service import (
-            has_text, find_text_center, check_text_in_region, find_text_center_in_region,
-            run_ocr, extract_region_items,
+            best_match, joined_text, run_ocr, extract_region_items, _fuzzy_score,
         )
 
         dev_info = self._find_ocr_device(step)
@@ -2365,6 +2364,39 @@ class PlaybackService:
                 _i(parts[3]) if len(parts) > 3 else 0,
             )
 
+        async def _ocr_once(mode: str):
+            """모드에 맞게 OCR 을 **1회만** 실행하고 (항목, x오프셋, y오프셋, 범위라벨) 반환.
+
+            예전에는 검사 대상 텍스트마다 has_text / check_text_in_region 을 호출해
+            그때마다 OCR 이 다시 돌았다(N개 검사 = OCR N회). 결과에 인식 텍스트를
+            표시하려면 어차피 항목이 필요하므로, 한 번 돌려 매칭과 표시에 함께 쓴다.
+            """
+            if mode == "Region":
+                rx, ry, rw, rh = _parse_region(func_args.get("region", ""))
+                items, ox, oy = await loop.run_in_executor(
+                    None, extract_region_items, img_bytes, rx, ry, rw, rh, language
+                )
+                return items, ox, oy, f"Region({rx},{ry},{rw},{rh})"
+            items = await loop.run_in_executor(None, run_ocr, img_bytes, language)
+            return items, 0, 0, "Full Screen"
+
+        def _detected_block(items, ox: int, oy: int, scope: str, limit: int = 30) -> str:
+            """결과 하단에 붙일 '인식된 텍스트' 블록.
+
+            무엇이 어떻게 읽혔는지 보이지 않아 디버깅이 어렵다는 요구로 추가.
+            항목이 많으면 앞에서 limit 개만 표시하고 나머지는 개수로 요약한다.
+            """
+            if not items:
+                return f"\n--- 인식된 텍스트 없음 ({scope}) ---"
+            lines = [f"\n--- 인식된 텍스트 ({scope}, {len(items)}개) ---"]
+            for i, it in enumerate(items[:limit], 1):
+                cx, cy = it.center
+                clean = it.text.replace("\n", " ").replace("\t", " ").strip()
+                lines.append(f'  [{i}] (x={cx + ox}, y={cy + oy}) score={it.score:.2f}: "{clean}"')
+            if len(items) > limit:
+                lines.append(f"  ... 외 {len(items) - limit}개")
+            return "\n".join(lines)
+
         if func_name == "CheckText":
             # text는 쉼표 구분으로 여러 개 지정 가능 — 모두 존재해야 PASS (AND 조건).
             # 토큰별로 strip + 빈 토큰 제외. 입력 자체가 비어있으면 FAIL.
@@ -2375,47 +2407,50 @@ class PlaybackService:
             threshold = float(func_args.get("threshold", "0.8") or 0.8)
             mode = str(func_args.get("mode", "Full Screen"))
 
-            if mode == "Region":
-                rx, ry, rw, rh = _parse_region(func_args.get("region", ""))
-                missing: list[str] = []
-                for target in targets:
-                    ok = await loop.run_in_executor(
-                        None, check_text_in_region, img_bytes, target, rx, ry, rw, rh, threshold, language
-                    )
-                    if not ok:
-                        missing.append(target)
-            else:
-                missing = []
-                for target in targets:
-                    ok, _ = await loop.run_in_executor(None, has_text, img_bytes, target, threshold, language)
-                    if not ok:
-                        missing.append(target)
+            items, ox, oy, scope = await _ocr_once(mode)
 
+            # Region 은 영역 전체 텍스트를 이어붙여 매칭하고(항목 경계 무시),
+            # Full Screen 은 항목별 최고 유사도로 매칭한다 — 기존 동작 그대로.
+            region_joined = joined_text(items) if mode == "Region" else ""
+            missing: list[str] = []
+            score_notes: list[str] = []
+            for target in targets:
+                if mode == "Region":
+                    score = _fuzzy_score(region_joined, target)
+                else:
+                    score, _c, _m = best_match(items, target)
+                score_notes.append(f"'{target}'={score:.2f}")
+                if score < threshold:
+                    missing.append(target)
+
+            detail = f"  [threshold={threshold:.2f}] 유사도: " + ", ".join(score_notes)
+            block = _detected_block(items, ox, oy, scope)
             if not missing:
-                return f"PASS: 모든 텍스트 검출됨 ({len(targets)}개)" if len(targets) > 1 else "PASS"
+                head = f"PASS: 모든 텍스트 검출됨 ({len(targets)}개)" if len(targets) > 1 else "PASS"
+                return head + "\n" + detail + block
             joined = ", ".join(f"'{m}'" for m in missing)
-            return f"FAIL: {joined} 텍스트를 찾을 수 없음"
+            return f"FAIL: {joined} 텍스트를 찾을 수 없음" + "\n" + detail + block
 
         elif func_name == "ClickText":
             target = str(func_args.get("text", ""))
             threshold = float(func_args.get("threshold", "0.8") or 0.8)
             mode = str(func_args.get("mode", "Full Screen"))
-            if mode == "Region":
-                rx, ry, rw, rh = _parse_region(func_args.get("region", ""))
-                center = await loop.run_in_executor(
-                    None, find_text_center_in_region, img_bytes, target, rx, ry, rw, rh, threshold, language
-                )
-            else:
-                center = await loop.run_in_executor(None, find_text_center, img_bytes, target, threshold, language)
-            if center is None:
-                return f"FAIL: '{target}' 텍스트를 찾을 수 없음"
-            x, y = center
+
+            items, ox, oy, scope = await _ocr_once(mode)
+            score, center, matched = best_match(items, target)
+            block = _detected_block(items, ox, oy, scope)
+            if center is None or score < threshold:
+                return (f"FAIL: '{target}' 텍스트를 찾을 수 없음 "
+                        f"(최고 유사도 {score:.2f} < threshold {threshold:.2f})" + block)
+            # Region 모드면 크롭 좌표를 원본 이미지 좌표로 환산
+            x, y = center[0] + ox, center[1] + oy
             # HKMC 일체형 표시 보정 — image_tap과 동일. OCR은 front_center(AVN) 캡처의
             # 로컬 좌표를 찾으므로 실제 터치 좌표계(+x_offset)로 환산해야 한다.
             # 기본형/비-HKMC는 params에 x_offset이 없어 0 → 무영향.
             x_offset = int((step.params or {}).get("x_offset", 0) or 0)
             await self._tap_ocr_device(dev_info, x + x_offset, y)
-            return f"PASS: '{target}' 클릭 완료 (x={x + x_offset}, y={y})"
+            return (f"PASS: '{target}' 클릭 완료 (x={x + x_offset}, y={y}) "
+                    f"— 매칭 \"{matched}\" 유사도 {score:.2f}" + block)
 
         elif func_name == "ExtractAllText":
             # 디버깅/시나리오 작성용 — 화면(또는 영역)의 모든 텍스트를 결과로 반환.
