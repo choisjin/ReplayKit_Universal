@@ -24,6 +24,62 @@ router = APIRouter(prefix="/api/scenario", tags=["scenario"])
 
 
 # ------------------------------------------------------------------
+# 기대이미지 파일명 / 삭제 안전장치
+# ------------------------------------------------------------------
+# ⚠️ step.id 는 안정적인 식별자가 아니다. 프론트가 스텝 삽입/삭제/순서변경 때마다
+#    배열 위치(i+1)로 재부여하는데(RecordPage.tsx), 이미 저장된 파일명은 rename 되지
+#    않는다. 따라서 파일명을 step.id 로만 만들면 나중에 번호가 밀린 다른 스텝과
+#    이름이 충돌해 서로의 기대이미지를 덮어쓰거나 지운다.
+#    (실제 사례: 20번 크롭 재추가가 21번의 _step_020_crop_00.png 를 덮어써 오비교 발생)
+#    → 단일 이미지 경로와 동일하게 타임스탬프를 붙여 유일성을 보장한다.
+
+def _unique_crop_filename(scenario_name: str, step, save_dir: Path) -> str:
+    """멀티크롭 기대이미지용 충돌 없는 파일명 생성."""
+    import time as _time
+    crop_idx = len(step.expected_images)
+    while True:
+        ts = int(_time.time() * 1000) % 1000000
+        name = f"{scenario_name}_step_{step.id:03d}_crop_{crop_idx:02d}_{ts}.png"
+        if not (save_dir / name).exists():
+            return name
+        _time.sleep(0.001)
+
+
+def _referenced_by_other_step(scenario, filename: str, owner_step) -> bool:
+    """다른 스텝이 같은 파일을 기대이미지로 참조 중인지 검사."""
+    if not filename:
+        return False
+    for s in scenario.steps:
+        if s is owner_step:
+            continue
+        if s.expected_image == filename:
+            return True
+        if any(ci.image == filename for ci in (s.expected_images or [])):
+            return True
+    return False
+
+
+def _safe_unlink_expected(scenario, save_dir: Path, filename: str, owner_step) -> bool:
+    """다른 스텝이 참조하지 않을 때만 기대이미지 파일을 삭제한다.
+
+    과거 버전이 만든 파일명 충돌 데이터에서, 한 스텝의 크롭 삭제가 다른 스텝의
+    기대이미지를 지워버리는 2차 피해를 막는다. 삭제했으면 True.
+    """
+    if not filename:
+        return False
+    if _referenced_by_other_step(scenario, filename, owner_step):
+        logger.warning(
+            f"기대이미지 '{filename}' 삭제를 건너뜁니다 — 다른 스텝이 같은 파일을 참조 중입니다. "
+            f"(과거 step.id 기반 파일명 충돌 데이터. 해당 스텝 기대이미지 재캡처를 권장)"
+        )
+        return False
+    f = save_dir / filename
+    if f.exists():
+        f.unlink(missing_ok=True)
+    return True
+
+
+# ------------------------------------------------------------------
 # Recording
 # ------------------------------------------------------------------
 
@@ -269,8 +325,7 @@ async def save_expected_image(req: SaveExpectedImageRequest):
 
     if req.compare_mode == "multi_crop":
         # Multi-crop: append to expected_images list
-        crop_idx = len(step.expected_images)
-        filename = f"{req.scenario_name}_step_{step.id:03d}_crop_{crop_idx:02d}.png"
+        filename = _unique_crop_filename(req.scenario_name, step, save_dir)
         (save_dir / filename).write_bytes(png_bytes)
         crop_roi = ROI(x=int(req.crop["x"]), y=int(req.crop["y"]),
                        width=int(req.crop["width"]), height=int(req.crop["height"])) if req.crop else None
@@ -283,18 +338,13 @@ async def save_expected_image(req: SaveExpectedImageRequest):
         filename = f"{req.scenario_name}_step_{step.id:03d}_{ts}.png"
         # 이전 기대이미지 파일 삭제
         if step.expected_image and step.expected_image != filename:
-            old_file = save_dir / step.expected_image
-            if old_file.exists():
-                old_file.unlink(missing_ok=True)
+            _safe_unlink_expected(scenario, save_dir, step.expected_image, step)
         # 이전 multi_crop 이미지 파일 삭제 + 관련 필드 초기화
         # (이전 모드가 multi_crop / full_exclude였다면 stale ROI가 렌더링에 끼어들어
         # 다른 스텝 ROI처럼 보이는 버그 방지). preserve_crops=True면 유지 (multi_crop base 갱신용)
         if not req.preserve_crops:
             for ci in step.expected_images:
-                if ci.image:
-                    old_crop = save_dir / ci.image
-                    if old_crop.exists():
-                        old_crop.unlink(missing_ok=True)
+                _safe_unlink_expected(scenario, save_dir, ci.image, step)
             step.expected_images.clear()
         # single_crop (crop 있음) 저장 시에만 exclude_rois 초기화 — 이전 full_exclude 잔재 제거
         if req.crop:
@@ -473,8 +523,7 @@ async def capture_expected_image(req: CaptureExpectedImageRequest):
 
     if req.compare_mode == "multi_crop":
         # Multi-crop: append to expected_images list
-        crop_idx = len(step.expected_images)
-        filename = f"{scenario_name}_step_{step.id:03d}_crop_{crop_idx:02d}.png"
+        filename = _unique_crop_filename(scenario_name, step, save_dir)
         (save_dir / filename).write_bytes(png_bytes)
         crop_roi = ROI(x=int(req.crop["x"]), y=int(req.crop["y"]),
                        width=int(req.crop["width"]), height=int(req.crop["height"])) if req.crop else None
@@ -486,16 +535,11 @@ async def capture_expected_image(req: CaptureExpectedImageRequest):
         filename = f"{scenario_name}_step_{step.id:03d}_{ts}.png"
         # 이전 기대이미지 파일 삭제
         if step.expected_image and step.expected_image != filename:
-            old_file = save_dir / step.expected_image
-            if old_file.exists():
-                old_file.unlink(missing_ok=True)
+            _safe_unlink_expected(scenario, save_dir, step.expected_image, step)
         if not req.preserve_crops:
             # 이전 multi_crop 이미지 파일 삭제
             for ci in step.expected_images:
-                if ci.image:
-                    old_crop = save_dir / ci.image
-                    if old_crop.exists():
-                        old_crop.unlink(missing_ok=True)
+                _safe_unlink_expected(scenario, save_dir, ci.image, step)
             step.expected_images.clear()
             step.exclude_rois.clear()
         (save_dir / filename).write_bytes(png_bytes)
@@ -534,17 +578,12 @@ async def remove_expected_image(req: RemoveExpectedImageRequest):
 
     # 기대이미지 파일 삭제
     if step.expected_image:
-        f = save_dir / step.expected_image
-        if f.exists():
-            f.unlink(missing_ok=True)
+        _safe_unlink_expected(scenario, save_dir, step.expected_image, step)
         step.expected_image = None
 
     # multi_crop 이미지 파일 삭제
     for ci in step.expected_images:
-        if ci.image:
-            f = save_dir / ci.image
-            if f.exists():
-                f.unlink(missing_ok=True)
+        _safe_unlink_expected(scenario, save_dir, ci.image, step)
     step.expected_images.clear()
     step.exclude_rois.clear()
     step.roi = None
@@ -1012,7 +1051,9 @@ async def import_steps(req: ImportStepsRequest):
         for ci_idx, ci in enumerate(step_data.get("expected_images", [])):
             if ci.get("image"):
                 old_ci = src_ss_dir / ci["image"]
-                new_ci_name = f"{req.target_name}_step_{new_id:03d}_crop_{ci_idx:02d}.png"
+                # ts 를 포함해 유일성 확보 — new_id 는 프론트가 곧바로 i+1 로 재부여하므로
+                # step.id 기반 이름만으로는 기존 스텝과 충돌한다.
+                new_ci_name = f"{req.target_name}_step_{new_id:03d}_crop_{ci_idx:02d}_{ts}.png"
                 new_ci = tgt_ss_dir / new_ci_name
                 if old_ci.exists():
                     shutil.copy2(str(old_ci), str(new_ci))
@@ -1072,9 +1113,13 @@ async def import_steps(req: ImportStepsRequest):
         _prune_device_map(source)
         await recording_svc.save_scenario(source)
 
-        # 원본 이미지 파일 제거
+        # 원본 이미지 파일 제거 — 소스에 남은 스텝이 여전히 참조하는 파일은 보존
+        # (과거 step.id 기반 파일명 충돌 데이터 방어)
         for f in src_images_to_delete:
             try:
+                if _referenced_by_other_step(source, f.name, None):
+                    logger.warning(f"이동 후 원본 '{f.name}' 삭제 건너뜀 — 소스의 다른 스텝이 참조 중")
+                    continue
                 if f.exists():
                     f.unlink()
             except Exception as e:
@@ -1102,10 +1147,8 @@ async def remove_crop(req: RemoveCropRequest):
         raise HTTPException(status_code=400, detail=f"Invalid crop index: {req.crop_index}")
 
     removed = step.expected_images.pop(req.crop_index)
-    # Delete the image file
-    img_path = SCREENSHOTS_DIR / req.scenario_name / removed.image
-    if img_path.exists():
-        img_path.unlink()
+    # Delete the image file (다른 스텝이 같은 파일을 참조 중이면 보존)
+    _safe_unlink_expected(scenario, SCREENSHOTS_DIR / req.scenario_name, removed.image, step)
 
     await recording_svc.save_scenario(scenario)
     return {"status": "ok", "removed": removed.image}
@@ -1164,7 +1207,13 @@ async def crop_from_expected(req: CropFromExpectedRequest):
             raise HTTPException(status_code=400, detail=f"Invalid replace index: {req.replace_index}")
         old = step.expected_images[req.replace_index]
         from ..utils.cv_io import safe_imwrite
-        filename = old.image  # reuse same filename
+        # 원칙적으로 같은 파일명을 재사용하지만, 과거 step.id 기반 파일명 충돌로 다른
+        # 스텝이 같은 파일을 참조 중이면 새 이름으로 분리한다(남의 기대이미지 덮어쓰기 방지).
+        if _referenced_by_other_step(scenario, old.image, step):
+            filename = _unique_crop_filename(req.scenario_name, step, save_dir)
+            logger.warning(f"크롭 교체: '{old.image}' 가 다른 스텝과 공유되어 '{filename}' 로 분리합니다.")
+        else:
+            filename = old.image  # reuse same filename
         safe_imwrite(save_dir / filename, cropped)
         step.expected_images[req.replace_index] = CropItem(
             image=filename, label=req.crop_label or old.label, roi=roi,
@@ -1172,8 +1221,7 @@ async def crop_from_expected(req: CropFromExpectedRequest):
     else:
         # Append new crop
         from ..utils.cv_io import safe_imwrite
-        crop_idx = len(step.expected_images)
-        filename = f"{req.scenario_name}_step_{step.id:03d}_crop_{crop_idx:02d}.png"
+        filename = _unique_crop_filename(req.scenario_name, step, save_dir)
         safe_imwrite(save_dir / filename, cropped)
         step.expected_images.append(CropItem(image=filename, label=req.crop_label, roi=roi))
 
