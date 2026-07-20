@@ -141,17 +141,25 @@ const effStatus = (r: { status: string; excluded_from_result?: boolean }) =>
 const statusDetail = (r: { status: string; excluded_from_result?: boolean }, t: (k: TranslationKey) => string) =>
   r.excluded_from_result ? `${t('results.statusBranch')} (${r.status === 'pass' ? 'PASS' : 'FAIL'})` : statusText(r.status, t);
 
+// 경로 세그먼트를 URL 인코딩. 시나리오 이름의 sanitize는 `\/:*?"<>|→`와 공백만
+// 제거하므로 `#`, `%`, `?` 같은 문자가 폴더명에 그대로 남을 수 있다. 인코딩하지 않으면
+// `#` 이후가 fragment로 잘려 이미지가 깨진다. 슬래시는 구분자로 보존.
+const encodePathSegments = (rel: string) =>
+  rel.split('/').map(encodeURIComponent).join('/');
+
 const imageUrl = (path: string | null) => {
   if (!path) return null;
   let rel = path.replace(/\\/g, '/');
   const resultsIdx = rel.indexOf('/results/');
-  if (resultsIdx >= 0) return '/results-files/' + rel.substring(resultsIdx + '/results/'.length);
-  if (/^\d{8}_\d{6}_/.test(rel)) return '/results-files/' + rel;
+  if (resultsIdx >= 0) {
+    return '/results-files/' + encodePathSegments(rel.substring(resultsIdx + '/results/'.length));
+  }
+  if (/^\d{8}_\d{6}_/.test(rel)) return '/results-files/' + encodePathSegments(rel);
   const idx = rel.indexOf('/screenshots/');
   if (idx >= 0) {
     rel = rel.substring(idx + '/screenshots/'.length);
   }
-  return '/screenshots/' + rel;
+  return '/screenshots/' + encodePathSegments(rel);
 };
 
 // Draws match-location boxes on the expected image for multi_crop results
@@ -282,12 +290,22 @@ export default function ResultsPage() {
   const stopAllResultBgPolls = (cancelBackend: boolean = true) => {
     bgPollTimers.current.forEach(t => clearInterval(t));
     bgPollTimers.current = [];
-    if (cancelBackend) {
-      bgPollTaskIds.current.forEach(tid => {
-        scenarioApi.cancelCmdTask(tid).catch(() => {});
-      });
-    }
+    const ids = bgPollTaskIds.current;
     bgPollTaskIds.current = [];
+    if (cancelBackend && ids.length > 0) {
+      // 에이징 런은 추적 중인 태스크가 수백 개다. 한 번에 전부 cancel을 쏘면
+      // 모달을 닫는 순간 브라우저 소켓이 고갈돼(ERR_INSUFFICIENT_RESOURCES)
+      // 서버가 죽은 것처럼 보인다 → 동시 요청 수를 제한해 순차 처리한다.
+      const MAX_INFLIGHT = 6;
+      let next = 0;
+      const worker = async (): Promise<void> => {
+        while (next < ids.length) {
+          const tid = ids[next++];
+          await scenarioApi.cancelCmdTask(tid).catch(() => {});
+        }
+      };
+      for (let i = 0; i < Math.min(MAX_INFLIGHT, ids.length); i++) void worker();
+    }
   };
 
   // 선택 삭제 + 필터
@@ -392,6 +410,15 @@ export default function ResultsPage() {
   // (1) onLoadedMetadata 이벤트가 React listener 부착 전에 이미 발화한 race
   // (2) ref 할당 타이밍 차이 모두 흡수.
   const seekRetryTimerRef = useRef<number | null>(null);
+  // 보류 seek + 재시도 타이머를 한 번에 정리. src를 붙일 수 없다고 확정된 시점에
+  // 반드시 호출해야 10초 폴링 후의 오진 메시지("코덱 문제")를 막을 수 있다.
+  const cancelPendingSeek = useCallback(() => {
+    pendingSeekRef.current = null;
+    if (seekRetryTimerRef.current != null) {
+      window.clearTimeout(seekRetryTimerRef.current);
+      seekRetryTimerRef.current = null;
+    }
+  }, []);
   const tryApplyPendingSeek = useCallback(() => {
     if (seekRetryTimerRef.current != null) {
       window.clearTimeout(seekRetryTimerRef.current);
@@ -414,10 +441,24 @@ export default function ResultsPage() {
         const codeLabel = code === 1 ? 'ABORTED' : code === 2 ? 'NETWORK'
           : code === 3 ? 'DECODE' : code === 4 ? 'SRC_NOT_SUPPORTED'
           : code != null ? `unknown(${code})` : 'timeout';
+        const curSrc = v?.currentSrc || v?.src || '';
         console.log('[seek-debug] EXHAUSTED — retry limit reached', {
           readyState: v?.readyState, networkState: v?.networkState, errorCode: code,
+          recUrl: pending.recUrl, currentSrc: curSrc,
+          blobResolved: pending.recUrl ? blobUrlMapRef.current.get(pending.recUrl) : undefined,
         });
-        message.error(`녹화 영상을 로드하지 못했습니다 (${codeLabel}). 파일이 손상되었거나 브라우저가 지원하지 않는 코덱일 수 있습니다 — 재녹화 후 다시 시도하세요.`);
+        // video.error가 없으면(=codeLabel 'timeout') 디코드가 실패한 게 아니라
+        // 애초에 src가 안 붙었거나 응답이 안 온 것이다. 코덱 탓으로 안내하면 오진이므로
+        // 두 경우를 구분해서 메시지를 낸다. (실제로 서버 이벤트루프 스톨이 이 메시지로 둔갑한 전례가 있음)
+        if (code == null) {
+          message.error(
+            !curSrc
+              ? `녹화 영상 소스를 붙이지 못했습니다 — 파일을 받아오지 못한 것으로 보입니다: ${pending.recUrl}`
+              : `녹화 영상이 10초 안에 로드되지 않았습니다 (서버 응답 지연 또는 파일 접근 실패): ${pending.recUrl}`
+          );
+        } else {
+          message.error(`녹화 영상을 로드하지 못했습니다 (${codeLabel}). 파일이 손상되었거나 브라우저가 지원하지 않는 코덱일 수 있습니다 — 재녹화 후 다시 시도하세요.`);
+        }
         pendingSeekRef.current = null;
         return;  // 100 * 100ms = 10s
       }
@@ -604,6 +645,22 @@ export default function ResultsPage() {
           console.error('[video] blob empty — recording file likely missing or zero bytes', { url: activeRecUrl });
           message.error('녹화 파일이 비어 있습니다 (0 bytes)');
           setActiveRecBlobUrl('');
+          // 보류 중인 seek를 반드시 취소한다. 안 그러면 src가 영영 안 붙은 채
+          // tryApplyPendingSeek가 10초간 폴링하다 "코덱 문제" 오진 메시지를 띄운다.
+          cancelPendingSeek();
+          return;
+        }
+        // 서버가 영상 대신 HTML(SPA catch-all/에러페이지)을 돌려준 경우 —
+        // blob은 만들어지지만 디코드가 불가능해 원인 불명의 timeout으로 보인다.
+        // allow-list가 아니라 deny-list로 판정한다 — 서버/OS에 따라 video mime이
+        // 비어 오거나 낯선 값일 수 있어 정상 파일을 거부하면 안 된다.
+        if (/^(text\/|application\/(json|xhtml))/.test(contentType)) {
+          console.error('[video] unexpected content-type — not a video response',
+            { url: activeRecUrl, contentType });
+          message.error(`녹화 파일 대신 다른 응답을 받았습니다 (content-type: ${contentType}). `
+            + `URL이 서버로 전달되지 않았을 수 있습니다: ${activeRecUrl}`);
+          setActiveRecBlobUrl('');
+          cancelPendingSeek();
           return;
         }
         console.log('[video] blob loaded', { url: activeRecUrl, size: blob.size, contentType });
@@ -613,7 +670,8 @@ export default function ResultsPage() {
       })
       .catch(err => {
         if (cancelled) return;
-        console.warn('[video] blob fetch failed, falling back to direct URL', err);
+        console.warn('[video] blob fetch failed, falling back to direct URL',
+          { url: activeRecUrl, error: String(err) });
         // 실패 시 직접 URL 사용 (seek 안 될 수 있지만 재생은 됨)
         setActiveRecBlobUrl(activeRecUrl);
       });
@@ -891,78 +949,110 @@ export default function ResultsPage() {
 
     if (!detail || !detailFilename) return;
 
+    // 폴링 대상 수집. 에이징 런은 BG_TASK 스텝이 수백 개라, 예전처럼 스텝마다
+    // setInterval을 만들면 초당 수백 개의 XHR이 동시에 뜬다 → 브라우저 소켓 고갈
+    // (ERR_INSUFFICIENT_RESOURCES) → 이미지/영상/`/api/health`까지 전부 실패해서
+    // "서버가 죽은 것처럼" 보인다. 타이머는 **하나**만 두고 동시 요청 수를 제한한다.
+    const pending: { taskId: string; idx: number }[] = [];
     detail.step_results.forEach((sr, idx) => {
       const bgMatch = sr.message?.match?.(/\[BG_TASK:(bg_\d+)\]/);
-      if (!bgMatch) return;
+      if (bgMatch) pending.push({ taskId: bgMatch[1], idx });
+    });
+    if (pending.length === 0) return;
 
-      const taskId = bgMatch[1];
-      // 즉시 "실행 중" 표시
+    // "실행 중" 표시는 한 번의 setDetail로 일괄 적용 (스텝마다 렌더 유발 금지)
+    const runningMsg = `⏳ ${t('record.cmdRunning')}...`;
+    setDetail(prev => {
+      if (!prev) return prev;
+      const updated = { ...prev, step_results: [...prev.step_results] };
+      pending.forEach(({ idx }) => {
+        updated.step_results[idx] = { ...updated.step_results[idx], message: runningMsg };
+      });
+      return updated;
+    });
+
+    const MAX_INFLIGHT = 6;
+    const alive = new Map(pending.map(p => [p.taskId, p.idx]));
+    let roundRunning = false;
+
+    const applyFinal = (idx: number, finalMsg: string,
+                        finalStatus: 'pass' | 'fail' | null | undefined) => {
       setDetail(prev => {
         if (!prev) return prev;
         const updated = { ...prev, step_results: [...prev.step_results] };
-        updated.step_results[idx] = { ...updated.step_results[idx], message: `⏳ ${t('record.cmdRunning')}...` };
+        const step = updated.step_results[idx];
+        const newStatus = finalStatus ?? step.status;
+        updated.step_results[idx] = { ...step, message: finalMsg, status: newStatus };
+
+        // status가 fail로 바뀐 경우 카운트 재계산
+        if (finalStatus === 'fail' && step.status !== 'fail') {
+          updated.failed_steps += 1;
+          if (step.status === 'pass') updated.passed_steps = Math.max(0, updated.passed_steps - 1);
+          else if (step.status === 'warning') updated.warning_steps = Math.max(0, updated.warning_steps - 1);
+          if (updated.failed_steps > 0 || updated.error_steps > 0) updated.status = 'fail';
+        }
+
+        // 백엔드에 영구 저장 (서버가 동시 요청을 합쳐서 1회 기록한다)
+        resultsApi.updateStepResult(detailFilename, idx, finalMsg, newStatus).catch(() => {});
         return updated;
       });
+    };
 
-      const poll = setInterval(async () => {
-        try {
-          const r = await scenarioApi.getCmdResult(taskId);
-          if (r.data.status === 'running') {
-            // 라이브 업데이트: 누적 stdout을 계속 반영 (send_command_stream)
-            const liveStdout = r.data.stdout ?? '';
-            if (liveStdout) {
-              setDetail(prev => {
-                if (!prev) return prev;
-                const updated = { ...prev, step_results: [...prev.step_results] };
-                updated.step_results[idx] = { ...updated.step_results[idx], message: liveStdout };
-                return updated;
-              });
-            }
-            return;
-          }
-          clearInterval(poll);
-
-          // 서버가 계산한 final_message/final_status 사용
-          const finalMsg = r.data.final_message ?? r.data.stdout ?? '';
-          const finalStatus = r.data.final_status as 'pass' | 'fail' | null | undefined;
-
-          setDetail(prev => {
-            if (!prev) return prev;
-            const updated = { ...prev, step_results: [...prev.step_results] };
-            const step = updated.step_results[idx];
-            const newStatus = finalStatus ?? step.status;
-            updated.step_results[idx] = { ...step, message: finalMsg, status: newStatus };
-
-            // status가 fail로 바뀐 경우 카운트 재계산
-            if (finalStatus === 'fail' && step.status !== 'fail') {
-              updated.failed_steps += 1;
-              if (step.status === 'pass') updated.passed_steps = Math.max(0, updated.passed_steps - 1);
-              else if (step.status === 'warning') updated.warning_steps = Math.max(0, updated.warning_steps - 1);
-              if (updated.failed_steps > 0 || updated.error_steps > 0) updated.status = 'fail';
-            }
-
-            // 백엔드에 영구 저장
-            resultsApi.updateStepResult(detailFilename, idx, finalMsg, newStatus).catch(() => {});
-            return updated;
-          });
-        } catch (err: any) {
-          clearInterval(poll);
-          // 404 = 태스크가 서버 메모리에 없음 (서버 재시작 등)
-          if (err?.response?.status === 404) {
-            const lostMsg = `[BG_TASK:${taskId}] 결과 소실 (서버 재시작)`;
+    const pollOne = async (taskId: string, idx: number) => {
+      try {
+        const r = await scenarioApi.getCmdResult(taskId);
+        if (r.data.status === 'running') {
+          const liveStdout = r.data.stdout ?? '';
+          if (liveStdout) {
             setDetail(prev => {
               if (!prev) return prev;
               const updated = { ...prev, step_results: [...prev.step_results] };
-              updated.step_results[idx] = { ...updated.step_results[idx], message: lostMsg };
+              updated.step_results[idx] = { ...updated.step_results[idx], message: liveStdout };
               return updated;
             });
-            resultsApi.updateStepResult(detailFilename, idx, lostMsg).catch(() => {});
           }
+          return;  // 계속 추적
         }
-      }, 1000);
-      bgPollTimers.current.push(poll);
-      bgPollTaskIds.current.push(taskId);
-    });
+        alive.delete(taskId);
+        bgPollTaskIds.current = bgPollTaskIds.current.filter(id => id !== taskId);
+        applyFinal(idx, r.data.final_message ?? r.data.stdout ?? '',
+                   r.data.final_status as 'pass' | 'fail' | null | undefined);
+      } catch (err: any) {
+        // 404 = 태스크가 서버 메모리에 없음 (서버 재시작 등) — 영구 실패라 즉시 포기.
+        // 그 외(네트워크 오류 등)도 재시도하지 않는다. 재시도 폭주가 바로 이 버그의 원인이었다.
+        alive.delete(taskId);
+        bgPollTaskIds.current = bgPollTaskIds.current.filter(id => id !== taskId);
+        if (err?.response?.status === 404) {
+          const lostMsg = `[BG_TASK:${taskId}] 결과 소실 (서버 재시작)`;
+          setDetail(prev => {
+            if (!prev) return prev;
+            const updated = { ...prev, step_results: [...prev.step_results] };
+            updated.step_results[idx] = { ...updated.step_results[idx], message: lostMsg };
+            return updated;
+          });
+          resultsApi.updateStepResult(detailFilename, idx, lostMsg).catch(() => {});
+        }
+      }
+    };
+
+    const tick = async () => {
+      if (roundRunning) return;          // 이전 라운드가 안 끝났으면 건너뛴다
+      if (alive.size === 0) { stopAllResultBgPolls(false); return; }
+      roundRunning = true;
+      try {
+        const entries = [...alive.entries()];
+        for (let i = 0; i < entries.length; i += MAX_INFLIGHT) {
+          const chunk = entries.slice(i, i + MAX_INFLIGHT);
+          await Promise.all(chunk.map(([tid, idx]) => pollOne(tid, idx)));
+        }
+      } finally {
+        roundRunning = false;
+      }
+    };
+
+    const poll = setInterval(tick, 1000);
+    bgPollTimers.current.push(poll);
+    pending.forEach(p => bgPollTaskIds.current.push(p.taskId));
 
     return () => {
       stopAllResultBgPolls();
