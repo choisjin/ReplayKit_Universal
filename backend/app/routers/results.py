@@ -1606,6 +1606,20 @@ def trim_recording(   # sync def: ffmpeg subprocess 가 블로킹이라 스레�
     end: float = Query(...),
 ):
     """Trim a webcam recording (requires ffmpeg). 결과는 원본과 같은 폴더에 저장."""
+    # 예상 못한 예외가 평문 "Internal Server Error"로 나가면 원인을 알 수 없다.
+    # 여기서 트레이스백을 backend.log 에 남기고 예외 종류/메시지를 응답에 실어준다.
+    try:
+        return _trim_recording_impl(filename, start, end)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[trim] 예상 못한 오류 (filename=%r start=%s end=%s)",
+                         filename, start, end)
+        raise HTTPException(status_code=500,
+                            detail=f"구간 저장 실패: {type(e).__name__}: {e}")
+
+
+def _trim_recording_impl(filename: str, start: float, end: float) -> dict:
     filepath = _resolve_recording(filename)
     if filepath is None:
         raise HTTPException(status_code=404, detail="Recording not found")
