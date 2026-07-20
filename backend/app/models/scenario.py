@@ -107,6 +107,10 @@ class CropItem(BaseModel):
     roi: Optional[ROI] = None  # crop region on the source screenshot
 
 
+#: 조건부이동의 '재생 종료' 센티널. (레거시 정수 표현 -1 을 대체)
+GOTO_END = "END"
+
+
 def _new_step_uid() -> str:
     """스텝 고유 식별자 생성 (파일명에 그대로 쓸 수 있는 8자리 hex)."""
     import uuid
@@ -129,8 +133,11 @@ class Step(BaseModel):
     description: str = ""
     roi: Optional[ROI] = None  # optional region for verification
     similarity_threshold: float = 0.95
-    on_pass_goto: Optional[int] = None  # step ID to jump to on pass (None = next)
-    on_fail_goto: Optional[int] = None  # step ID to jump to on fail (None = next)
+    # 조건부이동 대상 — 대상 스텝의 **uid**. None = 다음 스텝, GOTO_END("END") = 재생 종료.
+    # ⚠️ 위치(step.id)가 아니다. 스텝을 삽입/삭제해도 원래 가리키던 스텝을 계속 가리킨다.
+    #    레거시 정수값은 로드 시 _migrate_step_identity 가 uid 로 변환한다.
+    on_pass_goto: Optional[str] = None
+    on_fail_goto: Optional[str] = None
     # 조건부이동 '결과 미반영' — 체크 시 해당 방향(pass/fail) 결과를 최종 집계·시나리오
     # 통과/실패 판정에서 제외하고 Status를 '분기'로 표시 (점프 분기 판단엔 실제 결과 사용)
     exclude_pass_from_result: bool = False

@@ -1,0 +1,10 @@
+# 개발/테스트 전용 의존성.
+# 런타임에는 불필요하므로 backend/requirements.txt 와 분리한다
+# (.deb 배포본에 테스트 의존성이 딸려가지 않도록).
+#
+# 설치:  python -m pip install -r requirements-dev.txt
+# 실행:  python -m pytest test/ -q
+
+-r backend/requirements.txt
+
+pytest>=8.0

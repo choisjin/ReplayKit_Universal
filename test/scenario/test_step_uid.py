@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from backend.app.models.scenario import LoopRange, Scenario, Step, StepType
+from backend.app.models.scenario import GOTO_END, LoopRange, Scenario, Step, StepType
 import backend.app.services.recording_service as rs
 
 
@@ -110,6 +110,56 @@ def test_legacy_image_refs_are_not_renamed(svc, tmp_path):
 
 
 # ----------------------------------------------------------------------
+# 레거시 goto(정수 step.id) → uid 변환
+# ----------------------------------------------------------------------
+
+LEGACY_GOTO = {
+    "name": "G",
+    "steps": [
+        {"id": 1, "type": "wait", "params": {}, "on_pass_goto": 3},
+        {"id": 2, "type": "wait", "params": {}},
+        {"id": 3, "type": "wait", "params": {}, "on_fail_goto": -1},
+        {"id": 4, "type": "wait", "params": {}, "on_pass_goto": 99},
+    ],
+}
+
+
+def test_legacy_int_goto_converted_to_uid(svc, tmp_path):
+    write_scenario_json(tmp_path, "G", LEGACY_GOTO)
+    sc = asyncio.run(svc.load_scenario("G"))
+
+    # 1번의 goto 는 '3번 스텝'을 가리켰으므로 그 스텝의 uid 여야 한다
+    assert sc.steps[0].on_pass_goto == sc.steps[2].uid
+
+
+def test_legacy_end_sentinel_converted(svc, tmp_path):
+    write_scenario_json(tmp_path, "G", LEGACY_GOTO)
+    sc = asyncio.run(svc.load_scenario("G"))
+    assert sc.steps[2].on_fail_goto == GOTO_END
+
+
+def test_legacy_dangling_goto_becomes_none(svc, tmp_path):
+    """존재하지 않는 id 를 가리키던 goto 는 비운다."""
+    write_scenario_json(tmp_path, "G", LEGACY_GOTO)
+    sc = asyncio.run(svc.load_scenario("G"))
+    assert sc.steps[3].on_pass_goto is None
+
+
+def test_goto_migration_is_persisted_and_idempotent(svc, tmp_path):
+    """변환 결과가 저장되고, 재로드해도 uid 가 그대로여야 한다."""
+    write_scenario_json(tmp_path, "G", LEGACY_GOTO)
+    first = asyncio.run(svc.load_scenario("G"))
+    target = first.steps[0].on_pass_goto
+
+    saved = json.loads((tmp_path / "scenarios" / "G.json").read_text(encoding="utf-8"))
+    assert saved["steps"][0]["on_pass_goto"] == target
+
+    second = asyncio.run(svc.load_scenario("G"))
+    assert second.steps[0].on_pass_goto == target
+    assert second.steps[0].on_pass_goto == second.steps[2].uid
+
+
+# ----------------------------------------------------------------------
 # uid 중복 — 스텝 복사/붙여넣기가 uid 까지 복제하는 경우
 # ----------------------------------------------------------------------
 
@@ -156,23 +206,51 @@ def test_uid_unaffected_by_reindexing():
     assert [s.id for s in steps] == [1, 2, 3, 4]
 
 
-@pytest.mark.xfail(
-    reason="2b 미완료: on_pass_goto 가 step.id(위치) 기준이라 삽입 시 대상이 밀린다",
-    strict=True,
-)
 def test_goto_survives_step_insertion():
     """1번이 3번을 가리키는 상태에서 맨 앞에 스텝을 삽입해도
-    여전히 '원래 그 스텝'을 가리켜야 한다."""
-    s1, s2, s3 = mk_step(1, on_pass_goto=3), mk_step(2), mk_step(3)
-    target_uid = s3.uid
+    여전히 '원래 그 스텝'을 가리켜야 한다. (2b 의 존재 이유)"""
+    s1, s2, s3 = mk_step(1), mk_step(2), mk_step(3)
+    s1.on_pass_goto = s3.uid
     steps = [s1, s2, s3]
 
     steps.insert(0, mk_step(0))
+    reindex(steps)   # s3 의 id 는 3 → 4 로 밀림
+
+    resolved = next(s for s in steps if s.uid == s1.on_pass_goto)
+    assert resolved is s3
+    assert resolved.id == 4, "삽입으로 위치는 밀렸지만 참조는 그대로여야 한다"
+
+
+def test_goto_survives_step_deletion_of_unrelated_step():
+    """관계없는 앞 스텝을 지워도 대상은 유지된다."""
+    s1, s2, s3 = mk_step(1), mk_step(2), mk_step(3)
+    s1.on_fail_goto = s3.uid
+    steps = [s1, s2, s3]
+
+    steps.remove(s2)
     reindex(steps)
 
-    # id 기준이면 on_pass_goto=3 이 이제 s2(새 id 3)를 가리킨다 → 오작동
-    resolved = next(s for s in steps if s.id == s1.on_pass_goto)
-    assert resolved.uid == target_uid
+    assert next(s for s in steps if s.uid == s1.on_fail_goto) is s3
+
+
+def test_goto_survives_reorder():
+    s1, s2, s3 = mk_step(1), mk_step(2), mk_step(3)
+    s1.on_pass_goto = s3.uid
+    steps = [s1, s3, s2]          # 순서 변경
+    reindex(steps)
+
+    assert next(s for s in steps if s.uid == s1.on_pass_goto) is s3
+
+
+def test_goto_to_deleted_step_becomes_unresolvable():
+    """대상 스텝이 삭제되면 참조는 해결 불가 상태가 되고,
+    재생 시 _resolve_next_index 가 자연 진행으로 폴백한다."""
+    s1, s2 = mk_step(1), mk_step(2)
+    s1.on_pass_goto = s2.uid
+    steps = [s1]                  # s2 삭제
+    reindex(steps)
+
+    assert not any(s.uid == s1.on_pass_goto for s in steps)
 
 
 @pytest.mark.xfail(

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from ..models.scenario import ROI, Scenario, Step, StepType
+from ..models.scenario import GOTO_END, ROI, Scenario, Step, StepType
 from .adb_service import ADBService
 from .device_manager import DeviceManager
 
@@ -61,6 +61,62 @@ def _dedupe_step_uids(scenario: "Scenario") -> bool:
             s.uid = _new_step_uid()
             changed = True
         seen.add(s.uid)
+    return changed
+
+
+def _migrate_step_identity(data: dict) -> bool:
+    """스텝 식별자 마이그레이션 — pydantic 파싱 **이전에** raw dict 위에서 수행한다.
+
+    파싱 전에 해야 하는 이유:
+      · uid 는 Step 의 default_factory 가 채우지만, 저장하지 않으면 로드마다 새 값이
+        부여되어 uid 기반 파일명이 매번 고아가 된다. 여기서 확정해 영속화한다.
+      · on_pass_goto/on_fail_goto 는 이제 uid 문자열이라, 레거시 정수값을 그대로
+        넘기면 pydantic 검증에서 실패한다. 정수 → uid 변환이 파싱보다 앞서야 한다.
+
+    수행 순서가 중요하다: ① uid 부여/중복제거 → ② uid 표(id→uid) 작성 → ③ goto 변환.
+    변경이 있었으면 True (호출자가 반드시 1회 저장해야 한다).
+    """
+    from ..models.scenario import _new_step_uid
+
+    steps = [s for s in data.get("steps", []) if isinstance(s, dict)]
+    if not steps:
+        return False
+
+    changed = False
+
+    # ① uid 부여 + 중복 제거 (복사/붙여넣기로 uid 가 복제될 수 있음)
+    seen: set[str] = set()
+    for s in steps:
+        uid = s.get("uid")
+        if not uid or not isinstance(uid, str) or uid in seen:
+            s["uid"] = _new_step_uid()
+            changed = True
+        seen.add(s["uid"])
+
+    # ② 레거시 goto(정수 step.id) → uid 변환용 표.
+    #    레거시 시나리오에서 step.id 는 항상 1-based 위치였다.
+    uid_by_id: dict[int, str] = {}
+    for s in steps:
+        try:
+            uid_by_id[int(s.get("id"))] = s["uid"]
+        except (TypeError, ValueError):
+            continue
+
+    # ③ goto 변환. -1(END 센티널) → "END", 대상 없음 → None(자연 진행).
+    for s in steps:
+        for key in ("on_pass_goto", "on_fail_goto"):
+            g = s.get(key)
+            if g is None or isinstance(g, str):
+                continue  # 이미 uid/"END" 이거나 미설정
+            try:
+                gi = int(g)
+            except (TypeError, ValueError):
+                s[key] = None
+                changed = True
+                continue
+            s[key] = GOTO_END if gi == -1 else uid_by_id.get(gi)
+            changed = True
+
     return changed
 
 
@@ -338,15 +394,14 @@ class RecordingService:
             data = json.loads(filepath.read_text(encoding="utf-8"))
             # 레거시 cmd_send / cmd_check → module_command CMD.* 로 자동 마이그레이션
             migrated = _migrate_legacy_step_types(data)
-            # uid 없는 레거시 스텝 감지 — Step 모델의 default_factory 가 채워주지만,
-            # 저장하지 않으면 로드할 때마다 새 uid 가 부여되어 uid 기반 파일명이 고아가 된다.
-            # 따라서 '원본 JSON 에 uid 가 없었다'를 여기서 판정해 반드시 1회 영속화한다.
-            uid_added = any("uid" not in s for s in data.get("steps", []) if isinstance(s, dict))
+            # 스텝 식별자(uid) 부여 + 레거시 goto(정수) → uid 변환.
+            # 반드시 파싱 전에 raw dict 에서 수행한다 (_migrate_step_identity 주석 참조).
+            identity_migrated = _migrate_step_identity(data)
             scenario = Scenario(**data)
             deduped = _dedupe_step_uids(scenario)
             # 이미지 참조 자동 수리: 파일이 없으면 폴더 내에서 같은 step ID 파일 탐색
             changed = self._repair_image_refs(name, scenario)
-            return scenario, (changed or migrated or uid_added or deduped)
+            return scenario, (changed or migrated or identity_migrated or deduped)
 
         scenario, needs_save = await asyncio.to_thread(_load_sync)
         if needs_save:

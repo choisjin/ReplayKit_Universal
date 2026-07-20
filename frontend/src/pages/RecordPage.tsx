@@ -54,6 +54,22 @@ const SortableStepItem = ({ id, index, isDark, loopStyle, children }: { id: stri
 // 백엔드 로직은 그대로 유지되며 UI 체크박스만 숨긴다.
 const BRANCH_MODE_ENABLED = true;
 
+/** 조건부이동의 '재생 종료' 센티널 (백엔드 GOTO_END 와 동일 값). */
+const GOTO_END = 'END';
+
+/** 스텝 고유 ID 생성 — 백엔드 _new_step_uid 와 같은 형식(8자리 hex).
+ *  클라이언트에서 만든 스텝도 즉시 uid 를 가져야 조건부이동 대상으로 지정할 수 있다.
+ *  (백엔드는 저장 시 중복만 재부여하므로 유일하면 이 값이 그대로 유지된다) */
+const newStepUid = (): string =>
+  Array.from({ length: 8 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+
+/** 조건부이동 대상 uid → 1-based 표시 위치. 대상이 없으면(삭제됨) null. */
+const gotoPos = (steps: { uid?: string }[], target: string | null | undefined): number | null => {
+  if (target == null || target === GOTO_END) return null;
+  const i = steps.findIndex((s) => s.uid === target);
+  return i < 0 ? null : i + 1;
+};
+
 // CANAT.CAN_PANEL 파라미터 UI 정의 (스텝 생성 폼 + 커맨드 수정 모달 공용).
 //   state/cycle_time/bus_channel/message_type → 드롭다운
 //   x/y/width/height → 숨김 (모니터 크롭 버튼으로만 설정)
@@ -163,7 +179,7 @@ const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExcl
   step: Step;
   index: number;
   steps: Step[];
-  onUpdate: (index: number, field: 'on_pass_goto' | 'on_fail_goto', value: number | null) => void;
+  onUpdate: (index: number, field: 'on_pass_goto' | 'on_fail_goto', value: string | null) => void;
   onToggleExclude: (index: number, field: 'exclude_pass_from_result' | 'exclude_fail_from_result', value: boolean) => void;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
   // 이 스텝이 구간반복 내부면 그 범위(1-based). 구간 밖/END로 나가는 점프는 비활성화.
@@ -193,11 +209,11 @@ const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExcl
         style={{ width: 120 }}
       >
         {steps.map((_s, i) => (
-          <Option key={i} value={i + 1} disabled={i === index || outOfLoop(i + 1)}>
+          <Option key={_s.uid ?? i} value={_s.uid} disabled={i === index || outOfLoop(i + 1)}>
             #{i + 1} {_s.type}
           </Option>
         ))}
-        <Option value={-1} disabled={!!loopRange}>{t('record.end')}</Option>
+        <Option value={GOTO_END} disabled={!!loopRange}>{t('record.end')}</Option>
       </Select>
       {BRANCH_MODE_ENABLED && (
         <Tooltip title={t('scenario.excludeResultTooltip')}>
@@ -219,11 +235,11 @@ const JumpEditorInner = React.memo(({ step, index, steps, onUpdate, onToggleExcl
         style={{ width: 120 }}
       >
         {steps.map((_s, i) => (
-          <Option key={i} value={i + 1} disabled={i === index || outOfLoop(i + 1)}>
+          <Option key={_s.uid ?? i} value={_s.uid} disabled={i === index || outOfLoop(i + 1)}>
             #{i + 1} {_s.type}
           </Option>
         ))}
-        <Option value={-1} disabled={!!loopRange}>{t('record.end')}</Option>
+        <Option value={GOTO_END} disabled={!!loopRange}>{t('record.end')}</Option>
       </Select>
       {BRANCH_MODE_ENABLED && (
         <Tooltip title={t('scenario.excludeResultTooltip')}>
@@ -252,8 +268,10 @@ interface Step {
   delay_after_ms: number;
   description: string;
   expected_image: string | null;
-  on_pass_goto?: number | null;
-  on_fail_goto?: number | null;
+  // 조건부이동 대상 = 대상 스텝의 uid. null=다음, GOTO_END=종료.
+  // 위치(id)가 아니므로 스텝을 삽입/삭제해도 재매핑이 필요 없다.
+  on_pass_goto?: string | null;
+  on_fail_goto?: string | null;
   exclude_pass_from_result?: boolean;  // 조건부이동 결과 미반영(Pass) → Status '분기'
   exclude_fail_from_result?: boolean;  // 조건부이동 결과 미반영(Fail) → Status '분기'
   roi?: ROI | null;
@@ -523,6 +541,8 @@ export default function RecordPage() {
   const [loops, setLoops] = useState<LoopRange[]>([]);
   const loopsRef = useRef<LoopRange[]>(loops);
   loopsRef.current = loops; // 콜백(updateStepJump)에서 최신 loops 참조용
+  const stepsRef = useRef<Step[]>([]);
+  stepsRef.current = steps;  // 콜백에서 uid → 현재 위치 해석용 (loopsRef 와 동일 패턴)
   const savedLoopsRef = useRef<string>('[]');
   // 구간반복 모달 상태
   const [loopModalOpen, setLoopModalOpen] = useState(false);
@@ -1512,6 +1532,7 @@ export default function RecordPage() {
       // Optimistic UI: show step immediately
       const tempId = steps.length + 1;
       const optimisticStep: Step = {
+        uid: newStepUid(),
         id: tempId, type: resolvedAction, device_id: targetDevice,
         params: resolvedParams, delay_after_ms: delayMs, description: desc, expected_image: null,
       };
@@ -1828,6 +1849,7 @@ export default function RecordPage() {
     if (recording) {
       const tempId = (steps[steps.length - 1]?.id || 0) + 1;
       const optimisticStep: Step = {
+        uid: newStepUid(),
         id: tempId, type: action, device_id: 'WinControl',
         params: enrichedParams, delay_after_ms: delayMs, description: desc, expected_image: null,
       };
@@ -2051,6 +2073,7 @@ export default function RecordPage() {
     };
     const tempId = (steps[steps.length - 1]?.id || 0) + 1;
     const optimisticStep: Step = {
+      uid: newStepUid(),
       id: tempId, type: 'win_click_sequence', device_id: 'WinControl',
       params: enrichedParams, delay_after_ms: delayMs, description: desc, expected_image: null,
     };
@@ -4125,12 +4148,8 @@ export default function RecordPage() {
     return await syncFrontendStepsToBackend();
   };
 
-  // Helper: remap goto references after step reorder/delete
-  const remapGoto = (val: number | null | undefined, mapping: Map<number, number>): number | null | undefined => {
-    if (val == null) return val;
-    if (val === -1) return -1; // END stays END
-    return mapping.get(val) ?? null; // removed target → clear
-  };
+  // 조건부이동은 uid 참조라 삽입/삭제/순서변경 후 재매핑이 불필요하다.
+  // (예전에는 remapGoto/remapOrNull/산술시프트 3종이 제각기 존재했고 서로 동작이 달랐다)
 
   // Step editing helpers
   const deleteStep = async (index: number) => {
@@ -4157,8 +4176,6 @@ export default function RecordPage() {
       return filtered.map((s, i) => ({
         ...s,
         id: i + 1,
-        on_pass_goto: remapGoto(s.on_pass_goto, mapping),
-        on_fail_goto: remapGoto(s.on_fail_goto, mapping),
       }));
     });
     setLoops((prev) => remapLoopsOnDelete(prev, index));
@@ -4184,8 +4201,6 @@ export default function RecordPage() {
       reordered = arr.map((s, i) => ({
         ...s,
         id: i + 1,
-        on_pass_goto: remapGoto(s.on_pass_goto, posMapping),
-        on_fail_goto: remapGoto(s.on_fail_goto, posMapping),
       }));
       return reordered;
     });
@@ -4427,12 +4442,11 @@ export default function RecordPage() {
           newIdx += 1;
         });
 
-        const remapOrNull = (v: number | null | undefined): number | null | undefined => {
-          if (v == null || v === -1) return v;
-          const mapped = posMap.get(v);
-          if (mapped === -1 || mapped === undefined) return null; // 이동된 스텝 참조 → 끊기
-          return mapped;
-        };
+        // goto 는 uid 참조라 재매핑이 필요 없다. 다만 다른 시나리오로 이동해
+        // 사라진 스텝을 가리키는 참조는 끊어 둔다(남겨도 재생 시 자연 진행으로 폴백).
+        const aliveUids = new Set(finalArr.map((s) => s.uid).filter(Boolean));
+        const dropDangling = (v: string | null | undefined): string | null | undefined =>
+          (v == null || v === GOTO_END || aliveUids.has(v)) ? v : null;
 
         reordered = finalArr.map((s, i) => {
           // 이동된 스텝은 이미 goto 초기화됨
@@ -4442,8 +4456,8 @@ export default function RecordPage() {
           return {
             ...s,
             id: i + 1,
-            on_pass_goto: remapOrNull(s.on_pass_goto),
-            on_fail_goto: remapOrNull(s.on_fail_goto),
+            on_pass_goto: dropDangling(s.on_pass_goto),
+            on_fail_goto: dropDangling(s.on_fail_goto),
           };
         });
         return reordered;
@@ -4516,6 +4530,7 @@ export default function RecordPage() {
       desc = `wait ${opts.duration_ms || 1000}ms`;
     }
     const waitStep: Step = {
+      uid: newStepUid(),
       id: 0,
       type: 'wait',
       device_id: null,
@@ -4536,8 +4551,6 @@ export default function RecordPage() {
           return arr.map((s, i) => ({
             ...s,
             id: i + 1,
-            on_pass_goto: s.on_pass_goto != null && s.on_pass_goto !== -1 && s.on_pass_goto >= insertPos1Based ? s.on_pass_goto + 1 : s.on_pass_goto,
-            on_fail_goto: s.on_fail_goto != null && s.on_fail_goto !== -1 && s.on_fail_goto >= insertPos1Based ? s.on_fail_goto + 1 : s.on_fail_goto,
           }));
         });
         setLoops((prev) => shiftLoopsOnInsert(prev, insertPos1Based));
@@ -4576,8 +4589,6 @@ export default function RecordPage() {
         return arr.map((s, i) => ({
           ...s,
           id: i + 1,
-          on_pass_goto: s.on_pass_goto != null && s.on_pass_goto !== -1 && s.on_pass_goto >= insertPos1Based ? s.on_pass_goto + 1 : s.on_pass_goto,
-          on_fail_goto: s.on_fail_goto != null && s.on_fail_goto !== -1 && s.on_fail_goto >= insertPos1Based ? s.on_fail_goto + 1 : s.on_fail_goto,
         }));
       });
       setLoops((prev) => shiftLoopsOnInsert(prev, insertPos1Based));
@@ -4665,7 +4676,7 @@ export default function RecordPage() {
   // 구간 내 스텝의 조건부 이동(on_pass/fail_goto)이 구간 밖(또는 END)을 가리키면 설정 불가.
   // 반복 되감기는 자연 진행 시에만 동작하므로, 구간을 벗어나는 점프가 있으면
   // 반복 횟수가 보장되지 않는다. 구간 내부로만 향하는 점프는 정상 동작한다.
-  const loopJumpError = useMemo<{ step: number; target: number } | null>(() => {
+  const loopJumpError = useMemo<{ step: number; target: number | null } | null>(() => {
     if (!loopCandidate) return null;
     const { start, end } = loopCandidate;
     for (let pos = start; pos <= end; pos++) {
@@ -4673,14 +4684,18 @@ export default function RecordPage() {
       if (!st) continue;
       for (const g of [st.on_pass_goto, st.on_fail_goto]) {
         if (g == null) continue;
-        if (g === -1 || g < start || g > end) return { step: pos, target: g };
+        if (g === GOTO_END) return { step: pos, target: null };
+        const targetPos = gotoPos(steps, g);
+        // 대상이 삭제되어 없으면 재생 시 자연 진행이므로 구간을 깨지 않는다.
+        if (targetPos == null) continue;
+        if (targetPos < start || targetPos > end) return { step: pos, target: targetPos };
       }
     }
     return null;
   }, [loopCandidate, steps]);
 
-  const loopJumpErrorText = (e: { step: number; target: number }) =>
-    t('record.loopJumpEscape', { step: e.step, target: e.target === -1 ? 'END' : `#${e.target}` });
+  const loopJumpErrorText = (e: { step: number; target: number | null }) =>
+    t('record.loopJumpEscape', { step: e.step, target: e.target == null ? 'END' : `#${e.target}` });
 
   const confirmLoop = () => {
     if (!loopCandidate) { message.warning(t('record.loopSelectSteps')); return; }
@@ -4897,17 +4912,21 @@ export default function RecordPage() {
     );
   };
 
-  const updateStepJump = useCallback((index: number, field: 'on_pass_goto' | 'on_fail_goto', value: number | null) => {
+  const updateStepJump = useCallback((index: number, field: 'on_pass_goto' | 'on_fail_goto', value: string | null) => {
     // 이 스텝이 구간반복 내부라면, 구간 밖(또는 END)으로 나가는 조건부 이동은 금지.
     // (반복 되감기는 자연 진행 시에만 동작하므로 구간을 벗어나면 반복이 깨진다)
     if (value != null) {
       const pos = index + 1;
       const lp = loopsRef.current.find(l => pos >= l.start && pos <= l.end);
-      if (lp && (value === -1 || value < lp.start || value > lp.end)) {
-        message.error(t('record.loopJumpBlockedByLoop', {
-          start: lp.start, end: lp.end, target: value === -1 ? 'END' : `#${value}`,
-        }));
-        return;
+      if (lp) {
+        const targetPos = value === GOTO_END ? null : gotoPos(stepsRef.current, value);
+        const escapes = value === GOTO_END || targetPos == null || targetPos < lp.start || targetPos > lp.end;
+        if (escapes) {
+          message.error(t('record.loopJumpBlockedByLoop', {
+            start: lp.start, end: lp.end, target: value === GOTO_END ? 'END' : `#${targetPos ?? '?'}`,
+          }));
+          return;
+        }
       }
     }
     setSteps((prev) => prev.map((s, i) => i === index ? { ...s, [field]: value } : s));
@@ -5466,10 +5485,10 @@ export default function RecordPage() {
               <Tag color={s.type === 'wait' ? 'cyan' : s.type === 'module_command' ? 'geekblue' : s.type.startsWith('hkmc_') ? 'volcano' : undefined}>{s.type === 'module_command' ? (s.params.module || 'module_command') : s.type}</Tag>
               {s.screen_type && <Tag color="geekblue" style={{ margin: 0 }}>{s.screen_type}</Tag>}
               {s.on_pass_goto != null && (
-                <Tag color="green">P→{s.on_pass_goto === -1 ? 'END' : `#${s.on_pass_goto}`}</Tag>
+                <Tag color="green">P→{s.on_pass_goto === GOTO_END ? 'END' : `#${gotoPos(steps, s.on_pass_goto) ?? '?'}`}</Tag>
               )}
               {s.on_fail_goto != null && (
-                <Tag color="red">F→{s.on_fail_goto === -1 ? 'END' : `#${s.on_fail_goto}`}</Tag>
+                <Tag color="red">F→{s.on_fail_goto === GOTO_END ? 'END' : `#${gotoPos(steps, s.on_fail_goto) ?? '?'}`}</Tag>
               )}
               {s.expected_image && scenarioName && (() => {
                 // match_crop 는 단일크롭과 같은 데이터(roi+expected_image)를 갖지만

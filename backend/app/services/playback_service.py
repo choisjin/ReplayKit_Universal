@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 
-from ..models.scenario import CompareMode, Scenario, ScenarioResult, Step, StepResult, StepType, SubResult
+from ..models.scenario import GOTO_END, CompareMode, Scenario, ScenarioResult, Step, StepResult, StepType, SubResult
 
 
 def _set_sleep_block(block: bool):
@@ -526,7 +526,7 @@ class PlaybackService:
         idx: int,
         step,
         status: str,
-        step_by_id: dict[int, int],
+        step_by_uid: dict[str, int],
         loop_by_end_idx: dict[int, tuple[int, int]],
         loop_remaining: dict[int, int],
     ) -> tuple[int, bool]:
@@ -545,15 +545,15 @@ class PlaybackService:
         """
         next_idx = idx + 1
         if status == "pass" and step.on_pass_goto is not None:
-            if step.on_pass_goto == -1:
+            if step.on_pass_goto == GOTO_END:
                 return next_idx, True
-            target = step_by_id.get(step.on_pass_goto)
+            target = step_by_uid.get(step.on_pass_goto)
             if target is not None:
                 next_idx = target
         elif status in ("fail", "error") and step.on_fail_goto is not None:
-            if step.on_fail_goto == -1:
+            if step.on_fail_goto == GOTO_END:
                 return next_idx, True
-            target = step_by_id.get(step.on_fail_goto)
+            target = step_by_uid.get(step.on_fail_goto)
             if target is not None:
                 next_idx = target
 
@@ -630,10 +630,10 @@ class PlaybackService:
             started_at=started_at,
         )
 
-        # Build step lookup by ID for conditional jumps
-        step_by_id: dict[int, int] = {}
-        for i, s in enumerate(scenario.steps):
-            step_by_id[s.id] = i
+        # 조건부이동은 uid 기준(step.id 는 편집 때마다 재부여되므로 참조로 못 씀).
+        # 구간반복(loops)은 아직 step.id 기준이라 두 맵을 함께 만든다.
+        step_by_uid: dict[str, int] = {s.uid: i for i, s in enumerate(scenario.steps)}
+        step_by_id: dict[int, int] = {s.id: i for i, s in enumerate(scenario.steps)}
         loop_by_end_idx = self._build_loop_map(scenario, step_by_id)
         loop_remaining: dict[int, int] = {}  # start_idx -> 남은 추가 반복 횟수
 
@@ -676,7 +676,7 @@ class PlaybackService:
 
                 # 다음 스텝 결정 (조건부이동 + 구간반복) — 공유 로직
                 next_idx, _stop = self._resolve_next_index(
-                    idx, step, step_result.status, step_by_id, loop_by_end_idx, loop_remaining
+                    idx, step, step_result.status, step_by_uid, loop_by_end_idx, loop_remaining
                 )
                 if _stop:
                     break
@@ -740,10 +740,10 @@ class PlaybackService:
         else:
             self._run_output_dir_owned = False
 
-        # Build step lookup by ID for conditional jumps
-        step_by_id: dict[int, int] = {}  # step.id -> index
-        for i, s in enumerate(scenario.steps):
-            step_by_id[s.id] = i
+        # 조건부이동은 uid 기준(step.id 는 편집 때마다 재부여되므로 참조로 못 씀).
+        # 구간반복(loops)은 아직 step.id 기준이라 두 맵을 함께 만든다.
+        step_by_uid: dict[str, int] = {s.uid: i for i, s in enumerate(scenario.steps)}
+        step_by_id: dict[int, int] = {s.id: i for i, s in enumerate(scenario.steps)}
         loop_by_end_idx = self._build_loop_map(scenario, step_by_id)
         loop_remaining: dict[int, int] = {}  # start_idx -> 남은 추가 반복 횟수
 
@@ -783,7 +783,7 @@ class PlaybackService:
 
                 # 다음 스텝 결정 (조건부이동 + 구간반복) — 공유 로직
                 next_idx, _stop = self._resolve_next_index(
-                    idx, step, step_result.status, step_by_id, loop_by_end_idx, loop_remaining
+                    idx, step, step_result.status, step_by_uid, loop_by_end_idx, loop_remaining
                 )
                 if _stop:
                     break

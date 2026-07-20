@@ -16,7 +16,7 @@ from ..dependencies import adb_service as adb_svc
 from ..dependencies import device_manager as dm
 from ..dependencies import playback_service as playback_svc
 from ..dependencies import recording_service as recording_svc
-from ..models.scenario import ROI, CompareMode, CropItem, Scenario, StepType, _new_step_uid
+from ..models.scenario import GOTO_END, ROI, CompareMode, CropItem, Scenario, StepType, _new_step_uid
 from ..services.image_compare_service import ImageCompareService
 from ..services.recording_service import SCREENSHOTS_DIR
 
@@ -1088,28 +1088,23 @@ async def import_steps(req: ImportStepsRequest):
     # Move: 소스에서 선택된 스텝 제거 + 소스 저장 + 이미지 파일 정리
     if is_move and req.step_indices:
         remove_set = {i for i in req.step_indices if 0 <= i < len(source.steps)}
-        # 제거 후 id 재번호 + goto 참조 재매핑
-        remaining_pairs = [(i, s) for i, s in enumerate(source.steps) if i not in remove_set]
-        # old 1-based position → new 1-based position (제거된 것은 None)
-        pos_map: dict[int, Optional[int]] = {}
-        for new_idx, (old_idx, _s) in enumerate(remaining_pairs):
-            pos_map[old_idx + 1] = new_idx + 1
-        for old_idx in remove_set:
-            pos_map[old_idx + 1] = None
+        remaining = [s for i, s in enumerate(source.steps) if i not in remove_set]
+        # goto 는 uid 참조이므로 위치 재매핑이 필요 없다 (예전에는 pos_map 으로 일일이
+        # 다시 계산해야 했고, 그 계산이 프론트의 다른 두 구현과 어긋나 있었다).
+        # 다만 이동으로 사라진 스텝을 가리키던 참조는 JSON 정리를 위해 비운다.
+        # (비우지 않아도 재생 시 자연 진행으로 폴백하므로 동작상 안전하다)
+        alive = {s.uid for s in remaining}
 
-        def _remap_goto(g):
-            if g is None or g == -1:
-                return g
-            return pos_map.get(g, None)
+        def _drop_dangling(g):
+            return g if (g is None or g == GOTO_END or g in alive) else None
 
         new_steps = []
-        for new_idx, (_old_idx, s) in enumerate(remaining_pairs):
-            s_copy = s.model_copy(update={
+        for new_idx, s in enumerate(remaining):
+            new_steps.append(s.model_copy(update={
                 "id": new_idx + 1,
-                "on_pass_goto": _remap_goto(s.on_pass_goto),
-                "on_fail_goto": _remap_goto(s.on_fail_goto),
-            })
-            new_steps.append(s_copy)
+                "on_pass_goto": _drop_dangling(s.on_pass_goto),
+                "on_fail_goto": _drop_dangling(s.on_fail_goto),
+            }))
         source.steps = new_steps
         # 이동(move)으로 소스에서 스텝이 빠지면 device_map도 정리
         _prune_device_map(source)
