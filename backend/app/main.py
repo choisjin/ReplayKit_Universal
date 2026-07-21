@@ -91,10 +91,9 @@ async def _reconnect_loop():
             logger.debug("Reconnect loop error: %s", e)
 
 
-# 모듈/함수 사용 통계 캐시 — 관제 스냅샷은 2초마다 전송되므로 매번 재계산하면
-# 디스크 glob + 모듈 introspection 이 낭비다. 60초 TTL 로 캐시하고 compact 하게 보낸다.
+# 모듈/함수 사용 통계 캐시 — 서버 기동 시 1회만 계산해 여기에 담아두고,
+# 관제 스냅샷(_get_monitor_status)은 이 값을 읽기만 한다(계산 X).
 _usage_stats_cache: dict = {"data": None, "ts": 0.0}
-_USAGE_STATS_TTL = 60.0
 
 # ReplayKit UI(브라우저 창) 포커스 상태 — 프론트가 POST /api/monitor/ui-focus 로 보고한다.
 # 관제 activity 판정 우선순위: 재생중(playing) > 녹화중(recording) > 창 최상단 포커스(in_use) > 대기(idle).
@@ -146,26 +145,38 @@ def _compact_usage_stats(stats: dict | None) -> dict | None:
     }
 
 
-async def _usage_stats_refresh_loop():
-    """usage-stats 를 백그라운드에서 주기적으로 재계산해 캐시에 저장한다.
+async def _usage_stats_compute_once():
+    """usage-stats 를 서버 기동 후 **1회만** 계산해 캐시에 저장한다.
 
-    ⚠️ 관제 상태 콜백(_get_monitor_status)은 2초마다 호출되는데, 여기서 직접
-    _compute_usage_stats(디스크 glob + 모듈 introspection, 수초 소요 가능)를 await 하면
-    그 시간 동안 status_update 전송이 막혀 관제 대시보드가 "대기"로 멈춘다.
-    따라서 계산은 이 독립 루프에서만 수행하고, 콜백은 캐시값만 즉시 읽는다.
+    시나리오 목록은 실행 중 거의 바뀌지 않는데 전 시나리오 JSON 을 주기적으로 재파싱하는 것은
+    (특히 대형 시나리오가 많은 PC 에서) 디스크·CPU 낭비라 기동 시 1회만 계산한다.
+    → 관제 서버로 보고되는 함수통계는 **기동 시점 스냅샷**이다. 실행 중 시나리오를 추가/수정했다면
+      ReplayKit 을 재시작해야 관제에 반영된다.
+      (로컬 `#stats` 페이지는 /api/scenario/usage-stats 가 요청마다 새로 계산하므로 항상 최신)
+
+    ⚠️ 계산은 반드시 스레드로 오프로드 — 2초 관제 콜백이 막히면 대시보드가 '대기'로 굳는다.
     """
     from .routers.scenario import _compute_usage_stats
     import time as _time
-    # 서버 안정화 후 첫 계산 (재생/스캔 등 초기 부하와 겹치지 않게 약간 지연)
+    # 서버 안정화 후 계산 (초기 스캔/자동연결 부하와 겹치지 않게 약간 지연)
     await asyncio.sleep(8)
-    while True:
+    for attempt in range(1, 4):
         try:
             full = await asyncio.to_thread(_compute_usage_stats)
             _usage_stats_cache["data"] = _compact_usage_stats(full)
             _usage_stats_cache["ts"] = _time.monotonic()
+            s = _usage_stats_cache["data"] or {}
+            logger.info(
+                "usage-stats 계산 완료(기동 1회): 시나리오 %d개, 사용 모듈 %d개, 미사용 함수 %d개",
+                s.get("scenario_count", 0), len(s.get("modules", [])),
+                len(s.get("unused_functions", [])),
+            )
+            return
         except Exception as e:
-            logger.debug("usage-stats 백그라운드 계산 실패: %s", e)
-        await asyncio.sleep(_USAGE_STATS_TTL)
+            # 일시적 실패(디스크/모듈 로드)로 함수통계가 영구히 비지 않도록 몇 번만 재시도
+            logger.warning("usage-stats 계산 실패 (%d/3): %s", attempt, e)
+            await asyncio.sleep(10)
+    logger.warning("usage-stats 계산 최종 실패 — 관제 함수통계가 비어 있을 수 있습니다 (재시작 시 재시도)")
 
 
 async def _get_monitor_status() -> dict:
@@ -221,8 +232,9 @@ async def _get_monitor_status() -> dict:
     except Exception:
         scenarios = []
 
-    # 모듈/함수 사용 통계 — 백그라운드 루프(_usage_stats_refresh_loop)가 채운 캐시를
-    # 그대로 읽기만 한다(계산 X). 여기서 계산하면 2초 status 루프가 막혀 대시보드가 멈춘다.
+    # 모듈/함수 사용 통계 — 기동 시 1회(_usage_stats_compute_once) 채운 캐시를 읽기만 한다(계산 X).
+    # 여기서 계산하면 2초 status 루프가 막혀 대시보드가 멈춘다.
+    # 전송 측(monitor_client)은 generated_at 이 바뀔 때만 실제로 보내므로, 사실상 연결당 1회 전송된다.
     return {
         "activity": activity,
         "devices": devices,
@@ -436,9 +448,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug("SSH startup reconnect sweep: %s", e)
 
-    # usage-stats 백그라운드 재계산 루프 — 관제 상태 콜백이 계산을 직접 하지 않고
-    # 이 루프가 채운 캐시만 읽도록 분리(2초 status 루프 stall 방지).
-    usage_stats_task = asyncio.create_task(_usage_stats_refresh_loop())
+    # usage-stats 기동 1회 계산 — 관제 상태 콜백은 계산 없이 이 캐시만 읽는다
+    # (2초 status 루프 stall 방지 + 전 시나리오 주기적 재파싱 낭비 제거).
+    usage_stats_task = asyncio.create_task(_usage_stats_compute_once())
 
     # 관제 클라이언트 콜백 항상 등록 (URL은 나중에 Settings에서 설정 가능)
     monitor_client.set_status_callback(_get_monitor_status)

@@ -29,6 +29,10 @@ _MACHINE_UID_CACHE: Optional[str] = None
 _STATUS_LOG_EVERY = 30       # 성공 하트비트 — 30회 = 약 60초마다 1줄
 _STATUS_FAIL_LOG_EVERY = 15  # 연속 실패 — 15회 = 약 30초마다 1줄
 
+# 재생 중 전송 주기(초) — 테스트 PC 가 가장 바쁜 구간이라 보고 빈도를 낮춰 간섭을 줄인다.
+# 평상시(_status_interval=2s)보다 길지만 매니저의 오프라인 판정(45s)보다는 충분히 짧다.
+_STATUS_INTERVAL_PLAYING = 10.0
+
 
 def get_machine_uid() -> str:
     """하드웨어 기반의 **안정적** 머신 UID 를 반환한다.
@@ -314,11 +318,25 @@ class MonitorClient:
         sent = 0
         fail_count = 0
         last_activity: Optional[str] = None
+        # 이 연결에서 마지막으로 실제 전송한 usage_stats 의 generated_at.
+        # 재연결 시 새 태스크로 시작하므로 None 으로 리셋 → 첫 전송에 반드시 포함된다
+        # (매니저가 재시작해 상태를 잃었어도 복구됨).
+        last_usage_gen: Optional[str] = None
+        interval = self._status_interval
         try:
             while self._running:
                 if self._get_status_fn:
                     try:
                         status = await self._get_status_fn()
+                        # usage_stats 는 60초 주기로만 갱신된다 — 값이 그대로면 키를 통째로
+                        # 빼서 2초 페이로드를 줄인다. 매니저는 키가 없으면 마지막 값을 유지한다.
+                        # (아직 계산 전이라 None 일 때도 보내지 않는다 — 마지막 값을 덮어쓰지 않도록)
+                        us = status.get("usage_stats")
+                        gen = us.get("generated_at") if isinstance(us, dict) else None
+                        if us is None or (gen and gen == last_usage_gen):
+                            status.pop("usage_stats", None)
+                        elif gen:
+                            last_usage_gen = gen
                         status["type"] = "status_update"
                         status["client_id"] = self._client_id
                         status["name"] = self._client_name
@@ -330,24 +348,30 @@ class MonitorClient:
                             logger.info("관제 상태 전송 복구 (이전 실패 %d회)", fail_count)
                             fail_count = 0
                         act = status.get("activity")
+                        # 재생 중에는 주기를 늘려(10초) 테스트 PC 부하/간섭을 줄인다.
+                        interval = _STATUS_INTERVAL_PLAYING if act == "playing" else self._status_interval
                         if act != last_activity:
                             pb = status.get("playback") or {}
                             extra = ""
                             if pb:
                                 extra = (f" scenario={pb.get('scenario_name')}"
                                          f" cycle={pb.get('current_cycle')}/{pb.get('total_cycles')}")
-                            logger.info("관제 상태 전송: activity=%s%s (누적 %d회)", act, extra, sent)
+                            logger.info(
+                                "관제 상태 전송: activity=%s%s (주기 %.0fs, 누적 %d회)",
+                                act, extra, interval, sent,
+                            )
                             last_activity = act
                         elif sent % _STATUS_LOG_EVERY == 0:
                             logger.info("관제 상태 전송 중: activity=%s (누적 %d회)", act, sent)
                     except Exception as e:
+                        interval = self._status_interval  # 실패 시엔 기본 주기로 재시도
                         fail_count += 1
                         if fail_count == 1 or fail_count % _STATUS_FAIL_LOG_EVERY == 0:
                             logger.warning(
                                 "관제 상태 전송 실패 (%d회째) — 관제 대시보드가 '대기/오프라인'으로 굳습니다: %r",
                                 fail_count, e, exc_info=(fail_count == 1),
                             )
-                await asyncio.sleep(self._status_interval)
+                await asyncio.sleep(interval)
         except Exception:
             pass
 
