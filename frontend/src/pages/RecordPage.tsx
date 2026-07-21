@@ -6814,10 +6814,27 @@ export default function RecordPage() {
                       }}
                       size="small"
                       style={{ width: '100%' }}
-                      options={moduleFunctions.map(f => ({
-                        label: `${f.name}(${f.params.map(p => p.required ? p.name : p.name + '?').join(', ')})`,
-                        value: f.name,
-                      }))}
+                      optionFilterProp="label"
+                      options={moduleFunctions.map(f => {
+                        // 인자 시그니처 대신 설명을 붙인다(가독성/검색성). 설명은 첫 줄만.
+                        const desc = (f.description || '').split('\n')[0].trim();
+                        return {
+                          label: desc ? `${f.name} - ${desc}` : f.name,
+                          value: f.name,
+                          fnName: f.name,
+                          fnDesc: desc,
+                        };
+                      })}
+                      optionRender={(opt) => (
+                        <span style={{ display: 'flex', gap: 6, alignItems: 'baseline', minWidth: 0 }}>
+                          <span style={{ fontWeight: 600, flexShrink: 0 }}>{(opt.data as any).fnName}</span>
+                          {(opt.data as any).fnDesc && (
+                            <span style={{ color: subTextColor, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              - {(opt.data as any).fnDesc}
+                            </span>
+                          )}
+                        </span>
+                      )}
                     />
                     {selectedModuleFunc && (() => {
                       const fn = moduleFunctions.find(f => f.name === selectedModuleFunc);
