@@ -1799,6 +1799,27 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
                 raise ValueError("local_path is required (재생 중이 아니어서 런 폴더 자동 경로를 쓸 수 없음)")
             local_path = str(run_dir / "logs" / (posixpath.basename(remote_path) or "remote_folder"))
 
+        # 같은 이름의 폴더가 이미 (내용을 갖고) 있으면 _2, _3 … 을 붙여 새 폴더에 저장한다.
+        # 같은 스텝을 반복 실행/반복 재생해도 이전 수집분이 덮어써지지 않는다.
+        # 비어 있는 폴더(사용자가 미리 만들어 둔 경우)는 그대로 재사용.
+        def _unique_dir(base: str) -> str:
+            def _taken(p: str) -> bool:
+                if not os.path.exists(p):
+                    return False
+                if not os.path.isdir(p):
+                    return True  # 동명의 파일이 있으면 그 이름은 못 씀
+                return bool(os.listdir(p))
+            if not _taken(base):
+                return base
+            for n in range(2, 1000):
+                cand = f"{base}_{n}"
+                if not _taken(cand):
+                    return cand
+            import time as _time
+            return f"{base}_{_time.strftime('%Y%m%d_%H%M%S')}"
+
+        local_path = _unique_dir(local_path.rstrip("/\\"))
+
         sftp = client.open_sftp()
         try:
             st = sftp.stat(remote_path)

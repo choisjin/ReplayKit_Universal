@@ -1140,7 +1140,7 @@
         "description": "Recursively downloads an entire folder (including subfolders) from the remote device to the PC via SFTP. Non-regular files such as symlinks are skipped. If some files fail, returns a 'FAIL:' prefix so the step is judged as fail.",
         "params": {
           "remote_path": "Folder path on remote device. e.g. '/var/log'",
-          "local_path": "Destination folder path on PC. If empty during playback, saved automatically under the run folder's logs/ with the remote folder name"
+          "local_path": "Destination folder path on PC. If empty during playback, saved automatically under the run folder's logs/ with the remote folder name. If a folder with the same name already has content, it is NOT overwritten — '_2', '_3' … is appended instead (keeps each run separate)"
         }
       },
       "get_file_list_in_dir": {

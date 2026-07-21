@@ -2833,6 +2833,10 @@ export default function DevicePage() {
                             renderItem={(h) => {
                               const existing = findExisting(x => x.type === 'ssh' && x.address === h.ip);
                               const doAdd = () => {
+                                // 이전에 고른 모듈이 남아있으면 SSH 전용 입력칸(user/password)이
+                                // 가려져 모듈 디바이스로 잘못 등록되므로 초기화.
+                                setSelectedModule(undefined);
+                                setExtraFieldValues({});
                                 setConnectType('ssh');
                                 setConnectAddress(h.ip);
                                 setSshPort(h.port);
@@ -2967,7 +2971,10 @@ export default function DevicePage() {
                         )}
                       </Space>
                     )}
-                    {modalCategory === 'auxiliary' && modules.length > 0 && !selectedModule && (
+                    {/* SSH 연결은 전용 폼(host/user/password)으로만 등록해야 한다.
+                        여기서 모듈(SSHManager)을 고르면 type="module" 디바이스가 되어
+                        자격증명이 저장되지 않고 재생 시 "SSH client not connected" 로 실패한다. */}
+                    {modalCategory === 'auxiliary' && modules.length > 0 && !selectedModule && connectType !== 'ssh' && (
                       <Select
                         allowClear
                         placeholder={t('device.moduleSelect')}
