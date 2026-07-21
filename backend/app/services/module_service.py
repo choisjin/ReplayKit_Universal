@@ -109,6 +109,25 @@ _GUIDES_FILE = Path(__file__).resolve().parent / "module_guides.json"
 _guides_cache: dict | None = None
 _guides_mtime: float = 0
 
+# ── 함수명 오타 교정 별칭 ──────────────────────────────────────────────────
+# 외부 모듈(lge.auto .pyd 등)의 실제 함수명에 오타가 있어도 그쪽을 고칠 수 없으므로,
+# UI 목록/가이드/시나리오에는 교정된 이름만 노출하고 실행 직전에 실제 이름으로 되돌린다.
+# 기존 시나리오 파일은 recording_service._migrate_legacy_step_types 가 로드 시 변환.
+#   {모듈명: {교정된 이름(표시·저장용): 실제 이름(모듈에 존재하는 이름)}}
+FUNCTION_ALIASES: dict[str, dict[str, str]] = {
+    # cam → can 오타 (.pyd 는 send_cam_message_all_stop 로 정의되어 있다)
+    "CANAT": {"send_can_message_all_stop": "send_cam_message_all_stop"},
+}
+_REAL_TO_ALIAS: dict[str, dict[str, str]] = {
+    mod: {real: alias for alias, real in mapping.items()}
+    for mod, mapping in FUNCTION_ALIASES.items()
+}
+
+
+def resolve_function_alias(module_name: str, function_name: str) -> str:
+    """표시용(교정된) 함수명 → 실제 호출할 함수명. 별칭이 없으면 그대로 반환."""
+    return FUNCTION_ALIASES.get(module_name, {}).get(function_name, function_name)
+
 
 def _load_guides() -> dict:
     """가이드 JSON을 로드 (파일 변경 시 자동 리로드)."""
@@ -1032,6 +1051,14 @@ def get_module_functions(module_name: str) -> list[dict]:
             "params": params,
         })
 
+    # 오타 함수명은 교정된 이름으로 노출 (실행 시 resolve_function_alias 로 실제 이름 복원).
+    _alias_of = _REAL_TO_ALIAS.get(module_name)
+    if _alias_of:
+        for fn in functions:
+            if fn["name"] in _alias_of:
+                fn["name"] = _alias_of[fn["name"]]
+        functions.sort(key=lambda f: f["name"])
+
     # CANAT.CAN_PANEL — CAN 반응속도 측정 시각화 패널 가상 함수 (실제 .pyd 에는 없음).
     # 인자: state(on/off 콤보) + send_can_message 인자 그대로.
     if module_name == "CANAT":
@@ -1458,6 +1485,9 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
                   adb_serial: Optional[str] = None,
                   hkmc_service: Any = None) -> Any:
     """Execute a module function synchronously."""
+    # 오타 교정 별칭(예: CANAT.send_can_message_all_stop) 을 실제 함수명으로 되돌린다.
+    function_name = resolve_function_alias(module_name, function_name)
+
     # HKMC6th: device_manager가 디바이스별로 관리하는 HKMC6thService 인스턴스에 직접 호출
     if module_name == "HKMC6th":
         if hkmc_service is None:

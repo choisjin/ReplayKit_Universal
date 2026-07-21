@@ -124,7 +124,7 @@
           "message_type": "'FD' 또는 'Classic'"
         }
       },
-      "send_cam_message_all_stop": {
+      "send_can_message_all_stop": {
         "description": "모든 CAN 메시지 전송을 중지합니다.",
         "params": {}
       },

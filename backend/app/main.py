@@ -183,12 +183,15 @@ async def _get_monitor_status() -> dict:
     # ⚠️ ManagedDevice 에는 is_connected 속성이 없다 — 문자열 status 필드
     #    ("connected"/"disconnected"/"reconnecting")를 쓴다. (과거 dev.is_connected 는
     #    디바이스가 있을 때마다 AttributeError 를 던져 상태 전송을 통째로 막았다.)
+    # ⚠️ DeviceManager 에는 list_devices() 가 없다 — list_all() / list_primary() /
+    #    list_auxiliary() 뿐이다. (과거 list_devices() 호출이 매번 AttributeError 를 내
+    #    상태 전송을 통째로 막았다.)
     devices = []
-    for dev in device_manager.list_devices():
+    for dev in device_manager.list_all():
         try:
             devices.append({
                 "device_id": dev.id,
-                "name": (dev.info or {}).get("name", dev.id),
+                "name": dev.name or (dev.info or {}).get("name") or dev.id,
                 "type": dev.type,
                 "status": dev.status,
             })

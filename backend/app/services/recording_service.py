@@ -276,6 +276,29 @@ def _migrate_legacy_step_types(data: dict) -> bool:
             s["params"] = params
             changed = True
 
+    # 함수명 오타 교정 마이그레이션 (module_service.FUNCTION_ALIASES 와 쌍).
+    # 실제 모듈 함수명은 그대로지만 시나리오/UI 에는 교정된 이름만 남긴다.
+    #   CANAT.send_cam_message_all_stop → send_can_message_all_stop
+    _func_renames = {"CANAT": {"send_cam_message_all_stop": "send_can_message_all_stop"}}
+    for s in steps:
+        params = s.get("params")
+        if not isinstance(params, dict):
+            continue
+        renames = _func_renames.get(params.get("module") or "")
+        if not renames:
+            continue
+        old_func = params.get("function")
+        new_func = renames.get(old_func or "")
+        if not new_func:
+            continue
+        params["function"] = new_func
+        desc = s.get("description") or ""
+        if old_func in desc:
+            s["description"] = desc.replace(old_func, new_func)
+        changed = True
+        logger.info("Migrated typo function name: %s.%s → %s",
+                    params.get("module"), old_func, new_func)
+
     # 레거시 win_repeat_tap (같은 위치 count회 클릭, 중간 버전에서만 생성) →
     # win_click_sequence (포커스 유지 다좌표 클릭). 같은 좌표를 count개 넣어 의미 보존.
     # 프로세스 식별 정보(process_name/exe_path/window_* 등)는 그대로 유지.
