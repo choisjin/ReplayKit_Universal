@@ -5,6 +5,7 @@ Supports both lge.auto modules and local plugins (backend/app/plugins/).
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import concurrent.futures
 import importlib
@@ -179,6 +180,45 @@ def _load_plugin_from_file(py_file: Path):
     return mod
 
 
+def _init_params_via_ast(py_file: Path, class_name: str) -> Optional[list[str]]:
+    """플러그인 .py 소스를 **실행하지 않고** AST 로 ``<class_name>.__init__`` 파라미터명을 추출.
+
+    목록 작성(connect_type 추론)만을 위해 플러그인을 import 하면 CANoe_RBS.py→py_canoe 처럼
+    무거운 HW 라이브러리가 통째로 로드돼 이벤트 루프가 막힌다([loop-watchdog] blocked).
+    AST 는 코드를 실행하지 않으므로 그런 부작용이 없다.
+
+    반환:
+      - list[str]: 클래스에 **명시적** __init__ 이 있을 때 그 파라미터명(self 제외)
+      - None      : 파싱 실패 / 클래스 못 찾음 / 명시적 __init__ 없음(상속) → 호출부가 import 폴백
+    """
+    try:
+        tree = ast.parse(py_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    cls_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            cls_node = node
+            break
+    if cls_node is None:
+        return None
+    for item in cls_node.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__":
+            a = item.args
+            names = [p.arg for p in a.posonlyargs] + [p.arg for p in a.args] + [p.arg for p in a.kwonlyargs]
+            return [n for n in names if n != "self"]
+    return None  # 명시적 __init__ 없음(상속) → import 폴백으로 정확한 시그니처 확인
+
+
+def _connect_type_from_params(params: list[str]) -> str:
+    """생성자 파라미터명으로 connect_type 추론 (기존 규칙과 동일)."""
+    if "host" in params:
+        return "socket"
+    if "port" in params or "bps" in params:
+        return "serial"
+    return "none"
+
+
 def _list_plugin_modules() -> list[dict]:
     """Discover local plugins in the plugins directory."""
     plugins = []
@@ -213,33 +253,42 @@ def _list_plugin_modules() -> list[dict]:
         if module_name in seen or module_name in _hidden_modules:
             continue
         seen.add(module_name)
-        try:
-            mod = _load_plugin_from_file(py_file)
-            if mod is None:
+        # connect_type 추론 — 우선 소스를 실행하지 않는 AST 파싱으로 시도한다.
+        # (플러그인을 import 하면 py_canoe 등 무거운 HW 라이브러리가 로드돼 루프가 막힘)
+        params: Optional[list[str]] = None
+        if py_file.suffix == ".py":
+            params = _init_params_via_ast(py_file, module_name)
+
+        if params is not None:
+            # AST 로 명시적 __init__ 시그니처를 얻음 — import 없이 목록 작성.
+            connect_type = _connect_type_from_params(params)
+        else:
+            # 폴백: .pyd(컴파일 확장) 이거나 __init__ 상속/비표준 구조 — 부득이 import 해 확인.
+            # (이 경로는 이제 소수 플러그인에만 해당. list_available_modules 호출부가 스레드로
+            #  오프로드돼 있어 여기서 import 가 일어나도 이벤트 루프는 막지 않는다.)
+            try:
+                mod = _load_plugin_from_file(py_file)
+                if mod is None:
+                    continue
+                cls = getattr(mod, module_name, None)
+                if cls is None:
+                    continue
+                sig = inspect.signature(cls.__init__)
+                sig_params = [p for p in sig.parameters if p != "self"]
+                connect_type = _connect_type_from_params(sig_params)
+            except Exception as e:
+                logger.warning("Cannot load plugin %s: %s", module_name, e)
                 continue
-            cls = getattr(mod, module_name, None)
-            if cls is None:
-                continue
-            # Determine connect_type from constructor signature
-            sig = inspect.signature(cls.__init__)
-            params = [p for p in sig.parameters if p != "self"]
-            if "host" in params:
-                connect_type = "socket"
-            elif "port" in params or "bps" in params:
-                connect_type = "serial"
-            else:
-                connect_type = "none"
-            # Use a cleaner label: strip "Plugin" suffix if present
-            label = module_name.replace("Plugin", "") if module_name.endswith("Plugin") else module_name
-            plugins.append({
-                "name": module_name,
-                "label": label,
-                "connect_type": connect_type,
-                "connect_fields": [],
-                "_source": "plugin",
-            })
-        except Exception as e:
-            logger.warning("Cannot load plugin %s: %s", module_name, e)
+
+        # Use a cleaner label: strip "Plugin" suffix if present
+        label = module_name.replace("Plugin", "") if module_name.endswith("Plugin") else module_name
+        plugins.append({
+            "name": module_name,
+            "label": label,
+            "connect_type": connect_type,
+            "connect_fields": [],
+            "_source": "plugin",
+        })
     return plugins
 
 
