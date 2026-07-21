@@ -1773,26 +1773,34 @@ async def list_scenarios_detailed():
     각 시나리오 JSON의 created_at 필드를 읽고, 없으면 파일 mtime(ISO)으로 폴백한다.
     이름 목록만 필요한 경우 가벼운 /list 를 계속 사용한다.
     """
+    import asyncio
     from datetime import datetime
 
     from ..services.recording_service import SCENARIOS_DIR
 
     names = await recording_svc.list_scenarios()
-    result: list[dict] = []
-    for name in names:
-        fp = SCENARIOS_DIR / f"{name}.json"
-        created: Optional[str] = None
-        try:
-            data = json.loads(fp.read_text(encoding="utf-8"))
-            created = data.get("created_at")
-        except Exception:
-            created = None
-        if not created:
+
+    def _collect() -> list[dict]:
+        # 시나리오 수만큼 파일을 동기 read 하므로 루프에서 직접 돌면 /api/health 를
+        # 굶긴다("서버 연결 중..."). 전체 루프를 스레드로 오프로드한다.
+        out: list[dict] = []
+        for name in names:
+            fp = SCENARIOS_DIR / f"{name}.json"
+            created: Optional[str] = None
             try:
-                created = datetime.fromtimestamp(fp.stat().st_mtime).isoformat()
+                data = json.loads(fp.read_text(encoding="utf-8"))
+                created = data.get("created_at")
             except Exception:
                 created = None
-        result.append({"name": name, "created_at": created})
+            if not created:
+                try:
+                    created = datetime.fromtimestamp(fp.stat().st_mtime).isoformat()
+                except Exception:
+                    created = None
+            out.append({"name": name, "created_at": created})
+        return out
+
+    result = await asyncio.to_thread(_collect)
     return {"scenarios": result}
 
 

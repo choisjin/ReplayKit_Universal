@@ -411,6 +411,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def _track_inflight_requests(request, call_next):
+    """진행 중 요청을 loop_watchdog에 등록 — 스톨 시 범인 엔드포인트 경로를 남긴다.
+
+    /api/health 자신은 추적에서 제외(범인일 리 없고 노이즈만 됨).
+    """
+    from .services import loop_watchdog
+
+    path = request.url.path
+    if path == "/api/health":
+        return await call_next(request)
+    token = loop_watchdog.request_started(request.method, path)
+    try:
+        return await call_next(request)
+    finally:
+        loop_watchdog.request_finished(token)
+
+
 # Routers
 app.include_router(device.router)
 app.include_router(scenario.router)

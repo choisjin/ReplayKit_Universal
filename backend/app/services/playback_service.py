@@ -174,7 +174,14 @@ def publish_event(event: dict) -> None:
     버퍼에는 축약본을 저장해 장시간 재생 시 메모리 점유를 억제한다."""
     _event_buffer.append(_slim_for_buffer(event))
     if len(_event_buffer) > _EVENT_BUFFER_MAX:
-        _event_buffer.pop(0)
+        # 맨 앞의 playback_reset(새 재생 시작 마커)은 evict 하지 않는다.
+        # 이걸 밀어내면 재연결 replay가 리셋 없이 시작되어 클라이언트가 이전 run의
+        # 스텝을 지우지 못하고 유령행으로 겹쳐 보인다(저장물은 정상). 리셋은 index 0에
+        # 고정하고 그다음으로 오래된 이벤트를 제거한다.
+        if _event_buffer[0].get("type") == "playback_reset" and len(_event_buffer) > 1:
+            _event_buffer.pop(1)
+        else:
+            _event_buffer.pop(0)
     for q in list(_event_subscribers):
         try:
             q.put_nowait(event)

@@ -52,6 +52,42 @@ _watch_thread: Optional[threading.Thread] = None
 _heartbeat_handle: Optional[asyncio.Task] = None
 _running = False
 
+# ── in-flight HTTP 요청 추적 ──────────────────────────────────────────────
+# 루프 스톨의 범인은 거의 항상 "지금 처리 중인 요청" 하나다. 스택 덤프가 FastAPI
+# dispatch(`dependant.call`)에서 잘려도(로그 복붙/래핑 등), 이 레지스트리가 그 순간
+# 실행 중이던 요청 경로를 함께 남겨 범인 엔드포인트를 확정할 수 있게 한다.
+# 요청은 이벤트 루프(메인 스레드)에서 시작/종료되지만, 감시 스레드가 읽으므로 락으로 보호.
+_inflight: dict = {}          # id -> (method, path, start_monotonic)
+_inflight_lock = threading.Lock()
+_req_seq = 0
+
+
+def request_started(method: str, path: str) -> int:
+    """요청 처리 시작 시 호출. 반환된 토큰을 request_finished에 넘긴다."""
+    global _req_seq
+    with _inflight_lock:
+        _req_seq += 1
+        token = _req_seq
+        _inflight[token] = (method, path, time.monotonic())
+    return token
+
+
+def request_finished(token: int) -> None:
+    with _inflight_lock:
+        _inflight.pop(token, None)
+
+
+def _inflight_report(now: float) -> str:
+    """진행 중 요청을 오래된 순으로 나열 — 맨 위(가장 오래된 것)가 유력 범인."""
+    with _inflight_lock:
+        items = sorted(_inflight.values(), key=lambda v: v[2])
+    if not items:
+        return "  (진행 중 요청 없음 — 백그라운드 태스크/비HTTP 작업이 루프를 막는 중)"
+    lines = []
+    for method, path, start in items:
+        lines.append(f"  {now - start:6.2f}s  {method} {path}")
+    return "\n".join(lines)
+
 
 async def _heartbeat_task() -> None:
     global _last_beat
@@ -76,18 +112,21 @@ def _watch_loop() -> None:
         if now - last_dump < _DUMP_COOLDOWN_S:
             continue
         last_dump = now
+        inflight = _inflight_report(now)
         frame = sys._current_frames().get(_main_thread_id) if _main_thread_id else None
         if frame is None:
             logger.warning(
-                "[loop-watchdog] event loop blocked %.2fs — /api/health 굶김 (메인 스택 캡처 실패)",
-                lag,
+                "[loop-watchdog] event loop blocked %.2fs — /api/health 굶김 (메인 스택 캡처 실패).\n"
+                "진행 중 요청(오래된 순, 맨 위가 유력 범인):\n%s",
+                lag, inflight,
             )
             continue
         stack = "".join(traceback.format_stack(frame))
         logger.warning(
-            "[loop-watchdog] event loop blocked %.2fs — /api/health 굶김 (\"서버 연결 중...\" 원인). "
+            "[loop-watchdog] event loop blocked %.2fs — /api/health 굶김 (\"서버 연결 중...\" 원인).\n"
+            "진행 중 요청(오래된 순, 맨 위가 유력 범인):\n%s\n"
             "메인 스레드 블록 지점:\n%s",
-            lag, stack,
+            lag, inflight, stack,
         )
 
 
