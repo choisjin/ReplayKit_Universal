@@ -1805,6 +1805,164 @@ async def list_scenarios_detailed():
 
 
 # ------------------------------------------------------------------
+# Usage statistics (모듈/함수 사용 통계 — #stats 관제 페이지)
+# ------------------------------------------------------------------
+
+def _compute_usage_stats() -> dict:
+    """저장된 모든 시나리오를 순회하며 스텝 타입·모듈·함수 사용량을 집계한다.
+
+    ⚠️ 이 함수는 디스크 I/O + 모듈 introspection 으로 무겁다. 반드시 asyncio.to_thread
+    로 오프로드해 호출해야 /api/health 를 굶기지 않는다("서버 연결 중..." 방지).
+
+    집계 대상:
+      - step_types: 내장 스텝 타입(tap/swipe/wait/image_tap/module_command 등) 사용 횟수
+      - modules/functions: type==module_command 스텝의 params.module + params.function
+    미사용 교차대조:
+      - list_available_modules() × get_module_functions() 카탈로그와 대조해
+        시나리오에서 한 번도 참조되지 않은 (module, function) 을 unused_functions 로 반환.
+    """
+    from datetime import datetime
+    from collections import defaultdict
+
+    from ..services.recording_service import SCENARIOS_DIR
+    from ..services.module_service import list_available_modules, get_module_functions
+
+    reserved = {"groups.json", "folders.json", "group_folders.json"}
+
+    # step_type -> {"count": int, "scenarios": set}
+    step_types: dict[str, dict] = defaultdict(lambda: {"count": 0, "scenarios": set()})
+    # module -> {"count": int, "scenarios": set,
+    #            "functions": {func -> {"count": int, "scenarios": set}}}
+    modules: dict[str, dict] = defaultdict(
+        lambda: {"count": 0, "scenarios": set(), "functions": defaultdict(lambda: {"count": 0, "scenarios": set()})}
+    )
+
+    scenario_count = 0
+    total_steps = 0
+
+    if SCENARIOS_DIR.is_dir():
+        for spath in sorted(SCENARIOS_DIR.glob("*.json")):
+            if spath.name in reserved:
+                continue
+            try:
+                data = json.loads(spath.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("usage-stats: skip unreadable %s: %s", spath.name, e)
+                continue
+            name = data.get("name", spath.stem)
+            scenario_count += 1
+            for step in data.get("steps") or []:
+                if not isinstance(step, dict):
+                    continue
+                stype = step.get("type") or "unknown"
+                total_steps += 1
+                st = step_types[stype]
+                st["count"] += 1
+                st["scenarios"].add(name)
+                if stype == "module_command":
+                    params = step.get("params") or {}
+                    mod = params.get("module") or "(unknown)"
+                    func = params.get("function") or "(unknown)"
+                    m = modules[mod]
+                    m["count"] += 1
+                    m["scenarios"].add(name)
+                    f = m["functions"][func]
+                    f["count"] += 1
+                    f["scenarios"].add(name)
+
+    # ── 미사용 함수 교차대조 ─────────────────────────────────────────
+    # 가용 모듈 카탈로그를 순회하며 시나리오에서 쓰이지 않은 함수를 골라낸다.
+    unused_functions: list[dict] = []
+    available_module_count = 0
+    available_function_count = 0
+    try:
+        available = list_available_modules()
+    except Exception as e:
+        logger.warning("usage-stats: list_available_modules failed: %s", e)
+        available = []
+    for mod_info in available:
+        mod_name = mod_info.get("name")
+        if not mod_name:
+            continue
+        available_module_count += 1
+        try:
+            funcs = get_module_functions(mod_name)
+        except Exception as e:
+            logger.warning("usage-stats: get_module_functions(%s) failed: %s", mod_name, e)
+            continue
+        used_funcs = modules.get(mod_name, {}).get("functions", {})
+        for fn in funcs or []:
+            fname = fn.get("name")
+            if not fname:
+                continue
+            available_function_count += 1
+            if fname not in used_funcs:
+                unused_functions.append({
+                    "module": mod_name,
+                    "function": fname,
+                    "description": fn.get("description", ""),
+                })
+
+    # ── 직렬화 (set → 정렬 리스트, count 내림차순) ──────────────────────
+    def _serialize_scen(s: set) -> list:
+        return sorted(s)
+
+    step_types_out = sorted(
+        [
+            {"type": t, "count": v["count"], "scenario_count": len(v["scenarios"]),
+             "scenarios": _serialize_scen(v["scenarios"])}
+            for t, v in step_types.items()
+        ],
+        key=lambda x: x["count"], reverse=True,
+    )
+
+    modules_out = []
+    for mod, v in modules.items():
+        funcs_out = sorted(
+            [
+                {"function": fn, "count": fv["count"], "scenario_count": len(fv["scenarios"]),
+                 "scenarios": _serialize_scen(fv["scenarios"])}
+                for fn, fv in v["functions"].items()
+            ],
+            key=lambda x: x["count"], reverse=True,
+        )
+        modules_out.append({
+            "module": mod,
+            "count": v["count"],
+            "scenario_count": len(v["scenarios"]),
+            "function_count": len(funcs_out),
+            "functions": funcs_out,
+        })
+    modules_out.sort(key=lambda x: x["count"], reverse=True)
+    unused_functions.sort(key=lambda x: (x["module"], x["function"]))
+
+    used_function_count = sum(m["function_count"] for m in modules_out)
+
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "scenario_count": scenario_count,
+        "total_steps": total_steps,
+        "step_types": step_types_out,
+        "modules": modules_out,
+        "unused_functions": unused_functions,
+        "available_module_count": available_module_count,
+        "available_function_count": available_function_count,
+        "used_module_count": len(modules_out),
+        "used_function_count": used_function_count,
+    }
+
+
+@router.get("/usage-stats")
+async def usage_stats():
+    """저장된 시나리오들의 스텝 타입·모듈·함수 사용 통계 (#stats 관제 페이지용).
+
+    디스크 read + 모듈 introspection 이 무거우므로 전체를 스레드로 오프로드한다.
+    """
+    import asyncio
+    return await asyncio.to_thread(_compute_usage_stats)
+
+
+# ------------------------------------------------------------------
 # Migration (LGSI 전용 임시) — WoohyunBench SendAvnCan → SendCan
 # ------------------------------------------------------------------
 

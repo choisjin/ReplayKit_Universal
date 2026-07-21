@@ -30,6 +30,7 @@ import ResultsPage from './pages/ResultsPage';
 import SettingsPage from './pages/SettingsPage';
 import ChangelogPage from './pages/ChangelogPage';
 import AdminPage from './pages/AdminPage';
+import StatsPage from './pages/StatsPage';
 import WebcamPip from './components/WebcamPip';
 import CompositorEditor from './components/CompositorEditor';
 import AnnouncementBanner from './components/AnnouncementBanner';
@@ -62,17 +63,20 @@ const pageKeys = [
 
 // 메뉴에 노출되지 않는 숨김 페이지 (URL hash로 접근)
 const HIDDEN_ADMIN_KEY = '/admin';
+const HIDDEN_STATS_KEY = '/stats';
 
 function AppContent() {
-  // URL hash가 #admin이면 AdminPage로 초기화 (새로고침 시에도 유지)
-  const initialKey = (typeof window !== 'undefined' && window.location.hash === '#admin') ? HIDDEN_ADMIN_KEY : '/';
+  // URL hash가 #admin / #stats 면 해당 숨김 페이지로 초기화 (새로고침 시에도 유지)
+  const initialKey = (typeof window !== 'undefined' && window.location.hash === '#admin') ? HIDDEN_ADMIN_KEY
+    : (typeof window !== 'undefined' && window.location.hash === '#stats') ? HIDDEN_STATS_KEY : '/';
   const [activeKey, setActiveKey] = useState(initialKey);
 
-  // hash 변경 감지 — 사용자가 주소창에서 #admin / #admin 해제 시 즉시 전환
+  // hash 변경 감지 — 사용자가 주소창에서 #admin / #stats 설정·해제 시 즉시 전환
   useEffect(() => {
     const onHashChange = () => {
       if (window.location.hash === '#admin') setActiveKey(HIDDEN_ADMIN_KEY);
-      else if (activeKey === HIDDEN_ADMIN_KEY) setActiveKey('/');
+      else if (window.location.hash === '#stats') setActiveKey(HIDDEN_STATS_KEY);
+      else if (activeKey === HIDDEN_ADMIN_KEY || activeKey === HIDDEN_STATS_KEY) setActiveKey('/');
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -540,6 +544,10 @@ function AppContent() {
                 {/* 숨김 admin 페이지 — URL hash #admin 으로 접근 */}
                 <div style={{ display: activeKey === HIDDEN_ADMIN_KEY ? 'block' : 'none' }}>
                   <AdminPage />
+                </div>
+                {/* 숨김 통계 페이지 — URL hash #stats 로 접근 */}
+                <div style={{ display: activeKey === HIDDEN_STATS_KEY ? 'block' : 'none' }}>
+                  <StatsPage />
                 </div>
               </>
             ) : (
