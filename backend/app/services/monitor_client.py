@@ -113,6 +113,14 @@ class MonitorClient:
         self._status_interval: float = 2.0  # 상태 전송 간격 (초)
         self._running = False
 
+        # 최초 연결 가드 — 서버가 접근 불가하면 무한 재시도로 두드리지 않고 중단한다.
+        #  - 한 번도 연결에 성공하지 못한 상태에서 _max_initial_attempts 회 실패하면 루프 종료.
+        #  - 한 번이라도 연결에 성공(_ever_connected)한 뒤의 끊김은 기존대로 무한 재연결(서버 재시작/일시 단절 복구).
+        #  - URL 재설정/재저장(start)으로 다시 시도할 수 있다.
+        self._ever_connected = False
+        self._initial_attempts = 0
+        self._max_initial_attempts = 3
+
         # 상태 수집 콜백
         self._get_status_fn: Optional[Callable[[], Coroutine[Any, Any, dict]]] = None
         # 원격 명령 수신 콜백
@@ -155,6 +163,10 @@ class MonitorClient:
                 self._client_id = str(uuid.uuid4())
             logger.info("Monitor client machine_uid=%s", self._client_id)
 
+        # 새로 시작할 때마다 최초 연결 가드 리셋 — URL 재설정/재저장은 '다시 시도' 의도.
+        self._ever_connected = False
+        self._initial_attempts = 0
+
         self._server_url = server_url.rstrip("/")
         self._running = True
         self._task = asyncio.create_task(self._connection_loop())
@@ -188,6 +200,9 @@ class MonitorClient:
             try:
                 async with ws_connect(ws_url, ping_interval=20, ping_timeout=10) as ws:
                     self._ws = ws
+                    # 연결 성공 — 이후 끊김은 무한 재연결 대상(최초 연결 가드 해제).
+                    self._ever_connected = True
+                    self._initial_attempts = 0
                     logger.info("관제 서버 연결 성공: %s", ws_url)
 
                     # 등록 메시지 전송
@@ -223,12 +238,32 @@ class MonitorClient:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.debug("관제 서버 연결 실패: %s — 5초 후 재시도", e)
+                logger.debug("관제 서버 연결 실패: %s", e)
             finally:
                 self._ws = None
 
-            if self._running:
-                await asyncio.sleep(5)
+            if not self._running:
+                break
+
+            # 최초 연결 가드 — 한 번도 성공하지 못한 채 _max_initial_attempts 회 실패하면
+            # 접근 불가 서버로 보고 루프를 중단한다(무한 재시도로 두드리지 않음).
+            # 관제 서버 URL 재설정/재저장 시 start()가 가드를 리셋하고 다시 시도한다.
+            if not self._ever_connected:
+                self._initial_attempts += 1
+                if self._initial_attempts >= self._max_initial_attempts:
+                    logger.warning(
+                        "관제 서버(%s) 최초 연결 실패 %d회 — 접근 불가로 판단해 이후 보고를 중단합니다. "
+                        "(관제 서버 URL 을 다시 저장하면 재시도)",
+                        self._server_url, self._initial_attempts,
+                    )
+                    self._running = False
+                    break
+                logger.debug(
+                    "관제 서버 최초 연결 실패 %d/%d — 5초 후 재시도",
+                    self._initial_attempts, self._max_initial_attempts,
+                )
+
+            await asyncio.sleep(5)
 
     async def _receive_loop(self, ws):
         """서버에서 수신한 메시지 처리 (원격 명령)."""
@@ -279,8 +314,12 @@ class MonitorClient:
             pass
 
     async def update_server_url(self, new_url: str):
-        """관제 서버 URL 변경 시 재연결."""
-        if new_url == self._server_url:
+        """관제 서버 URL 변경 시 재연결.
+
+        같은 URL 을 다시 저장한 경우라도 현재 연결돼 있지 않으면(최초 연결 실패로 중단된 상태 포함)
+        재시도한다 — #admin 에서 '저장'을 다시 누르는 것이 '재시도' 의도이기 때문.
+        """
+        if new_url == self._server_url and self.is_connected:
             return
         if new_url:
             await self.start(new_url)
