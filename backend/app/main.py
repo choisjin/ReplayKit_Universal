@@ -200,9 +200,14 @@ async def _get_monitor_status() -> dict:
     devices = []
     for dev in device_manager.list_all():
         try:
+            info = dev.info or {}
             devices.append({
                 "device_id": dev.id,
-                "name": dev.name or (dev.info or {}).get("name") or dev.id,
+                "name": dev.name or info.get("name") or dev.id,
+                # 연결된 모듈명 (CMD/SHELL/OCR/Frame_Check/SmartBench/TH/SCAR 등).
+                # Common·OCR·Frame_Check 디바이스는 name 이 모두 "Common" 이라 구분이 안 되므로
+                # 관제 대시보드는 이 module 을 우선 표시한다. ADB/에이전트 등 물리 디바이스는 빈 값.
+                "module": info.get("module") or "",
                 "type": dev.type,
                 "status": dev.status,
             })
