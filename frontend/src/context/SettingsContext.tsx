@@ -42,7 +42,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   excel_export_dir: '',
   scenario_export_dir: '',
   language: 'ko',
-  monitor_server_url: '',
+  monitor_server_url: 'http://10.176.144.70:9000',
   admin_server_url: '',
   default_wait_ms: 3000,
   threshold_full: 0.95,

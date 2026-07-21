@@ -20,13 +20,17 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 _SETTINGS_FILE = Path(__file__).resolve().parent.parent.parent / "settings.json"
 
+# 관제(매니저) 서버 기본 주소 — 미설정 PC 는 이 서버로 재생상태/함수통계를 보고한다.
+# 빈 값으로 저장돼 있어도 _load() 가 이 값으로 폴백하므로 배포된 PC 전체에 기본 적용된다.
+_DEFAULT_MONITOR_URL = "http://10.176.144.70:9000"
+
 _DEFAULTS = {
     "theme": "light",
     "webcam_save_dir": "",
     "excel_export_dir": "",
     "scenario_export_dir": "",
     "language": "ko",
-    "monitor_server_url": "",
+    "monitor_server_url": _DEFAULT_MONITOR_URL,
     "admin_server_url": "",
     "default_wait_ms": 3000,
     "threshold_full": 0.95,
@@ -43,13 +47,19 @@ _DEFAULTS = {
 
 
 def _load() -> dict:
+    merged = dict(_DEFAULTS)
     if _SETTINGS_FILE.exists():
         try:
             data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
-            return {**_DEFAULTS, **data}
+            merged = {**_DEFAULTS, **data}
         except Exception:
-            pass
-    return dict(_DEFAULTS)
+            merged = dict(_DEFAULTS)
+    # 관제 서버 URL 이 빈 값/키 없음이면 기본값으로 폴백 — 이미 배포된 PC 의 settings.json 에
+    # 예전 빈 문자열("")이 저장돼 있어도 기본 관제 서버로 자동 연결되게 한다.
+    # (특정 PC 를 다른 서버로 보내려면 #admin 에서 다른 URL 을 입력하면 됨)
+    if not merged.get("monitor_server_url"):
+        merged["monitor_server_url"] = _DEFAULT_MONITOR_URL
+    return merged
 
 
 def _save(data: dict) -> None:
