@@ -278,9 +278,15 @@ async def _get_monitor_status() -> dict:
             continue
 
     # 재생 진행 상태
+    # ⚠️ activity 와 반드시 같은 조건이어야 한다 — 예전엔 activity 는 is_running 만 보고
+    #    playback 은 _monitor_state 까지 요구해서, 둘이 어긋나면 관제 카드가
+    #    "재생 중" 태그 + "재생 중 아님" 본문으로 모순돼 보였다(그룹 재생 경로).
+    #    _monitor_state 가 없어도 is_running 이면 최소 정보라도 채워 모순을 없앤다.
     playback = None
-    if playback_service.is_running and hasattr(playback_service, '_monitor_state'):
-        ms = playback_service._monitor_state
+    ms = getattr(playback_service, "_monitor_state", None)
+    if playback_service.is_running and not isinstance(ms, dict):
+        ms = {"scenario_name": "(정보 없음)"}
+    if playback_service.is_running:
         playback = {
             "scenario_name": ms.get("scenario_name", ""),
             "current_cycle": ms.get("current_cycle", 0),
@@ -2449,14 +2455,29 @@ async def _run_play_group_job(data: dict):
         iteration = 0  # 외부 보존 — 중단 시 stopped_at_iteration 표기에 사용
         last_completed_iteration = 0
 
+        # 관제 보고용 상태 — 그룹 재생도 단일 재생(_run_play_job)과 동일하게 채운다.
+        # (예전엔 그룹 경로만 이걸 안 세워서, execute_scenario_stream 이 _running=True 로 만든
+        #  탓에 관제 카드가 'activity=재생 중' 인데 상세는 '재생 중 아님' 으로 모순돼 보였다)
+        playback_service._monitor_state = {
+            "scenario_name": group_name,
+            "total_cycles": repeat if until_time is None else 0,
+            "current_cycle": 0,
+            "current_step": 0,
+            "total_steps": total_steps,
+            "passed": 0, "failed": 0, "warning": 0, "error": 0,
+        }
+
         # until_time이 지정되면 시각 한도가 우선 — repeat 한도는 안전 cap으로 매우 크게.
         _MAX_REPEAT_CAP = 99999
         effective_repeat = _MAX_REPEAT_CAP if until_time is not None else repeat
         _multi = (repeat > 1) or (until_time is not None)
 
+        _cycle_step = 0   # 관제 표시용 사이클 내 스텝 번호 (global_step_seq 는 그룹 전체 누적이라 부적합)
         for iteration in range(1, effective_repeat + 1):
             if playback_service._should_stop:
                 break
+            playback_service._monitor_state["current_cycle"] = iteration
+            _cycle_step = 0
             if _multi:
                 publish_event({
                     "type": "iteration_start",
@@ -2476,6 +2497,8 @@ async def _run_play_group_job(data: dict):
                     break
                 entry = entries[sc_idx]
                 sc_name = entry["name"]
+                # 관제에 "그룹 (현재 시나리오)" 로 표시 — 어떤 멤버를 돌고 있는지 보이게 한다.
+                playback_service._monitor_state["scenario_name"] = f"{group_name} ({sc_name})"
                 step_jumps = entry.get("step_jumps", {})
                 try:
                     play_count = max(1, int(entry.get("play_count", 1)))
@@ -2515,6 +2538,9 @@ async def _run_play_group_job(data: dict):
                         if isinstance(item, dict) and item.get("_type") == "step_start":
                             global_step_seq += 1
                             _pending_seq = global_step_seq
+                            # 관제 진행 표시 — 사이클 내 누적 스텝 번호 (멤버를 이어 돌며 증가, 회차마다 리셋)
+                            _cycle_step += 1
+                            playback_service._monitor_state["current_step"] = _cycle_step
                             start_data = {k: v for k, v in item.items() if k != "_type"}
                             start_data["step_id"] = _pending_seq
                             start_data["description"] = f"{sc_prefix} {start_data.get('description', '')}" if start_data.get('description') else sc_prefix
@@ -2569,10 +2595,13 @@ async def _run_play_group_job(data: dict):
                             pass  # 결과 미반영('분기') — 집계/시나리오 판정에서 제외
                         elif step_result.status == "pass":
                             unified_result.passed_steps += 1
+                            playback_service._monitor_state["passed"] += 1
                         elif step_result.status == "fail":
                             unified_result.failed_steps += 1
+                            playback_service._monitor_state["failed"] += 1
                         else:
                             unified_result.error_steps += 1
+                            playback_service._monitor_state["error"] += 1
                         sr_data = step_result.model_dump()
                         sr_data["exec_seq"] = _pending_seq
                         publish_event({
