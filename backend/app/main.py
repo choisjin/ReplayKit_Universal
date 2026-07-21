@@ -95,6 +95,34 @@ async def _reconnect_loop():
 # 관제 스냅샷(_get_monitor_status)은 이 값을 읽기만 한다(계산 X).
 _usage_stats_cache: dict = {"data": None, "ts": 0.0}
 
+# 관제 보고용 디바이스 상태 갱신 스로틀.
+# dev.status 는 가만히 두면 갱신되지 않는다 — refresh_adb()/refresh_auxiliary() 가 채워준다
+# (/api/device/list 도 10초 스로틀로 같은 일을 한다). 관제는 ReplayKit UI 가 닫혀 있어도
+# 최신 연결 상태를 보고해야 하므로 여기서도 같은 주기로 갱신한다.
+_device_refresh: dict = {"ts": 0.0}
+_DEVICE_REFRESH_INTERVAL = 10.0
+
+
+async def _refresh_device_status_for_monitor() -> None:
+    """관제 보고용 디바이스 상태 갱신 (10초 스로틀).
+
+    ⚠️ 호출부는 재생 중이 아닐 때만 부른다 — adb 재조회가 스텝의 screencap/입력과 경합해
+    테스트에 간섭할 수 있다(재연결 루프의 passive 모드와 같은 이유).
+    """
+    import time as _t
+    now = _t.monotonic()
+    if now - _device_refresh["ts"] < _DEVICE_REFRESH_INTERVAL:
+        return
+    _device_refresh["ts"] = now
+    try:
+        await device_manager.refresh_adb()
+    except Exception as e:
+        logger.debug("관제 refresh_adb 실패: %s", e)
+    try:
+        await device_manager.refresh_auxiliary()
+    except Exception as e:
+        logger.debug("관제 refresh_auxiliary 실패: %s", e)
+
 # ReplayKit UI(브라우저 창) 포커스 상태 — 프론트가 POST /api/monitor/ui-focus 로 보고한다.
 # 관제 activity 판정 우선순위: 재생중(playing) > 녹화중(recording) > 창 최상단 포커스(in_use) > 대기(idle).
 # 브라우저는 백엔드와 별개 프로세스라 백엔드가 "그 창이 최상단인지"를 직접 알 수 없으므로,
@@ -197,6 +225,11 @@ async def _get_monitor_status() -> dict:
     # ⚠️ DeviceManager 에는 list_devices() 가 없다 — list_all() / list_primary() /
     #    list_auxiliary() 뿐이다. (과거 list_devices() 호출이 매번 AttributeError 를 내
     #    상태 전송을 통째로 막았다.)
+    # dev.status 는 refresh_* 가 갱신해야 최신이다. 재생 중에는 adb 재조회가 테스트와
+    # 경합할 수 있으므로 건너뛰고 직전 상태를 그대로 보고한다.
+    if not playback_service.is_running:
+        await _refresh_device_status_for_monitor()
+
     devices = []
     for dev in device_manager.list_all():
         try:
@@ -205,9 +238,11 @@ async def _get_monitor_status() -> dict:
                 "device_id": dev.id,
                 "name": dev.name or info.get("name") or dev.id,
                 # 연결된 모듈명 (CMD/SHELL/OCR/Frame_Check/SmartBench/TH/SCAR 등).
-                # Common·OCR·Frame_Check 디바이스는 name 이 모두 "Common" 이라 구분이 안 되므로
-                # 관제 대시보드는 이 module 을 우선 표시한다. ADB/에이전트 등 물리 디바이스는 빈 값.
+                # Common·OCR·Frame_Check 는 name 이 모두 "Common" 이라 구분이 안 되므로
+                # 대시보드가 auxiliary 에 한해 이 값을 우선 표시한다.
+                # primary(ADB/에이전트 등 물리 디바이스)는 name 이 곧 식별자이므로 module 을 쓰지 않는다.
                 "module": info.get("module") or "",
+                "category": dev.category,   # "primary" | "auxiliary"
                 "type": dev.type,
                 "status": dev.status,
             })
