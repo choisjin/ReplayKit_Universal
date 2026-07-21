@@ -25,6 +25,10 @@ except ImportError:
 
 _MACHINE_UID_CACHE: Optional[str] = None
 
+# 상태 전송 로그 스로틀 (전송 주기 2초 기준)
+_STATUS_LOG_EVERY = 30       # 성공 하트비트 — 30회 = 약 60초마다 1줄
+_STATUS_FAIL_LOG_EVERY = 15  # 연속 실패 — 15회 = 약 30초마다 1줄
+
 
 def get_machine_uid() -> str:
     """하드웨어 기반의 **안정적** 머신 UID 를 반환한다.
@@ -298,7 +302,18 @@ class MonitorClient:
             pass  # 연결 종료 시 루프 탈출
 
     async def _send_status_loop(self, ws):
-        """주기적으로 상태를 관제 서버에 전송."""
+        """주기적으로 상태를 관제 서버에 전송.
+
+        관측성 규칙 — 2초마다 성공 로그를 남기면 스팸이므로:
+          - **activity 변화 시**(대기→재생중 등) INFO 1줄
+          - 그 외에는 _STATUS_LOG_EVERY 회마다 하트비트 INFO 1줄
+          - **실패는 절대 조용히 삼키지 않는다** — 첫 실패는 traceback 과 함께 WARNING,
+            이후엔 _STATUS_FAIL_LOG_EVERY 회마다 WARNING.
+        (과거 dev.is_connected AttributeError 가 debug 로 묻혀 관제가 죽은 걸 몰랐던 사고 재발 방지)
+        """
+        sent = 0
+        fail_count = 0
+        last_activity: Optional[str] = None
         try:
             while self._running:
                 if self._get_status_fn:
@@ -310,8 +325,28 @@ class MonitorClient:
                         status["version"] = "0.1.0"
                         status["timestamp"] = datetime.now(timezone.utc).isoformat()
                         await ws.send(json.dumps(status, default=str))
+                        sent += 1
+                        if fail_count:
+                            logger.info("관제 상태 전송 복구 (이전 실패 %d회)", fail_count)
+                            fail_count = 0
+                        act = status.get("activity")
+                        if act != last_activity:
+                            pb = status.get("playback") or {}
+                            extra = ""
+                            if pb:
+                                extra = (f" scenario={pb.get('scenario_name')}"
+                                         f" cycle={pb.get('current_cycle')}/{pb.get('total_cycles')}")
+                            logger.info("관제 상태 전송: activity=%s%s (누적 %d회)", act, extra, sent)
+                            last_activity = act
+                        elif sent % _STATUS_LOG_EVERY == 0:
+                            logger.info("관제 상태 전송 중: activity=%s (누적 %d회)", act, sent)
                     except Exception as e:
-                        logger.debug("상태 전송 오류: %s", e)
+                        fail_count += 1
+                        if fail_count == 1 or fail_count % _STATUS_FAIL_LOG_EVERY == 0:
+                            logger.warning(
+                                "관제 상태 전송 실패 (%d회째) — 관제 대시보드가 '대기/오프라인'으로 굳습니다: %r",
+                                fail_count, e, exc_info=(fail_count == 1),
+                            )
                 await asyncio.sleep(self._status_interval)
         except Exception:
             pass
