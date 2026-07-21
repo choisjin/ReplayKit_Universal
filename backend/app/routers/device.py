@@ -1818,18 +1818,28 @@ async def update_device(req: UpdateDeviceRequest):
 
 @router.get("/modules")
 async def list_modules():
-    """List available lge.auto modules."""
-    return {"modules": list_available_modules()}
+    """List available lge.auto modules.
+
+    ⚠️ list_available_modules() 는 플러그인 파일을 실제 import 해 connect_type 을 추론한다
+    (CANoe_RBS → py_canoe 등 무거운 HW 라이브러리 로드). 이벤트 루프에서 직접 호출하면
+    최초 1회 임포트가 루프를 수백 ms~수초 막아 관제 상태 전송/health 가 굶는다
+    ([loop-watchdog] event loop blocked). 반드시 스레드로 오프로드한다.
+    """
+    import asyncio
+    return {"modules": await asyncio.to_thread(list_available_modules)}
 
 
 @router.get("/modules/{module_name}/functions")
 async def module_functions(module_name: str):
     """List functions of a specific lge.auto module."""
+    import asyncio
     from ..services.module_service import _load_guides
-    functions = get_module_functions(module_name)
+    # get_module_functions 는 대상 모듈을 import·introspect 하므로(무거운 HW 라이브러리 포함)
+    # 이벤트 루프 블록 방지를 위해 스레드로 오프로드한다.
+    functions = await asyncio.to_thread(get_module_functions, module_name)
     if not functions:
         raise HTTPException(status_code=404, detail=f"Module '{module_name}' not found or has no functions")
-    guides = _load_guides()
+    guides = await asyncio.to_thread(_load_guides)
     mod_guide = guides.get(module_name, {})
     return {"module": module_name, "functions": functions, "module_description": mod_guide.get("_description", "")}
 
