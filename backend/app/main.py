@@ -234,17 +234,24 @@ async def _get_monitor_status() -> dict:
     for dev in device_manager.list_all():
         try:
             info = dev.info or {}
+            # ⚠️ status 정규화 — refresh_adb() 는 ADB 원시 상태를 그대로 넣는다(연결됨 = "device").
+            #    "connected" 만 연결로 보면 ADB 디바이스가 항상 미연결로 표시된다.
+            raw_status = dev.status or ""
+            status = "connected" if raw_status in ("connected", "device") else raw_status
             devices.append({
                 "device_id": dev.id,
+                # dev.name 은 ADB 가 보고한 모델명(예: AIVI2_N_FULL). 관제에서는 카탈로그
+                # 모델 기준 이름(dev.id = "Europe_New_1")을 쓰므로 참고용으로만 보낸다.
                 "name": dev.name or info.get("name") or dev.id,
+                "device_model": info.get("device_model") or "",   # 등록 시 선택한 모델 (예: Europe_New)
                 # 연결된 모듈명 (CMD/SHELL/OCR/Frame_Check/SmartBench/TH/SCAR 등).
                 # Common·OCR·Frame_Check 는 name 이 모두 "Common" 이라 구분이 안 되므로
                 # 대시보드가 auxiliary 에 한해 이 값을 우선 표시한다.
-                # primary(ADB/에이전트 등 물리 디바이스)는 name 이 곧 식별자이므로 module 을 쓰지 않는다.
                 "module": info.get("module") or "",
                 "category": dev.category,   # "primary" | "auxiliary"
                 "type": dev.type,
-                "status": dev.status,
+                "status": status,
+                "raw_status": raw_status,   # 진단용 (device/offline/unauthorized/reconnecting 등)
             })
         except Exception:
             continue

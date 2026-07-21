@@ -35,12 +35,21 @@ _STATUS_INTERVAL_PLAYING = 10.0
 
 
 def get_machine_uid() -> str:
-    """하드웨어 기반의 **안정적** 머신 UID 를 반환한다.
+    """이 PC 를 식별하는, **재부팅해도 변하지 않는 고정 UID** 를 반환한다.
 
-    관제 서버가 각 테스트 PC 를 식별하는 키. IP 는 바뀔 수 있으므로 쓰지 않고,
-    메인보드 펌웨어에 각인된 SMBIOS 제품 UUID(부품 교체 전까지 불변)를 우선 사용한다.
-    우선순위: SMBIOS/제품 UUID → (Windows) 레지스트리 MachineGuid → (Linux) machine-id
-             → 최종 폴백으로 영속 파일에 랜덤 UUID 저장.
+    관제 서버가 PC 를 구분하는 키다. 값이 한 번이라도 달라지면 같은 PC 가 새 PC 로 잡혀
+    관제 목록과 함수 통계가 오염되므로, **실행 환경(관리자 권한 여부, subprocess 성공 여부)에
+    좌우되지 않는 소스를 최우선**으로 쓴다.
+
+    우선순위:
+      - Windows: 레지스트리 MachineGuid (일반 권한으로 읽힘, subprocess 불필요 → 항상 동일)
+                 → SMBIOS 제품 UUID (PowerShell, 실패 가능성 있어 후순위)
+      - Linux:   /etc/machine-id (world-readable → 항상 동일)
+                 → /var/lib/dbus/machine-id
+                 → /sys/class/dmi/id/product_uuid (root 필요 — 권한 따라 값이 흔들려 후순위)
+      - 모두 실패 시: machine_uid.txt 에 랜덤 UUID 를 1회 생성·보존해 이후 재사용.
+
+    OS 를 재설치하면 값이 바뀐다(새 PC 로 잡힘). 그 외 재부팅/재시작/권한 변화에는 불변.
     한 번 계산하면 프로세스 내에서 캐시한다.
     """
     global _MACHINE_UID_CACHE
@@ -48,40 +57,52 @@ def get_machine_uid() -> str:
         return _MACHINE_UID_CACHE
 
     uid = ""
+    source = ""
     system = platform.system()
     try:
         if system == "Windows":
-            # SMBIOS 제품 UUID (메인보드 펌웨어에 각인 — 부품 교체 전까지 불변)
+            # 1순위: 레지스트리 MachineGuid — 일반 권한으로 읽히고 subprocess 가 없어
+            # 실행 환경에 관계없이 **항상 같은 값**이 나온다.
             try:
-                out = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command",
-                     "(Get-CimInstance -ClassName Win32_ComputerSystemProduct).UUID"],
-                    capture_output=True, text=True, timeout=10,
-                )
-                cand = (out.stdout or "").strip()
-                # 일부 메인보드는 UUID 를 채우지 않아 all-F / all-0 을 반환 → 무효 처리
-                if cand and not cand.lower().replace("-", "").strip("f0"):
-                    cand = ""
-                uid = cand
+                import winreg
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                    r"SOFTWARE\Microsoft\Cryptography") as k:
+                    uid = str(winreg.QueryValueEx(k, "MachineGuid")[0]).strip()
+                    source = "registry:MachineGuid"
             except Exception:
                 uid = ""
             if not uid:
-                # 폴백: 레지스트리 MachineGuid (OS 설치 단위 고유)
+                # 폴백: SMBIOS 제품 UUID. PowerShell 호출이라 타임아웃/차단 시 실패할 수 있어
+                # 후순위 (1순위로 두면 실패한 부팅에서만 값이 달라져 PC 가 중복 등록된다).
                 try:
-                    import winreg
-                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                        r"SOFTWARE\Microsoft\Cryptography") as k:
-                        uid = str(winreg.QueryValueEx(k, "MachineGuid")[0]).strip()
+                    out = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command",
+                         "(Get-CimInstance -ClassName Win32_ComputerSystemProduct).UUID"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    cand = (out.stdout or "").strip()
+                    # 일부 메인보드는 UUID 를 채우지 않아 all-F / all-0 을 반환 → 무효 처리
+                    if cand and not cand.lower().replace("-", "").strip("f0"):
+                        cand = ""
+                    uid = cand
+                    if uid:
+                        source = "smbios:ComputerSystemProduct.UUID"
                 except Exception:
                     uid = ""
         else:
-            # Linux: product_uuid(root 필요할 수 있음) → machine-id
-            for p in ("/sys/class/dmi/id/product_uuid", "/etc/machine-id",
-                      "/var/lib/dbus/machine-id"):
+            # Linux: /etc/machine-id 는 world-readable 이라 권한과 무관하게 항상 같은 값.
+            # /sys/class/dmi/id/product_uuid 는 보통 root 여야 읽혀서, 권한이 바뀌면 값도
+            # 바뀌어 같은 PC 가 둘로 잡힌다 → 후순위로 둔다.
+            for p, label in (
+                ("/etc/machine-id", "linux:/etc/machine-id"),
+                ("/var/lib/dbus/machine-id", "linux:dbus-machine-id"),
+                ("/sys/class/dmi/id/product_uuid", "linux:dmi-product_uuid"),
+            ):
                 try:
                     v = Path(p).read_text().strip()
                     if v:
                         uid = v
+                        source = label
                         break
                 except Exception:
                     continue
@@ -89,18 +110,29 @@ def get_machine_uid() -> str:
         logger.warning("머신 UID 조회 실패: %s", e)
 
     if not uid:
-        # 최종 폴백: 영속 파일에 랜덤 UUID 저장 (재부팅해도 유지되지만 OS 재설치 시 변경)
+        # 최종 폴백: 영속 파일에 랜덤 UUID 를 1회 만들어 두고 이후 계속 재사용.
+        # (파일에 남겨야 재부팅해도 같은 값 — 매번 새로 만들면 PC 가 계속 중복 등록된다)
+        fallback = Path(__file__).resolve().parent.parent.parent / "machine_uid.txt"
         try:
-            fallback = Path(__file__).resolve().parent.parent.parent / "machine_uid.txt"
             if fallback.exists():
                 uid = fallback.read_text().strip()
+                source = "file:machine_uid.txt"
             if not uid:
                 uid = str(uuid.uuid4())
                 fallback.write_text(uid)
-        except Exception:
-            uid = str(uuid.uuid4())
+                source = "file:machine_uid.txt(new)"
+        except Exception as e:
+            # 파일조차 못 쓰면 매 기동마다 값이 달라져 관제가 오염된다 — 반드시 눈에 띄게 경고.
+            uid = uid or str(uuid.uuid4())
+            source = "random(NOT PERSISTED)"
+            logger.warning(
+                "머신 UID 를 파일(%s)에 보존하지 못했습니다: %s — "
+                "재시작마다 다른 PC 로 잡혀 관제/통계가 오염될 수 있습니다.",
+                fallback, e,
+            )
 
     _MACHINE_UID_CACHE = uid.strip().lower().replace("{", "").replace("}", "")
+    logger.info("머신 UID 결정: %s (source=%s)", _MACHINE_UID_CACHE, source or "unknown")
     return _MACHINE_UID_CACHE
 
 
