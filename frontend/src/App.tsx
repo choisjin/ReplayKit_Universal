@@ -218,6 +218,31 @@ function AppContent() {
     return () => { mounted = false; };
   }, []);
 
+  // ReplayKit 창(브라우저 탭)의 최상단 포커스 여부를 백엔드에 보고.
+  // 관제 대시보드가 activity 를 '사용중(in_use)' / '대기(idle)' 로 구분하는 데 사용.
+  // 백엔드는 재생/녹화 중이면 이 값과 무관하게 '재생중/녹화중'을 우선 표시한다.
+  useEffect(() => {
+    const report = () => {
+      const focused = document.hasFocus() && document.visibilityState === 'visible';
+      axios.post('/api/monitor/ui-focus', { focused }).catch(() => {});
+    };
+    report();
+    const onFocus = () => report();
+    const onBlur = () => report();
+    const onVis = () => report();
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVis);
+    // 하트비트 — 백엔드 TTL(12s) 안에 최소 1회 갱신되도록 5초마다 현재 상태 재전송.
+    const iv = window.setInterval(report, 5000);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVis);
+      window.clearInterval(iv);
+    };
+  }, []);
+
   // Global webcam
   const webcam = useWebcam();
   const [webcamVisible, setWebcamVisible] = useState(false);

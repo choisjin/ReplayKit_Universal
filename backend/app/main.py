@@ -96,6 +96,23 @@ async def _reconnect_loop():
 _usage_stats_cache: dict = {"data": None, "ts": 0.0}
 _USAGE_STATS_TTL = 60.0
 
+# ReplayKit UI(브라우저 창) 포커스 상태 — 프론트가 POST /api/monitor/ui-focus 로 보고한다.
+# 관제 activity 판정 우선순위: 재생중(playing) > 녹화중(recording) > 창 최상단 포커스(in_use) > 대기(idle).
+# 브라우저는 백엔드와 별개 프로세스라 백엔드가 "그 창이 최상단인지"를 직접 알 수 없으므로,
+# 창 포커스를 정확히 아는 프론트가 document.hasFocus() 상태를 주기적으로 보고한다.
+_ui_focus_state: dict = {"focused": False, "ts": 0.0}
+# 이 시간(초) 안에 focused=True 보고가 없으면 최상단 아님(대기)으로 간주 —
+# 브라우저 탭이 닫히거나 프리즈되면 자동으로 대기로 떨어진다.
+_UI_FOCUS_TTL = 12.0
+
+
+def _ui_recently_focused() -> bool:
+    """프론트가 최근(_UI_FOCUS_TTL 이내)에 '창 최상단 포커스' 를 보고했는지."""
+    import time as _time
+    if not _ui_focus_state.get("focused"):
+        return False
+    return (_time.monotonic() - _ui_focus_state.get("ts", 0.0)) <= _UI_FOCUS_TTL
+
 
 def _compact_usage_stats(stats: dict | None) -> dict | None:
     """usage-stats 를 관제 전송용으로 경량화 — 시나리오 이름 배열(무거움)을 제거하고
@@ -129,29 +146,38 @@ def _compact_usage_stats(stats: dict | None) -> dict | None:
     }
 
 
-async def _get_cached_usage_stats() -> dict | None:
-    """60초 TTL 로 캐시된 compact usage-stats 반환 (스레드 오프로드)."""
+async def _usage_stats_refresh_loop():
+    """usage-stats 를 백그라운드에서 주기적으로 재계산해 캐시에 저장한다.
+
+    ⚠️ 관제 상태 콜백(_get_monitor_status)은 2초마다 호출되는데, 여기서 직접
+    _compute_usage_stats(디스크 glob + 모듈 introspection, 수초 소요 가능)를 await 하면
+    그 시간 동안 status_update 전송이 막혀 관제 대시보드가 "대기"로 멈춘다.
+    따라서 계산은 이 독립 루프에서만 수행하고, 콜백은 캐시값만 즉시 읽는다.
+    """
+    from .routers.scenario import _compute_usage_stats
     import time as _time
-    now = _time.monotonic()
-    if _usage_stats_cache["data"] is None or (now - _usage_stats_cache["ts"]) > _USAGE_STATS_TTL:
+    # 서버 안정화 후 첫 계산 (재생/스캔 등 초기 부하와 겹치지 않게 약간 지연)
+    await asyncio.sleep(8)
+    while True:
         try:
-            from .routers.scenario import _compute_usage_stats
             full = await asyncio.to_thread(_compute_usage_stats)
             _usage_stats_cache["data"] = _compact_usage_stats(full)
-            _usage_stats_cache["ts"] = now
+            _usage_stats_cache["ts"] = _time.monotonic()
         except Exception as e:
-            logger.debug("usage-stats 계산 실패(관제 스냅샷): %s", e)
-    return _usage_stats_cache["data"]
+            logger.debug("usage-stats 백그라운드 계산 실패: %s", e)
+        await asyncio.sleep(_USAGE_STATS_TTL)
 
 
 async def _get_monitor_status() -> dict:
     """관제 서버에 보낼 현재 상태를 수집."""
-    # 활동 상태 판별
+    # 활동 상태 판별 — 우선순위: 재생중 > 녹화중 > 창 최상단 포커스(사용중) > 대기
     activity = "idle"
     if playback_service.is_running:
         activity = "playing"
     elif recording_service.is_recording:
         activity = "recording"
+    elif _ui_recently_focused():
+        activity = "in_use"
 
     # 디바이스 목록
     devices = []
@@ -186,15 +212,14 @@ async def _get_monitor_status() -> dict:
     except Exception:
         scenarios = []
 
-    # 모듈/함수 사용 통계 (60초 캐시, compact) — 관제 서버의 PC 간 함수통계 집계용
-    usage_stats = await _get_cached_usage_stats()
-
+    # 모듈/함수 사용 통계 — 백그라운드 루프(_usage_stats_refresh_loop)가 채운 캐시를
+    # 그대로 읽기만 한다(계산 X). 여기서 계산하면 2초 status 루프가 막혀 대시보드가 멈춘다.
     return {
         "activity": activity,
         "devices": devices,
         "playback": playback,
         "scenarios": scenarios,
-        "usage_stats": usage_stats,
+        "usage_stats": _usage_stats_cache["data"],
     }
 
 
@@ -402,6 +427,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug("SSH startup reconnect sweep: %s", e)
 
+    # usage-stats 백그라운드 재계산 루프 — 관제 상태 콜백이 계산을 직접 하지 않고
+    # 이 루프가 채운 캐시만 읽도록 분리(2초 status 루프 stall 방지).
+    usage_stats_task = asyncio.create_task(_usage_stats_refresh_loop())
+
     # 관제 클라이언트 콜백 항상 등록 (URL은 나중에 Settings에서 설정 가능)
     monitor_client.set_status_callback(_get_monitor_status)
     monitor_client.set_command_callback(_handle_monitor_command)
@@ -424,6 +453,7 @@ async def lifespan(app: FastAPI):
     await monitor_client.stop()
     reconnect_task.cancel()
     backup_task.cancel()
+    usage_stats_task.cancel()
     # 모듈 인스턴스 graceful teardown — SCAR(netns 복원=인터넷/cvd-ebr 정리), TH(게이트웨이/cuttlefish
     # 정리) 등 무거운 모듈이 서버 종료 시 잔류 상태를 남기지 않도록. (재시작 후 stale 상태로 인한
     # "connected 인데 동작 안 함" / FqinAlreadyExists 완화)
@@ -554,6 +584,19 @@ async def _resolve_group_jump_step(scenario_name: str, step_uid: Optional[str]) 
 
 @app.get("/api/health")
 async def health_check():
+    return {"status": "ok"}
+
+
+@app.post("/api/monitor/ui-focus")
+async def report_ui_focus(body: dict):
+    """프론트가 자기 창(브라우저 탭)의 최상단 포커스 여부를 보고한다.
+
+    관제 대시보드의 activity 를 '사용중(in_use)' / '대기(idle)' 로 구분하는 데 쓴다.
+    body: {"focused": bool}. 재생/녹화 중에는 이 값과 무관하게 재생중/녹화중이 우선한다.
+    """
+    import time as _time
+    _ui_focus_state["focused"] = bool(body.get("focused"))
+    _ui_focus_state["ts"] = _time.monotonic()
     return {"status": "ok"}
 
 
