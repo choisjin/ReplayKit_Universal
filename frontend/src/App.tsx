@@ -218,27 +218,39 @@ function AppContent() {
     return () => { mounted = false; };
   }, []);
 
-  // ReplayKit 창(브라우저 탭)의 최상단 포커스 여부를 백엔드에 보고.
-  // 관제 대시보드가 activity 를 '사용중(in_use)' / '대기(idle)' 로 구분하는 데 사용.
-  // 백엔드는 재생/녹화 중이면 이 값과 무관하게 '재생중/녹화중'을 우선 표시한다.
+  // ReplayKit 창(브라우저 탭)의 상태를 백엔드에 보고 — 관제 대시보드용.
+  //  - focused: 최상단 포커스 여부 → activity 를 '사용중(in_use)'/'대기(idle)' 로 구분
+  //             (재생/녹화 중이면 백엔드가 '재생중/녹화중'을 우선한다)
+  //  - mode   : URL hash 게이트 (#test/#admin/#stats) — 모드마다 노출되는 모듈이 달라
+  //             관제에서 "이 PC 가 지금 어떤 모드인지" 알아야 한다
+  //  - page   : 현재 보고 있는 페이지 (activeKey)
   useEffect(() => {
     const report = () => {
       const focused = document.hasFocus() && document.visibilityState === 'visible';
-      axios.post('/api/monitor/ui-focus', { focused }).catch(() => {});
+      const hash = window.location.hash || '';
+      const mode =
+        hash === '#test' ? 'test' :
+        hash === '#admin' ? 'admin' :
+        hash === '#stats' ? 'stats' : 'normal';
+      axios.post('/api/monitor/ui-focus', {
+        focused, mode, page: activeKeyRef.current,
+      }).catch(() => {});
     };
     report();
-    const onFocus = () => report();
-    const onBlur = () => report();
-    const onVis = () => report();
-    window.addEventListener('focus', onFocus);
-    window.addEventListener('blur', onBlur);
-    document.addEventListener('visibilitychange', onVis);
+    const onAny = () => report();
+    window.addEventListener('focus', onAny);
+    window.addEventListener('blur', onAny);
+    window.addEventListener('hashchange', onAny);   // 모드 전환 즉시 반영
+    window.addEventListener('tab-change', onAny);   // 페이지 이동 즉시 반영
+    document.addEventListener('visibilitychange', onAny);
     // 하트비트 — 백엔드 TTL(12s) 안에 최소 1회 갱신되도록 5초마다 현재 상태 재전송.
     const iv = window.setInterval(report, 5000);
     return () => {
-      window.removeEventListener('focus', onFocus);
-      window.removeEventListener('blur', onBlur);
-      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('focus', onAny);
+      window.removeEventListener('blur', onAny);
+      window.removeEventListener('hashchange', onAny);
+      window.removeEventListener('tab-change', onAny);
+      document.removeEventListener('visibilitychange', onAny);
       window.clearInterval(iv);
     };
   }, []);

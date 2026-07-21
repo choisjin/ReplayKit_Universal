@@ -127,18 +127,37 @@ async def _refresh_device_status_for_monitor() -> None:
 # 관제 activity 판정 우선순위: 재생중(playing) > 녹화중(recording) > 창 최상단 포커스(in_use) > 대기(idle).
 # 브라우저는 백엔드와 별개 프로세스라 백엔드가 "그 창이 최상단인지"를 직접 알 수 없으므로,
 # 창 포커스를 정확히 아는 프론트가 document.hasFocus() 상태를 주기적으로 보고한다.
-_ui_focus_state: dict = {"focused": False, "ts": 0.0}
+_ui_focus_state: dict = {"focused": False, "mode": "normal", "page": "", "ts": 0.0}
+
+# 프론트 useTestMode.ts 의 TEST_ONLY_MODULES 와 같은 목록 —
+# URL hash `#test` 모드에서만 UI 에 노출되는 실험 모듈. 관제에서 일반 모드 PC 의 목록과
+# 구분해 표시하기 위해 디바이스마다 test_only 플래그로 함께 보낸다.
+# ⚠️ 프론트 목록이 바뀌면 여기도 같이 고쳐야 한다(게이트 자체는 순수 프론트 구현).
+_TEST_ONLY_MODULES = {"Frame_Check"}
 # 이 시간(초) 안에 focused=True 보고가 없으면 최상단 아님(대기)으로 간주 —
 # 브라우저 탭이 닫히거나 프리즈되면 자동으로 대기로 떨어진다.
 _UI_FOCUS_TTL = 12.0
 
 
+def _ui_report_fresh() -> bool:
+    """프론트의 UI 상태 보고가 최근(_UI_FOCUS_TTL 이내)인지 — 브라우저가 떠 있는지 판단."""
+    import time as _time
+    return (_time.monotonic() - _ui_focus_state.get("ts", 0.0)) <= _UI_FOCUS_TTL
+
+
 def _ui_recently_focused() -> bool:
     """프론트가 최근(_UI_FOCUS_TTL 이내)에 '창 최상단 포커스' 를 보고했는지."""
-    import time as _time
-    if not _ui_focus_state.get("focused"):
-        return False
-    return (_time.monotonic() - _ui_focus_state.get("ts", 0.0)) <= _UI_FOCUS_TTL
+    return bool(_ui_focus_state.get("focused")) and _ui_report_fresh()
+
+
+def _current_ui_state() -> dict:
+    """관제에 보낼 현재 UI 모드/페이지. 보고가 끊겼으면(브라우저 닫힘) 빈 값."""
+    if not _ui_report_fresh():
+        return {"mode": "", "page": ""}
+    return {
+        "mode": _ui_focus_state.get("mode") or "normal",
+        "page": _ui_focus_state.get("page") or "",
+    }
 
 
 def _compact_usage_stats(stats: dict | None) -> dict | None:
@@ -252,6 +271,8 @@ async def _get_monitor_status() -> dict:
                 "type": dev.type,
                 "status": status,
                 "raw_status": raw_status,   # 진단용 (device/offline/unauthorized/reconnecting 등)
+                # #test 모드에서만 UI 에 노출되는 실험 모듈인지 — 관제에서 구분 표시용
+                "test_only": (info.get("module") or dev.id) in _TEST_ONLY_MODULES,
             })
         except Exception:
             continue
@@ -288,6 +309,8 @@ async def _get_monitor_status() -> dict:
         "playback": playback,
         "scenarios": scenarios,
         "usage_stats": _usage_stats_cache["data"],
+        # 현재 UI 모드(#test/#admin/#stats/normal)와 보고 있는 페이지
+        "ui": _current_ui_state(),
     }
 
 
@@ -664,6 +687,9 @@ async def report_ui_focus(body: dict):
     """
     import time as _time
     _ui_focus_state["focused"] = bool(body.get("focused"))
+    # 모드/페이지 — 관제에서 이 PC 가 지금 어떤 화면·모드인지 표시하는 데 쓴다.
+    _ui_focus_state["mode"] = str(body.get("mode") or "normal")
+    _ui_focus_state["page"] = str(body.get("page") or "")
     _ui_focus_state["ts"] = _time.monotonic()
     return {"status": "ok"}
 
