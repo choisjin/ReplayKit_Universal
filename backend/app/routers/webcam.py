@@ -5,6 +5,7 @@ Frontend MediaRecorder를 대체하여 WS 연결 상태와 무관하게 녹화�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Optional
@@ -54,7 +55,9 @@ async def list_devices():
     excluded = _get_primary_webcam_indices()
     # excluded 를 함께 반환 — 목록이 비었을 때 "전부 주 디바이스 점유" vs "탐지 실패" 를
     # 프론트/사용자가 구분할 수 있게 한다.
-    return {"devices": svc.list_devices(exclude=excluded), "excluded": sorted(excluded)}
+    # ⚠️ 장치 열거는 인덱스마다 DirectShow 오픈을 시도해 수초까지 걸린다 → 스레드로 오프로드.
+    devices = await asyncio.to_thread(svc.list_devices, exclude=excluded)
+    return {"devices": devices, "excluded": sorted(excluded)}
 
 
 @router.get("/resolutions/{device_index}")
@@ -70,7 +73,9 @@ async def probe_resolutions(device_index: int):
     if svc.is_open() and svc._device_index == device_index:
         # 현재 열려 있는 장치는 재오픈 피함 — status에서 현재 해상도만 반환
         return {"resolutions": [f"{svc._width}x{svc._height}"]}
-    return {"resolutions": svc.probe_resolutions(device_index)}
+    # ⚠️ 해상도 프로브는 해상도마다 장치를 열어보므로 매우 느리다 → 스레드로 오프로드.
+    resolutions = await asyncio.to_thread(svc.probe_resolutions, device_index)
+    return {"resolutions": resolutions}
 
 
 class OpenRequest(BaseModel):
@@ -90,7 +95,9 @@ async def open_webcam(req: OpenRequest):
             detail=f"Webcam index {req.device_index} is registered as a primary device",
         )
     svc = get_webcam_service()
-    ok = svc.open(req.device_index, req.width, req.height)
+    # ⚠️ DirectShow 카메라 오픈은 1~2초 걸리는 블로킹 호출이다. 이벤트 루프에서 직접 부르면
+    #    그동안 /api/health 와 관제 상태 전송이 굶는다([loop-watchdog] blocked ~1.2s) → 스레드로.
+    ok = await asyncio.to_thread(svc.open, req.device_index, req.width, req.height)
     if not ok:
         raise HTTPException(status_code=400, detail=f"Failed to open webcam device {req.device_index}")
     return svc.status()
@@ -99,7 +106,8 @@ async def open_webcam(req: OpenRequest):
 @router.post("/close")
 async def close_webcam():
     svc = get_webcam_service()
-    svc.close()
+    # 장치 release 도 블로킹이므로 동일하게 오프로드.
+    await asyncio.to_thread(svc.close)
     return {"ok": True}
 
 
@@ -132,7 +140,8 @@ class RecordStartRequest(BaseModel):
 async def start_record(req: RecordStartRequest):
     """녹화 시작."""
     svc = get_webcam_service()
-    ok = svc.start_recording(req.output_path)
+    # ffmpeg writer 스폰이 포함돼 블로킹 → 스레드로 오프로드.
+    ok = await asyncio.to_thread(svc.start_recording, req.output_path)
     if not ok:
         raise HTTPException(status_code=400, detail="Failed to start recording (webcam not open or already recording)")
     return svc.status()
@@ -142,7 +151,8 @@ async def start_record(req: RecordStartRequest):
 async def stop_record():
     """녹화 정지 + 파일 경로 반환."""
     svc = get_webcam_service()
-    path = svc.stop_recording()
+    # ffmpeg 종료 대기(finalize)가 포함돼 블로킹 → 스레드로 오프로드.
+    path = await asyncio.to_thread(svc.stop_recording)
     if path is None:
         raise HTTPException(status_code=400, detail="Not recording")
     return {"path": path}
@@ -183,8 +193,10 @@ async def list_audio_devices(force: bool = False):
     """
     svc = get_webcam_service()
     st = svc.status()
+    # dshow 장치 열거는 ffmpeg 서브프로세스 호출이라 수백 ms~수초 → 스레드로 오프로드.
+    devices = await asyncio.to_thread(svc.list_audio_devices, force=force)
     return {
-        "devices": svc.list_audio_devices(force=force),
+        "devices": devices,
         "enabled": st.get("audio_enabled", False),
         "device": st.get("audio_device", ""),
     }
