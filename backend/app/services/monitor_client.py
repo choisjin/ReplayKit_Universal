@@ -198,7 +198,10 @@ class MonitorClient:
 
         while self._running:
             try:
-                async with ws_connect(ws_url, ping_interval=20, ping_timeout=10) as ws:
+                # ping_interval/timeout 을 넉넉히 — 재생 중 이벤트 루프가 잠깐 바빠져도
+                # keepalive pong 지연으로 WS 가 끊겨 관제가 오프라인으로 보이는 것을 방지.
+                # (최대 ~50초 무응답까지 버팀. 그보다 긴 스톨은 loop_watchdog 로그로 원인 특정)
+                async with ws_connect(ws_url, ping_interval=30, ping_timeout=20) as ws:
                     self._ws = ws
                     # 연결 성공 — 이후 끊김은 무한 재연결 대상(최초 연결 가드 해제).
                     self._ever_connected = True
