@@ -91,6 +91,59 @@ async def _reconnect_loop():
             logger.debug("Reconnect loop error: %s", e)
 
 
+# 모듈/함수 사용 통계 캐시 — 관제 스냅샷은 2초마다 전송되므로 매번 재계산하면
+# 디스크 glob + 모듈 introspection 이 낭비다. 60초 TTL 로 캐시하고 compact 하게 보낸다.
+_usage_stats_cache: dict = {"data": None, "ts": 0.0}
+_USAGE_STATS_TTL = 60.0
+
+
+def _compact_usage_stats(stats: dict | None) -> dict | None:
+    """usage-stats 를 관제 전송용으로 경량화 — 시나리오 이름 배열(무거움)을 제거하고
+    카운트만 남긴다. 관제 서버는 카운트를 PC 간 합산하므로 이름 목록은 불필요."""
+    if not stats:
+        return None
+    return {
+        "generated_at": stats.get("generated_at"),
+        "scenario_count": stats.get("scenario_count", 0),
+        "total_steps": stats.get("total_steps", 0),
+        "step_types": [
+            {"type": s["type"], "count": s["count"], "scenario_count": s["scenario_count"]}
+            for s in stats.get("step_types", [])
+        ],
+        "modules": [
+            {
+                "module": m["module"], "count": m["count"],
+                "scenario_count": m["scenario_count"], "function_count": m["function_count"],
+                "functions": [
+                    {"function": f["function"], "count": f["count"], "scenario_count": f["scenario_count"]}
+                    for f in m["functions"]
+                ],
+            }
+            for m in stats.get("modules", [])
+        ],
+        "unused_functions": stats.get("unused_functions", []),
+        "available_module_count": stats.get("available_module_count", 0),
+        "available_function_count": stats.get("available_function_count", 0),
+        "used_module_count": stats.get("used_module_count", 0),
+        "used_function_count": stats.get("used_function_count", 0),
+    }
+
+
+async def _get_cached_usage_stats() -> dict | None:
+    """60초 TTL 로 캐시된 compact usage-stats 반환 (스레드 오프로드)."""
+    import time as _time
+    now = _time.monotonic()
+    if _usage_stats_cache["data"] is None or (now - _usage_stats_cache["ts"]) > _USAGE_STATS_TTL:
+        try:
+            from .routers.scenario import _compute_usage_stats
+            full = await asyncio.to_thread(_compute_usage_stats)
+            _usage_stats_cache["data"] = _compact_usage_stats(full)
+            _usage_stats_cache["ts"] = now
+        except Exception as e:
+            logger.debug("usage-stats 계산 실패(관제 스냅샷): %s", e)
+    return _usage_stats_cache["data"]
+
+
 async def _get_monitor_status() -> dict:
     """관제 서버에 보낼 현재 상태를 수집."""
     # 활동 상태 판별
@@ -133,11 +186,15 @@ async def _get_monitor_status() -> dict:
     except Exception:
         scenarios = []
 
+    # 모듈/함수 사용 통계 (60초 캐시, compact) — 관제 서버의 PC 간 함수통계 집계용
+    usage_stats = await _get_cached_usage_stats()
+
     return {
         "activity": activity,
         "devices": devices,
         "playback": playback,
         "scenarios": scenarios,
+        "usage_stats": usage_stats,
     }
 
 

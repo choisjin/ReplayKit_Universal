@@ -6,8 +6,10 @@ import asyncio
 import json
 import logging
 import platform
+import subprocess
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,79 @@ except ImportError:
     HAS_WEBSOCKETS = False
 
 
+_MACHINE_UID_CACHE: Optional[str] = None
+
+
+def get_machine_uid() -> str:
+    """하드웨어 기반의 **안정적** 머신 UID 를 반환한다.
+
+    관제 서버가 각 테스트 PC 를 식별하는 키. IP 는 바뀔 수 있으므로 쓰지 않고,
+    메인보드 펌웨어에 각인된 SMBIOS 제품 UUID(부품 교체 전까지 불변)를 우선 사용한다.
+    우선순위: SMBIOS/제품 UUID → (Windows) 레지스트리 MachineGuid → (Linux) machine-id
+             → 최종 폴백으로 영속 파일에 랜덤 UUID 저장.
+    한 번 계산하면 프로세스 내에서 캐시한다.
+    """
+    global _MACHINE_UID_CACHE
+    if _MACHINE_UID_CACHE:
+        return _MACHINE_UID_CACHE
+
+    uid = ""
+    system = platform.system()
+    try:
+        if system == "Windows":
+            # SMBIOS 제품 UUID (메인보드 펌웨어에 각인 — 부품 교체 전까지 불변)
+            try:
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     "(Get-CimInstance -ClassName Win32_ComputerSystemProduct).UUID"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                cand = (out.stdout or "").strip()
+                # 일부 메인보드는 UUID 를 채우지 않아 all-F / all-0 을 반환 → 무효 처리
+                if cand and not cand.lower().replace("-", "").strip("f0"):
+                    cand = ""
+                uid = cand
+            except Exception:
+                uid = ""
+            if not uid:
+                # 폴백: 레지스트리 MachineGuid (OS 설치 단위 고유)
+                try:
+                    import winreg
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                        r"SOFTWARE\Microsoft\Cryptography") as k:
+                        uid = str(winreg.QueryValueEx(k, "MachineGuid")[0]).strip()
+                except Exception:
+                    uid = ""
+        else:
+            # Linux: product_uuid(root 필요할 수 있음) → machine-id
+            for p in ("/sys/class/dmi/id/product_uuid", "/etc/machine-id",
+                      "/var/lib/dbus/machine-id"):
+                try:
+                    v = Path(p).read_text().strip()
+                    if v:
+                        uid = v
+                        break
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.warning("머신 UID 조회 실패: %s", e)
+
+    if not uid:
+        # 최종 폴백: 영속 파일에 랜덤 UUID 저장 (재부팅해도 유지되지만 OS 재설치 시 변경)
+        try:
+            fallback = Path(__file__).resolve().parent.parent.parent / "machine_uid.txt"
+            if fallback.exists():
+                uid = fallback.read_text().strip()
+            if not uid:
+                uid = str(uuid.uuid4())
+                fallback.write_text(uid)
+        except Exception:
+            uid = str(uuid.uuid4())
+
+    _MACHINE_UID_CACHE = uid.strip().lower().replace("{", "").replace("}", "")
+    return _MACHINE_UID_CACHE
+
+
 class MonitorClient:
     """관제 서버에 WebSocket으로 연결하여 상태를 주기적으로 push하는 클라이언트.
 
@@ -29,7 +104,9 @@ class MonitorClient:
 
     def __init__(self):
         self._server_url: str = ""
-        self._client_id: str = str(uuid.uuid4())[:8]
+        # 관제 서버 식별 키 — 하드웨어 기반 안정적 머신 UID (IP 대신 사용, 부품 교체 전 불변).
+        # 무거운 조회를 피하려 start() 시점에 lazy 계산한다.
+        self._client_id: str = ""
         self._client_name: str = platform.node()  # 호스트명
         self._ws: Any = None
         self._task: Optional[asyncio.Task] = None
@@ -69,6 +146,14 @@ class MonitorClient:
 
         # 기존 연결 정리
         await self.stop()
+
+        # 머신 UID lazy 계산 (subprocess 호출 — 이벤트 루프 블록 방지 위해 스레드로)
+        if not self._client_id:
+            try:
+                self._client_id = await asyncio.to_thread(get_machine_uid)
+            except Exception:
+                self._client_id = str(uuid.uuid4())
+            logger.info("Monitor client machine_uid=%s", self._client_id)
 
         self._server_url = server_url.rstrip("/")
         self._running = True

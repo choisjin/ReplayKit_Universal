@@ -3,6 +3,7 @@ import { Button, Card, Checkbox, Collapse, Divider, Empty, Input, message, Modal
 import { DeleteOutlined, LockOutlined, LogoutOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, UserOutlined } from '@ant-design/icons';
 import { deviceApi } from '../services/api';
 import MemoryMonitor from '../components/MemoryMonitor';
+import { useSettings } from '../context/SettingsContext';
 
 // 하드코딩된 관리자 자격증명 — 실수 방지 목적의 게이트
 // (클라이언트 측 검증이므로 기술적 엄격 보안 아님; 소스 확인 가능 유저 대상이 아님을 전제)
@@ -71,6 +72,23 @@ export default function AdminPage() {
     setAuthed(false);
     setLoginId('');
     setLoginPw('');
+  };
+
+  // 관제 서버 URL — 이 PC 의 재생 상태/함수통계를 매니저 서버로 보고할 대상.
+  const { settings, updateSettings } = useSettings();
+  const [monitorUrl, setMonitorUrl] = useState('');
+  const [savingMonitor, setSavingMonitor] = useState(false);
+  useEffect(() => { setMonitorUrl(settings.monitor_server_url || ''); }, [settings.monitor_server_url]);
+  const saveMonitorUrl = async () => {
+    setSavingMonitor(true);
+    try {
+      await updateSettings({ monitor_server_url: monitorUrl.trim() });
+      message.success(monitorUrl.trim() ? '관제 서버 연동 저장 — 곧 연결됩니다' : '관제 서버 연동 해제됨');
+    } catch (e: any) {
+      message.error('저장 실패: ' + (e.response?.data?.detail || e.message));
+    } finally {
+      setSavingMonitor(false);
+    }
   };
 
   const [catalog, setCatalog] = useState<Catalog>({ projects: [], module_visibility: {}, agents: [] });
@@ -276,6 +294,24 @@ export default function AdminPage() {
           DevicePage의 프로젝트·모델 콤보와 모듈 목록에 반영됩니다. 체크 해제된 항목은 사용자에게 노출되지 않습니다.
           접근 경로: URL hash <code>#admin</code>. 메뉴에는 표시되지 않습니다.
         </Typography.Paragraph>
+      </Card>
+
+      {/* 관제 서버 연동 — 이 PC 를 매니저(관제) 서버에 등록 */}
+      <Card size="small" title={<Space><Typography.Text strong>관제 서버 연동</Typography.Text><Tag color="purple">Manager</Tag></Space>}>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 8, fontSize: 12 }}>
+          이 PC 의 재생 상태(시나리오/그룹·회차·pass/fail/error)와 함수 사용통계를 매니저 서버로 실시간 보고합니다.
+          매니저 서버 주소를 <code>http://&lt;매니저IP&gt;:9000</code> 형식으로 입력하세요. 비우면 연동 해제됩니다.
+          PC 식별은 하드웨어 머신 UID 기준이라 IP 가 바뀌어도 동일 PC 로 집계됩니다.
+        </Typography.Paragraph>
+        <Space.Compact style={{ width: '100%', maxWidth: 520 }}>
+          <Input
+            placeholder="http://192.168.0.10:9000"
+            value={monitorUrl}
+            onChange={(e) => setMonitorUrl(e.target.value)}
+            onPressEnter={saveMonitorUrl}
+          />
+          <Button type="primary" icon={<SaveOutlined />} onClick={saveMonitorUrl} loading={savingMonitor}>저장</Button>
+        </Space.Compact>
       </Card>
 
       {/* 메모리 사용량 모니터링 */}
