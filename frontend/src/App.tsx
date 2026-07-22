@@ -14,8 +14,6 @@ import {
   PlayCircleOutlined,
   SettingOutlined,
   VideoCameraOutlined,
-  MessageOutlined,
-  NotificationOutlined,
 } from '@ant-design/icons';
 import axios from 'axios';
 import { deviceApi, serverApi } from './services/api';
@@ -35,7 +33,7 @@ import WebcamPip from './components/WebcamPip';
 import CompositorEditor from './components/CompositorEditor';
 import AnnouncementBanner from './components/AnnouncementBanner';
 import AnnouncementListModal from './components/AnnouncementListModal';
-import { AnnouncementsProvider, useAnnouncements } from './context/AnnouncementsContext';
+import { AnnouncementsProvider } from './context/AnnouncementsContext';
 import PlaybackStatusBanner from './components/PlaybackStatusBanner';
 import ChatWidget from './components/ChatWidget';
 import { WebcamProvider } from './context/WebcamContext';
@@ -94,7 +92,6 @@ function AppContent() {
   const initialBootIdRef = useRef<string>('');
   const reloadingRef = useRef<boolean>(false);
   const { settings, uploadWebcamRecording, fetchSettings } = useSettings();
-  const { openList: openAnnouncements } = useAnnouncements();
   const { t } = useTranslation();
 
   // 백엔드 version 또는 boot_id 가 페이지 로드 후 바뀌면 강제 새로고침.
@@ -487,35 +484,6 @@ function AppContent() {
                 }}
               >
                 {!siderCollapsed && 'Results 폴더'}
-              </Button>
-            </Tooltip>
-            <Tooltip title={t('announce.title')} placement="right">
-              <Button
-                block
-                icon={<NotificationOutlined />}
-                onClick={() => openAnnouncements()}
-              >
-                {!siderCollapsed && t('announce.title')}
-              </Button>
-            </Tooltip>
-            <Tooltip title={t('chat.title')} placement="right">
-              <Button
-                block
-                icon={<MessageOutlined />}
-                onClick={() => {
-                  Modal.info({
-                    title: '문의 안내',
-                    content: (
-                      <div style={{ fontSize: 12, lineHeight: 1.8 }}>
-                        요청사항 및 문의사항은 제목에<br />
-                        <b style={{ color: '#1677ff' }}>[ReplayKit]</b> 붙여 이슈 등록 해주세요!
-                      </div>
-                    ),
-                    okText: '확인',
-                  });
-                }}
-              >
-                {!siderCollapsed && t('chat.title')}
               </Button>
             </Tooltip>
           </div>

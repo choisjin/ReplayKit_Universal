@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Alert, Badge, Button, Space } from 'antd';
-import { NotificationOutlined, ExpandOutlined } from '@ant-design/icons';
+import { NotificationOutlined } from '@ant-design/icons';
 import { useAnnouncements } from '../context/AnnouncementsContext';
 import { annContent, annTitle } from '../lib/manager';
 import { useTranslation } from '../i18n';
 
 /**
- * 상단 배너 — 활성 공지의 대표 1건을 띄우고, "크게보기" 로 공통 목록 모달을 연다.
+ * 상단 배너 — 활성 공지의 대표 1건을 띄우고, 우측 "공지사항" 버튼으로 공통 목록 모달을 연다.
  * 데이터는 AnnouncementsContext(단일 소스) 사용. 배너 닫기는 세션 한정.
  */
 export default function AnnouncementBanner() {
@@ -44,8 +44,8 @@ export default function AnnouncementBanner() {
               <Badge count={visible.length} size="small" style={{ backgroundColor: '#1677ff' }} />
             )}
           </Space>
-          <Button type="text" size="small" icon={<ExpandOutlined />} onClick={() => openList()} style={{ color: 'inherit' }}>
-            {t('announce.expand')}
+          <Button type="text" size="small" icon={<NotificationOutlined />} onClick={() => openList()} style={{ color: 'inherit' }}>
+            {t('announce.title')}
           </Button>
         </div>
       }
