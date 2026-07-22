@@ -333,7 +333,9 @@ function AppContent() {
       },
     }}>
       <Layout style={{ minHeight: '100vh' }}>
-        <Sider collapsible collapsed={siderCollapsed} onCollapse={setSiderCollapsed} style={isDark ? undefined : { background: '#f0f0f0' }}>
+        <Sider collapsible width={150} collapsed={siderCollapsed} onCollapse={setSiderCollapsed} style={isDark ? undefined : { background: '#f0f0f0' }}>
+          {/* flex column — 디스크 게이지/버전 블록을 사이드바 하단에 고정 */}
+          <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
           <div
             onClick={handleLogoClick}
             style={{ height: 40, margin: siderCollapsed ? '16px 8px' : 16, color: isDark ? '#fff' : '#222', fontSize: siderCollapsed ? 11 : 14, fontWeight: 'bold', textAlign: 'center', lineHeight: '40px', overflow: 'hidden', whiteSpace: 'nowrap', cursor: 'default', userSelect: 'none' }}
@@ -355,7 +357,7 @@ function AppContent() {
             }}
             style={isDark ? undefined : { background: '#f0f0f0' }}
           />
-          <div style={{ padding: siderCollapsed ? '12px 8px' : '12px 16px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <div style={{ padding: '12px 8px', display: 'flex', flexDirection: 'column', gap: 5 }}>
             <Tooltip title={t('webcam.title')} placement="right">
               <Button
                 block
@@ -380,7 +382,7 @@ function AppContent() {
                   }
                 }}
               >
-                {!siderCollapsed && t('dlt.launchViewer')}
+                {!siderCollapsed && 'DLT Viewer'}
               </Button>
             </Tooltip>
             <Tooltip title={t('server.update')} placement="right">
@@ -487,8 +489,9 @@ function AppContent() {
               </Button>
             </Tooltip>
           </div>
+          <div style={{ marginTop: 'auto' }}>
           {diskInfoList.length > 0 && (
-            <div style={{ padding: siderCollapsed ? '8px 4px' : '8px 16px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+            <div style={{ padding: siderCollapsed ? '8px 4px' : '8px 8px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
               {diskInfoList.map((di) => (
               <Tooltip key={di.drive} title={`${di.drive} — ${di.free_gb} GB 사용가능 / ${di.total_gb} GB`} placement="right">
                 <div style={{ fontSize: 11, color: '#888', marginBottom: diskInfoList.length > 1 ? 6 : 0 }}>
@@ -508,9 +511,9 @@ function AppContent() {
           )}
           {appVersion && (
             <div style={{
-              padding: siderCollapsed ? '6px 4px' : '6px 16px',
+              padding: siderCollapsed ? '6px 4px' : '6px 8px',
               borderTop: '1px solid rgba(255,255,255,0.1)',
-              fontSize: 10,
+              fontSize: 20,
               color: '#888',
               textAlign: 'center',
               userSelect: 'none',
@@ -518,6 +521,8 @@ function AppContent() {
               {appVersion}
             </div>
           )}
+          </div>
+          </div>
         </Sider>
         <Layout style={layoutBg ? { background: layoutBg } : undefined}>
           <Content style={{ margin: 6, padding: 10, background: contentBg, borderRadius: 8 }}>
