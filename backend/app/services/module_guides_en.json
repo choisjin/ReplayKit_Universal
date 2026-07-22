@@ -1156,13 +1156,13 @@
     "_description": "DLT Logging — Captures and saves logs via direct TCP connection to the DLT daemon, with keyword-based PASS/FAIL evaluation (no GUI required)",
     "functions": {
       "StartLogging": {
-        "description": "Connects to DLT and starts capture. Streams all logs immediately to a text file (auto path) while keeping only recent entries in memory (stays fast even for long runs). The viewer modal opens automatically.",
+        "description": "Connects to DLT and starts capture. Streams all logs immediately to a text file (auto path) while keeping only recent entries in memory (stays fast even for long runs). A raw .dlt file (same path, .dlt extension) is written in parallel so the capture can be reopened in DLT Viewer. The viewer modal opens automatically.",
         "params": {}
       },
       "StopLogging": {
-        "description": "Stops DLT capture. Logs are already saved to file in real time; specifying save_path only moves the file to that location.",
+        "description": "Stops DLT capture. Logs are already saved to file in real time; specifying save_path only moves the file to that location. The raw .dlt file is moved alongside it (same path, .dlt extension).",
         "params": {
-          "save_path": "Save file path. If empty, keeps the streaming file as-is (during replay: run_dir/logs/dlt_*.log, step test: backend/results/Temp_logs/dlt_*.log)"
+          "save_path": "Save file path. If empty, keeps the streaming files as-is (during replay: run_dir/logs/dlt_*.log + dlt_*.dlt, step test: backend/results/Temp_logs/)"
         }
       },
       "WaitLog": {

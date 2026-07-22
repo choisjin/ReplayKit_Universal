@@ -9,6 +9,9 @@ DLT Viewer GUI 없이 시나리오 스텝 내에서:
 저장 구조 (스트리밍 정본):
   - StartSave/StartLogging 모두 캡처 시작과 동시에 모든 라인을 텍스트 파일에
     즉시 기록한다 — 파일이 로그 정본.
+  - 동시에 같은 경로에 확장자만 바꾼 **.dlt 원본 파일**도 기록한다. 수신한 DLT
+    메시지 바이트에 storage header(16B)를 붙여 그대로 append하므로 DLT Viewer
+    등 표준 툴로 다시 열 수 있다 (텍스트로 변환되며 손실되는 정보 보존).
   - 메모리는 최근 _RING_MAX줄 링버퍼만 유지 (장시간 로깅 메모리 증가 방지).
   - 전체/구간 검색(SearchAll/SearchRange 등)은 링버퍼에 없는 과거분을
     스트림 파일에서 읽는다 (절대 인덱스 = 파일 라인 번호).
@@ -183,7 +186,22 @@ def _auto_save_path(prefix: str = "dlt") -> str:
     return str(log_dir / f"{prefix}_{ts}.log")
 
 
+def _raw_path_for(text_path: str) -> str:
+    """텍스트 로그 경로에 대응하는 .dlt 원본 파일 경로.
+
+    같은 디렉토리/같은 파일명 + 확장자만 .dlt (text: foo.log → raw: foo.dlt).
+    텍스트 경로가 이미 .dlt면 덮어쓰지 않도록 _raw 접미사를 붙인다.
+    """
+    stem, ext = os.path.splitext(text_path)
+    if ext.lower() == ".dlt":
+        return f"{stem}_raw.dlt"
+    return f"{stem}.dlt"
+
+
 # DLT 프로토콜 상수
+# .dlt 파일 storage header: "DLT\x01" + uint32 sec(LE) + int32 usec(LE) + char[4] ECU (총 16B).
+# TCP 스트림에는 storage header가 없으므로 파일로 저장할 때 우리가 붙여야 한다.
+_STORAGE_PATTERN = b"DLT\x01"
 _MSG_TYPE = {0: "LOG", 1: "TRACE", 2: "NW", 3: "CTRL"}
 _LOG_LEVEL = {0: "", 1: "FATAL", 2: "ERROR", 3: "WARN", 4: "INFO", 5: "DEBUG", 6: "VERBOSE"}
 _TYLE_BYTES = {1: 1, 2: 2, 3: 4, 4: 8, 5: 16}
@@ -221,6 +239,10 @@ class DLTLogging:
         self._save_file = None
         self._save_path: Optional[str] = None
         self._stream_path: Optional[str] = None  # 정본 파일 경로 (close/move 후에도 유지)
+
+        # .dlt 원본 저장 — 텍스트 정본과 항상 같은 경로/파일명(확장자만 .dlt)
+        self._raw_file = None
+        self._raw_path: Optional[str] = None
 
         # 스텝 마킹: {step_index: log_buffer_index}
         self._step_marks: dict[int, int] = {}
@@ -260,6 +282,7 @@ class DLTLogging:
             self._total_count = 0
             self._clear_base = 0
             self._stream_path = None
+            self._raw_path = None
             self._step_marks.clear()
             with self._counter_lock:
                 self._counters.clear()  # 새 세션마다 키워드 카운터 자동 리셋
@@ -296,15 +319,58 @@ class DLTLogging:
     # ------------------------------------------------------------------
 
     def _open_stream_file(self, save_path: str) -> str:
-        """스트림 파일을 연다. 성공 시 "", 실패 시 에러 메시지."""
+        """스트림 파일(텍스트 정본 + .dlt 원본)을 연다. 성공 시 "", 실패 시 에러 메시지.
+
+        .dlt 원본 열기 실패는 치명적이지 않다 — 텍스트 로깅은 그대로 진행하고
+        경고만 남긴다 (원본 저장 때문에 로깅 자체가 죽지 않도록).
+        """
         try:
             os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
             self._save_file = open(save_path, "w", encoding="utf-8")
             self._save_path = save_path
             self._stream_path = save_path
-            return ""
         except Exception as e:
             return f"ERROR: 파일 열기 실패 — {e}"
+
+        raw_path = _raw_path_for(save_path)
+        try:
+            self._raw_file = open(raw_path, "wb")
+            self._raw_path = raw_path
+        except Exception as e:
+            self._raw_file = None
+            self._raw_path = None
+            logger.warning("[DLTLogging] .dlt 원본 파일 열기 실패 (%s): %s — 텍스트만 저장합니다",
+                           raw_path, e)
+        return ""
+
+    @staticmethod
+    def _storage_header(msg_data: bytes, ts: float) -> bytes:
+        """.dlt 파일용 storage header 생성. ECU ID는 메시지 헤더(WEID)에서 그대로 가져온다."""
+        ecu = b"\x00\x00\x00\x00"
+        if len(msg_data) >= 8 and (msg_data[0] & 0x04):  # WEID
+            ecu = msg_data[4:8]
+        sec = int(ts)
+        usec = int(round((ts - sec) * 1_000_000))
+        return _STORAGE_PATTERN + struct.pack("<Ii", sec, usec) + ecu
+
+    def _move_raw_file(self, target_text_path: str) -> str:
+        """.dlt 원본을 텍스트 저장 경로에 맞춰 함께 이동. 최종 경로(없으면 "")를 반환.
+
+        호출 전 _close_save_file()로 파일을 닫아야 한다 (Windows: 열린 파일 이동 불가).
+        """
+        src = self._raw_path
+        if not src or not os.path.exists(src):
+            return ""
+        dst = _raw_path_for(target_text_path)
+        try:
+            if os.path.abspath(src) != os.path.abspath(dst):
+                os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+                shutil.move(src, dst)
+            self._raw_path = dst
+            return dst
+        except Exception as e:
+            logger.warning("[DLTLogging] .dlt 원본 이동 실패 (%s → %s): %s", src, dst, e)
+            return src
 
     def _iter_abs_range(self, start_abs: int, end_abs: int) -> Iterator[str]:
         """절대 인덱스 [start_abs, end_abs) 라인을 순서대로 yield.
@@ -351,6 +417,9 @@ class DLTLogging:
 
     def StartSave(self, save_path: str = "") -> str:
         """DLT 데몬에 연결하고 로그 캡처 + 파일 저장을 시작합니다.
+
+        텍스트(.log)와 함께 같은 경로에 .dlt 원본 파일도 동시에 저장됩니다
+        (예: dlt_20260101_120000.log + dlt_20260101_120000.dlt).
 
         Args:
             save_path: 저장 파일 경로. 빈 값이면 자동 생성 (backend/logs/dlt_YYYYMMDD_HHMMSS.log)
@@ -406,7 +475,8 @@ class DLTLogging:
         sid = self._session_id()
         self._close_save_file()
         self._disconnect()
-        logger.info("[DLTLogging] Save stopped + disconnected: %s", path)
+        raw_path = self._raw_path or ""
+        logger.info("[DLTLogging] Save stopped + disconnected: %s (raw=%s)", path, raw_path or "none")
 
         # 뷰어 동기화: StopLogging과 동일한 lifecycle emit
         try:
@@ -419,7 +489,7 @@ class DLTLogging:
         except Exception as e:
             logger.warning("[DLTLogging] StopSave lifecycle emit failed: %s", e)
 
-        return f"Save stopped: {path}"
+        return f"Save stopped: {path}" + (f" (+ raw: {raw_path})" if raw_path else "")
 
     # ------------------------------------------------------------------
     # 뷰어 연동 신규 API — StartLogging / StopLogging / SearchSection
@@ -434,8 +504,9 @@ class DLTLogging:
 
         모든 라인을 수신 즉시 텍스트 파일(자동 경로)에 기록한다 — 파일이 로그
         정본이며, 메모리는 최근 {_RING_MAX}줄 링버퍼만 유지해 장시간 로깅에도
-        느려지지 않는다. StopLogging(save_path)은 일괄 덤프 대신 스트림 파일을
-        지정 경로로 이동만 한다.
+        느려지지 않는다. 동시에 같은 경로의 .dlt 원본 파일(DLT Viewer로 열 수 있음)
+        에도 수신 메시지를 그대로 기록한다. StopLogging(save_path)은 일괄 덤프 대신
+        두 스트림 파일을 지정 경로로 이동만 한다.
         DLT_HUB에 session_started 이벤트를 emit하여 뷰어가 자동 오픈된다.
 
         Returns:
@@ -466,6 +537,7 @@ class DLTLogging:
 
         메모리 일괄 덤프 대신, 캡처 중 스트리밍 기록된 파일을 닫고 save_path가
         지정되면 그 위치로 이동(move)만 한다 — 장시간 로깅에서도 종료가 즉시 끝난다.
+        .dlt 원본 파일도 같은 경로(확장자만 .dlt)로 함께 이동된다.
 
         Args:
             save_path: 저장할 파일 경로. 빈 값이면 스트림 파일(자동 경로) 그대로 유지:
@@ -484,6 +556,7 @@ class DLTLogging:
             total_lines = self._total_count
 
         saved_path = ""
+        raw_saved = ""
         save_error = ""
         try:
             # 캡처/파일을 먼저 정리해야 move 가능 (Windows: 열린 파일 이동 불가)
@@ -505,6 +578,7 @@ class DLTLogging:
                     if logs_snapshot:
                         f.write("\n")
                 saved_path = save_path
+                raw_saved = self._move_raw_file(save_path)
                 total_lines = len(logs_snapshot)
                 logger.info("[DLTLogging] Saved %d lines (ring fallback) to %s",
                             total_lines, save_path)
@@ -517,12 +591,14 @@ class DLTLogging:
                     shutil.move(stream_path, save_path)
                 self._stream_path = save_path
                 saved_path = save_path
-                logger.info("[DLTLogging] Stream file moved: %s → %s (%d lines)",
-                            stream_path, save_path, total_lines)
+                raw_saved = self._move_raw_file(save_path)
+                logger.info("[DLTLogging] Stream file moved: %s → %s (%d lines, raw=%s)",
+                            stream_path, save_path, total_lines, raw_saved or "none")
             else:
                 saved_path = stream_path
-                logger.info("[DLTLogging] Stream file kept: %s (%d lines)",
-                            stream_path, total_lines)
+                raw_saved = self._raw_path or ""
+                logger.info("[DLTLogging] Stream file kept: %s (%d lines, raw=%s)",
+                            stream_path, total_lines, raw_saved or "none")
         except Exception as e:
             logger.error("[DLTLogging] StopLogging save handling failed: %s", e)
             save_error = str(e)
@@ -542,7 +618,8 @@ class DLTLogging:
 
         if save_error:
             return f"ERROR: 저장 실패 — {save_error}"
-        return f"Logging stopped. Saved {total_lines} lines to: {saved_path}"
+        tail = f" (+ raw: {raw_saved})" if raw_saved else ""
+        return f"Logging stopped. Saved {total_lines} lines to: {saved_path}{tail}"
 
     def SearchSection(self, keyword: str, from_step: int, to_step: int, count: int = 5) -> str:
         """뷰어 연동용: MarkStep 구간 검색. SearchRange의 alias."""
@@ -658,6 +735,8 @@ class DLTLogging:
             lines = max(0, end_abs - start_abs)
 
         self._close_save_file()
+        # .dlt 원본은 캡처 전체분 — 매칭 지점까지 자르지 않고 텍스트 옆에 그대로 둔다.
+        raw_saved = self._move_raw_file(save_path) if saved else (self._raw_path or "")
         self._disconnect()
         DLT_HUB.emit_lifecycle({
             "type": "session_stopped",
@@ -667,6 +746,8 @@ class DLTLogging:
         })
 
         tail = f"saved {lines} lines to {saved}" if saved else f"{lines} lines (save failed)"
+        if raw_saved:
+            tail += f" (+ raw: {raw_saved})"
         if matched:
             return f"PASS: '{keyword}' found after {check_count} checks — {tail}"
         if reason == "timeout":
@@ -732,6 +813,12 @@ class DLTLogging:
                 pass
             self._save_file = None
             self._save_path = None
+        if self._raw_file:
+            try:
+                self._raw_file.close()
+            except Exception:
+                pass
+            self._raw_file = None  # _raw_path는 이동/보고용으로 유지
 
     # ------------------------------------------------------------------
     # 스텝 마킹
@@ -1233,6 +1320,7 @@ class DLTLogging:
             f"Capturing: {self._capturing}",
             f"Logs: {log_count} (total: {self._msg_counter})",
             f"Saving: {saving}",
+            f"Raw(.dlt): {self._raw_path or 'N/A'}",
             f"StepMarks: {marks or 'none'}",
         ]
         return " | ".join(parts)
@@ -1312,6 +1400,16 @@ class DLTLogging:
 
             msg_data = bytes(self._recv_buffer[:msg_len])
             del self._recv_buffer[:msg_len]
+
+            # .dlt 원본 기록 — 텍스트로 변환되지 않는 메시지(_parse_message가 None)도
+            # 포함해야 원본 그대로가 되므로 파싱 전에 먼저 쓴다.
+            if self._raw_file:
+                try:
+                    self._raw_file.write(self._storage_header(msg_data, time.time()))
+                    self._raw_file.write(msg_data)
+                    self._raw_file.flush()
+                except Exception:
+                    pass
 
             line = self._parse_message(msg_data)
             if line:

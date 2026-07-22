@@ -29,6 +29,9 @@ _MACHINE_UID_CACHE: Optional[str] = None
 _STATUS_LOG_EVERY = 30       # 성공 하트비트 — 30회 = 약 60초마다 1줄
 _STATUS_FAIL_LOG_EVERY = 15  # 연속 실패 — 15회 = 약 30초마다 1줄
 
+# activity 전이 중 INFO 로 남길 값 — idle/in_use 는 창 포커스만 따라 수시로 뒤집히므로 제외.
+_MEANINGFUL_ACTIVITY = {"playing", "recording"}
+
 # 재생 중 전송 주기(초) — 테스트 PC 가 가장 바쁜 구간이라 보고 빈도를 낮춰 간섭을 줄인다.
 # 평상시(_status_interval=2s)보다 길지만 매니저의 오프라인 판정(45s)보다는 충분히 짧다.
 _STATUS_INTERVAL_PLAYING = 10.0
@@ -342,7 +345,7 @@ class MonitorClient:
 
         관측성 규칙 — 2초마다 성공 로그를 남기면 스팸이므로:
           - **activity 변화 시**(대기→재생중 등) INFO 1줄
-          - 그 외에는 _STATUS_LOG_EVERY 회마다 하트비트 INFO 1줄
+          - 그 외에는 _STATUS_LOG_EVERY 회마다 하트비트 DEBUG 1줄 (평상시 로그에 안 보임)
           - **실패는 절대 조용히 삼키지 않는다** — 첫 실패는 traceback 과 함께 WARNING,
             이후엔 _STATUS_FAIL_LOG_EVERY 회마다 WARNING.
         (과거 dev.is_connected AttributeError 가 debug 로 묻혀 관제가 죽은 걸 몰랐던 사고 재발 방지)
@@ -388,13 +391,18 @@ class MonitorClient:
                             if pb:
                                 extra = (f" scenario={pb.get('scenario_name')}"
                                          f" cycle={pb.get('current_cycle')}/{pb.get('total_cycles')}")
-                            logger.info(
+                            # idle↔in_use 는 사용자가 창을 오갈 때마다 뒤집혀 로그를 도배한다 —
+                            # 실제로 알 가치가 있는 재생/녹화 전이만 INFO, 나머지는 DEBUG.
+                            _log = logger.info if _MEANINGFUL_ACTIVITY & {act, last_activity} else logger.debug
+                            _log(
                                 "관제 상태 전송: activity=%s%s (주기 %.0fs, 누적 %d회)",
                                 act, extra, interval, sent,
                             )
                             last_activity = act
                         elif sent % _STATUS_LOG_EVERY == 0:
-                            logger.info("관제 상태 전송 중: activity=%s (누적 %d회)", act, sent)
+                            # 하트비트는 DEBUG — 상태가 그대로면 로그를 남기지 않는다(백엔드 로그 스팸).
+                            # 이상 징후(activity 변화/전송 실패)는 아래·위에서 INFO/WARNING 으로 남는다.
+                            logger.debug("관제 상태 전송 중: activity=%s (누적 %d회)", act, sent)
                     except Exception as e:
                         interval = self._status_interval  # 실패 시엔 기본 주기로 재시도
                         fail_count += 1
