@@ -17,6 +17,7 @@ import logging
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -1205,6 +1206,144 @@ def _instance_lock(key: str) -> threading.Lock:
         return _instance_locks.setdefault(key, threading.Lock())
 
 
+# SSHManager 연결 재사용: 키(SSHManager@host)별 마지막 접속 자격증명.
+# 같은 호스트라도 계정/키가 바뀌면 기존 연결을 닫고 재접속하기 위한 비교용.
+_ssh_creds: dict[str, tuple] = {}
+
+
+def _ssh_transport_alive(instance) -> bool:
+    """SSHManager 인스턴스의 내부 paramiko ssh_client transport 활성 여부."""
+    client = getattr(instance, "ssh_client", None)
+    if client is None:
+        return False
+    try:
+        transport = client.get_transport()
+        return bool(transport is not None and transport.is_active())
+    except Exception:
+        return False
+
+
+def _close_ssh_client(instance) -> None:
+    """SSHManager 인스턴스의 paramiko 연결을 명시적으로 close.
+
+    paramiko Transport 는 실행 중인 스레드라서 인스턴스를 pop 만 하면 GC 되지 않고
+    디바이스 쪽 SSH 세션이 산 채로 남는다. 폐기 경로에서는 반드시 이걸 불러야 한다.
+    """
+    client = getattr(instance, "ssh_client", None)
+    if client is not None:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+def _teardown_ssh_key(key: str) -> None:
+    """SSHManager 캐시 항목 제거 + paramiko 연결 close."""
+    inst = _instances.pop(key, None)
+    _auto_connected.discard(key)
+    _ssh_creds.pop(key, None)
+    if inst is not None:
+        _close_ssh_client(inst)
+
+
+def _teardown_ssh_of(instance) -> None:
+    """인스턴스 객체로 SSHManager 캐시 항목을 역추적해 정리 (exec 실패 self-heal용)."""
+    for k in _keys_for("SSHManager"):
+        if _instances.get(k) is instance:
+            _teardown_ssh_key(k)
+            return
+    _close_ssh_client(instance)
+
+
+def _get_ssh_manager_instance(ssh_credentials: Optional[dict]) -> Any:
+    """SSHManager 인스턴스를 호스트별로 캐시하고 paramiko 연결을 재사용한다.
+
+    과거에는 매 호출마다 인스턴스를 pop + create_ssh_client 로 새 연결을 만들었는데,
+    버려진 paramiko Transport(실행 중인 스레드)는 close 없이는 GC 되지 않아 디바이스
+    sshd 세션이 스텝 수만큼 누적됐다. 그룹 재생처럼 SSH 스텝이 수십 개 이어지면 sshd
+    연결 한도에 걸려 신규 접속이 배너 전송 전에 끊기고("Error reading SSH protocol
+    banner") 이후 스텝이 연쇄 실패했다. transport 가 살아있는 동안 재사용해 근본 차단.
+    """
+    host = str((ssh_credentials or {}).get("host", "") or "")
+    key = f"SSHManager@{host}" if host else "SSHManager"
+    creds = None
+    if ssh_credentials is not None:
+        creds = (
+            host,
+            str(ssh_credentials.get("username", "") or ""),
+            str(ssh_credentials.get("password", "") or ""),
+            str(ssh_credentials.get("key_file_path", "") or ""),
+        )
+    with _instance_lock(key):
+        instance = _instances.get(key)
+        if instance is not None:
+            same_creds = creds is None or _ssh_creds.get(key) == creds
+            if same_creds and _ssh_transport_alive(instance):
+                return instance
+            # 죽었거나(장비 재부팅 등) 자격증명 변경 → 기존 연결 닫고 재생성
+            logger.info("SSHManager(%s): stale connection or credential change, reconnecting", key)
+            _teardown_ssh_key(key)
+        if key not in _instances:
+            _create_and_register("SSHManager", key, None, None)
+        instance = _instances[key]
+        if creds is not None:
+            _ssh_connect_verified(instance, key, creds)
+        return instance
+
+
+def _ssh_connect_verified(instance, key: str, creds: tuple) -> None:
+    """create_ssh_client 호출 + transport 활성 검증 (실패 시 1회 재시도 후 예외).
+
+    pyd 의 create_ssh_client 는 접속 실패(배너 에러 등)를 삼키고 정상 리턴할 수 있어
+    'OK 로그 직후 SSH session not active' 로 이어지는 혼선이 있었다. 실제 transport
+    활성 여부를 확인하고, 살아나면 keepalive 를 걸어 half-open 을 조기 감지시킨다.
+    """
+    host, username, password, key_file = creds
+    last_err: Optional[Exception] = None
+    for attempt in range(2):
+        if attempt:
+            time.sleep(1.0)
+        try:
+            if key_file:
+                instance.create_ssh_client(host, username, password, key_file)
+            else:
+                instance.create_ssh_client(host, username, password)
+        except Exception as e:
+            last_err = e
+            logger.warning("SSHManager.create_ssh_client(%s@%s) failed (attempt %d/2): %s",
+                           username, host, attempt + 1, e)
+            continue
+        if _ssh_transport_alive(instance):
+            try:
+                instance.ssh_client.get_transport().set_keepalive(15)
+            except Exception:
+                pass
+            _auto_connected.add(key)
+            _ssh_creds[key] = creds
+            logger.info("SSHManager.create_ssh_client(%s@%s) OK", username, host)
+            return
+        last_err = RuntimeError("transport not active after create_ssh_client")
+        logger.warning("SSHManager.create_ssh_client(%s@%s) returned but transport inactive (attempt %d/2)",
+                       username, host, attempt + 1)
+    _teardown_ssh_key(key)
+    logger.error("SSHManager.create_ssh_client(%s@%s) failed: %s", username, host, last_err)
+    raise RuntimeError(f"SSH connect failed: {last_err}") from last_err
+
+
+def _ssh_exec_managed(instance, command: str, timeout: int = 60) -> str:
+    """instance.ssh_client 로 명령 실행. 실패 시 transport 가 죽어 있으면 캐시를
+    정리해 다음 호출이 자동 재접속하도록 한다 (연결 재사용의 self-heal 경로)."""
+    client = getattr(instance, "ssh_client", None)
+    if client is None:
+        raise RuntimeError("SSH client not connected")
+    try:
+        return _ssh_exec_decoded(client, command, timeout)
+    except Exception:
+        if not _ssh_transport_alive(instance):
+            _teardown_ssh_of(instance)
+        raise
+
+
 def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
                   shared_serial_conn=None, ssh_credentials: Optional[dict] = None) -> Any:
     """Get or create a singleton instance of the module class.
@@ -1215,11 +1354,11 @@ def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
         ssh_credentials: SSH 디바이스의 자격증명 {host, port, username, password, key_file_path}.
             전달되면 SSHManager 인스턴스에 instance.create_ssh_client()로 정식 연결.
     """
-    # SSHManager는 디바이스별로 다른 자격증명을 가질 수 있으므로 매 호출마다 캐시 무효화
-    # (SSHManager 내부 상태 때문에 create_ssh_client를 새로 호출해야 안정적)
+    # SSHManager: 호스트별 캐시 + paramiko 연결 재사용 경로로 분기.
+    # (과거의 '매 호출 pop + 재연결' 방식은 버려진 Transport 가 close 되지 않아
+    #  디바이스 sshd 세션이 누적 → 그룹 재생 수십 스텝부터 배너 에러 연쇄 실패)
     if module_name == "SSHManager":
-        _instances.pop(module_name, None)
-        _auto_connected.discard(module_name)
+        return _get_ssh_manager_instance(ssh_credentials)
     # 캐시 키 — 포트/호스트가 다르면 다른 키가 되어 같은 모듈의 다른 엔드포인트끼리
     # 서로를 덮어쓰지 않는다. (포트 변경 시 pop 하던 파괴적 로직 제거 — 그게 버퍼 고아화 버그였다)
     key = _instance_key(module_name, constructor_kwargs)
@@ -1238,24 +1377,6 @@ def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
             # 락 대기 동안 다른 요청이 생성을 끝냈으면 그 인스턴스를 그대로 사용 (더블체크)
             if key not in _instances:
                 _create_and_register(module_name, key, constructor_kwargs, shared_serial_conn)
-
-    # SSHManager: 디바이스 자격증명으로 공식 create_ssh_client 호출 (매 호출마다)
-    if module_name == "SSHManager" and ssh_credentials is not None:
-        instance = _instances[key]
-        host = ssh_credentials.get("host", "")
-        username = ssh_credentials.get("username", "")
-        password = ssh_credentials.get("password", "")
-        key_file = ssh_credentials.get("key_file_path", "") or None
-        try:
-            if key_file:
-                instance.create_ssh_client(host, username, password, key_file)
-            else:
-                instance.create_ssh_client(host, username, password)
-            _auto_connected.add(key)
-            logger.info("SSHManager.create_ssh_client(%s@%s) OK", username, host)
-        except Exception as e:
-            logger.error("SSHManager.create_ssh_client(%s@%s) failed: %s", username, host, e)
-            raise
 
     return _instances[key]
 
@@ -1725,23 +1846,17 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
     # Windows(CP949) 등 비-UTF8 출력이 깨지므로, paramiko를 직접 호출해서 raw bytes를
     # 다중 인코딩 fallback으로 처리한다.
     if module_name == "SSHManager" and function_name == "send_command":
-        client = getattr(instance, "ssh_client", None)
-        if client is None:
-            raise RuntimeError("SSH client not connected")
         command = args.get("command", "")
-        output = _ssh_exec_decoded(client, command, 60)
+        output = _ssh_exec_managed(instance, command, 60)
         return output or "(no output)"
 
     # SSHManager.Check / Check_Logic 가상 함수: send_command 와 동일하게 명령을 실행한 뒤
     # 출력을 기대값/키워드로 합부 판정 (CMD.Check / CMD.Check_Logic 와 동일 규약).
     # 실패 시 "FAIL:" 접두사를 반환 → playback_service 가 스텝을 fail 로 판정.
     if module_name == "SSHManager" and function_name in ("Check", "Check_Logic"):
-        client = getattr(instance, "ssh_client", None)
-        if client is None:
-            raise RuntimeError("SSH client not connected")
         command = args.get("command", "")
         timeout = _cast_arg(args.get("timeout", 60), int)
-        actual = _ssh_exec_decoded(client, command, timeout)
+        actual = _ssh_exec_managed(instance, command, timeout)
         output = actual or "(no output)"
 
         if function_name == "Check":
@@ -2156,10 +2271,15 @@ def reset_instance(module_name: str) -> None:
     """Remove cached instance (단순 무효화 — 재생성용. teardown 호출 안 함).
 
     포트별 키(module@port)로 분리 관리되므로, 해당 모듈의 모든 엔드포인트 인스턴스를 제거한다.
+    SSHManager 는 pop 만으로는 Transport 스레드가 살아남아 세션이 leak 되므로 명시적 close.
     """
     for key in _keys_for(module_name):
-        _instances.pop(key, None)
+        inst = _instances.pop(key, None)
         _auto_connected.discard(key)
+        if module_name == "SSHManager":
+            _ssh_creds.pop(key, None)
+            if inst is not None:
+                _close_ssh_client(inst)
 
 
 def disconnect_instance(module_name: str, endpoint: Optional[str] = None):
@@ -2206,8 +2326,12 @@ def disconnect_instance(module_name: str, endpoint: Optional[str] = None):
                     except Exception as e:
                         result = f"error: {e}"
                     break
+            # SSHManager: pyd 의 teardown 메서드 유무와 무관하게 paramiko 연결을 확실히 close
+            if module_name == "SSHManager":
+                _close_ssh_client(inst)
         _instances.pop(key, None)
         _auto_connected.discard(key)
+        _ssh_creds.pop(key, None)
     return result
 
 
@@ -2252,6 +2376,15 @@ def cleanup_active_instances(reason: str = "") -> dict[str, str]:
     for name in list(_instances.keys()):
         inst = _instances.get(name)
         if inst is None:
+            continue
+        # SSHManager: pyd 라 Disconnect 류 메서드가 없을 수 있음 — 내부 paramiko 연결을
+        # 명시적으로 close (pop 만으로는 Transport 스레드가 살아 디바이스 세션 leak).
+        if name == "SSHManager" or name.startswith("SSHManager@"):
+            _close_ssh_client(inst)
+            _ssh_creds.pop(name, None)
+            _instances.pop(name, None)
+            _auto_connected.discard(name)
+            summary[name] = "ok(ssh_close)"
             continue
         # 연결된 시리얼 디바이스 소속 인스턴스 → 포트 유지, 세션만 정리
         if _serial_device_still_connected(name):
