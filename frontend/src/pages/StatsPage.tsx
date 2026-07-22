@@ -48,6 +48,8 @@ interface UsageStats {
   step_types: StepTypeStat[];
   modules: ModuleStat[];
   unused_functions: UnusedFunc[];
+  /** 미사용 교차대조의 기준이 된 '활성화된 모듈' 목록 (이 PC 에 디바이스로 등록된 모듈) */
+  active_modules?: string[];
   available_module_count: number;
   available_function_count: number;
   used_module_count: number;
@@ -121,7 +123,8 @@ export default function StatsPage() {
       >
         <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
           이 PC 에 저장된 모든 시나리오에서 쓰인 스텝 타입·모듈·함수 사용량을 집계합니다.
-          가용 함수 카탈로그와 대조해 <b>한 번도 안 쓰인 함수</b>를 하단에 표시하며, 개선/삭제 판단의 근거로 활용하세요.
+          <b>이 PC 에서 활성화된(디바이스로 등록된) 모듈</b>의 함수 카탈로그와 대조해
+          <b> 한 번도 안 쓰인 함수</b>를 하단에 표시하며, 개선/삭제 판단의 근거로 활용하세요.
           접근 경로: URL hash <code>#stats</code>.
           {stats?.generated_at && <span> · 집계 시각: {new Date(stats.generated_at).toLocaleString()}</span>}
         </Typography.Paragraph>
@@ -131,12 +134,14 @@ export default function StatsPage() {
       <Row gutter={[10, 10]}>
         <Col xs={12} sm={8} md={4}><Card size="small"><Statistic title="시나리오 수" value={stats?.scenario_count ?? 0} /></Card></Col>
         <Col xs={12} sm={8} md={4}><Card size="small"><Statistic title="총 스텝" value={stats?.total_steps ?? 0} /></Card></Col>
+        {/* 분모는 '활성 모듈' 기준 — 시나리오가 등록되지 않은 모듈을 쓰고 있으면
+            사용 개수가 분모를 넘을 수 있으므로 라벨에 기준을 명시한다. */}
         <Col xs={12} sm={8} md={4}>
-          <Card size="small"><Statistic title="사용 모듈" value={stats?.used_module_count ?? 0}
+          <Card size="small"><Statistic title="사용 모듈 / 활성" value={stats?.used_module_count ?? 0}
             suffix={<span style={{ fontSize: 12, color: '#888' }}>/ {stats?.available_module_count ?? 0}</span>} /></Card>
         </Col>
         <Col xs={12} sm={8} md={4}>
-          <Card size="small"><Statistic title="사용 함수" value={stats?.used_function_count ?? 0}
+          <Card size="small"><Statistic title="사용 함수 / 활성" value={stats?.used_function_count ?? 0}
             suffix={<span style={{ fontSize: 12, color: '#888' }}>/ {stats?.available_function_count ?? 0}</span>} /></Card>
         </Col>
         <Col xs={12} sm={8} md={4}>
@@ -263,9 +268,21 @@ export default function StatsPage() {
           />
         }>
         <Typography.Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 8 }}>
-          가용 모듈 카탈로그의 함수 중 <b>이 PC 의 어떤 시나리오에서도 module_command 로 호출되지 않은</b> 함수입니다.
-          (전용 스텝 타입 tap/swipe 등으로 제공되는 동작은 카탈로그에서 이미 제외되어 있습니다.)
+          <b>이 PC 에서 활성화된 모듈</b>(디바이스로 등록된 모듈)의 함수 중
+          <b> 어떤 시나리오에서도 module_command 로 호출되지 않은</b> 함수입니다.
+          등록하지 않은 모듈(다른 차종·벤치 플러그인)은 여기서 쓸 수 없는 기능이므로 집계에서 제외됩니다.
+          (전용 스텝 타입 tap/swipe 등으로 제공되는 동작, <code>#test</code> 전용 실험 모듈도 제외)
         </Typography.Paragraph>
+        {stats?.active_modules && (
+          <Typography.Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 8 }}>
+            집계 기준 모듈 {stats.active_modules.length}개:{' '}
+            {stats.active_modules.length === 0
+              ? <b>없음 — 등록된 디바이스가 없어 미사용 함수를 판정할 수 없습니다.</b>
+              : stats.active_modules.map(m => (
+                  <Tag key={m} style={{ fontFamily: 'monospace', fontSize: 10, marginInlineEnd: 3 }}>{m}</Tag>
+                ))}
+          </Typography.Paragraph>
+        )}
         {Object.keys(unusedByModule).length > 0 && (
           <div style={{ marginBottom: 10, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
             {Object.entries(unusedByModule).sort((a, b) => b[1] - a[1]).map(([mod, n]) => (

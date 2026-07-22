@@ -239,6 +239,56 @@ def _connect_type_from_params(params: list[str]) -> str:
     return "none"
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# UI 노출 규칙 상수 — "사용자가 실제로 쓸 수 있는 기능" 을 판정하는 단일 기준.
+# (예전엔 main.py 와 프론트에 같은 목록이 흩어져 있어 한쪽만 고치면 어긋났다)
+# ──────────────────────────────────────────────────────────────────────────
+
+# 주 디바이스 타입 → 모듈 스텝에서 쓰이는 **가상 모듈명**.
+# 플러그인 파일이 없는 모듈이지만 해당 타입의 주 디바이스가 등록돼 있으면
+# 스텝 드롭다운에 노출된다.
+# ⚠️ 프론트 RecordPage.tsx 의 moduleDevices 매핑과 1:1 — 한쪽만 고치면 어긋난다.
+PRIMARY_VIRTUAL_MODULES: dict[str, str] = {
+    "adb": "Android",
+    "hkmc_agent": "HKMC6th",
+    "hkmc5th_wide_agent": "HKMC5thWide",
+}
+
+# URL hash `#test` 모드에서만 UI 에 노출되는 실험 모듈 —
+# 일반 모드 사용자에게는 존재하지 않는 기능이다.
+# ⚠️ 프론트 useTestMode.ts 의 TEST_ONLY_MODULES 와 같은 목록.
+TEST_ONLY_MODULES: frozenset[str] = frozenset({"Frame_Check"})
+
+
+def list_active_module_names(devices) -> set[str]:
+    """이 PC 에서 **사용자가 실제로 쓸 수 있는** 모듈명 집합.
+
+    기준 = 녹화 중 '스텝 수동 추가' 드롭다운에 뜨는 항목 (RecordPage.tsx moduleDevices):
+      - auxiliary 디바이스에 등록된 info["module"]
+      - 주 디바이스 타입에서 유도되는 가상 모듈 (adb→Android 등)
+      - #test 전용 실험 모듈은 제외 (일반 모드에서 보이지 않음)
+
+    ⚠️ **등록 여부**로 판정하고 연결 상태(status)는 보지 않는다.
+    호출 시점에 장비 전원이 꺼져 있거나 재연결 중이면 목록이 통째로 흔들리는데,
+    "이 PC 에 어떤 기능을 깔아 뒀나" 는 그 사이에도 변하지 않기 때문이다.
+    (특히 usage-stats 는 기동 직후 1회 스냅샷이라 자동연결과 경합한다)
+
+    devices: DeviceManager.list_all() 결과.
+    """
+    active: set[str] = set()
+    for dev in devices or []:
+        try:
+            mod = (getattr(dev, "info", None) or {}).get("module")
+            if mod:
+                active.add(mod)
+            virt = PRIMARY_VIRTUAL_MODULES.get(getattr(dev, "type", ""))
+            if virt:
+                active.add(virt)
+        except Exception:
+            continue
+    return active - set(TEST_ONLY_MODULES)
+
+
 def _list_plugin_modules() -> list[dict]:
     """Discover local plugins in the plugins directory."""
     plugins = []

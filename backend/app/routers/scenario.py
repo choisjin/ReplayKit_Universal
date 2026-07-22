@@ -1832,12 +1832,18 @@ def _compute_usage_stats() -> dict:
     미사용 교차대조:
       - list_available_modules() × get_module_functions() 카탈로그와 대조해
         시나리오에서 한 번도 참조되지 않은 (module, function) 을 unused_functions 로 반환.
+      - ⚠️ 대조 범위는 **이 PC 에서 활성화된 모듈**로 좁힌다 (list_active_module_names).
+        플러그인 폴더에는 전 차종·전 벤치 모듈이 다 들어 있어서, 그대로 대조하면
+        이 PC 에 장비조차 없는 모듈(SCAR/TH/CANoe…)의 함수가 전부 '미사용' 으로 잡혀
+        정작 봐야 할 "쓸 수 있는데 안 쓰는 함수" 가 묻힌다.
     """
     from datetime import datetime
     from collections import defaultdict
 
     from ..services.recording_service import SCENARIOS_DIR
-    from ..services.module_service import list_available_modules, get_module_functions
+    from ..services.module_service import (
+        list_available_modules, get_module_functions, list_active_module_names,
+    )
 
     reserved = {"groups.json", "folders.json", "group_folders.json"}
 
@@ -1884,9 +1890,17 @@ def _compute_usage_stats() -> dict:
 
     # ── 미사용 함수 교차대조 ─────────────────────────────────────────
     # 가용 모듈 카탈로그를 순회하며 시나리오에서 쓰이지 않은 함수를 골라낸다.
+    # 단, **이 PC 에서 활성화된(디바이스로 등록된) 모듈만** 대상으로 한다 — 위 docstring 참고.
     unused_functions: list[dict] = []
     available_module_count = 0
     available_function_count = 0
+    try:
+        active_modules = list_active_module_names(dm.list_all())
+    except Exception as e:
+        # 실패해도 통계 전체를 죽이지 않는다. 다만 필터가 풀리면 예전처럼 전 모듈이
+        # 미사용으로 쏟아지므로, 조용히 넘어가지 말고 경고를 남긴다.
+        logger.warning("usage-stats: 활성 모듈 판정 실패 — 미사용 교차대조를 건너뜁니다: %s", e)
+        active_modules = set()
     try:
         available = list_available_modules()
     except Exception as e:
@@ -1895,6 +1909,9 @@ def _compute_usage_stats() -> dict:
     for mod_info in available:
         mod_name = mod_info.get("name")
         if not mod_name:
+            continue
+        # 등록되지 않은 모듈 = 이 PC 사용자가 쓸 수 없는 기능 → 분모에서 제외
+        if mod_name not in active_modules:
             continue
         available_module_count += 1
         try:
@@ -1957,6 +1974,9 @@ def _compute_usage_stats() -> dict:
         "step_types": step_types_out,
         "modules": modules_out,
         "unused_functions": unused_functions,
+        # 미사용 교차대조에 실제로 쓰인 모듈 목록 — UI 가 "무엇을 기준으로 셌는지" 를
+        # 보여줄 수 있어야 0건/소수 결과가 버그로 오해되지 않는다.
+        "active_modules": sorted(active_modules),
         "available_module_count": available_module_count,
         "available_function_count": available_function_count,
         "used_module_count": len(modules_out),

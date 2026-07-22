@@ -172,11 +172,11 @@ async def _refresh_device_status_for_monitor() -> None:
 # 창 포커스를 정확히 아는 프론트가 document.hasFocus() 상태를 주기적으로 보고한다.
 _ui_focus_state: dict = {"focused": False, "mode": "normal", "page": "", "ts": 0.0}
 
-# 프론트 useTestMode.ts 의 TEST_ONLY_MODULES 와 같은 목록 —
 # URL hash `#test` 모드에서만 UI 에 노출되는 실험 모듈. 관제에서 일반 모드 PC 의 목록과
 # 구분해 표시하기 위해 디바이스마다 test_only 플래그로 함께 보낸다.
-# ⚠️ 프론트 목록이 바뀌면 여기도 같이 고쳐야 한다(게이트 자체는 순수 프론트 구현).
-_TEST_ONLY_MODULES = {"Frame_Check"}
+# 정의는 module_service 한 곳 — 함수 사용통계의 '활성 모듈' 판정도 같은 목록을 쓴다.
+# (게이트 자체는 순수 프론트 구현 — 프론트 useTestMode.ts 의 목록과 맞춰야 한다)
+from .services.module_service import TEST_ONLY_MODULES as _TEST_ONLY_MODULES
 # 이 시간(초) 안에 focused=True 보고가 없으면 최상단 아님(대기)으로 간주 —
 # 브라우저 탭이 닫히거나 프리즈되면 자동으로 대기로 떨어진다.
 _UI_FOCUS_TTL = 12.0
