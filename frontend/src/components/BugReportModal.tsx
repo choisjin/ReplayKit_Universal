@@ -74,7 +74,6 @@ export default function BugReportModal({ open, onClose }: { open: boolean; onClo
   const [stepFrom, setStepFrom] = useState<number>(0);
   const [stepTo, setStepTo] = useState<number>(0);
   const [includeBackendLog, setIncludeBackendLog] = useState(true);
-  const [includeLauncherLog, setIncludeLauncherLog] = useState(true);
   const [busy, setBusy] = useState(false);
   const [percent, setPercent] = useState(0);
   const [phase, setPhase] = useState('');
@@ -162,7 +161,6 @@ export default function BugReportModal({ open, onClose }: { open: boolean; onClo
         reporter: values.reporter || '',
         include: {
           backend_log: includeBackendLog,
-          launcher_log: includeLauncherLog,
           step_test_range: stepTestRange,
           playback_ranges: playbackRanges,
         },
@@ -220,7 +218,7 @@ export default function BugReportModal({ open, onClose }: { open: boolean; onClo
     } finally {
       setBusy(false);
     }
-  }, [form, selectedTests, selectedRun, runSteps, stepFrom, stepTo, includeBackendLog, includeLauncherLog, ctx, managerUrl, onClose, t]);
+  }, [form, selectedTests, selectedRun, runSteps, stepFrom, stepTo, includeBackendLog, ctx, managerUrl, onClose, t]);
 
   return (
     <Modal
@@ -306,9 +304,6 @@ export default function BugReportModal({ open, onClose }: { open: boolean; onClo
       <div style={{ display: 'flex', gap: 16, marginBottom: 8 }}>
         <Checkbox checked={includeBackendLog} onChange={(e) => setIncludeBackendLog(e.target.checked)} disabled={busy}>
           <Text style={{ fontSize: 12 }}>{t('bugreport.includeBackendLog')}</Text>
-        </Checkbox>
-        <Checkbox checked={includeLauncherLog} onChange={(e) => setIncludeLauncherLog(e.target.checked)} disabled={busy}>
-          <Text style={{ fontSize: 12 }}>{t('bugreport.includeLauncherLog')}</Text>
         </Checkbox>
       </div>
 

@@ -323,7 +323,6 @@ export const bugreportApi = {
     reporter?: string;
     include: {
       backend_log?: boolean;
-      launcher_log?: boolean;
       step_test_range?: { from_ts: string; to_ts: string } | null;
       playback_ranges?: { run_folder: string; step_from: number; step_to: number }[];
     };

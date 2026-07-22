@@ -46,7 +46,6 @@ LOG_DIR = _PROJECT_ROOT / "logs"
 # 용량 캡 (계획서 §Part B)
 _LOG_SLICE_CAP = 10 * 1024 * 1024      # 구간별 backend.log 슬라이스
 _BACKEND_TAIL_CAP = 5 * 1024 * 1024    # 구간 미선택 시 backend.log tail
-_LAUNCHER_TAIL_CAP = 2 * 1024 * 1024   # 런처 로그 tail
 _IMAGES_PER_RANGE = 30                 # 재생 구간당 이미지 수
 _IMAGES_BYTES_PER_RANGE = 30 * 1024 * 1024
 _RESULT_JSON_CAP = 30 * 1024 * 1024    # ndjson 없을 때 result.json 파싱 허용 상한
@@ -70,7 +69,6 @@ class PlaybackRange(BaseModel):
 
 class BuildInclude(BaseModel):
     backend_log: bool = True
-    launcher_log: bool = True
     step_test_range: Optional[StepTestRange] = None
     playback_ranges: list[PlaybackRange] = Field(default_factory=list)
 
@@ -423,18 +421,7 @@ def _build_bundle(job_id: str, req: BuildRequest) -> None:
                     if bl.exists():
                         zf.writestr(f"{base}/logs/backend.log", _tail_bytes(bl, _BACKEND_TAIL_CAP))
 
-            # 4) 런처 로그 (오늘 + 어제 tail)
-            if req.include.launcher_log:
-                today = datetime.now().date()
-                for d in (today, today - timedelta(days=1)):
-                    lf = LOG_DIR / f"{d.strftime('%Y-%m-%d')}.log"
-                    if lf.exists():
-                        zf.writestr(
-                            f"{base}/logs/launcher_{d.strftime('%Y-%m-%d')}.log",
-                            _tail_bytes(lf, _LAUNCHER_TAIL_CAP),
-                        )
-
-            # 5) report.json (메타 + 환경 + 선택 구간 정의)
+            # 4) report.json (메타 + 환경 + 선택 구간 정의)
             _set_progress(job_id, 85, "리포트 작성 중")
             for label, lo, hi in slice_windows:
                 windows.append({"label": label, "from": lo.isoformat(), "to": hi.isoformat()})
