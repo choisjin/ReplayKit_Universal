@@ -2130,7 +2130,10 @@ async def _run_play_job(data: dict):
 
         playback_service._monitor_state = {
             "scenario_name": scenario_name,
-            "total_cycles": repeat,
+            # 시간 지정 재생은 끝 회차가 정해져 있지 않다(effective_repeat 은 _MAX_REPEAT_CAP 안전값일 뿐) →
+            # 0 = '총량 미상' 으로 보고해야 관제 게이지가 엉뚱한 비율을 그리지 않는다.
+            # (그룹 재생 경로는 이미 같은 규칙을 쓴다)
+            "total_cycles": repeat if until_time is None else 0,
             "current_cycle": 0,
             "current_step": 0,
             "total_steps": len(scen.steps),
