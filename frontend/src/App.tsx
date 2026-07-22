@@ -4,6 +4,7 @@ import {
   BarChartOutlined,
   AppstoreOutlined,
   BookOutlined,
+  BugOutlined,
   CloudSyncOutlined,
   DatabaseOutlined,
   DesktopOutlined,
@@ -36,6 +37,7 @@ import AnnouncementListModal from './components/AnnouncementListModal';
 import { AnnouncementsProvider } from './context/AnnouncementsContext';
 import PlaybackStatusBanner from './components/PlaybackStatusBanner';
 import ChatWidget from './components/ChatWidget';
+import BugReportModal from './components/BugReportModal';
 import { WebcamProvider } from './context/WebcamContext';
 
 const { Sider, Content } = Layout;
@@ -82,6 +84,7 @@ function AppContent() {
   }, []);
   const [siderCollapsed, setSiderCollapsed] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [bugReportOpen, setBugReportOpen] = useState(false);
   const [diskInfoList, setDiskInfoList] = useState<{ drive: string; free_gb: number; total_gb: number; used_percent: number }[]>([]);
   const [appVersion, setAppVersion] = useState<string>('');
   // boot_id: 백엔드 프로세스 시작 시점에 생성되는 unique id. version.txt 가 안 바뀌어도
@@ -488,6 +491,15 @@ function AppContent() {
                 {!siderCollapsed && 'Results 폴더'}
               </Button>
             </Tooltip>
+            <Tooltip title={t('bugreport.title')} placement="right">
+              <Button
+                block
+                icon={<BugOutlined />}
+                onClick={() => setBugReportOpen(true)}
+              >
+                {!siderCollapsed && t('bugreport.title')}
+              </Button>
+            </Tooltip>
           </div>
           <div style={{ marginTop: 'auto' }}>
           {diskInfoList.length > 0 && (
@@ -590,6 +602,8 @@ function AppContent() {
       <AnnouncementListModal />
 
       <ChatWidget open={chatOpen} onClose={() => setChatOpen(false)} />
+
+      <BugReportModal open={bugReportOpen} onClose={() => setBugReportOpen(false)} />
 
       <Modal
         title={

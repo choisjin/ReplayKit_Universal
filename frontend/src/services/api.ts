@@ -314,6 +314,25 @@ export const serverApi = {
   getVersion: () => api.get('/settings/version'),
 };
 
+// Bug report APIs (번들 생성은 백엔드, Manager 업로드는 프론트가 직접)
+export const bugreportApi = {
+  context: () => api.get('/bugreport/context'),
+  build: (payload: {
+    title: string;
+    description?: string;
+    reporter?: string;
+    include: {
+      backend_log?: boolean;
+      launcher_log?: boolean;
+      step_test_range?: { from_ts: string; to_ts: string } | null;
+      playback_ranges?: { run_folder: string; step_from: number; step_to: number }[];
+    };
+    client?: Record<string, string>;
+  }) => api.post('/bugreport/build', payload),
+  jobStatus: (jobId: string) => api.get(`/bugreport/job/${jobId}`),
+  download: (jobId: string) => api.get(`/bugreport/job/${jobId}/download`, { responseType: 'blob' }),
+};
+
 // Compositor APIs (다중 캡처 합성 녹화)
 export interface CompositorSourceConfig {
   id: string;

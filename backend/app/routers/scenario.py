@@ -1620,6 +1620,18 @@ async def test_step(req: TestStepRequest):
     )
 
     result = await playback_svc.execute_single_step(step, scenario_name, device_map=device_map)
+
+    # 버그 리포트용 스텝 테스트 이력 보존 (판정 + 스크린샷 사본).
+    # 부수 기능이므로 실패해도 test-step 응답에는 영향 없음.
+    try:
+        import asyncio
+        from ..services import step_test_history
+        await asyncio.to_thread(
+            step_test_history.record, scenario_name, req.step_index, step, result
+        )
+    except Exception:
+        logger.warning("step-test history record failed", exc_info=True)
+
     return result.model_dump()
 
 
