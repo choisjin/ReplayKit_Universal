@@ -78,6 +78,49 @@ logging.basicConfig(level=logging.INFO, format=_log_fmt, handlers=[
 ])
 logger = logging.getLogger(__name__)
 
+# ── 상태 폴링 access 로그 억제 ──────────────────────────────────────────────
+# 프론트/관제가 주기적으로 호출하는 상태 확인용 엔드포인트는 1~10초마다 access
+# 로그 한 줄씩을 만들어 백엔드 로그를 도배한다 (health 3s, memory-usage 1s,
+# webcam/status 2s, device/list 10s, ui-focus 5s ...). 성공 응답은 아무 정보가
+# 없으므로 숨기고, 오류 응답(4xx/5xx)은 문제 신호이므로 그대로 남긴다.
+# ⚠️ 새 폴링 엔드포인트를 추가하면 여기에도 등록할 것.
+_POLLING_PATHS = (
+    "/api/health",
+    "/api/device/list",
+    "/api/device/wincontrol/status",
+    "/api/scenario/record/status",
+    "/api/scenario/playback/status",
+    "/api/webcam/status",
+    "/api/settings/memory-usage",
+    "/api/settings/power-status",
+    "/api/compositor/status",
+    "/api/monitor/ui-focus",
+    "/api/dlt/sessions",
+)
+
+
+class _PollingAccessFilter(logging.Filter):
+    """uvicorn.access: 상태 폴링 엔드포인트의 성공 응답 로그를 숨긴다."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # uvicorn access 로그 args: (client_addr, method, full_path, http_version, status_code)
+        try:
+            args = record.args
+            if isinstance(args, tuple) and len(args) == 5:
+                path, status = str(args[2]), int(args[4])
+                if status < 400 and (
+                    path in _POLLING_PATHS
+                    or any(path.startswith(p + "?") for p in _POLLING_PATHS)
+                ):
+                    return False
+        except Exception:
+            pass  # 형식이 다르면(uvicorn 버전 차이 등) 그냥 통과 — 로그 유실보다 소음이 낫다
+        return True
+
+
+# uvicorn이 로깅 설정 후 app을 import하므로, 여기서 logger에 붙인 필터가 유지된다.
+logging.getLogger("uvicorn.access").addFilter(_PollingAccessFilter())
+
 
 async def _reconnect_loop():
     """백그라운드: 끊어진 디바이스 주기적 재연결 시도 (5초 간격).
