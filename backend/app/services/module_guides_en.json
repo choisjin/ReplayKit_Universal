@@ -1451,8 +1451,21 @@
         "description": "Broadcasts a time-sync packet over UDP to all bench equipment. Automatically called on Connect, so manual invocation is usually unnecessary.",
         "params": {}
       },
+      "canmsg_start": {
+        "description": "Starts pre-capturing CAN messages. Begins recording all received packets on every channel into a background ring buffer (up to 100k entries). Call this BEFORE the control step (e.g. IGN1) so that short one-shot responses fired right after the command are not missed. Verify afterwards with canmsg_stop.",
+        "params": {}
+      },
+      "canmsg_stop": {
+        "description": "Stops the CAN capture and verifies the buffer. Checks whether any packet captured since canmsg_start matches the target MCU/channel/msg_id/data pattern. Returns PASS on a match, or a 'FAIL:' string so the step is marked failed. Usage order: canmsg_start → control command → (wait) → canmsg_stop",
+        "params": {
+          "mcu": "Target MCU to listen on (default: 'mcu1' / e.g. 'mcu1', 'mcu2', 'mcu3')",
+          "channel": "Rx channel (default: 'A' / 'A', 'B', 'C', 'D')",
+          "msg_id": "CAN ID to verify. Integer or hex string (with or without '0x'. e.g. '0x12F', '47A', 1146)",
+          "data": "Data pattern to match. Hex bytes separated by spaces/commas. '*' or '**' positions are wildcards (ignored), and received bytes beyond the pattern length are not compared. e.g. '00 00 00 00 05 00 00 00' or '** ** ** ** 05'"
+        }
+      },
       "canmsg": {
-        "description": "Verifies CAN message reception. Buffers packets received on the given MCU/channel for the specified time (ms), then checks whether any message matched msg_id and the data pattern. Returns PASS on a match, or a 'FAIL:' string so the step is marked failed.",
+        "description": "[Legacy compatibility] Verifies CAN message reception. Collects packets for the specified time (ms) starting at the moment of the call, then checks for a msg_id/data pattern match. One-shot responses that occur before the call cannot be caught, so use canmsg_start → control → canmsg_stop for new scenarios.",
         "params": {
           "mcu": "Target MCU to listen on (default: 'mcu1' / e.g. 'mcu1', 'mcu2', 'mcu3')",
           "channel": "Rx channel (default: 'A' / 'A', 'B', 'C', 'D')",

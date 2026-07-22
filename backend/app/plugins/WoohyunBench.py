@@ -38,6 +38,7 @@ import datetime
 import threading
 import subprocess
 import platform
+import collections
 from typing import Optional, Callable
 
 # 📌 UDP_CANFD 모듈 임포트 유지
@@ -119,6 +120,12 @@ class WoohyunBench:
         self._log_lock = threading.Lock()
         self._flush_counter = 0
         self._stop_events = {}
+
+        # 📌 [신규 추가] CAN 메시지 사전 캡처(Capture) 용 변수
+        # 📌 [수정] 리스트([]) 대신 deque를 사용하여 FIFO 링 버퍼 구현
+        self._capture_buffer = collections.deque(maxlen=100000)
+        self._capture_lock = threading.Lock()
+        self._is_capturing = False
 
     def _load_channel_config(self) -> dict:
         logger.info('_load_channel_config')
@@ -542,6 +549,13 @@ class WoohyunBench:
                     can_id = (data[12] << 24) | (data[13] << 16) | (data[14] << 8) | data[15]
                     payload = data[18:]
                     self._write_log(mcu, ch_key, "Rx", can_id, payload)
+
+                    # 📌 [신규 추가] canmsg_start가 호출되어 캡처 모드인 경우 실시간 적재, deque를 사용하므로 길이 체크 없이 append (자동으로 오래된 것 밀어냄)
+                    if self._is_capturing:
+                        recv_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                        with self._capture_lock:
+                            self._capture_buffer.append((mcu, ch_key, can_id, payload, recv_time))
+
                 else:
                     self._write_log(mcu, ch_key, "Rx", port, data)
 
@@ -558,8 +572,8 @@ class WoohyunBench:
                 # 1. Windows UDP 타겟 무응답(10054) 에러 방어
                 if win_err == 10054:
                     continue
-                # 2. [추가] Disconnect로 인한 강제 소켓 종료(10038) 시 조용히 스레드 종료
-                if self._rx_stop_event.is_set() and win_err == 10038:
+                # 📌 [수정] 플래그 체크 없이 10038(소켓 파괴) 에러면 무조건 스레드 조용히 종료
+                if win_err == 10038:
                     break
                 logger.error(f"[{mcu}-{ch_key}] Rx OSError: {e}")
                 break
@@ -667,19 +681,26 @@ class WoohyunBench:
 
     def _ensure_mcu1_connected(self) -> bool:
         """
-        [요청사항 반영: 사전 Connect 강제 실행]
-        ReplayKit 환경에서는 이전 스텝의 소켓이 닫혀있을 수 있으므로,
-        조건을 따지지 않고 무조건 Connect()를 먼저 실행하여 통신망을 확실히 연결합니다.
+        [수정: 조건부 재연결]
+        (무조건 Connect()를 호출하면 진행중인 로그/캡처가 다 끊기므로,
+        실제 끊어졌거나 유효하지 않을 때만 재연결하도록 수정)
         """
-        logger.info("👉 제어 명령 수행 전, 사전에 Connect()를 실행하여 통신을 초기화합니다.")
-        self.Connect()  # 📌 무조건 연결 함수 먼저 동작
-
         mcu = "mcu1"
-        # Connect 이후에도 연결 상태가 아니면 실패 처리
-        if mcu not in self._connected_mcus:
-            logger.error(f"[{mcu}] Connect() 실행 후에도 장비를 찾을 수 없습니다.")
-            return False
-        return True
+        is_dead = True
+
+        if mcu in self._connected_mcus:
+            try:
+                # 소켓이 살아있고 유효한지 파일 디스크립터 검사
+                if self._connected_mcus[mcu].fileno() != -1:
+                    is_dead = False
+            except:
+                pass
+
+        if is_dead:
+            logger.info("👉 장비 소켓이 끊어져 있어 Connect()를 재실행합니다.")
+            self.Connect()
+
+        return mcu in self._connected_mcus
 
     def _safe_val(self, on_off) -> int:
         """ReplayKit UI에서 빈칸("")이나 None을 던져도 기본값(1, ON)으로 켜지도록 보정"""
@@ -853,25 +874,101 @@ class WoohyunBench:
             return f"FAIL: TestAllSignals Error - {e}"
 
     # ------------------------------------------------------------------
-    # 📌 CAN 메시지 유효성 검증 (canmsg)
+    # 📌 신규 추가 기능: CAN 메시지 사전 수집 및 사후 검증 기능
     # ------------------------------------------------------------------
+
+    def canmsg_start(self) -> str:
+        """
+        단발성 이벤트로 발생하는 CAN 메시지 유실을 막기 위해
+        모든 채널의 수신 패킷을 백그라운드 버퍼에 미리 기록하기 시작합니다.
+        (파라미터 없음)
+        """
+        logger.info("canmsg_start: 백그라운드 CAN 메시지 캡처를 시작합니다.")
+        with self._capture_lock:
+            self._capture_buffer.clear()
+            self._is_capturing = True
+        return "OK: CAN Capture Started"
+
+    def canmsg_stop(self, mcu: str = "mcu1", channel: str = "A", msg_id: str | int = "",
+                    data: str = "") -> tuple[bool, Optional[str], Optional[str], Optional[str]]:
+        """
+        수집을 중단하고, 버퍼에 쌓인 내용 중 타겟 MCU, Channel, msg_id, data 패턴이 일치하는지 검증합니다.
+        (기존 time 파라미터 제외됨)
+        """
+        logger.info(f"canmsg_stop 호출: mcu={mcu}, channel={channel}, msg_id={msg_id}, data='{data}'")
+        logger.info(f"canmsg_stop captured buffer 수 : {len(self._capture_buffer)}")
+        # 1. 캡처 중단 및 버퍼 복사 (멀티스레드 충돌 방지)
+        with self._capture_lock:
+            self._is_capturing = False
+            captured_copy = list(self._capture_buffer)
+            self._capture_buffer.clear()
+
+        ch_key = str(channel).upper()
+
+        # 2. msg_id 정수화 (0x 접두어 방어)
+        try:
+            target_id = int(str(msg_id).replace("0x", "").replace("0X", ""), 16) if isinstance(msg_id, str) else int(
+                msg_id)
+        except Exception as e:
+            logger.error(f"canmsg_stop 실패: msg_id={msg_id} 파싱 오류 - {e}")
+            return False, None, None, None
+
+        # 3. 데이터 패턴 파싱 ("** ** 05" -> [None, None, 5])
+        data_cleaned = str(data).replace(",", " ").strip()
+        pattern = []
+        for token in data_cleaned.split():
+            if '*' in token:
+                pattern.append(None)
+            else:
+                try:
+                    pattern.append(int(token, 16))
+                except ValueError:
+                    pattern.append(None)
+
+        # 4. 캡처된 버퍼에서 매칭 검사
+        matched_details = None
+
+        for c_mcu, c_ch, cid, payload, recv_time in captured_copy:
+            # 타겟 장비, 채널, 아이디가 다르면 스킵
+            if c_mcu != mcu or c_ch != ch_key or cid != target_id:
+                continue
+
+            # 수신된 데이터 길이가 패턴 길이보다 짧으면 스킵
+            if len(payload) < len(pattern):
+                continue
+
+            # 바이트 단위 매칭 (와일드카드는 무시)
+            is_current_match = True
+            for i, pat_val in enumerate(pattern):
+                if pat_val is None:
+                    continue
+                if payload[i] != pat_val:
+                    is_current_match = False
+                    break
+
+            if is_current_match:
+                matched_details = (cid, payload, recv_time)
+                break  # 📌 첫 번째(가장 빨리 발생한) 일치건 발견 시 즉시 종료
+
+        if matched_details:
+            cid, payload_bytes, recv_time = matched_details
+            payload_hex = " ".join(f"{b:02X}" for b in payload_bytes)
+            logger.info(f"🎉 canmsg_stop 성공: 일치 메시지 발견! ID=0x{cid:X}, 시간={recv_time}, Payload=[{payload_hex}]")
+            return True, recv_time, f"0x{cid:X}", payload_hex
+
+        logger.info(f"❌ canmsg_stop 실패: 버퍼에 {len(captured_copy)}개의 패킷이 캡처되었으나 일치하는 패턴이 없습니다.")
+        return False, None, None, None
 
     def canmsg(self, mcu: str = "mcu1", channel: str = "A", time: int = 1000, msg_id: str | int = "",
                data: str = "") -> tuple[bool, Optional[str], Optional[str], Optional[str]]:
         """
-        지정된 MCU 및 채널에서 지정된 시간(ms) 동안 수신된 CAN 로그를 버퍼링하고,
-        버퍼에서 msg_id 및 data 패턴(완전 일치 또는 와일드카드 일부 일치)과 일치하는 메시지가 존재했는지 확인합니다.
+        [Deprecated — 하위호환 유지용] 기존 저장된 시나리오의 canmsg 스텝을 위해 남겨둔 래퍼입니다.
+        신규 시나리오는 canmsg_start(제어 명령 전) → canmsg_stop(검증) 분리 사용을 권장합니다.
 
-        :param mcu: 장비 이름 (예: 'mcu1', 'mcu2', 'mcu3')
-        :param channel: 채널 이름 (예: 'A', 'B', 'C', 'D')
-        :param time: 수신 대기 시간 (단위: ms)
-        :param msg_id: 확인할 CAN ID (예: "0x12F", "47A", 1146 등)
-        :param data: 매칭할 데이터 패턴 (예: "00 00 00 00 05 00 00 00" 또는 "** ** ** ** 05")
-        :return: (결과_bool, 최초_발견_시간_str, msg_id_str, 전체_데이터_str)
-                 - 일치하는 메시지가 있으면: (True, "2023-11-20 14:02:01.123", "0x12F", "00 00 00 00 05 00 00 00")
-                 - 일치하는 메시지가 없으면: (False, None, None, None)
+        내부적으로 신규 캡처 버퍼(canmsg_start/stop)를 사용하므로 호출 시점에 진행 중이던
+        별도 canmsg_start 캡처 세션은 초기화됩니다.
         """
-        logger.info(f"canmsg 호출됨: mcu={mcu}, channel={channel}, time={time}ms, msg_id={msg_id}, data='{data}'")
+        logger.info(f"canmsg(호환) 호출됨: mcu={mcu}, channel={channel}, time={time}ms, msg_id={msg_id}, data='{data}'")
 
         # 1. 대상 MCU 및 채널 존재 검증
         conf = self._mcu_configs.get(mcu)
@@ -885,9 +982,6 @@ class WoohyunBench:
             logger.error(f"canmsg 실패: 정의되지 않은 채널 [{channel}] (MCU: {mcu})")
             return False, None, None, None
 
-        port = ch_conf["rx_port"]
-        cmd1_val = ch_conf["cmd1"]
-
         # 2. 연결 및 수신 포트 오픈 확인 (예외 방어)
         if mcu not in self._connected_mcus:
             logger.info(f"[{mcu}] 장비가 연결 상태가 아닙니다. 강제 자동 연결을 시작합니다.")
@@ -896,106 +990,16 @@ class WoohyunBench:
                 logger.error(f"canmsg 실패: [{mcu}] 장비 연결에 실패했습니다.")
                 return False, None, None, None
 
+        port = ch_conf["rx_port"]
         if port not in self._rx_sockets:
             logger.info(f"[{mcu}-{ch_key}] 수신 스레드가 미작동 상태입니다. 리스너를 실행합니다 (Port: {port})")
             self._start_rx_listener(mcu, port, channel_name=ch_key)
 
-        # 3. msg_id 정수화 (0x 접두어 대응)
-        try:
-            target_id = int(str(msg_id).replace("0x", "").replace("0X", ""), 16) if isinstance(msg_id, str) else int(
-                msg_id)
-        except Exception as e:
-            logger.error(f"canmsg 실패: msg_id={msg_id} 파싱 오류 - {e}")
-            return False, None, None, None
-
-        # 4. 데이터 패턴 파싱 (공백/콤마 정제 후 토큰화)
-        # 예: "** ** ** ** 05" -> [None, None, None, None, 5]
-        # 예: "00 00 00 00 05" -> [0, 0, 0, 0, 5]
-        data_cleaned = str(data).replace(",", " ").strip()
-        pattern = []
-        for token in data_cleaned.split():
-            if '*' in token:
-                pattern.append(None)  # 와일드카드 토큰
-            else:
-                try:
-                    pattern.append(int(token, 16))
-                except ValueError:
-                    pattern.append(None)  # 잘못된 토큰 유입시 와일드카드 처리로 에러 방어
-
-        # 5. 임시 수집 버퍼 및 Thread-safe 데이터 공유 수집 콜백 등록
-        captured = []
-        captured_lock = threading.Lock()
-
-        def temp_callback(chan_tag, rx_bytes):
-            # UDP 원시 패킷을 파싱하여 [0x55, 0xAA, ..., cmd1, 0x41] 응답 여부 및 ID, Payload 정제
-            if (len(rx_bytes) >= 18 and rx_bytes[0] == 0x55 and rx_bytes[1] == 0xAA and
-                    rx_bytes[4] == cmd1_val and rx_bytes[5] == 0x41):
-                cid = (rx_bytes[12] << 24) | (rx_bytes[13] << 16) | (rx_bytes[14] << 8) | rx_bytes[15]
-                payload = rx_bytes[18:]
-                # 📌 패킷이 소켓에 수집되는 정확한 시각을 밀리초(ms) 정밀도까지 기록
-                recv_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                with captured_lock:
-                    captured.append((cid, payload, recv_time))
-
-        old_callback = self._rx_callbacks.get(port)
-
-        # 기존 콜백이 있을 시 유실 없이 연속 보장을 위해 체이닝(Chaining) 적용
-        def chained_callback(chan_tag, rx_bytes):
-            if old_callback and callable(old_callback):
-                try:
-                    old_callback(chan_tag, rx_bytes)
-                except Exception as cb_err:
-                    logger.error(f"원래의 콜백 처리 중 에러 발생 (수집은 계속 유지됨): {cb_err}")
-            temp_callback(chan_tag, rx_bytes)
-
-        self._rx_callbacks[port] = chained_callback
-
-        try:
-            # 6. 지정된 밀리초(ms) 동안 수신 데이터 축적
-            import time as _time  # 파라미터 time과의 충돌 및 Shadowing 해결
-            _time.sleep(max(0.0, float(time) / 1000.0))
-        finally:
-            # 7. 수집 완료 후 임시 콜백 제거 및 원래 콜백 복원.
-            #    (수집 중 다른 곳에서 콜백을 갈아끼웠다면 남의 콜백을 덮어쓰지 않는다)
-            if self._rx_callbacks.get(port) is chained_callback:
-                if old_callback:
-                    self._rx_callbacks[port] = old_callback
-                else:
-                    self._rx_callbacks.pop(port, None)
-
-        # 8. 수집된 버퍼에서 목표 CAN 데이터 일치 여부 검사
-        matched_details = None
-
-        with captured_lock:
-            for cid, payload, recv_time in captured:
-                if cid != target_id:
-                    continue
-
-                # [예외 케이스 대응]: 수신된 실제 페이로드가 사용자가 검사하려는 패턴보다 짧으면 무시
-                if len(payload) < len(pattern):
-                    continue
-
-                # 바이트 단위 매칭 분석
-                is_current_match = True
-                for i, pat_val in enumerate(pattern):
-                    if pat_val is None:
-                        continue  # 와일드카드 자리는 검사 생략 (뒷부분 생략 조건 충족)
-                    if payload[i] != pat_val:
-                        is_current_match = False
-                        break
-
-                if is_current_match:
-                    matched_details = (cid, payload, recv_time)
-                    break  # 📌 최초로 발견된(시간상 가장 빠른) 메시지가 나오면 즉시 탐색 종료
-
-        if matched_details:
-            cid, payload_bytes, recv_time = matched_details
-            payload_hex = " ".join(f"{b:02X}" for b in payload_bytes)
-            logger.info(f"canmsg 성공: 일치하는 메시지 발견! ID=0x{cid:X}, 시간={recv_time}, Payload=[{payload_hex}]")
-            return True, recv_time, f"0x{cid:X}", payload_hex
-
-        logger.info(f"canmsg 실패: {time}ms 동안 {len(captured)}개 패킷을 받았으나 타겟 패턴과 매칭되는 데이터가 없습니다.")
-        return False, None, None, None
+        # 3. 신규 캡처 구조로 지정 시간(ms) 동안 수집 후 검증
+        self.canmsg_start()
+        import time as _time  # 파라미터 time과의 충돌 및 Shadowing 해결
+        _time.sleep(max(0.0, float(time) / 1000.0))
+        return self.canmsg_stop(mcu=mcu, channel=ch_key, msg_id=msg_id, data=data)
 
 
 if __name__ == "__main__":
