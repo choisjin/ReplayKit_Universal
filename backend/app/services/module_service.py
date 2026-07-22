@@ -926,6 +926,26 @@ def get_module_functions(module_name: str) -> list[dict]:
                     {"name": "serial", "required": False, "default": "''"},
                 ],
             },
+            # Check/Check_Logic: CMD/SHELL 모듈과 동일한 판정 인터페이스의 ADB 셸 버전.
+            # command 는 디바이스 셸 명령 (shell 접두사 없으면 자동 보정).
+            {
+                "name": "Check",
+                "params": [
+                    {"name": "command", "required": True},
+                    {"name": "expected", "required": False, "default": "''"},
+                    {"name": "match_mode", "required": False, "default": "'contains'"},
+                    {"name": "serial", "required": False, "default": "''"},
+                ],
+            },
+            {
+                "name": "Check_Logic",
+                "params": [
+                    {"name": "command", "required": True},
+                    {"name": "keywords", "required": True},
+                    {"name": "logic", "required": False, "default": "'and'"},
+                    {"name": "serial", "required": False, "default": "''"},
+                ],
+            },
             {
                 "name": "StartLogging",
                 "params": [
@@ -1682,8 +1702,11 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
         result = func(**call_args)
         return result
 
-    # Android.Send_adb_command — ReplayKit 자체 ADBService로 라우팅 (가상 함수)
-    if module_name == "Android" and function_name == "Send_adb_command":
+    # Android.Send_adb_command / Check / Check_Logic — ReplayKit 자체 ADBService로 라우팅 (가상 함수).
+    # Check/Check_Logic 는 CMD/SHELL 모듈과 동일한 판정 인터페이스의 ADB 셸 버전 —
+    # 명령 출력에 대해 기대값 비교(Check) / 다중 키워드 and/or 판정(Check_Logic)을 수행하고,
+    # 불통과 시 "FAIL:" 접두사 반환으로 module_command 가 자동 fail 처리한다.
+    if module_name == "Android" and function_name in ("Send_adb_command", "Check", "Check_Logic"):
         from .adb_service import ADBService
         from ..dependencies import adb_service as _adb
         command = args.get("command", "")
@@ -1693,7 +1716,13 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
         # 비어 있으면 step.device_id에서 derive된 adb_serial 사용
         target_serial = (args.get("serial") or "").strip() or adb_serial
         if not target_serial:
-            raise RuntimeError("Send_adb_command requires an ADB device (serial missing)")
+            raise RuntimeError(f"{function_name} requires an ADB device (serial missing)")
+        # Check/Check_Logic 의 command 는 '디바이스 셸 명령' — Send_adb_command 와 달리
+        # shell 접두사가 없으면 자동 보정한다 (예: "getprop ro.product.model" → "shell getprop ...").
+        # 이미 "shell ..."로 쓰면 그대로 사용 (Send_adb_command 습관과 양쪽 다 호환).
+        if function_name in ("Check", "Check_Logic") and \
+                not (command == "shell" or command.startswith("shell ")):
+            command = f"shell {command}"
         # async 호출이지만 _execute_sync는 sync context (run_in_executor 안에서 호출됨)
         # → asyncio.run을 사용할 수 없음 (이미 이벤트 루프 중). loop.run_until_complete도 위험.
         # → ADBService 내부의 _run_device가 subprocess.run을 호출하는지 확인 필요.
@@ -1704,7 +1733,40 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
             output = loop.run_until_complete(_adb.run_shell_command(command, serial=target_serial))
         finally:
             loop.close()
-        return output if output is not None else "(no output)"
+        if function_name == "Send_adb_command":
+            return output if output is not None else "(no output)"
+
+        # ── 판정 (CMD/SHELL 의 Check/Check_Logic 와 동일 규약) ──
+        output = output or ""
+        actual = output.strip()
+        if function_name == "Check":
+            expected = str(args.get("expected") or "").strip()
+            match_mode = str(args.get("match_mode") or "contains").strip() or "contains"
+            if not expected:
+                # expected가 비어있으면 "출력 없음"일 때만 pass (no-output 검증)
+                if actual == "":
+                    return "(no output)"
+                return f"FAIL: expected({match_mode}): (no output)\n---\n{output}"
+            passed = (actual == expected) if match_mode == "exact" else (expected in actual)
+            if passed:
+                return output
+            return f"FAIL: expected({match_mode}): {expected}\n---\n{output}"
+
+        # Check_Logic
+        keywords = str(args.get("keywords") or "")
+        logic = str(args.get("logic") or "and").strip().lower()
+        kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
+        if not kw_list:
+            return f"FAIL: logic({logic}): no keywords provided\n---\n{output}"
+        if logic not in ("and", "or"):
+            return f"FAIL: logic: unknown mode '{logic}' (use 'and' or 'or')\n---\n{output}"
+        if logic == "and":
+            passed = all(k in actual for k in kw_list)
+        else:
+            passed = any(k in actual for k in kw_list)
+        if passed:
+            return output
+        return f"FAIL: logic({logic}): {keywords}\n---\n{output}"
 
     # Frame_Check — 영상 측정 마커 기록 가상 함수. 실제 인스턴스/디바이스 불필요.
     # 재생 중이든 단발 스텝 테스트든 동일하게 FrameCheckService에 마커만 기록한다.

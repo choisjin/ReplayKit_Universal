@@ -513,7 +513,7 @@ function AppContent() {
             <div style={{
               padding: siderCollapsed ? '6px 4px' : '6px 8px',
               borderTop: '1px solid rgba(255,255,255,0.1)',
-              fontSize: 20,
+              fontSize: 15,
               color: '#888',
               textAlign: 'center',
               userSelect: 'none',

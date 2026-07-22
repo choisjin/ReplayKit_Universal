@@ -2349,7 +2349,17 @@ async def _run_play_job(data: dict):
             if _is_multi_cycle:
                 result.total_steps = global_step_seq
             result.finished_at = datetime.now(timezone.utc).isoformat()
-            result.status = "fail" if (result.failed_steps > 0 or result.error_steps > 0) else "pass"
+            # Frame_Check 측정 실패(target_not_found 등 status != "ok")도 최종 fail 에 반영 —
+            # 측정 결과는 step_results 가 아닌 frame_check_results 에만 기록되므로 별도 검사.
+            _fc_failed = any(
+                str(_fc.get("status")) != "ok"
+                for _fc in (result.frame_check_results or [])
+            )
+            result.status = (
+                "fail"
+                if (result.failed_steps > 0 or result.error_steps > 0 or _fc_failed)
+                else "pass"
+            )
             result_path = await playback_service._save_result(result)
             terminal_event = {"type": "playback_complete", "result_filename": _result_filename(result_path)}
     except Exception as e:

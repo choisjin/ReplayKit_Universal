@@ -1719,6 +1719,24 @@
   },
   "Android": {
     "functions": {
+      "Check": {
+        "description": "Runs an ADB shell command and compares the output against an expected value for PASS/FAIL (same contract as Check in the CMD/SSH modules). The shell prefix is added automatically if missing. On mismatch, the 'FAIL:' prefix makes the step fail automatically.",
+        "params": {
+          "command": "Device shell command to run (e.g. getprop ro.build.version.release — shell prefix optional)",
+          "expected": "Expected value. If empty, passes only when there is no output (no-output check)",
+          "match_mode": "contains (substring match, default) or exact (full match)",
+          "serial": "Target ADB device serial. Empty = derived from the step's device"
+        }
+      },
+      "Check_Logic": {
+        "description": "Runs an ADB shell command and judges multiple keywords with and/or logic (same contract as Check_Logic in the CMD/SSH modules). The shell prefix is added automatically if missing. On mismatch, the 'FAIL:' prefix makes the step fail automatically.",
+        "params": {
+          "command": "Device shell command to run (e.g. dumpsys activity — shell prefix optional)",
+          "keywords": "Keyword list, comma-separated (e.g. OK,ready,done)",
+          "logic": "and (pass when all keywords present, default) or or (pass when at least one present)",
+          "serial": "Target ADB device serial. Empty = derived from the step's device"
+        }
+      },
       "StartLogging": {
         "description": "Start capturing logcat for the given Android device (in-memory buffer). If clear=True, flushes the logcat ring buffer first. Auto-restarts logcat into the same buffer if the device reboots/disconnects.",
         "params": {

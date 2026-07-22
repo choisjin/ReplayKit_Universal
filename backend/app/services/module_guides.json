@@ -1728,6 +1728,24 @@
   },
   "Android": {
     "functions": {
+      "Check": {
+        "description": "ADB 셸 명령을 실행하고 출력 결과를 기대값과 비교하여 PASS/FAIL 판정합니다 (CMD/SSH 모듈의 Check와 동일 규약). command에 shell 접두사가 없으면 자동으로 붙습니다. 불통과 시 'FAIL:' 접두사로 스텝이 자동 fail 처리됩니다.",
+        "params": {
+          "command": "실행할 디바이스 셸 명령 (예: getprop ro.build.version.release — shell 접두사 생략 가능)",
+          "expected": "기대값. 비우면 '출력이 없을 때만 pass' (no-output 검증)",
+          "match_mode": "contains(부분 일치, 기본) 또는 exact(완전 일치)",
+          "serial": "대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정"
+        }
+      },
+      "Check_Logic": {
+        "description": "ADB 셸 명령을 실행하고 여러 키워드를 and/or 로직으로 합부 판정합니다 (CMD/SSH 모듈의 Check_Logic과 동일 규약). command에 shell 접두사가 없으면 자동으로 붙습니다. 불통과 시 'FAIL:' 접두사로 스텝이 자동 fail 처리됩니다.",
+        "params": {
+          "command": "실행할 디바이스 셸 명령 (예: dumpsys activity — shell 접두사 생략 가능)",
+          "keywords": "키워드 목록, 콤마 구분 (예: OK,ready,done)",
+          "logic": "and(모든 키워드 포함 시 pass, 기본) 또는 or(하나 이상 포함 시 pass)",
+          "serial": "대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정"
+        }
+      },
       "StartLogging": {
         "description": "지정한 Android 디바이스의 logcat 캡처를 시작합니다(메모리 버퍼). clear=True면 시작 전 logcat 링버퍼를 비웁니다. 디바이스가 reboot/끊겨도 자동으로 logcat을 재기동해 같은 버퍼에 이어서 캡처합니다.",
         "params": {
