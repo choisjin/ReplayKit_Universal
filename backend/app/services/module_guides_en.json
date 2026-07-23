@@ -78,7 +78,13 @@
           "cycle_time": "Transmission interval (ms). 0 for one-shot",
           "can_message": "Message data (hex)",
           "bus_channel": "CAN channel",
-          "message_type": "'FD' (default) or 'Classic'"
+          "message_type": {
+            "description": "'FD' (default) or 'Classic'",
+            "options": [
+              "FD",
+              "Classic"
+            ]
+          }
         }
       },
       "CAN_PANEL": {
@@ -101,7 +107,15 @@
         "params": {
           "message_id": "CAN message ID to check (hex). e.g. '0x18DAF141' or '291'",
           "expected_data": "Expected data (hex bytes, space-separated). Empty = ID-only check. '*' ignores a nibble — e.g. '1A 2B', '1* ** 33'",
-          "match_mode": "Data comparison mode. 'startswith' (default: prefix match) / 'exact' (full-length match) / 'contains' (match anywhere in data) / 'bitmask' (all set bits present)",
+          "match_mode": {
+            "description": "Data comparison mode. 'startswith' (default: prefix match) / 'exact' (full-length match) / 'contains' (match anywhere in data) / 'bitmask' (all set bits present)",
+            "options": [
+              "startswith",
+              "exact",
+              "contains",
+              "bitmask"
+            ]
+          },
           "timeout": "Max wait time in seconds (default 5). Returns PASS immediately when matched"
         }
       },
@@ -110,7 +124,15 @@
         "params": {
           "message_id": "CAN message ID that must not be received (hex). e.g. '0x18DAF141'",
           "expected_data": "Expected data (hex bytes). Empty = any reception of the ID fails. '*' nibble wildcard supported",
-          "match_mode": "Data comparison mode. 'startswith' / 'exact' / 'contains' / 'bitmask'",
+          "match_mode": {
+            "description": "Data comparison mode. 'startswith' / 'exact' / 'contains' / 'bitmask'",
+            "options": [
+              "startswith",
+              "exact",
+              "contains",
+              "bitmask"
+            ]
+          },
           "timeout": "Watch duration in seconds (default 5). PASS if not received for this long"
         }
       },
@@ -121,7 +143,13 @@
           "cycle_time": "Cycle time",
           "can_message": "Message data",
           "bus_channel": "CAN channel",
-          "message_type": "'FD' or 'Classic'"
+          "message_type": {
+            "description": "'FD' or 'Classic'",
+            "options": [
+              "FD",
+              "Classic"
+            ]
+          }
         }
       },
       "send_can_message_all_stop": {
@@ -194,8 +222,20 @@
         "params": {
           "namespace_name": "Namespace name",
           "sys_var_name": "System variable name",
-          "return_symbolic_name": "Whether to return the symbolic name. Default False",
-          "islog": "Whether to print a log. Default True"
+          "return_symbolic_name": {
+            "description": "Whether to return the symbolic name. Default False",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
+          "islog": {
+            "description": "Whether to print a log. Default True",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "CheckSysVar": {
@@ -217,7 +257,13 @@
         "description": "Reads an environment variable value (use GetSysVar if it's a System Variables namespace variable).",
         "params": {
           "env_var_name": "Environment variable name",
-          "islog": "Whether to print a log. Default True"
+          "islog": {
+            "description": "Whether to print a log. Default True",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "CheckEnvVar": {
@@ -231,7 +277,13 @@
         "description": "Turns periodic Tester Present transmission on or off for the given ECU.",
         "params": {
           "diag_ecu_qualifier_name": "Diagnostic ECU qualifier name",
-          "value": "True = activate, False = deactivate"
+          "value": {
+            "description": "True = activate, False = deactivate",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "DIAG_Request": {
@@ -239,10 +291,28 @@
         "params": {
           "diag_ecu_qualifier_name": "Diagnostic ECU qualifier name",
           "request": "Request data. e.g. '10 01'",
-          "request_in_bytes": "Interpret request as bytes. Default True",
-          "return_sender_name": "Include sender name in the response. Default False",
+          "request_in_bytes": {
+            "description": "Interpret request as bytes. Default True",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
+          "return_sender_name": {
+            "description": "Include sender name in the response. Default False",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "timeout": "(unused — not supported by py_canoe)",
-          "islog": "Whether to print a log. Default True"
+          "islog": {
+            "description": "Whether to print a log. Default True",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "CheckDIAG": {
@@ -251,8 +321,20 @@
           "diag_ecu_qualifier_name": "Diagnostic ECU qualifier name",
           "request": "Request data. e.g. '10 01'",
           "expect_value": "Expected response pattern. e.g. '50 01 00 32 01 F4'",
-          "request_in_bytes": "Interpret request as bytes. Default True",
-          "return_sender_name": "Include sender name in the response. Default False"
+          "request_in_bytes": {
+            "description": "Interpret request as bytes. Default True",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
+          "return_sender_name": {
+            "description": "Include sender name in the response. Default False",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "SendDiagMsg": {
@@ -261,8 +343,20 @@
           "diag_ecu_qualifier_name": "Diagnostic ECU qualifier name",
           "request": "Request data. e.g. '10 01'",
           "timeout": "(unused — not supported by py_canoe)",
-          "request_in_bytes": "Interpret request as bytes. Default True",
-          "return_sender_name": "Include sender name in the response. Default False",
+          "request_in_bytes": {
+            "description": "Interpret request as bytes. Default True",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
+          "return_sender_name": {
+            "description": "Include sender name in the response. Default False",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "max_retries": "Maximum number of retries on timeout. Default 5",
           "retry_delay": "Delay between retries (seconds). Default 10.0"
         }
@@ -302,7 +396,13 @@
           "can_message": "Message data (space-separated hex). e.g. '01 02 03 04 05 06 07 08'",
           "bus_channel": "Bus channel index (from 0, in device_info order)",
           "message_type": "'FD' (default) or any other string = Classic CAN",
-          "apply_e2e": "True = E2E (Alive Counter + CRC16) periodic transmit; False (default) = plain transmit. E2E spec is read per message_id from plugins/e2e_config.json, falling back to a default template. Only effective when cycle_time > 0."
+          "apply_e2e": {
+            "description": "True = E2E (Alive Counter + CRC16) periodic transmit; False (default) = plain transmit. E2E spec is read per message_id from plugins/e2e_config.json, falling back to a default template. Only effective when cycle_time > 0.",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "canoe_send_message_stop": {
@@ -338,7 +438,13 @@
           "bus_ch": "Bus channel index used for diagnostics",
           "tx_id": "Request (Tx) CAN ID (hex). e.g. '0x7E0'",
           "rx_id": "Response (Rx) CAN ID (hex). e.g. '0x7E8'",
-          "can_type": "'FD' or 'CC' (Classic CAN, default)"
+          "can_type": {
+            "description": "'FD' or 'CC' (Classic CAN, default)",
+            "options": [
+              "FD",
+              "CC"
+            ]
+          }
         }
       },
       "canoe_start_tester_present": {
@@ -356,7 +462,13 @@
         "params": {
           "can_message": "Diagnostic data to send (space-separated hex). e.g. '22 F1 90'",
           "timeout": "Response wait time (seconds). Default '5'",
-          "wait_response": "Whether to wait for and evaluate the response. Default True"
+          "wait_response": {
+            "description": "Whether to wait for and evaluate the response. Default True",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       }
     }
@@ -375,8 +487,20 @@
       "ACCOnOff": {
         "description": "Turns ACC (Accessory) power on or off.",
         "params": {
-          "state": "0 = OFF, 1 = ON",
-          "bench_info": "Bench type. 'OLD_BENCH' (default) or 'NEW_BENCH'"
+          "state": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "bench_info": {
+            "description": "Bench type. 'OLD_BENCH' (default) or 'NEW_BENCH'",
+            "options": [
+              "OLD_BENCH",
+              "NEW_BENCH"
+            ]
+          }
         }
       },
       "ACCSinglePulse": {
@@ -390,8 +514,20 @@
       "AccControl": {
         "description": "Controls the ACC relay.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON",
-          "bench_info": "Bench type"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "bench_info": {
+            "description": "Bench type",
+            "options": [
+              "OLD_BENCH",
+              "NEW_BENCH"
+            ]
+          }
         }
       },
       "AccVoltage": {
@@ -403,21 +539,51 @@
       "BatteryOnOff": {
         "description": "Turns battery power on or off.",
         "params": {
-          "nState": "0 = OFF (disconnect battery), 1 = ON (connect battery)",
-          "bench_info": "Bench type. 'OLD_BENCH' (default) or 'NEW_BENCH'"
+          "nState": {
+            "description": "'ON' = connect battery, 'OFF' = disconnect battery — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "bench_info": {
+            "description": "Bench type. 'OLD_BENCH' (default) or 'NEW_BENCH'",
+            "options": [
+              "OLD_BENCH",
+              "NEW_BENCH"
+            ]
+          }
         }
       },
       "BatteryControl": {
         "description": "Controls the battery relay.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON",
-          "bench_info": "Bench type"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "bench_info": {
+            "description": "Bench type",
+            "options": [
+              "OLD_BENCH",
+              "NEW_BENCH"
+            ]
+          }
         }
       },
       "BatteryMinusControl": {
         "description": "Controls the battery negative (-) terminal relay.",
         "params": {
-          "nStatus": "0 = OFF (connected), 1 = ON (disconnected)"
+          "nStatus": {
+            "description": "'ON' = disconnected, 'OFF' = connected — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "BatteryVoltage": {
@@ -437,206 +603,410 @@
       "IGNControl": {
         "description": "Controls the ignition (IGN) power.",
         "params": {
-          "status": "0 = OFF, 1 = ON"
+          "status": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "IGN3Control": {
         "description": "Controls the ignition 3 (IGN3) power.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ALTControl": {
         "description": "Controls the alternator signal.",
         "params": {
-          "status": "0 = OFF, 1 = ON"
+          "status": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ILLControl": {
         "description": "Controls the illumination signal (vehicle lighting interlock).",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ILLControlMinus": {
         "description": "Controls the illumination negative signal.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ReverseControl": {
         "description": "Controls the reverse gear signal.",
         "params": {
-          "nStatus": "0 = OFF (forward), 1 = ON (reverse)"
+          "nStatus": {
+            "description": "'ON' = reverse, 'OFF' = forward — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ReverseActiveHigh": {
         "description": "Controls the reverse signal as Active High.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ReverseActiveLow": {
         "description": "Controls the reverse signal as Active Low.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ParkingControl": {
         "description": "Controls the parking signal.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "PPositonControl": {
         "description": "Controls the P (Park) gear position signal.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "NPositionControl": {
         "description": "Controls the N (Neutral) gear position signal.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "SpeedControl": {
         "description": "Controls the vehicle speed signal.",
         "params": {
-          "nStatus": "0 = OFF (stopped), 1 = ON (driving)"
+          "nStatus": {
+            "description": "'ON' = driving, 'OFF' = stopped — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "DoorControl": {
         "description": "Controls the door open/close signal.",
         "params": {
-          "nStatus": "0 = OFF (closed), 1 = ON (open)"
+          "nStatus": {
+            "description": "'ON' = open, 'OFF' = closed — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "DoorUnLockControl": {
         "description": "Controls the door unlock signal.",
         "params": {
-          "nStatus": "0 = OFF (locked), 1 = ON (unlocked)"
+          "nStatus": {
+            "description": "'ON' = unlocked, 'OFF' = locked — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "TransDetectControl": {
         "description": "Controls the transmission detection signal.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "FUELControl": {
         "description": "Controls the fuel-related signal.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "KeylessBootingControl": {
         "description": "Controls the keyless (smart key) boot signal.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "AutolightControl": {
         "description": "Controls the auto-light signal.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "AlarmDetectControl": {
         "description": "Controls the alarm detection signal.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "AirbagCrashDetection": {
         "description": "Controls the airbag crash detection signal.",
         "params": {
           "model": "Vehicle model name",
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ShieldBoxControl": {
         "description": "Controls the shield box (RF shielding box) open/close.",
         "params": {
-          "nStatus": "0 = OFF (close), 1 = ON (open)"
+          "nStatus": {
+            "description": "'ON' = open, 'OFF' = close — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ANTControl": {
         "description": "Controls the antenna relay.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "AmpControl": {
         "description": "Controls the external audio amplifier power.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "MICControl": {
         "description": "Controls the microphone relay.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "AUXControl": {
         "description": "Controls the AUX input relay.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "CDControl": {
         "description": "Controls the CD drive relay.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "IPODControl": {
         "description": "Controls the iPod connection relay.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "RcInControl": {
         "description": "Controls the RC input relay.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ComEnableControl": {
         "description": "Controls the COM (communication) enable.",
         "params": {
-          "nStatus": "0 = OFF (disabled), 1 = ON (enabled)"
+          "nStatus": {
+            "description": "'ON' = enabled, 'OFF' = disabled — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "Detent": {
         "description": "Controls the detent (rotary encoder for volume knob, etc.) signal.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "AVNSDDetect": {
         "description": "Controls the AVN SD card detection signal.",
         "params": {
-          "nStatus": "0 = OFF (not inserted), 1 = ON (inserted)"
+          "nStatus": {
+            "description": "'ON' = inserted, 'OFF' = not inserted — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "USB1Control": {
         "description": "Controls the USB 1 port relay.",
         "params": {
-          "Status": "0 = OFF, 1 = ON"
+          "Status": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "USBFrontSwitchControl": {
         "description": "Controls the front USB switch relay.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "USBRearSwitchControl": {
         "description": "Controls the rear USB switch relay.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "USBSelectorControl": {
@@ -650,13 +1020,25 @@
         "params": {
           "nType": "Switch type",
           "nPortNum": "Port number",
-          "nOnOffStatus": "0 = OFF, 1 = ON"
+          "nOnOffStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "Telltale": {
         "description": "Controls the telltale (dashboard warning indicator) relay.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "TelltaleLED": {
@@ -792,7 +1174,13 @@
       "RequestLightSensorControl": {
         "description": "Controls the light sensor.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON",
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          },
           "pbData": "PB data",
           "twData": "TW data"
         }
@@ -857,31 +1245,61 @@
       "Relay_10": {
         "description": "Controls relay 10.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "Relay_11": {
         "description": "Controls relay 11.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "Relay_12": {
         "description": "Controls relay 12.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "Relay_13": {
         "description": "Controls relay 13.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "Relay_14": {
         "description": "Controls relay 14.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = on, 'OFF' = off — this bench only recognizes the strings 'ON'/'OFF' (0/1 inputs are auto-converted)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "RelayInitialization": {
@@ -944,7 +1362,13 @@
       "AnnouncesAutoTestStartOrEnd": {
         "description": "Announces the start/end of an automated test.",
         "params": {
-          "bisStart": "True = test start, False = test end"
+          "bisStart": {
+            "description": "True = test start, False = test end",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "BATSwitchSETtoPC": {
@@ -958,7 +1382,13 @@
       "RequestAudioFrequency": {
         "description": "Requests audio frequency measurement.",
         "params": {
-          "bStart": "True = start, False = stop",
+          "bStart": {
+            "description": "True = start, False = stop",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nMs": "Measurement interval (ms)"
         }
       },
@@ -971,63 +1401,117 @@
       "RequestAudioStatusAndADCValuePeriodicallyNoti": {
         "description": "Receives periodic notifications of audio status and ADC value.",
         "params": {
-          "bStart": "True = start, False = stop",
+          "bStart": {
+            "description": "True = start, False = stop",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "Notification interval (ms)"
         }
       },
       "RequestAudioStatusPeriodicallyNoti": {
         "description": "Receives periodic notifications of audio status.",
         "params": {
-          "bStart": "True = start, False = stop",
+          "bStart": {
+            "description": "True = start, False = stop",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "Notification interval (ms)"
         }
       },
       "RequestCurrentPeriodicallyNoti": {
         "description": "Receives periodic notifications of current value.",
         "params": {
-          "bStart": "True = start, False = stop",
+          "bStart": {
+            "description": "True = start, False = stop",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "Notification interval (ms)"
         }
       },
       "RequestExtCurrentPeriodicallyNoti": {
         "description": "Receives periodic notifications of external current value.",
         "params": {
-          "bStart": "True = start, False = stop",
+          "bStart": {
+            "description": "True = start, False = stop",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "Notification interval (ms)"
         }
       },
       "RequestVoltagePeriodicallyNoti": {
         "description": "Receives periodic notifications of voltage value.",
         "params": {
-          "bStart": "True = start, False = stop",
+          "bStart": {
+            "description": "True = start, False = stop",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "Notification interval (ms)"
         }
       },
       "RequestKeyOutVoltagePeriodicallyNoti": {
         "description": "Receives periodic notifications of key output voltage.",
         "params": {
-          "bStart": "True = start, False = stop",
+          "bStart": {
+            "description": "True = start, False = stop",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "Notification interval (ms)"
         }
       },
       "RequestLCDStatus": {
         "description": "Requests LCD status.",
         "params": {
-          "bStart": "True = start, False = stop",
+          "bStart": {
+            "description": "True = start, False = stop",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nMs": "Response wait time (ms)"
         }
       },
       "RequestLCDIllumiSensorValue": {
         "description": "Requests LCD illumination sensor value.",
         "params": {
-          "bStart": "True = start, False = stop",
+          "bStart": {
+            "description": "True = start, False = stop",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nMs": "Response wait time (ms)"
         }
       },
       "RequestLCDStatusAndIllumiSensorValuePeriodicallyNoti": {
         "description": "Receives periodic notifications of LCD status and illumination sensor value.",
         "params": {
-          "bStart": "True = start, False = stop",
+          "bStart": {
+            "description": "True = start, False = stop",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "Notification interval (ms)"
         }
       },
@@ -1063,7 +1547,13 @@
       "ReceiveStart": {
         "description": "Starts or stops bench data reception.",
         "params": {
-          "bStart": "True = start receiving, False = stop receiving",
+          "bStart": {
+            "description": "True = start receiving, False = stop receiving",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "queue": "Queue to store received data (optional)"
         }
       },
@@ -1210,7 +1700,13 @@
         "params": {
           "command": "Command to send. e.g. 'reboot', 'cat /proc/version'",
           "encoding": "Encoding (default: utf-8)",
-          "append_newline": "Auto-append newline. true/false (default: true)"
+          "append_newline": {
+            "description": "Auto-append newline. true/false (default: true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "Send_Packet": {
@@ -1226,7 +1722,13 @@
           "keyword": "Substring that triggers FAIL. e.g. 'ERROR', 'Fail', 'crash'",
           "time": "Response monitoring duration (seconds). Default 5",
           "encoding": "Encoding (default: utf-8)",
-          "append_newline": "Auto-append newline. true/false (default: true)"
+          "append_newline": {
+            "description": "Auto-append newline. true/false (default: true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "SendCommand_pass_on_keyword": {
@@ -1236,7 +1738,13 @@
           "keyword": "Substring required for PASS. e.g. 'OK', 'Pass', 'BootComplete'",
           "time": "Response wait duration (seconds). Default 5",
           "encoding": "Encoding (default: utf-8)",
-          "append_newline": "Auto-append newline. true/false (default: true)"
+          "append_newline": {
+            "description": "Auto-append newline. true/false (default: true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "Monitor_pass_on_keyword": {
@@ -1244,7 +1752,13 @@
         "params": {
           "keyword": "Keyword to PASS on (substring match)",
           "time": "Seconds to wait for future log lines. Default 5. 0 = scan past buffer only",
-          "include_past": "Whether to also scan logs captured so far. true/false (default true)"
+          "include_past": {
+            "description": "Whether to also scan logs captured so far. true/false (default true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "Monitor_fail_on_keyword": {
@@ -1252,7 +1766,13 @@
         "params": {
           "keyword": "Keyword that triggers FAIL (substring match)",
           "time": "Seconds to monitor future log lines. Default 5. 0 = scan past buffer only",
-          "include_past": "Whether to also scan logs captured so far. true/false (default true)"
+          "include_past": {
+            "description": "Whether to also scan logs captured so far. true/false (default true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       }
     }
@@ -1271,31 +1791,61 @@
       "Battery": {
         "description": "Controls the Battery (+B) relay.",
         "params": {
-          "status": "'on' or 'off'"
+          "status": {
+            "description": "'on' or 'off'",
+            "options": [
+              "on",
+              "off"
+            ]
+          }
         }
       },
       "ACC": {
         "description": "Controls the ACC relay.",
         "params": {
-          "status": "'on' or 'off'"
+          "status": {
+            "description": "'on' or 'off'",
+            "options": [
+              "on",
+              "off"
+            ]
+          }
         }
       },
       "IGN": {
         "description": "Controls the IGN relay.",
         "params": {
-          "status": "'on' or 'off'"
+          "status": {
+            "description": "'on' or 'off'",
+            "options": [
+              "on",
+              "off"
+            ]
+          }
         }
       },
       "IGN3": {
         "description": "Controls the IGN3 relay.",
         "params": {
-          "status": "'on' or 'off'"
+          "status": {
+            "description": "'on' or 'off'",
+            "options": [
+              "on",
+              "off"
+            ]
+          }
         }
       },
       "USB": {
         "description": "Controls the USB relay.",
         "params": {
-          "status": "'on' or 'off'"
+          "status": {
+            "description": "'on' or 'off'",
+            "options": [
+              "on",
+              "off"
+            ]
+          }
         }
       },
       "CheckCurrent": {
@@ -1338,7 +1888,13 @@
         "description": "Directly controls a relay.",
         "params": {
           "relay_num": "Relay number",
-          "status": "'on' or 'off'"
+          "status": {
+            "description": "'on' or 'off'",
+            "options": [
+              "on",
+              "off"
+            ]
+          }
         }
       },
       "SendRaw": {
@@ -1371,7 +1927,19 @@
       "IGN1": {
         "description": "Turns IGN1 (Ignition 1) power on or off. Corresponds to the vehicle's ignition power.",
         "params": {
-          "on_off": "0 = OFF, 1 = ON. Default: 1 (ON)"
+          "on_off": {
+            "description": "0 = OFF, 1 = ON. Default: 1 (ON)",
+            "options": [
+              {
+                "value": "1",
+                "label": "ON (1)"
+              },
+              {
+                "value": "0",
+                "label": "OFF (0)"
+              }
+            ]
+          }
         }
       },
       "IGN1_Read": {
@@ -1381,7 +1949,19 @@
       "IGN2": {
         "description": "Turns IGN2 (Ignition 2) power on or off. Corresponds to auxiliary ignition power.",
         "params": {
-          "on_off": "0 = OFF, 1 = ON. Default: 1 (ON)"
+          "on_off": {
+            "description": "0 = OFF, 1 = ON. Default: 1 (ON)",
+            "options": [
+              {
+                "value": "1",
+                "label": "ON (1)"
+              },
+              {
+                "value": "0",
+                "label": "OFF (0)"
+              }
+            ]
+          }
         }
       },
       "IGN2_Read": {
@@ -1391,7 +1971,19 @@
       "ACC": {
         "description": "Turns ACC (Accessory) power on or off. Corresponds to the vehicle's accessory power (radio, navigation, etc.).",
         "params": {
-          "on_off": "0 = OFF, 1 = ON. Default: 1 (ON)"
+          "on_off": {
+            "description": "0 = OFF, 1 = ON. Default: 1 (ON)",
+            "options": [
+              {
+                "value": "1",
+                "label": "ON (1)"
+              },
+              {
+                "value": "0",
+                "label": "OFF (0)"
+              }
+            ]
+          }
         }
       },
       "ACC_Read": {
@@ -1401,7 +1993,19 @@
       "BATTERY": {
         "description": "Turns the battery relay on or off. When OFF, battery power is completely cut from the vehicle.",
         "params": {
-          "on_off": "0 = OFF (disconnect battery), 1 = ON (connect battery). Default: 1 (ON)"
+          "on_off": {
+            "description": "0 = OFF (disconnect battery), 1 = ON (connect battery). Default: 1 (ON)",
+            "options": [
+              {
+                "value": "1",
+                "label": "ON (1)"
+              },
+              {
+                "value": "0",
+                "label": "OFF (0)"
+              }
+            ]
+          }
         }
       },
       "BATTERY_Read": {
@@ -1458,8 +2062,23 @@
       "canmsg_stop": {
         "description": "Stops the CAN capture and verifies the buffer. Checks whether any packet captured since canmsg_start matches the target MCU/channel/msg_id/data pattern. Returns PASS on a match, or a 'FAIL:' string so the step is marked failed. Usage order: canmsg_start → control command → (wait) → canmsg_stop",
         "params": {
-          "mcu": "Target MCU to listen on (default: 'mcu1' / e.g. 'mcu1', 'mcu2', 'mcu3')",
-          "channel": "Rx channel (default: 'A' / 'A', 'B', 'C', 'D')",
+          "mcu": {
+            "description": "Target MCU to listen on (default: 'mcu1' / e.g. 'mcu1', 'mcu2', 'mcu3')",
+            "options": [
+              "mcu1",
+              "mcu2",
+              "mcu3"
+            ]
+          },
+          "channel": {
+            "description": "Rx channel (default: 'A' / 'A', 'B', 'C', 'D')",
+            "options": [
+              "A",
+              "B",
+              "C",
+              "D"
+            ]
+          },
           "msg_id": "CAN ID to verify. Integer or hex string (with or without '0x'. e.g. '0x12F', '47A', 1146)",
           "data": "Data pattern to match. Hex bytes separated by spaces/commas. '*' or '**' positions are wildcards (ignored), and received bytes beyond the pattern length are not compared. e.g. '00 00 00 00 05 00 00 00' or '** ** ** ** 05'"
         }
@@ -1467,8 +2086,23 @@
       "canmsg": {
         "description": "[Legacy compatibility] Verifies CAN message reception. Collects packets for the specified time (ms) starting at the moment of the call, then checks for a msg_id/data pattern match. One-shot responses that occur before the call cannot be caught, so use canmsg_start → control → canmsg_stop for new scenarios.",
         "params": {
-          "mcu": "Target MCU to listen on (default: 'mcu1' / e.g. 'mcu1', 'mcu2', 'mcu3')",
-          "channel": "Rx channel (default: 'A' / 'A', 'B', 'C', 'D')",
+          "mcu": {
+            "description": "Target MCU to listen on (default: 'mcu1' / e.g. 'mcu1', 'mcu2', 'mcu3')",
+            "options": [
+              "mcu1",
+              "mcu2",
+              "mcu3"
+            ]
+          },
+          "channel": {
+            "description": "Rx channel (default: 'A' / 'A', 'B', 'C', 'D')",
+            "options": [
+              "A",
+              "B",
+              "C",
+              "D"
+            ]
+          },
           "time": "Collection window in milliseconds (default: 1000)",
           "msg_id": "CAN ID to verify. Integer or hex string (with or without '0x'. e.g. '0x12F', '47A', 1146)",
           "data": "Data pattern to match. Hex bytes separated by spaces/commas. '*' or '**' positions are wildcards (ignored), and received bytes beyond the pattern length are not compared. e.g. '00 00 00 00 05 00 00 00' or '** ** ** ** 05'"
@@ -1763,7 +2397,13 @@
         "description": "Start capturing logcat for the given Android device (in-memory buffer). If clear=True, flushes the logcat ring buffer first. Auto-restarts logcat into the same buffer if the device reboots/disconnects.",
         "params": {
           "serial": "Target ADB device serial. Empty = derived from the step's device",
-          "clear": "Clear logcat buffer before starting. true/false (default true)"
+          "clear": {
+            "description": "Clear logcat buffer before starting. true/false (default true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "StopLogging": {
@@ -1785,7 +2425,13 @@
           "keyword": "Keyword to PASS on (substring match)",
           "time": "Seconds to wait for future log lines. Default 5. 0 = past buffer only",
           "serial": "Target ADB device serial. Empty = derived from the step's device",
-          "include_past": "Whether to also scan logs captured so far. true/false (default true)"
+          "include_past": {
+            "description": "Whether to also scan logs captured so far. true/false (default true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "Monitor_fail_on_keyword": {
@@ -1794,7 +2440,13 @@
           "keyword": "Keyword that triggers FAIL (substring match)",
           "time": "Seconds to monitor future log lines. Default 5. 0 = past buffer only",
           "serial": "Target ADB device serial. Empty = derived from the step's device",
-          "include_past": "Whether to also scan logs captured so far. true/false (default true)"
+          "include_past": {
+            "description": "Whether to also scan logs captured so far. true/false (default true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       }
     }

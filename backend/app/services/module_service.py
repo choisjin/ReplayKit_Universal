@@ -196,8 +196,18 @@ def _apply_func_guides(functions: list[dict], module_name: str) -> None:
         param_guides = fg.get("params", {})
         param_guides_en = fg_en.get("params", {})
         for p in fn["params"]:
-            p["description"] = param_guides.get(p["name"], "")
-            p["description_en"] = param_guides_en.get(p["name"], "")
+            pg = param_guides.get(p["name"], "")
+            pg_en = param_guides_en.get(p["name"], "")
+            # 객체형 파라미터 가이드: {"description": ..., "options": [...]} —
+            # options 는 프론트 스텝 편집기에서 드롭다운으로 렌더링된다
+            # (항목은 문자열 또는 {"value","label"} 객체).
+            if isinstance(pg, dict):
+                p["description"] = pg.get("description", "")
+                if pg.get("options"):
+                    p["options"] = pg["options"]
+            else:
+                p["description"] = pg
+            p["description_en"] = pg_en.get("description", "") if isinstance(pg_en, dict) else pg_en
 
 
 def _load_plugin_from_file(py_file: Path):
@@ -1620,6 +1630,71 @@ def _cast_arg(val: Any, target_type: type) -> Any:
     return target_type(s)
 
 
+# ── 가이드 options 기반 인자 정규화 ──────────────────────────────────────────
+# module_guides.json 의 파라미터가 객체형({"options": [...]})으로 선언되면, 스텝 실행 시
+# 사용자가 넣은 동의어 값을 실제 모듈이 인식하는 wire 값으로 정규화한다.
+#   - {"ON","OFF"} 계열: IVIQEBenchIOClient .pyd 는 문자열 'ON' 만 켜짐으로 인식
+#     (가이드의 "0/1" 안내를 보고 1 을 넣으면 OFF 로 동작하던 혼동의 원인).
+#     0/1/true/false/on/off 등 동의어를 모두 옵션 표기로 흡수 → 구 시나리오도 복구.
+#   - {"True","False"} 계열: 실제 파이썬 bool 로 변환 — annotation 없는 플러그인
+#     (CANoe_RBS islog 등)과 .pyd(bStart)가 문자열 "False" 를 truthy 로 오판하는 것을 방지.
+#   - 그 외 옵션 목록: 옵션과 대소문자만 다른 입력을 옵션 표기 그대로 교정.
+_TRUTHY_WORDS = {"1", "true", "yes", "y", "on"}
+_FALSY_WORDS = {"0", "false", "no", "n", "off"}
+
+
+def _guide_option_values(options: list) -> list[str]:
+    """옵션 항목(문자열 또는 {value,label} 객체)에서 value 문자열 목록 추출."""
+    vals = []
+    for o in options:
+        vals.append(str(o.get("value", "")) if isinstance(o, dict) else str(o))
+    return [v for v in vals if v]
+
+
+def _normalize_option_args(module_name: str, function_name: str, args: dict) -> dict:
+    """가이드 options 선언에 따라 스텝 인자 값을 정규화한 dict 반환 (원본 불변)."""
+    if not isinstance(args, dict) or not args:
+        return args
+    try:
+        fg = _load_guides().get(module_name, {}).get("functions", {}).get(function_name, {})
+    except Exception:
+        return args
+    pguides = fg.get("params") if isinstance(fg, dict) else None
+    if not isinstance(pguides, dict):
+        return args
+    out = None
+    for pname, pg in pguides.items():
+        if not isinstance(pg, dict) or not pg.get("options") or pname not in args:
+            continue
+        val = args[pname]
+        if not isinstance(val, str):
+            continue
+        vals = _guide_option_values(pg["options"])
+        if not vals:
+            continue
+        lower_map = {v.lower(): v for v in vals}
+        canon = set(lower_map)
+        sl = val.strip().lower()
+        if sl in lower_map:
+            norm = lower_map[sl]
+        elif canon == {"on", "off"} and sl in _TRUTHY_WORDS:
+            norm = lower_map["on"]
+        elif canon == {"on", "off"} and sl in _FALSY_WORDS:
+            norm = lower_map["off"]
+        elif canon == {"true", "false"} and sl in _TRUTHY_WORDS:
+            norm = lower_map["true"]
+        elif canon == {"true", "false"} and sl in _FALSY_WORDS:
+            norm = lower_map["false"]
+        else:
+            continue
+        new_val: Any = (norm.lower() == "true") if canon == {"true", "false"} else norm
+        if new_val != val or type(new_val) is not type(val):
+            if out is None:
+                out = dict(args)
+            out[pname] = new_val
+    return out if out is not None else args
+
+
 # `bash -s` 류의 stdin 스크립트 실행에서 `< 로컬경로` 리디렉션을 탐지하는 패턴.
 # 따옴표("..." / '...') 또는 공백 없는 경로 토큰을 캡처.
 _SSH_STDIN_REDIRECT_RE = re.compile(r'<\s*("[^"]*"|\'[^\']*\'|\S+)')
@@ -1694,6 +1769,8 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
                   adb_serial: Optional[str] = None,
                   hkmc_service: Any = None) -> Any:
     """Execute a module function synchronously."""
+    # 가이드 options 메타 기반 인자 정규화 — alias 해석 전에 수행 (가이드는 표시 이름 기준).
+    args = _normalize_option_args(module_name, function_name, args)
     # 오타 교정 별칭(예: CANAT.send_can_message_all_stop) 을 실제 함수명으로 되돌린다.
     function_name = resolve_function_alias(module_name, function_name)
 

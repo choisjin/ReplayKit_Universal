@@ -81,6 +81,7 @@ I18N = {
         "th_func": "함수",
         "th_param": "파라미터",
         "no_param": "(없음)",
+        "options_fmt": "[선택지: {opts}]",
         "total": "총 <strong>{modules}개</strong> 모듈, <strong>{funcs}개</strong> 함수가 등록되어 있습니다.",
         "theme_title": "테마 전환",
         "cat_label_idx": 1,  # index into CATEGORIES tuple for label
@@ -102,6 +103,7 @@ I18N = {
         "th_func": "Function",
         "th_param": "Parameters",
         "no_param": "(none)",
+        "options_fmt": "[choices: {opts}]",
         "total": "Total <strong>{modules}</strong> modules, <strong>{funcs}</strong> functions registered.",
         "theme_title": "Toggle theme",
         "cat_label_idx": 2,  # index into CATEGORIES tuple for label
@@ -188,7 +190,20 @@ def generate_html(data: dict, lang: str = "ko", visible_map: dict[str, set[str]]
                 if params:
                     param_parts = []
                     for pname, pdesc in params.items():
-                        param_parts.append(f"<code>{pname}</code>: {escape(pdesc)}")
+                        # 객체형 파라미터({"description", "options"}) — options 는 앱에서
+                        # 드롭다운으로 표시되므로 문서에도 선택지를 병기한다.
+                        if isinstance(pdesc, dict):
+                            opts = [
+                                str(o.get("value", "")) if isinstance(o, dict) else str(o)
+                                for o in (pdesc.get("options") or [])
+                            ]
+                            pd = pdesc.get("description", "")
+                            if opts:
+                                choice = t["options_fmt"].format(opts=" / ".join(o for o in opts if o))
+                                pd = f"{pd} {choice}" if pd else choice
+                        else:
+                            pd = pdesc
+                        param_parts.append(f"<code>{pname}</code>: {escape(pd)}")
                     params_html = "<br>".join(param_parts)
                 else:
                     params_html = f'<span style="color:var(--text-muted)">{t["no_param"]}</span>'

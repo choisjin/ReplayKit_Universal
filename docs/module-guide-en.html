@@ -212,7 +212,7 @@ Standard usage pattern:
 <tr>
 <td><code>ACCOnOff</code></td>
 <td>Turns ACC (Accessory) power on or off.</td>
-<td style="font-size:12px"><code>state</code>: 0 = OFF, 1 = ON<br><code>bench_info</code>: Bench type. &#x27;OLD_BENCH&#x27; (default) or &#x27;NEW_BENCH&#x27;</td>
+<td style="font-size:12px"><code>state</code>: &#x27;ON&#x27; = on, &#x27;OFF&#x27; = off — this bench only recognizes the strings &#x27;ON&#x27;/&#x27;OFF&#x27; (0/1 inputs are auto-converted) [choices: ON / OFF]<br><code>bench_info</code>: Bench type. &#x27;OLD_BENCH&#x27; (default) or &#x27;NEW_BENCH&#x27; [choices: OLD_BENCH / NEW_BENCH]</td>
 </tr>
 <tr>
 <td><code>AccVoltage</code></td>
@@ -222,7 +222,7 @@ Standard usage pattern:
 <tr>
 <td><code>BatteryOnOff</code></td>
 <td>Turns battery power on or off.</td>
-<td style="font-size:12px"><code>nState</code>: 0 = OFF (disconnect battery), 1 = ON (connect battery)<br><code>bench_info</code>: Bench type. &#x27;OLD_BENCH&#x27; (default) or &#x27;NEW_BENCH&#x27;</td>
+<td style="font-size:12px"><code>nState</code>: &#x27;ON&#x27; = connect battery, &#x27;OFF&#x27; = disconnect battery — this bench only recognizes the strings &#x27;ON&#x27;/&#x27;OFF&#x27; (0/1 inputs are auto-converted) [choices: ON / OFF]<br><code>bench_info</code>: Bench type. &#x27;OLD_BENCH&#x27; (default) or &#x27;NEW_BENCH&#x27; [choices: OLD_BENCH / NEW_BENCH]</td>
 </tr>
 <tr>
 <td><code>BatteryVoltage</code></td>
@@ -232,22 +232,22 @@ Standard usage pattern:
 <tr>
 <td><code>IGNControl</code></td>
 <td>Controls the ignition (IGN) power.</td>
-<td style="font-size:12px"><code>status</code>: 0 = OFF, 1 = ON</td>
+<td style="font-size:12px"><code>status</code>: &#x27;ON&#x27; = on, &#x27;OFF&#x27; = off — this bench only recognizes the strings &#x27;ON&#x27;/&#x27;OFF&#x27; (0/1 inputs are auto-converted) [choices: ON / OFF]</td>
 </tr>
 <tr>
 <td><code>IGN3Control</code></td>
 <td>Controls the ignition 3 (IGN3) power.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+<td style="font-size:12px"><code>nStatus</code>: &#x27;ON&#x27; = on, &#x27;OFF&#x27; = off — this bench only recognizes the strings &#x27;ON&#x27;/&#x27;OFF&#x27; (0/1 inputs are auto-converted) [choices: ON / OFF]</td>
 </tr>
 <tr>
 <td><code>USBFrontSwitchControl</code></td>
 <td>Controls the front USB switch relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+<td style="font-size:12px"><code>nStatus</code>: &#x27;ON&#x27; = on, &#x27;OFF&#x27; = off — this bench only recognizes the strings &#x27;ON&#x27;/&#x27;OFF&#x27; (0/1 inputs are auto-converted) [choices: ON / OFF]</td>
 </tr>
 <tr>
 <td><code>USBRearSwitchControl</code></td>
 <td>Controls the rear USB switch relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+<td style="font-size:12px"><code>nStatus</code>: &#x27;ON&#x27; = on, &#x27;OFF&#x27; = off — this bench only recognizes the strings &#x27;ON&#x27;/&#x27;OFF&#x27; (0/1 inputs are auto-converted) [choices: ON / OFF]</td>
 </tr>
 </tbody>
 </table>
@@ -270,27 +270,27 @@ Standard usage pattern:
 <tr>
 <td><code>Battery</code></td>
 <td>Controls the Battery (+B) relay.</td>
-<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; or &#x27;off&#x27;</td>
+<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; or &#x27;off&#x27; [choices: on / off]</td>
 </tr>
 <tr>
 <td><code>ACC</code></td>
 <td>Controls the ACC relay.</td>
-<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; or &#x27;off&#x27;</td>
+<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; or &#x27;off&#x27; [choices: on / off]</td>
 </tr>
 <tr>
 <td><code>IGN</code></td>
 <td>Controls the IGN relay.</td>
-<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; or &#x27;off&#x27;</td>
+<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; or &#x27;off&#x27; [choices: on / off]</td>
 </tr>
 <tr>
 <td><code>IGN3</code></td>
 <td>Controls the IGN3 relay.</td>
-<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; or &#x27;off&#x27;</td>
+<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; or &#x27;off&#x27; [choices: on / off]</td>
 </tr>
 <tr>
 <td><code>USB</code></td>
 <td>Controls the USB relay.</td>
-<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; or &#x27;off&#x27;</td>
+<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; or &#x27;off&#x27; [choices: on / off]</td>
 </tr>
 <tr>
 <td><code>CheckCurrent</code></td>
@@ -320,7 +320,7 @@ Standard usage pattern:
 <tr>
 <td><code>Relay</code></td>
 <td>Directly controls a relay.</td>
-<td style="font-size:12px"><code>relay_num</code>: Relay number<br><code>status</code>: &#x27;on&#x27; or &#x27;off&#x27;</td>
+<td style="font-size:12px"><code>relay_num</code>: Relay number<br><code>status</code>: &#x27;on&#x27; or &#x27;off&#x27; [choices: on / off]</td>
 </tr>
 <tr>
 <td><code>SendRaw</code></td>
@@ -358,7 +358,7 @@ Standard usage pattern:
 <tr>
 <td><code>IGN1</code></td>
 <td>Turns IGN1 (Ignition 1) power on or off. Corresponds to the vehicle&#x27;s ignition power.</td>
-<td style="font-size:12px"><code>on_off</code>: 0 = OFF, 1 = ON. Default: 1 (ON)</td>
+<td style="font-size:12px"><code>on_off</code>: 0 = OFF, 1 = ON. Default: 1 (ON) [choices: 1 / 0]</td>
 </tr>
 <tr>
 <td><code>IGN1_Read</code></td>
@@ -368,7 +368,7 @@ Standard usage pattern:
 <tr>
 <td><code>IGN2</code></td>
 <td>Turns IGN2 (Ignition 2) power on or off. Corresponds to auxiliary ignition power.</td>
-<td style="font-size:12px"><code>on_off</code>: 0 = OFF, 1 = ON. Default: 1 (ON)</td>
+<td style="font-size:12px"><code>on_off</code>: 0 = OFF, 1 = ON. Default: 1 (ON) [choices: 1 / 0]</td>
 </tr>
 <tr>
 <td><code>IGN2_Read</code></td>
@@ -378,7 +378,7 @@ Standard usage pattern:
 <tr>
 <td><code>ACC</code></td>
 <td>Turns ACC (Accessory) power on or off. Corresponds to the vehicle&#x27;s accessory power (radio, navigation, etc.).</td>
-<td style="font-size:12px"><code>on_off</code>: 0 = OFF, 1 = ON. Default: 1 (ON)</td>
+<td style="font-size:12px"><code>on_off</code>: 0 = OFF, 1 = ON. Default: 1 (ON) [choices: 1 / 0]</td>
 </tr>
 <tr>
 <td><code>ACC_Read</code></td>
@@ -388,7 +388,7 @@ Standard usage pattern:
 <tr>
 <td><code>BATTERY</code></td>
 <td>Turns the battery relay on or off. When OFF, battery power is completely cut from the vehicle.</td>
-<td style="font-size:12px"><code>on_off</code>: 0 = OFF (disconnect battery), 1 = ON (connect battery). Default: 1 (ON)</td>
+<td style="font-size:12px"><code>on_off</code>: 0 = OFF (disconnect battery), 1 = ON (connect battery). Default: 1 (ON) [choices: 1 / 0]</td>
 </tr>
 <tr>
 <td><code>BATTERY_Read</code></td>
@@ -448,12 +448,12 @@ Standard usage pattern:
 <tr>
 <td><code>canmsg_stop</code></td>
 <td>Stops the CAN capture and verifies the buffer. Checks whether any packet captured since canmsg_start matches the target MCU/channel/msg_id/data pattern. Returns PASS on a match, or a &#x27;FAIL:&#x27; string so the step is marked failed. Usage order: canmsg_start → control command → (wait) → canmsg_stop</td>
-<td style="font-size:12px"><code>mcu</code>: Target MCU to listen on (default: &#x27;mcu1&#x27; / e.g. &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;)<br><code>channel</code>: Rx channel (default: &#x27;A&#x27; / &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;)<br><code>msg_id</code>: CAN ID to verify. Integer or hex string (with or without &#x27;0x&#x27;. e.g. &#x27;0x12F&#x27;, &#x27;47A&#x27;, 1146)<br><code>data</code>: Data pattern to match. Hex bytes separated by spaces/commas. &#x27;*&#x27; or &#x27;**&#x27; positions are wildcards (ignored), and received bytes beyond the pattern length are not compared. e.g. &#x27;00 00 00 00 05 00 00 00&#x27; or &#x27;** ** ** ** 05&#x27;</td>
+<td style="font-size:12px"><code>mcu</code>: Target MCU to listen on (default: &#x27;mcu1&#x27; / e.g. &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;) [choices: mcu1 / mcu2 / mcu3]<br><code>channel</code>: Rx channel (default: &#x27;A&#x27; / &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;) [choices: A / B / C / D]<br><code>msg_id</code>: CAN ID to verify. Integer or hex string (with or without &#x27;0x&#x27;. e.g. &#x27;0x12F&#x27;, &#x27;47A&#x27;, 1146)<br><code>data</code>: Data pattern to match. Hex bytes separated by spaces/commas. &#x27;*&#x27; or &#x27;**&#x27; positions are wildcards (ignored), and received bytes beyond the pattern length are not compared. e.g. &#x27;00 00 00 00 05 00 00 00&#x27; or &#x27;** ** ** ** 05&#x27;</td>
 </tr>
 <tr>
 <td><code>canmsg</code></td>
 <td>[Legacy compatibility] Verifies CAN message reception. Collects packets for the specified time (ms) starting at the moment of the call, then checks for a msg_id/data pattern match. One-shot responses that occur before the call cannot be caught, so use canmsg_start → control → canmsg_stop for new scenarios.</td>
-<td style="font-size:12px"><code>mcu</code>: Target MCU to listen on (default: &#x27;mcu1&#x27; / e.g. &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;)<br><code>channel</code>: Rx channel (default: &#x27;A&#x27; / &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;)<br><code>time</code>: Collection window in milliseconds (default: 1000)<br><code>msg_id</code>: CAN ID to verify. Integer or hex string (with or without &#x27;0x&#x27;. e.g. &#x27;0x12F&#x27;, &#x27;47A&#x27;, 1146)<br><code>data</code>: Data pattern to match. Hex bytes separated by spaces/commas. &#x27;*&#x27; or &#x27;**&#x27; positions are wildcards (ignored), and received bytes beyond the pattern length are not compared. e.g. &#x27;00 00 00 00 05 00 00 00&#x27; or &#x27;** ** ** ** 05&#x27;</td>
+<td style="font-size:12px"><code>mcu</code>: Target MCU to listen on (default: &#x27;mcu1&#x27; / e.g. &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;) [choices: mcu1 / mcu2 / mcu3]<br><code>channel</code>: Rx channel (default: &#x27;A&#x27; / &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;) [choices: A / B / C / D]<br><code>time</code>: Collection window in milliseconds (default: 1000)<br><code>msg_id</code>: CAN ID to verify. Integer or hex string (with or without &#x27;0x&#x27;. e.g. &#x27;0x12F&#x27;, &#x27;47A&#x27;, 1146)<br><code>data</code>: Data pattern to match. Hex bytes separated by spaces/commas. &#x27;*&#x27; or &#x27;**&#x27; positions are wildcards (ignored), and received bytes beyond the pattern length are not compared. e.g. &#x27;00 00 00 00 05 00 00 00&#x27; or &#x27;** ** ** ** 05&#x27;</td>
 </tr>
 <tr>
 <td><code>SendCan</code></td>
@@ -530,7 +530,7 @@ Standard usage pattern:
 <tr>
 <td><code>GetSysVar</code></td>
 <td>Reads a system variable value (falls back to raw COM to surface the real cause when py_canoe returns None).</td>
-<td style="font-size:12px"><code>namespace_name</code>: Namespace name<br><code>sys_var_name</code>: System variable name<br><code>return_symbolic_name</code>: Whether to return the symbolic name. Default False<br><code>islog</code>: Whether to print a log. Default True</td>
+<td style="font-size:12px"><code>namespace_name</code>: Namespace name<br><code>sys_var_name</code>: System variable name<br><code>return_symbolic_name</code>: Whether to return the symbolic name. Default False [choices: True / False]<br><code>islog</code>: Whether to print a log. Default True [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>CheckSysVar</code></td>
@@ -545,7 +545,7 @@ Standard usage pattern:
 <tr>
 <td><code>GetEnvVar</code></td>
 <td>Reads an environment variable value (use GetSysVar if it&#x27;s a System Variables namespace variable).</td>
-<td style="font-size:12px"><code>env_var_name</code>: Environment variable name<br><code>islog</code>: Whether to print a log. Default True</td>
+<td style="font-size:12px"><code>env_var_name</code>: Environment variable name<br><code>islog</code>: Whether to print a log. Default True [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>CheckEnvVar</code></td>
@@ -555,22 +555,22 @@ Standard usage pattern:
 <tr>
 <td><code>DIAG_TestPresent</code></td>
 <td>Turns periodic Tester Present transmission on or off for the given ECU.</td>
-<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: Diagnostic ECU qualifier name<br><code>value</code>: True = activate, False = deactivate</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: Diagnostic ECU qualifier name<br><code>value</code>: True = activate, False = deactivate [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>DIAG_Request</code></td>
 <td>Sends a UDS diagnostic request and returns the response.</td>
-<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: Diagnostic ECU qualifier name<br><code>request</code>: Request data. e.g. &#x27;10 01&#x27;<br><code>request_in_bytes</code>: Interpret request as bytes. Default True<br><code>return_sender_name</code>: Include sender name in the response. Default False<br><code>timeout</code>: (unused — not supported by py_canoe)<br><code>islog</code>: Whether to print a log. Default True</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: Diagnostic ECU qualifier name<br><code>request</code>: Request data. e.g. &#x27;10 01&#x27;<br><code>request_in_bytes</code>: Interpret request as bytes. Default True [choices: True / False]<br><code>return_sender_name</code>: Include sender name in the response. Default False [choices: True / False]<br><code>timeout</code>: (unused — not supported by py_canoe)<br><code>islog</code>: Whether to print a log. Default True [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>CheckDIAG</code></td>
 <td>Sends a UDS diagnostic request and compares the response against an expected pattern (supports indexed comparison).</td>
-<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: Diagnostic ECU qualifier name<br><code>request</code>: Request data. e.g. &#x27;10 01&#x27;<br><code>expect_value</code>: Expected response pattern. e.g. &#x27;50 01 00 32 01 F4&#x27;<br><code>request_in_bytes</code>: Interpret request as bytes. Default True<br><code>return_sender_name</code>: Include sender name in the response. Default False</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: Diagnostic ECU qualifier name<br><code>request</code>: Request data. e.g. &#x27;10 01&#x27;<br><code>expect_value</code>: Expected response pattern. e.g. &#x27;50 01 00 32 01 F4&#x27;<br><code>request_in_bytes</code>: Interpret request as bytes. Default True [choices: True / False]<br><code>return_sender_name</code>: Include sender name in the response. Default False [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>SendDiagMsg</code></td>
 <td>Sends a UDS diagnostic request, parses PRC/NRC, and returns a dict (retries on timeout).</td>
-<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: Diagnostic ECU qualifier name<br><code>request</code>: Request data. e.g. &#x27;10 01&#x27;<br><code>timeout</code>: (unused — not supported by py_canoe)<br><code>request_in_bytes</code>: Interpret request as bytes. Default True<br><code>return_sender_name</code>: Include sender name in the response. Default False<br><code>max_retries</code>: Maximum number of retries on timeout. Default 5<br><code>retry_delay</code>: Delay between retries (seconds). Default 10.0</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: Diagnostic ECU qualifier name<br><code>request</code>: Request data. e.g. &#x27;10 01&#x27;<br><code>timeout</code>: (unused — not supported by py_canoe)<br><code>request_in_bytes</code>: Interpret request as bytes. Default True [choices: True / False]<br><code>return_sender_name</code>: Include sender name in the response. Default False [choices: True / False]<br><code>max_retries</code>: Maximum number of retries on timeout. Default 5<br><code>retry_delay</code>: Delay between retries (seconds). Default 10.0</td>
 </tr>
 </tbody>
 </table>
@@ -603,7 +603,7 @@ Standard usage pattern:
 <tr>
 <td><code>canoe_send_message</code></td>
 <td>Sends a CAN/CAN FD message. A non-zero cycle time sends periodically; 0 sends once. When apply_e2e=True, the Alive Counter and CRC16 are recomputed in real time every cycle for an E2E-protected periodic transmit.</td>
-<td style="font-size:12px"><code>message_id</code>: CAN ID (hex string). e.g. &#x27;0x288&#x27;<br><code>cycle_time</code>: Transmit cycle (ms). 0 = send once<br><code>can_message</code>: Message data (space-separated hex). e.g. &#x27;01 02 03 04 05 06 07 08&#x27;<br><code>bus_channel</code>: Bus channel index (from 0, in device_info order)<br><code>message_type</code>: &#x27;FD&#x27; (default) or any other string = Classic CAN<br><code>apply_e2e</code>: True = E2E (Alive Counter + CRC16) periodic transmit; False (default) = plain transmit. E2E spec is read per message_id from plugins/e2e_config.json, falling back to a default template. Only effective when cycle_time &gt; 0.</td>
+<td style="font-size:12px"><code>message_id</code>: CAN ID (hex string). e.g. &#x27;0x288&#x27;<br><code>cycle_time</code>: Transmit cycle (ms). 0 = send once<br><code>can_message</code>: Message data (space-separated hex). e.g. &#x27;01 02 03 04 05 06 07 08&#x27;<br><code>bus_channel</code>: Bus channel index (from 0, in device_info order)<br><code>message_type</code>: &#x27;FD&#x27; (default) or any other string = Classic CAN<br><code>apply_e2e</code>: True = E2E (Alive Counter + CRC16) periodic transmit; False (default) = plain transmit. E2E spec is read per message_id from plugins/e2e_config.json, falling back to a default template. Only effective when cycle_time &gt; 0. [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>canoe_send_message_stop</code></td>
@@ -628,7 +628,7 @@ Standard usage pattern:
 <tr>
 <td><code>canoe_set_diag_env</code></td>
 <td>Configures the ISO-TP (diagnostic) environment. Must be called once before sending/receiving diagnostics.</td>
-<td style="font-size:12px"><code>bus_ch</code>: Bus channel index used for diagnostics<br><code>tx_id</code>: Request (Tx) CAN ID (hex). e.g. &#x27;0x7E0&#x27;<br><code>rx_id</code>: Response (Rx) CAN ID (hex). e.g. &#x27;0x7E8&#x27;<br><code>can_type</code>: &#x27;FD&#x27; or &#x27;CC&#x27; (Classic CAN, default)</td>
+<td style="font-size:12px"><code>bus_ch</code>: Bus channel index used for diagnostics<br><code>tx_id</code>: Request (Tx) CAN ID (hex). e.g. &#x27;0x7E0&#x27;<br><code>rx_id</code>: Response (Rx) CAN ID (hex). e.g. &#x27;0x7E8&#x27;<br><code>can_type</code>: &#x27;FD&#x27; or &#x27;CC&#x27; (Classic CAN, default) [choices: FD / CC]</td>
 </tr>
 <tr>
 <td><code>canoe_start_tester_present</code></td>
@@ -643,7 +643,7 @@ Standard usage pattern:
 <tr>
 <td><code>canoe_send_diag_msg</code></td>
 <td>Sends a diagnostic (UDS) message via ISO-TP and evaluates the response (PRC/NRC). Returns a dict with status/response/service_id, etc. (requires canoe_set_diag_env first)</td>
-<td style="font-size:12px"><code>can_message</code>: Diagnostic data to send (space-separated hex). e.g. &#x27;22 F1 90&#x27;<br><code>timeout</code>: Response wait time (seconds). Default &#x27;5&#x27;<br><code>wait_response</code>: Whether to wait for and evaluate the response. Default True</td>
+<td style="font-size:12px"><code>can_message</code>: Diagnostic data to send (space-separated hex). e.g. &#x27;22 F1 90&#x27;<br><code>timeout</code>: Response wait time (seconds). Default &#x27;5&#x27;<br><code>wait_response</code>: Whether to wait for and evaluate the response. Default True [choices: True / False]</td>
 </tr>
 </tbody>
 </table>
@@ -666,7 +666,7 @@ Standard usage pattern:
 <tr>
 <td><code>send_can_message</code></td>
 <td>Sends a CAN message.</td>
-<td style="font-size:12px"><code>message_id</code>: CAN message ID<br><code>cycle_time</code>: Transmission interval (ms). 0 for one-shot<br><code>can_message</code>: Message data (hex)<br><code>bus_channel</code>: CAN channel<br><code>message_type</code>: &#x27;FD&#x27; (default) or &#x27;Classic&#x27;</td>
+<td style="font-size:12px"><code>message_id</code>: CAN message ID<br><code>cycle_time</code>: Transmission interval (ms). 0 for one-shot<br><code>can_message</code>: Message data (hex)<br><code>bus_channel</code>: CAN channel<br><code>message_type</code>: &#x27;FD&#x27; (default) or &#x27;Classic&#x27; [choices: FD / Classic]</td>
 </tr>
 <tr>
 <td><code>CAN_PANEL</code></td>
@@ -676,17 +676,17 @@ Standard usage pattern:
 <tr>
 <td><code>check_can_message</code></td>
 <td>Checks whether a specific CAN message is received (RX) within the timeout. PASS if received, FAIL otherwise. Leave data empty to check message ID reception only. Works as a single step — no prepare/cleanup steps needed.</td>
-<td style="font-size:12px"><code>message_id</code>: CAN message ID to check (hex). e.g. &#x27;0x18DAF141&#x27; or &#x27;291&#x27;<br><code>expected_data</code>: Expected data (hex bytes, space-separated). Empty = ID-only check. &#x27;*&#x27; ignores a nibble — e.g. &#x27;1A 2B&#x27;, &#x27;1* ** 33&#x27;<br><code>match_mode</code>: Data comparison mode. &#x27;startswith&#x27; (default: prefix match) / &#x27;exact&#x27; (full-length match) / &#x27;contains&#x27; (match anywhere in data) / &#x27;bitmask&#x27; (all set bits present)<br><code>timeout</code>: Max wait time in seconds (default 5). Returns PASS immediately when matched</td>
+<td style="font-size:12px"><code>message_id</code>: CAN message ID to check (hex). e.g. &#x27;0x18DAF141&#x27; or &#x27;291&#x27;<br><code>expected_data</code>: Expected data (hex bytes, space-separated). Empty = ID-only check. &#x27;*&#x27; ignores a nibble — e.g. &#x27;1A 2B&#x27;, &#x27;1* ** 33&#x27;<br><code>match_mode</code>: Data comparison mode. &#x27;startswith&#x27; (default: prefix match) / &#x27;exact&#x27; (full-length match) / &#x27;contains&#x27; (match anywhere in data) / &#x27;bitmask&#x27; (all set bits present) [choices: startswith / exact / contains / bitmask]<br><code>timeout</code>: Max wait time in seconds (default 5). Returns PASS immediately when matched</td>
 </tr>
 <tr>
 <td><code>check_no_can_message</code></td>
 <td>Inverse check — PASS only if the message is NOT received during the timeout. Fails immediately on first reception (e.g. a message must stop after entering sleep).</td>
-<td style="font-size:12px"><code>message_id</code>: CAN message ID that must not be received (hex). e.g. &#x27;0x18DAF141&#x27;<br><code>expected_data</code>: Expected data (hex bytes). Empty = any reception of the ID fails. &#x27;*&#x27; nibble wildcard supported<br><code>match_mode</code>: Data comparison mode. &#x27;startswith&#x27; / &#x27;exact&#x27; / &#x27;contains&#x27; / &#x27;bitmask&#x27;<br><code>timeout</code>: Watch duration in seconds (default 5). PASS if not received for this long</td>
+<td style="font-size:12px"><code>message_id</code>: CAN message ID that must not be received (hex). e.g. &#x27;0x18DAF141&#x27;<br><code>expected_data</code>: Expected data (hex bytes). Empty = any reception of the ID fails. &#x27;*&#x27; nibble wildcard supported<br><code>match_mode</code>: Data comparison mode. &#x27;startswith&#x27; / &#x27;exact&#x27; / &#x27;contains&#x27; / &#x27;bitmask&#x27; [choices: startswith / exact / contains / bitmask]<br><code>timeout</code>: Watch duration in seconds (default 5). PASS if not received for this long</td>
 </tr>
 <tr>
 <td><code>stop_can_message</code></td>
 <td>Stops periodic transmission of a specific CAN message.</td>
-<td style="font-size:12px"><code>message_id</code>: Message ID to stop<br><code>cycle_time</code>: Cycle time<br><code>can_message</code>: Message data<br><code>bus_channel</code>: CAN channel<br><code>message_type</code>: &#x27;FD&#x27; or &#x27;Classic&#x27;</td>
+<td style="font-size:12px"><code>message_id</code>: Message ID to stop<br><code>cycle_time</code>: Cycle time<br><code>can_message</code>: Message data<br><code>bus_channel</code>: CAN channel<br><code>message_type</code>: &#x27;FD&#x27; or &#x27;Classic&#x27; [choices: FD / Classic]</td>
 </tr>
 <tr>
 <td><code>send_can_message_all_stop</code></td>
@@ -748,7 +748,7 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <tr>
 <td><code>SendCommand</code></td>
 <td>Sends a text command via the serial port.</td>
-<td style="font-size:12px"><code>command</code>: Command to send. e.g. &#x27;reboot&#x27;, &#x27;cat /proc/version&#x27;<br><code>encoding</code>: Encoding (default: utf-8)<br><code>append_newline</code>: Auto-append newline. true/false (default: true)</td>
+<td style="font-size:12px"><code>command</code>: Command to send. e.g. &#x27;reboot&#x27;, &#x27;cat /proc/version&#x27;<br><code>encoding</code>: Encoding (default: utf-8)<br><code>append_newline</code>: Auto-append newline. true/false (default: true) [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>Send_Packet</code></td>
@@ -758,22 +758,22 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <tr>
 <td><code>SendCommand_fail_on_keyword</code></td>
 <td>Sends a command, then **FAILS if the keyword appears** in the response. Used to detect abnormal keywords like &#x27;ERROR&#x27;/&#x27;Fail&#x27;/&#x27;crash&#x27;. After sending, monitors only newly captured lines for &#x27;time&#x27; seconds; every matching line is appended as a fail row and displayed inline (Fail_Count_N). Returns PASS if no match.</td>
-<td style="font-size:12px"><code>command</code>: Command to send. e.g. &#x27;status&#x27;, &#x27;self_test&#x27;<br><code>keyword</code>: Substring that triggers FAIL. e.g. &#x27;ERROR&#x27;, &#x27;Fail&#x27;, &#x27;crash&#x27;<br><code>time</code>: Response monitoring duration (seconds). Default 5<br><code>encoding</code>: Encoding (default: utf-8)<br><code>append_newline</code>: Auto-append newline. true/false (default: true)</td>
+<td style="font-size:12px"><code>command</code>: Command to send. e.g. &#x27;status&#x27;, &#x27;self_test&#x27;<br><code>keyword</code>: Substring that triggers FAIL. e.g. &#x27;ERROR&#x27;, &#x27;Fail&#x27;, &#x27;crash&#x27;<br><code>time</code>: Response monitoring duration (seconds). Default 5<br><code>encoding</code>: Encoding (default: utf-8)<br><code>append_newline</code>: Auto-append newline. true/false (default: true) [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>SendCommand_pass_on_keyword</code></td>
 <td>Sends a command, then **PASSES if the keyword appears** in the response. Used for normal-response keywords like &#x27;OK&#x27;/&#x27;Pass&#x27;/&#x27;BootComplete&#x27;. Returns PASS immediately on first match (early exit). If not found within &#x27;time&#x27; seconds, appends one fail row and returns FAIL.</td>
-<td style="font-size:12px"><code>command</code>: Command to send. e.g. &#x27;ping&#x27;, &#x27;getversion&#x27;<br><code>keyword</code>: Substring required for PASS. e.g. &#x27;OK&#x27;, &#x27;Pass&#x27;, &#x27;BootComplete&#x27;<br><code>time</code>: Response wait duration (seconds). Default 5<br><code>encoding</code>: Encoding (default: utf-8)<br><code>append_newline</code>: Auto-append newline. true/false (default: true)</td>
+<td style="font-size:12px"><code>command</code>: Command to send. e.g. &#x27;ping&#x27;, &#x27;getversion&#x27;<br><code>keyword</code>: Substring required for PASS. e.g. &#x27;OK&#x27;, &#x27;Pass&#x27;, &#x27;BootComplete&#x27;<br><code>time</code>: Response wait duration (seconds). Default 5<br><code>encoding</code>: Encoding (default: utf-8)<br><code>append_newline</code>: Auto-append newline. true/false (default: true) [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>Monitor_pass_on_keyword</code></td>
 <td>WITHOUT sending any command (no write), PASS if keyword is found in the log. If include_past=True, first scans logs captured so far, then monitors new lines for `time` seconds; PASS on first match. Sends nothing (not even a newline), so it does not disturb a webcam on the same USB hub.</td>
-<td style="font-size:12px"><code>keyword</code>: Keyword to PASS on (substring match)<br><code>time</code>: Seconds to wait for future log lines. Default 5. 0 = scan past buffer only<br><code>include_past</code>: Whether to also scan logs captured so far. true/false (default true)</td>
+<td style="font-size:12px"><code>keyword</code>: Keyword to PASS on (substring match)<br><code>time</code>: Seconds to wait for future log lines. Default 5. 0 = scan past buffer only<br><code>include_past</code>: Whether to also scan logs captured so far. true/false (default true) [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>Monitor_fail_on_keyword</code></td>
 <td>WITHOUT sending any command (no write), FAIL if keyword is found in the log. For monitoring abnormal keywords (ERROR/crash). Scans past buffer (if include_past) and new lines for `time` seconds, accumulating all matches.</td>
-<td style="font-size:12px"><code>keyword</code>: Keyword that triggers FAIL (substring match)<br><code>time</code>: Seconds to monitor future log lines. Default 5. 0 = scan past buffer only<br><code>include_past</code>: Whether to also scan logs captured so far. true/false (default true)</td>
+<td style="font-size:12px"><code>keyword</code>: Keyword that triggers FAIL (substring match)<br><code>time</code>: Seconds to monitor future log lines. Default 5. 0 = scan past buffer only<br><code>include_past</code>: Whether to also scan logs captured so far. true/false (default true) [choices: True / False]</td>
 </tr>
 </tbody>
 </table>
@@ -891,7 +891,7 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <tr>
 <td><code>StartLogging</code></td>
 <td>Start capturing logcat for the given Android device (in-memory buffer). If clear=True, flushes the logcat ring buffer first. Auto-restarts logcat into the same buffer if the device reboots/disconnects.</td>
-<td style="font-size:12px"><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device<br><code>clear</code>: Clear logcat buffer before starting. true/false (default true)</td>
+<td style="font-size:12px"><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device<br><code>clear</code>: Clear logcat buffer before starting. true/false (default true) [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>StopLogging</code></td>
@@ -906,12 +906,12 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <tr>
 <td><code>Monitor_pass_on_keyword</code></td>
 <td>PASS if keyword is found in the captured logcat. If include_past=True, scans logs captured so far first, then monitors new lines for `time` seconds. Requires StartLogging first.</td>
-<td style="font-size:12px"><code>keyword</code>: Keyword to PASS on (substring match)<br><code>time</code>: Seconds to wait for future log lines. Default 5. 0 = past buffer only<br><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device<br><code>include_past</code>: Whether to also scan logs captured so far. true/false (default true)</td>
+<td style="font-size:12px"><code>keyword</code>: Keyword to PASS on (substring match)<br><code>time</code>: Seconds to wait for future log lines. Default 5. 0 = past buffer only<br><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device<br><code>include_past</code>: Whether to also scan logs captured so far. true/false (default true) [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>Monitor_fail_on_keyword</code></td>
 <td>FAIL if keyword is found in the captured logcat. For monitoring abnormal keywords (FATAL/ANR/Exception). Scans past buffer (if include_past) and new lines for `time` seconds.</td>
-<td style="font-size:12px"><code>keyword</code>: Keyword that triggers FAIL (substring match)<br><code>time</code>: Seconds to monitor future log lines. Default 5. 0 = past buffer only<br><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device<br><code>include_past</code>: Whether to also scan logs captured so far. true/false (default true)</td>
+<td style="font-size:12px"><code>keyword</code>: Keyword that triggers FAIL (substring match)<br><code>time</code>: Seconds to monitor future log lines. Default 5. 0 = past buffer only<br><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device<br><code>include_past</code>: Whether to also scan logs captured so far. true/false (default true) [choices: True / False]</td>
 </tr>
 </tbody>
 </table>

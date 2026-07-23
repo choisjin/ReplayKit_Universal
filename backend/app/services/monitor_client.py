@@ -32,6 +32,10 @@ _STATUS_FAIL_LOG_EVERY = 15  # 연속 실패 — 15회 = 약 30초마다 1줄
 # activity 전이 중 INFO 로 남길 값 — idle/in_use 는 창 포커스만 따라 수시로 뒤집히므로 제외.
 _MEANINGFUL_ACTIVITY = {"playing", "recording"}
 
+# 전송 사이 activity 폴링 간격(초) — 상태 전이를 이 해상도로 감지해 즉시 재전송한다.
+# 값이 작을수록 짧은 이벤트를 잘 잡지만 폴링이 잦아진다(경량 함수라 0.5s 면 부하 무시).
+_TRANSITION_POLL = 0.5
+
 # 재생 중 전송 주기(초) — 테스트 PC 가 가장 바쁜 구간이라 보고 빈도를 낮춰 간섭을 줄인다.
 # 평상시(_status_interval=2s)보다 길지만 매니저의 오프라인 판정(45s)보다는 충분히 짧다.
 _STATUS_INTERVAL_PLAYING = 10.0
@@ -166,6 +170,8 @@ class MonitorClient:
 
         # 상태 수집 콜백
         self._get_status_fn: Optional[Callable[[], Coroutine[Any, Any, dict]]] = None
+        # 경량 activity 판별 콜백 — 전송 사이 폴링으로 상태 전이를 즉시 감지(짧은 이벤트 포착).
+        self._get_activity_fn: Optional[Callable[[], str]] = None
         # 원격 명령 수신 콜백
         self._on_command_fn: Optional[Callable[[dict], Coroutine[Any, Any, dict | None]]] = None
 
@@ -180,6 +186,13 @@ class MonitorClient:
     def set_status_callback(self, fn: Callable[[], Coroutine[Any, Any, dict]]):
         """상태 수집 콜백 등록. 주기적으로 호출되어 현재 상태를 반환해야 함."""
         self._get_status_fn = fn
+
+    def set_activity_callback(self, fn: Callable[[], str]):
+        """경량 activity 판별 콜백 등록. 전송 사이 폴링으로 상태 전이를 감지하는 데 쓴다.
+
+        디바이스 조회 없이 즉시 반환해야 한다(자주 호출됨). 없으면 폴링 없이 기존 주기만 쓴다.
+        """
+        self._get_activity_fn = fn
 
     def set_command_callback(self, fn: Callable[[dict], Coroutine[Any, Any, dict | None]]):
         """원격 명령 수신 콜백 등록. 명령을 처리하고 결과를 반환."""
@@ -411,9 +424,28 @@ class MonitorClient:
                                 "관제 상태 전송 실패 (%d회째) — 관제 대시보드가 '대기/오프라인'으로 굳습니다: %r",
                                 fail_count, e, exc_info=(fail_count == 1),
                             )
-                await asyncio.sleep(interval)
+                # 다음 전송까지 대기 — 그 사이 activity 가 바뀌면 즉시 깨어나 재전송한다.
+                # (관제가 상태 전이를 늦어도 _TRANSITION_POLL 이내에 받아 구간 경계가 정확해진다.
+                #  activity 판별은 디바이스 조회 없는 경량 함수라 폴링 부하는 무시할 수준)
+                await self._wait_or_transition(interval, last_activity)
         except Exception:
             pass
+
+    async def _wait_or_transition(self, interval: float, baseline: Optional[str]):
+        """interval 초 동안 대기하되, activity 가 baseline 에서 바뀌면 즉시 반환한다."""
+        if not self._get_activity_fn:
+            await asyncio.sleep(interval)
+            return
+        waited = 0.0
+        while self._running and waited < interval:
+            step = min(_TRANSITION_POLL, interval - waited)
+            await asyncio.sleep(step)
+            waited += step
+            try:
+                if self._get_activity_fn() != baseline:
+                    return  # 전이 감지 → 즉시 전체 status 재전송
+            except Exception:
+                pass
 
     async def update_server_url(self, new_url: str):
         """관제 서버 URL 변경 시 재연결.

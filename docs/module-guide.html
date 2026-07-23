@@ -212,7 +212,7 @@
 <tr>
 <td><code>ACCOnOff</code></td>
 <td>ACC(Accessory) 전원을 켜거나 끕니다.</td>
-<td style="font-size:12px"><code>state</code>: 0 = OFF (끄기), 1 = ON (켜기)<br><code>bench_info</code>: 벤치 종류. &#x27;OLD_BENCH&#x27;(기본) 또는 &#x27;NEW_BENCH&#x27;</td>
+<td style="font-size:12px"><code>state</code>: &#x27;ON&#x27; = 켜기, &#x27;OFF&#x27; = 끄기 — 이 벤치는 문자열 &#x27;ON&#x27;/&#x27;OFF&#x27;로 동작합니다 (0/1 입력은 자동 변환) [선택지: ON / OFF]<br><code>bench_info</code>: 벤치 종류. &#x27;OLD_BENCH&#x27;(기본) 또는 &#x27;NEW_BENCH&#x27; [선택지: OLD_BENCH / NEW_BENCH]</td>
 </tr>
 <tr>
 <td><code>AccVoltage</code></td>
@@ -222,7 +222,7 @@
 <tr>
 <td><code>BatteryOnOff</code></td>
 <td>배터리 전원을 켜거나 끕니다.</td>
-<td style="font-size:12px"><code>nState</code>: 0 = OFF (배터리 차단), 1 = ON (배터리 연결)<br><code>bench_info</code>: 벤치 종류. &#x27;OLD_BENCH&#x27;(기본) 또는 &#x27;NEW_BENCH&#x27;</td>
+<td style="font-size:12px"><code>nState</code>: &#x27;ON&#x27; = 배터리 연결, &#x27;OFF&#x27; = 배터리 차단 — 이 벤치는 문자열 &#x27;ON&#x27;/&#x27;OFF&#x27;로 동작합니다 (0/1 입력은 자동 변환) [선택지: ON / OFF]<br><code>bench_info</code>: 벤치 종류. &#x27;OLD_BENCH&#x27;(기본) 또는 &#x27;NEW_BENCH&#x27; [선택지: OLD_BENCH / NEW_BENCH]</td>
 </tr>
 <tr>
 <td><code>BatteryVoltage</code></td>
@@ -232,22 +232,22 @@
 <tr>
 <td><code>IGNControl</code></td>
 <td>이그니션(IGN) 전원을 제어합니다.</td>
-<td style="font-size:12px"><code>status</code>: 0 = OFF, 1 = ON</td>
+<td style="font-size:12px"><code>status</code>: &#x27;ON&#x27; = 켜기, &#x27;OFF&#x27; = 끄기 — 이 벤치는 문자열 &#x27;ON&#x27;/&#x27;OFF&#x27;로 동작합니다 (0/1 입력은 자동 변환) [선택지: ON / OFF]</td>
 </tr>
 <tr>
 <td><code>IGN3Control</code></td>
 <td>이그니션 3(IGN3) 전원을 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+<td style="font-size:12px"><code>nStatus</code>: &#x27;ON&#x27; = 켜기, &#x27;OFF&#x27; = 끄기 — 이 벤치는 문자열 &#x27;ON&#x27;/&#x27;OFF&#x27;로 동작합니다 (0/1 입력은 자동 변환) [선택지: ON / OFF]</td>
 </tr>
 <tr>
 <td><code>USBFrontSwitchControl</code></td>
 <td>전면 USB 스위치 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+<td style="font-size:12px"><code>nStatus</code>: &#x27;ON&#x27; = 켜기, &#x27;OFF&#x27; = 끄기 — 이 벤치는 문자열 &#x27;ON&#x27;/&#x27;OFF&#x27;로 동작합니다 (0/1 입력은 자동 변환) [선택지: ON / OFF]</td>
 </tr>
 <tr>
 <td><code>USBRearSwitchControl</code></td>
 <td>후면 USB 스위치 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
+<td style="font-size:12px"><code>nStatus</code>: &#x27;ON&#x27; = 켜기, &#x27;OFF&#x27; = 끄기 — 이 벤치는 문자열 &#x27;ON&#x27;/&#x27;OFF&#x27;로 동작합니다 (0/1 입력은 자동 변환) [선택지: ON / OFF]</td>
 </tr>
 </tbody>
 </table>
@@ -270,27 +270,27 @@
 <tr>
 <td><code>Battery</code></td>
 <td>Battery(+B) 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; 또는 &#x27;off&#x27;</td>
+<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; 또는 &#x27;off&#x27; [선택지: on / off]</td>
 </tr>
 <tr>
 <td><code>ACC</code></td>
 <td>ACC 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; 또는 &#x27;off&#x27;</td>
+<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; 또는 &#x27;off&#x27; [선택지: on / off]</td>
 </tr>
 <tr>
 <td><code>IGN</code></td>
 <td>IGN 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; 또는 &#x27;off&#x27;</td>
+<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; 또는 &#x27;off&#x27; [선택지: on / off]</td>
 </tr>
 <tr>
 <td><code>IGN3</code></td>
 <td>IGN3 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; 또는 &#x27;off&#x27;</td>
+<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; 또는 &#x27;off&#x27; [선택지: on / off]</td>
 </tr>
 <tr>
 <td><code>USB</code></td>
 <td>USB 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; 또는 &#x27;off&#x27;</td>
+<td style="font-size:12px"><code>status</code>: &#x27;on&#x27; 또는 &#x27;off&#x27; [선택지: on / off]</td>
 </tr>
 <tr>
 <td><code>CheckCurrent</code></td>
@@ -320,7 +320,7 @@
 <tr>
 <td><code>Relay</code></td>
 <td>릴레이를 직접 제어합니다.</td>
-<td style="font-size:12px"><code>relay_num</code>: 릴레이 번호<br><code>status</code>: &#x27;on&#x27; 또는 &#x27;off&#x27;</td>
+<td style="font-size:12px"><code>relay_num</code>: 릴레이 번호<br><code>status</code>: &#x27;on&#x27; 또는 &#x27;off&#x27; [선택지: on / off]</td>
 </tr>
 <tr>
 <td><code>SendRaw</code></td>
@@ -358,7 +358,7 @@
 <tr>
 <td><code>IGN1</code></td>
 <td>이그니션 1(IGN1) 전원을 켜거나 끕니다. 차량의 시동 전원에 해당합니다.</td>
-<td style="font-size:12px"><code>on_off</code>: 0 = OFF (전원 끄기), 1 = ON (전원 켜기). 기본값: 1 (ON)</td>
+<td style="font-size:12px"><code>on_off</code>: 0 = OFF (전원 끄기), 1 = ON (전원 켜기). 기본값: 1 (ON) [선택지: 1 / 0]</td>
 </tr>
 <tr>
 <td><code>IGN1_Read</code></td>
@@ -368,7 +368,7 @@
 <tr>
 <td><code>IGN2</code></td>
 <td>이그니션 2(IGN2) 전원을 켜거나 끕니다. 보조 이그니션 전원에 해당합니다.</td>
-<td style="font-size:12px"><code>on_off</code>: 0 = OFF (전원 끄기), 1 = ON (전원 켜기). 기본값: 1 (ON)</td>
+<td style="font-size:12px"><code>on_off</code>: 0 = OFF (전원 끄기), 1 = ON (전원 켜기). 기본값: 1 (ON) [선택지: 1 / 0]</td>
 </tr>
 <tr>
 <td><code>IGN2_Read</code></td>
@@ -378,7 +378,7 @@
 <tr>
 <td><code>ACC</code></td>
 <td>ACC(Accessory) 전원을 켜거나 끕니다. 차량의 액세서리 전원(라디오, 내비 등 작동 가능 상태)에 해당합니다.</td>
-<td style="font-size:12px"><code>on_off</code>: 0 = OFF (전원 끄기), 1 = ON (전원 켜기). 기본값: 1 (ON)</td>
+<td style="font-size:12px"><code>on_off</code>: 0 = OFF (전원 끄기), 1 = ON (전원 켜기). 기본값: 1 (ON) [선택지: 1 / 0]</td>
 </tr>
 <tr>
 <td><code>ACC_Read</code></td>
@@ -388,7 +388,7 @@
 <tr>
 <td><code>BATTERY</code></td>
 <td>배터리 릴레이를 켜거나 끕니다. OFF 시 차량에 배터리 전원이 완전히 차단됩니다.</td>
-<td style="font-size:12px"><code>on_off</code>: 0 = OFF (배터리 차단), 1 = ON (배터리 연결). 기본값: 1 (ON)</td>
+<td style="font-size:12px"><code>on_off</code>: 0 = OFF (배터리 차단), 1 = ON (배터리 연결). 기본값: 1 (ON) [선택지: 1 / 0]</td>
 </tr>
 <tr>
 <td><code>BATTERY_Read</code></td>
@@ -448,12 +448,12 @@
 <tr>
 <td><code>canmsg_stop</code></td>
 <td>CAN 메시지 캡처 종료 및 검증. canmsg_start 이후 버퍼에 쌓인 패킷 중 타겟 MCU/채널/msg_id/data 패턴에 일치하는 메시지가 있었는지 확인합니다. 일치하면 PASS, 없으면 &#x27;FAIL:&#x27; 을 반환해 스텝이 실패로 판정됩니다. 사용 순서: canmsg_start → 제어 명령 → (대기) → canmsg_stop</td>
-<td style="font-size:12px"><code>mcu</code>: 수신 대상 MCU (기본값: &#x27;mcu1&#x27; / 예: &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;)<br><code>channel</code>: 수신 채널 (기본값: &#x27;A&#x27; / &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;)<br><code>msg_id</code>: 검증할 CAN ID. 정수 또는 Hex 문자열 (&#x27;0x&#x27; 유무 무관. 예: &#x27;0x12F&#x27;, &#x27;47A&#x27;, 1146)<br><code>data</code>: 매칭할 데이터 패턴. 공백/쉼표 구분 Hex 바이트. &#x27;*&#x27; 또는 &#x27;**&#x27; 자리는 값 무시(와일드카드), 패턴보다 긴 뒷부분 바이트는 비교하지 않음. 예: &#x27;00 00 00 00 05 00 00 00&#x27; 또는 &#x27;** ** ** ** 05&#x27;</td>
+<td style="font-size:12px"><code>mcu</code>: 수신 대상 MCU (기본값: &#x27;mcu1&#x27; / 예: &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;) [선택지: mcu1 / mcu2 / mcu3]<br><code>channel</code>: 수신 채널 (기본값: &#x27;A&#x27; / &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;) [선택지: A / B / C / D]<br><code>msg_id</code>: 검증할 CAN ID. 정수 또는 Hex 문자열 (&#x27;0x&#x27; 유무 무관. 예: &#x27;0x12F&#x27;, &#x27;47A&#x27;, 1146)<br><code>data</code>: 매칭할 데이터 패턴. 공백/쉼표 구분 Hex 바이트. &#x27;*&#x27; 또는 &#x27;**&#x27; 자리는 값 무시(와일드카드), 패턴보다 긴 뒷부분 바이트는 비교하지 않음. 예: &#x27;00 00 00 00 05 00 00 00&#x27; 또는 &#x27;** ** ** ** 05&#x27;</td>
 </tr>
 <tr>
 <td><code>canmsg</code></td>
 <td>[구버전 호환용] CAN 메시지 수신 검증. 호출 시점부터 지정한 시간(ms) 동안 수신 패킷을 수집한 뒤 msg_id/data 패턴 일치 여부를 확인합니다. 호출 이전에 발생한 단발성 응답은 잡지 못하므로, 신규 시나리오는 canmsg_start → 제어 → canmsg_stop 방식을 사용하세요.</td>
-<td style="font-size:12px"><code>mcu</code>: 수신 대상 MCU (기본값: &#x27;mcu1&#x27; / 예: &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;)<br><code>channel</code>: 수신 채널 (기본값: &#x27;A&#x27; / &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;)<br><code>time</code>: 수집 대기 시간 (ms 단위. 기본값: 1000)<br><code>msg_id</code>: 검증할 CAN ID. 정수 또는 Hex 문자열 (&#x27;0x&#x27; 유무 무관. 예: &#x27;0x12F&#x27;, &#x27;47A&#x27;, 1146)<br><code>data</code>: 매칭할 데이터 패턴. 공백/쉼표 구분 Hex 바이트. &#x27;*&#x27; 또는 &#x27;**&#x27; 자리는 값 무시(와일드카드), 패턴보다 긴 뒷부분 바이트는 비교하지 않음. 예: &#x27;00 00 00 00 05 00 00 00&#x27; 또는 &#x27;** ** ** ** 05&#x27;</td>
+<td style="font-size:12px"><code>mcu</code>: 수신 대상 MCU (기본값: &#x27;mcu1&#x27; / 예: &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;) [선택지: mcu1 / mcu2 / mcu3]<br><code>channel</code>: 수신 채널 (기본값: &#x27;A&#x27; / &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;) [선택지: A / B / C / D]<br><code>time</code>: 수집 대기 시간 (ms 단위. 기본값: 1000)<br><code>msg_id</code>: 검증할 CAN ID. 정수 또는 Hex 문자열 (&#x27;0x&#x27; 유무 무관. 예: &#x27;0x12F&#x27;, &#x27;47A&#x27;, 1146)<br><code>data</code>: 매칭할 데이터 패턴. 공백/쉼표 구분 Hex 바이트. &#x27;*&#x27; 또는 &#x27;**&#x27; 자리는 값 무시(와일드카드), 패턴보다 긴 뒷부분 바이트는 비교하지 않음. 예: &#x27;00 00 00 00 05 00 00 00&#x27; 또는 &#x27;** ** ** ** 05&#x27;</td>
 </tr>
 <tr>
 <td><code>SendCan</code></td>
@@ -530,7 +530,7 @@
 <tr>
 <td><code>GetSysVar</code></td>
 <td>시스템 변수 값을 읽습니다 (py_canoe가 None 반환 시 raw COM으로 실제 원인을 진단).</td>
-<td style="font-size:12px"><code>namespace_name</code>: 네임스페이스 이름<br><code>sys_var_name</code>: 시스템 변수 이름<br><code>return_symbolic_name</code>: 심볼릭 이름 반환 여부. 기본 False<br><code>islog</code>: 로그 출력 여부. 기본 True</td>
+<td style="font-size:12px"><code>namespace_name</code>: 네임스페이스 이름<br><code>sys_var_name</code>: 시스템 변수 이름<br><code>return_symbolic_name</code>: 심볼릭 이름 반환 여부. 기본 False [선택지: True / False]<br><code>islog</code>: 로그 출력 여부. 기본 True [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>CheckSysVar</code></td>
@@ -545,7 +545,7 @@
 <tr>
 <td><code>GetEnvVar</code></td>
 <td>환경 변수 값을 읽습니다 (System Variables 네임스페이스 변수라면 GetSysVar 사용).</td>
-<td style="font-size:12px"><code>env_var_name</code>: 환경 변수 이름<br><code>islog</code>: 로그 출력 여부. 기본 True</td>
+<td style="font-size:12px"><code>env_var_name</code>: 환경 변수 이름<br><code>islog</code>: 로그 출력 여부. 기본 True [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>CheckEnvVar</code></td>
@@ -555,22 +555,22 @@
 <tr>
 <td><code>DIAG_TestPresent</code></td>
 <td>지정 ECU의 Tester Present 주기 전송을 켜거나 끕니다.</td>
-<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: 진단 ECU qualifier 이름<br><code>value</code>: True = 활성화, False = 비활성화</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: 진단 ECU qualifier 이름<br><code>value</code>: True = 활성화, False = 비활성화 [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>DIAG_Request</code></td>
 <td>UDS 진단 요청을 전송하고 응답을 반환합니다.</td>
-<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: 진단 ECU qualifier 이름<br><code>request</code>: 요청 데이터. 예: &#x27;10 01&#x27;<br><code>request_in_bytes</code>: 요청을 바이트로 해석. 기본 True<br><code>return_sender_name</code>: 응답에 송신자 이름 포함. 기본 False<br><code>timeout</code>: (미사용 — py_canoe가 미지원)<br><code>islog</code>: 로그 출력 여부. 기본 True</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: 진단 ECU qualifier 이름<br><code>request</code>: 요청 데이터. 예: &#x27;10 01&#x27;<br><code>request_in_bytes</code>: 요청을 바이트로 해석. 기본 True [선택지: True / False]<br><code>return_sender_name</code>: 응답에 송신자 이름 포함. 기본 False [선택지: True / False]<br><code>timeout</code>: (미사용 — py_canoe가 미지원)<br><code>islog</code>: 로그 출력 여부. 기본 True [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>CheckDIAG</code></td>
 <td>UDS 진단 요청을 보내고 응답을 기대 패턴과 비교하여 합부 판정합니다 (인덱스 지정 비교 지원).</td>
-<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: 진단 ECU qualifier 이름<br><code>request</code>: 요청 데이터. 예: &#x27;10 01&#x27;<br><code>expect_value</code>: 기대 응답 패턴. 예: &#x27;50 01 00 32 01 F4&#x27;<br><code>request_in_bytes</code>: 요청을 바이트로 해석. 기본 True<br><code>return_sender_name</code>: 응답에 송신자 이름 포함. 기본 False</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: 진단 ECU qualifier 이름<br><code>request</code>: 요청 데이터. 예: &#x27;10 01&#x27;<br><code>expect_value</code>: 기대 응답 패턴. 예: &#x27;50 01 00 32 01 F4&#x27;<br><code>request_in_bytes</code>: 요청을 바이트로 해석. 기본 True [선택지: True / False]<br><code>return_sender_name</code>: 응답에 송신자 이름 포함. 기본 False [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>SendDiagMsg</code></td>
 <td>UDS 진단 요청을 전송하고 PRC/NRC를 파싱하여 dict로 반환합니다 (타임아웃 시 재시도).</td>
-<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: 진단 ECU qualifier 이름<br><code>request</code>: 요청 데이터. 예: &#x27;10 01&#x27;<br><code>timeout</code>: (미사용 — py_canoe가 미지원)<br><code>request_in_bytes</code>: 요청을 바이트로 해석. 기본 True<br><code>return_sender_name</code>: 응답에 송신자 이름 포함. 기본 False<br><code>max_retries</code>: 최대 재시도 횟수. 기본 5<br><code>retry_delay</code>: 재시도 간격 (초). 기본 10.0</td>
+<td style="font-size:12px"><code>diag_ecu_qualifier_name</code>: 진단 ECU qualifier 이름<br><code>request</code>: 요청 데이터. 예: &#x27;10 01&#x27;<br><code>timeout</code>: (미사용 — py_canoe가 미지원)<br><code>request_in_bytes</code>: 요청을 바이트로 해석. 기본 True [선택지: True / False]<br><code>return_sender_name</code>: 응답에 송신자 이름 포함. 기본 False [선택지: True / False]<br><code>max_retries</code>: 최대 재시도 횟수. 기본 5<br><code>retry_delay</code>: 재시도 간격 (초). 기본 10.0</td>
 </tr>
 </tbody>
 </table>
@@ -603,7 +603,7 @@
 <tr>
 <td><code>canoe_send_message</code></td>
 <td>CAN/CAN FD 메시지를 전송합니다. 주기를 지정하면 주기 송신, 0이면 1회 송신. apply_e2e=True이면 Alive Counter와 CRC16을 매 주기 실시간 계산하여 E2E 보호 메시지로 주기 송신합니다.</td>
-<td style="font-size:12px"><code>message_id</code>: CAN ID(16진수 문자열). 예: &#x27;0x288&#x27;<br><code>cycle_time</code>: 전송 주기 (ms). 0이면 1회 전송<br><code>can_message</code>: 메시지 데이터 (공백 구분 16진수). 예: &#x27;01 02 03 04 05 06 07 08&#x27;<br><code>bus_channel</code>: 버스 채널 (드롭다운: 디바이스 추가 시 설정한 채널을 선택. 내부값=등록 순서 인덱스, 0부터)<br><code>message_type</code>: &#x27;FD&#x27;(기본) 또는 그 외 문자열 = Classic CAN<br><code>apply_e2e</code>: True이면 E2E(Alive Counter+CRC16) 적용 주기 송신, False(기본)이면 일반 전송. E2E 사양은 plugins/e2e_config.json의 message_id별 설정을 사용하며 없으면 기본 템플릿 적용. cycle_time&gt;0일 때만 유효.</td>
+<td style="font-size:12px"><code>message_id</code>: CAN ID(16진수 문자열). 예: &#x27;0x288&#x27;<br><code>cycle_time</code>: 전송 주기 (ms). 0이면 1회 전송<br><code>can_message</code>: 메시지 데이터 (공백 구분 16진수). 예: &#x27;01 02 03 04 05 06 07 08&#x27;<br><code>bus_channel</code>: 버스 채널 (드롭다운: 디바이스 추가 시 설정한 채널을 선택. 내부값=등록 순서 인덱스, 0부터)<br><code>message_type</code>: &#x27;FD&#x27;(기본) 또는 그 외 문자열 = Classic CAN<br><code>apply_e2e</code>: True이면 E2E(Alive Counter+CRC16) 적용 주기 송신, False(기본)이면 일반 전송. E2E 사양은 plugins/e2e_config.json의 message_id별 설정을 사용하며 없으면 기본 템플릿 적용. cycle_time&gt;0일 때만 유효. [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>canoe_send_message_stop</code></td>
@@ -628,7 +628,7 @@
 <tr>
 <td><code>canoe_set_diag_env</code></td>
 <td>ISO-TP(진단) 환경을 설정합니다. 진단 송수신 전에 1회 호출 필요.</td>
-<td style="font-size:12px"><code>bus_ch</code>: 진단에 사용할 버스 채널 인덱스<br><code>tx_id</code>: 요청(Tx) CAN ID(16진수). 예: &#x27;0x7E0&#x27;<br><code>rx_id</code>: 응답(Rx) CAN ID(16진수). 예: &#x27;0x7E8&#x27;<br><code>can_type</code>: &#x27;FD&#x27; 또는 &#x27;CC&#x27;(Classic CAN, 기본)</td>
+<td style="font-size:12px"><code>bus_ch</code>: 진단에 사용할 버스 채널 인덱스<br><code>tx_id</code>: 요청(Tx) CAN ID(16진수). 예: &#x27;0x7E0&#x27;<br><code>rx_id</code>: 응답(Rx) CAN ID(16진수). 예: &#x27;0x7E8&#x27;<br><code>can_type</code>: &#x27;FD&#x27; 또는 &#x27;CC&#x27;(Classic CAN, 기본) [선택지: FD / CC]</td>
 </tr>
 <tr>
 <td><code>canoe_start_tester_present</code></td>
@@ -643,7 +643,7 @@
 <tr>
 <td><code>canoe_send_diag_msg</code></td>
 <td>ISO-TP로 진단 메시지(UDS)를 전송하고 응답(PRC/NRC)을 판정합니다. status/response/service_id 등을 담은 dict를 반환. (canoe_set_diag_env 선행 필요)</td>
-<td style="font-size:12px"><code>can_message</code>: 전송할 진단 데이터 (공백 구분 16진수). 예: &#x27;22 F1 90&#x27;<br><code>timeout</code>: 응답 대기 시간 (초). 기본 &#x27;5&#x27;<br><code>wait_response</code>: 응답 대기 및 판정 여부. 기본 True</td>
+<td style="font-size:12px"><code>can_message</code>: 전송할 진단 데이터 (공백 구분 16진수). 예: &#x27;22 F1 90&#x27;<br><code>timeout</code>: 응답 대기 시간 (초). 기본 &#x27;5&#x27;<br><code>wait_response</code>: 응답 대기 및 판정 여부. 기본 True [선택지: True / False]</td>
 </tr>
 </tbody>
 </table>
@@ -666,7 +666,7 @@
 <tr>
 <td><code>send_can_message</code></td>
 <td>CAN 메시지를 전송합니다.</td>
-<td style="font-size:12px"><code>message_id</code>: CAN 메시지 ID<br><code>cycle_time</code>: 전송 주기 (ms). 0이면 1회 전송<br><code>can_message</code>: 메시지 데이터 (16진수)<br><code>bus_channel</code>: CAN 채널<br><code>message_type</code>: &#x27;FD&#x27;(기본) 또는 &#x27;Classic&#x27;</td>
+<td style="font-size:12px"><code>message_id</code>: CAN 메시지 ID<br><code>cycle_time</code>: 전송 주기 (ms). 0이면 1회 전송<br><code>can_message</code>: 메시지 데이터 (16진수)<br><code>bus_channel</code>: CAN 채널<br><code>message_type</code>: &#x27;FD&#x27;(기본) 또는 &#x27;Classic&#x27; [선택지: FD / Classic]</td>
 </tr>
 <tr>
 <td><code>CAN_PANEL</code></td>
@@ -676,17 +676,17 @@
 <tr>
 <td><code>check_can_message</code></td>
 <td>지정 시간(timeout) 안에 특정 CAN 메시지가 수신(RX)되는지 확인합니다. 수신되면 PASS, 시간 안에 못 찾으면 FAIL. 데이터를 비우면 메시지 ID 수신 여부만 확인합니다. 준비/정리 스텝 없이 이 스텝 하나로 동작합니다.</td>
-<td style="font-size:12px"><code>message_id</code>: 확인할 CAN 메시지 ID (hex). 예: &#x27;0x18DAF141&#x27; 또는 &#x27;291&#x27;<br><code>expected_data</code>: 기대 데이터 (hex 바이트, 공백 구분). 비우면 ID만 확인. &#x27;*&#x27;로 니블 무시 가능 — 예: &#x27;1A 2B&#x27;, &#x27;1* ** 33&#x27;<br><code>match_mode</code>: 데이터 비교 방식. &#x27;startswith&#x27;(기본: 앞부분 일치) / &#x27;exact&#x27;(길이까지 정확 일치) / &#x27;contains&#x27;(데이터 중 어디든 연속 일치) / &#x27;bitmask&#x27;(지정 비트가 모두 켜져 있는지)<br><code>timeout</code>: 최대 대기 시간 (초, 기본 5). 이 시간 안에 수신되면 즉시 PASS</td>
+<td style="font-size:12px"><code>message_id</code>: 확인할 CAN 메시지 ID (hex). 예: &#x27;0x18DAF141&#x27; 또는 &#x27;291&#x27;<br><code>expected_data</code>: 기대 데이터 (hex 바이트, 공백 구분). 비우면 ID만 확인. &#x27;*&#x27;로 니블 무시 가능 — 예: &#x27;1A 2B&#x27;, &#x27;1* ** 33&#x27;<br><code>match_mode</code>: 데이터 비교 방식. &#x27;startswith&#x27;(기본: 앞부분 일치) / &#x27;exact&#x27;(길이까지 정확 일치) / &#x27;contains&#x27;(데이터 중 어디든 연속 일치) / &#x27;bitmask&#x27;(지정 비트가 모두 켜져 있는지) [선택지: startswith / exact / contains / bitmask]<br><code>timeout</code>: 최대 대기 시간 (초, 기본 5). 이 시간 안에 수신되면 즉시 PASS</td>
 </tr>
 <tr>
 <td><code>check_no_can_message</code></td>
 <td>지정 시간(timeout) 동안 특정 CAN 메시지가 수신되지 않아야 PASS 하는 역검증입니다. 한 번이라도 수신되면 즉시 FAIL (예: Sleep 진입 후 특정 메시지가 더 이상 나오면 안 되는 경우).</td>
-<td style="font-size:12px"><code>message_id</code>: 수신되면 안 되는 CAN 메시지 ID (hex). 예: &#x27;0x18DAF141&#x27;<br><code>expected_data</code>: 기대 데이터 (hex 바이트). 비우면 ID 수신 자체가 FAIL. &#x27;*&#x27; 니블 무시 가능<br><code>match_mode</code>: 데이터 비교 방식. &#x27;startswith&#x27; / &#x27;exact&#x27; / &#x27;contains&#x27; / &#x27;bitmask&#x27;<br><code>timeout</code>: 감시 시간 (초, 기본 5). 이 시간 동안 미수신이어야 PASS</td>
+<td style="font-size:12px"><code>message_id</code>: 수신되면 안 되는 CAN 메시지 ID (hex). 예: &#x27;0x18DAF141&#x27;<br><code>expected_data</code>: 기대 데이터 (hex 바이트). 비우면 ID 수신 자체가 FAIL. &#x27;*&#x27; 니블 무시 가능<br><code>match_mode</code>: 데이터 비교 방식. &#x27;startswith&#x27; / &#x27;exact&#x27; / &#x27;contains&#x27; / &#x27;bitmask&#x27; [선택지: startswith / exact / contains / bitmask]<br><code>timeout</code>: 감시 시간 (초, 기본 5). 이 시간 동안 미수신이어야 PASS</td>
 </tr>
 <tr>
 <td><code>stop_can_message</code></td>
 <td>특정 CAN 메시지의 주기적 전송을 중지합니다.</td>
-<td style="font-size:12px"><code>message_id</code>: 중지할 메시지 ID<br><code>cycle_time</code>: 주기<br><code>can_message</code>: 메시지 데이터<br><code>bus_channel</code>: CAN 채널<br><code>message_type</code>: &#x27;FD&#x27; 또는 &#x27;Classic&#x27;</td>
+<td style="font-size:12px"><code>message_id</code>: 중지할 메시지 ID<br><code>cycle_time</code>: 주기<br><code>can_message</code>: 메시지 데이터<br><code>bus_channel</code>: CAN 채널<br><code>message_type</code>: &#x27;FD&#x27; 또는 &#x27;Classic&#x27; [선택지: FD / Classic]</td>
 </tr>
 <tr>
 <td><code>send_can_message_all_stop</code></td>
@@ -748,7 +748,7 @@
 <tr>
 <td><code>SendCommand</code></td>
 <td>시리얼 포트로 문자열 명령어를 전송합니다.</td>
-<td style="font-size:12px"><code>command</code>: 전송할 명령어. 예: &#x27;reboot&#x27;, &#x27;cat /proc/version&#x27;<br><code>encoding</code>: 인코딩 (기본 utf-8)<br><code>append_newline</code>: 개행 문자 자동 추가. true/false (기본 true)</td>
+<td style="font-size:12px"><code>command</code>: 전송할 명령어. 예: &#x27;reboot&#x27;, &#x27;cat /proc/version&#x27;<br><code>encoding</code>: 인코딩 (기본 utf-8)<br><code>append_newline</code>: 개행 문자 자동 추가. true/false (기본 true) [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>Send_Packet</code></td>
@@ -758,23 +758,23 @@
 <tr>
 <td><code>SendCommand_fail_on_keyword</code></td>
 <td>명령어 전송 후 응답에 keyword가 **포함되면 FAIL 판정**. &#x27;ERROR&#x27;/&#x27;Fail&#x27;/&#x27;crash&#x27; 등 비정상 키워드 검출용. 전송 직후 &#x27;time&#x27; 초간 새 라인만 모니터링 — 매칭된 라인은 모두 fail row로 누적되어 결과 표에 인라인(Fail_Count_N) 표시됨. 매칭 없으면 PASS 반환.</td>
-<td style="font-size:12px"><code>command</code>: 전송할 명령어. 예: &#x27;status&#x27;, &#x27;self_test&#x27;<br><code>keyword</code>: FAIL을 일으킬 검출 키워드. 예: &#x27;ERROR&#x27;, &#x27;Fail&#x27;, &#x27;crash&#x27;<br><code>time</code>: 응답 모니터링 시간(초). 기본 5<br><code>encoding</code>: 인코딩 (기본 utf-8)<br><code>append_newline</code>: 개행 문자 자동 추가. true/false (기본 true)</td>
+<td style="font-size:12px"><code>command</code>: 전송할 명령어. 예: &#x27;status&#x27;, &#x27;self_test&#x27;<br><code>keyword</code>: FAIL을 일으킬 검출 키워드. 예: &#x27;ERROR&#x27;, &#x27;Fail&#x27;, &#x27;crash&#x27;<br><code>time</code>: 응답 모니터링 시간(초). 기본 5<br><code>encoding</code>: 인코딩 (기본 utf-8)<br><code>append_newline</code>: 개행 문자 자동 추가. true/false (기본 true) [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>SendCommand_pass_on_keyword</code></td>
 <td>명령어 전송 후 응답에 keyword가 **포함되면 PASS 판정**. &#x27;OK&#x27;/&#x27;Pass&#x27;/&#x27;BootComplete&#x27; 등 정상 응답 키워드 검출용. 발견 즉시 PASS 반환 (조기 종료). &#x27;time&#x27; 초 안에 발견되지 않으면 fail row 1건 누적 후 FAIL 반환.</td>
-<td style="font-size:12px"><code>command</code>: 전송할 명령어. 예: &#x27;ping&#x27;, &#x27;getversion&#x27;<br><code>keyword</code>: PASS를 만족할 키워드. 예: &#x27;OK&#x27;, &#x27;Pass&#x27;, &#x27;BootComplete&#x27;<br><code>time</code>: 응답 대기 시간(초). 기본 5<br><code>encoding</code>: 인코딩 (기본 utf-8)<br><code>append_newline</code>: 개행 문자 자동 추가. true/false (기본 true)</td>
+<td style="font-size:12px"><code>command</code>: 전송할 명령어. 예: &#x27;ping&#x27;, &#x27;getversion&#x27;<br><code>keyword</code>: PASS를 만족할 키워드. 예: &#x27;OK&#x27;, &#x27;Pass&#x27;, &#x27;BootComplete&#x27;<br><code>time</code>: 응답 대기 시간(초). 기본 5<br><code>encoding</code>: 인코딩 (기본 utf-8)<br><code>append_newline</code>: 개행 문자 자동 추가. true/false (기본 true) [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>Monitor_pass_on_keyword</code></td>
 <td>명령을 전송하지 않고(write 없음) 로그에서 keyword를 찾으면 PASS. include_past=True면 현재까지 캡처된 로그(과거)를 먼저 검사하고, 이후 time초 동안 새로 들어오는 로그도 검사하여 발견 즉시 PASS. 못 찾으면 FAIL. 빈 명령(
 )조차 보내지 않아 같은 USB 허브의 웹캠 녹화 등에 영향을 주지 않음.</td>
-<td style="font-size:12px"><code>keyword</code>: PASS를 만족할 키워드 (부분 문자열 매칭). 예: &#x27;[3 to 4] SD_Reason 0&#x27;<br><code>time</code>: 미래 로그 대기 시간(초). 기본 5. 0이면 과거 버퍼만 1회 검사<br><code>include_past</code>: 현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)</td>
+<td style="font-size:12px"><code>keyword</code>: PASS를 만족할 키워드 (부분 문자열 매칭). 예: &#x27;[3 to 4] SD_Reason 0&#x27;<br><code>time</code>: 미래 로그 대기 시간(초). 기본 5. 0이면 과거 버퍼만 1회 검사<br><code>include_past</code>: 현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true) [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>Monitor_fail_on_keyword</code></td>
 <td>명령을 전송하지 않고(write 없음) 로그에서 keyword가 발견되면 FAIL. &#x27;ERROR&#x27;/&#x27;crash&#x27; 등 비정상 키워드 모니터링용. include_past=True면 과거 로그도 검사하고, time초 동안 들어오는 로그도 검사하여 매칭된 모든 라인을 fail로 누적. 발견 없으면 PASS.</td>
-<td style="font-size:12px"><code>keyword</code>: FAIL을 일으킬 검출 키워드 (부분 문자열 매칭). 예: &#x27;ERROR&#x27;, &#x27;crash&#x27;<br><code>time</code>: 미래 로그 모니터링 시간(초). 기본 5. 0이면 과거 버퍼만 검사<br><code>include_past</code>: 현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)</td>
+<td style="font-size:12px"><code>keyword</code>: FAIL을 일으킬 검출 키워드 (부분 문자열 매칭). 예: &#x27;ERROR&#x27;, &#x27;crash&#x27;<br><code>time</code>: 미래 로그 모니터링 시간(초). 기본 5. 0이면 과거 버퍼만 검사<br><code>include_past</code>: 현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true) [선택지: True / False]</td>
 </tr>
 </tbody>
 </table>
@@ -892,7 +892,7 @@
 <tr>
 <td><code>StartLogging</code></td>
 <td>지정한 Android 디바이스의 logcat 캡처를 시작합니다(메모리 버퍼). clear=True면 시작 전 logcat 링버퍼를 비웁니다. 디바이스가 reboot/끊겨도 자동으로 logcat을 재기동해 같은 버퍼에 이어서 캡처합니다.</td>
-<td style="font-size:12px"><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정<br><code>clear</code>: 시작 전 logcat 버퍼 비우기. true/false (기본 true)</td>
+<td style="font-size:12px"><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정<br><code>clear</code>: 시작 전 logcat 버퍼 비우기. true/false (기본 true) [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>StopLogging</code></td>
@@ -907,12 +907,12 @@
 <tr>
 <td><code>Monitor_pass_on_keyword</code></td>
 <td>캡처된 logcat에서 keyword를 찾으면 PASS. include_past=True면 현재까지 캡처된 로그(과거)를 먼저 검사하고, 이후 time초 동안 들어오는 로그도 검사하여 발견 즉시 PASS. StartLogging이 선행되어야 합니다.</td>
-<td style="font-size:12px"><code>keyword</code>: PASS를 만족할 키워드 (부분 문자열 매칭)<br><code>time</code>: 미래 로그 대기 시간(초). 기본 5. 0이면 과거 버퍼만 검사<br><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정<br><code>include_past</code>: 현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)</td>
+<td style="font-size:12px"><code>keyword</code>: PASS를 만족할 키워드 (부분 문자열 매칭)<br><code>time</code>: 미래 로그 대기 시간(초). 기본 5. 0이면 과거 버퍼만 검사<br><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정<br><code>include_past</code>: 현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true) [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>Monitor_fail_on_keyword</code></td>
 <td>캡처된 logcat에서 keyword가 발견되면 FAIL. &#x27;FATAL&#x27;/&#x27;ANR&#x27;/&#x27;Exception&#x27; 등 비정상 키워드 모니터링용. include_past=True면 과거 로그도 검사하고 time초 동안 들어오는 로그도 검사하여 매칭 라인을 fail로 누적.</td>
-<td style="font-size:12px"><code>keyword</code>: FAIL을 일으킬 검출 키워드 (부분 문자열 매칭)<br><code>time</code>: 미래 로그 모니터링 시간(초). 기본 5. 0이면 과거 버퍼만 검사<br><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정<br><code>include_past</code>: 현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)</td>
+<td style="font-size:12px"><code>keyword</code>: FAIL을 일으킬 검출 키워드 (부분 문자열 매칭)<br><code>time</code>: 미래 로그 모니터링 시간(초). 기본 5. 0이면 과거 버퍼만 검사<br><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정<br><code>include_past</code>: 현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true) [선택지: True / False]</td>
 </tr>
 </tbody>
 </table>

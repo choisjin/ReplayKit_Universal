@@ -78,7 +78,13 @@
           "cycle_time": "전송 주기 (ms). 0이면 1회 전송",
           "can_message": "메시지 데이터 (16진수)",
           "bus_channel": "CAN 채널",
-          "message_type": "'FD'(기본) 또는 'Classic'"
+          "message_type": {
+            "description": "'FD'(기본) 또는 'Classic'",
+            "options": [
+              "FD",
+              "Classic"
+            ]
+          }
         }
       },
       "CAN_PANEL": {
@@ -101,7 +107,15 @@
         "params": {
           "message_id": "확인할 CAN 메시지 ID (hex). 예: '0x18DAF141' 또는 '291'",
           "expected_data": "기대 데이터 (hex 바이트, 공백 구분). 비우면 ID만 확인. '*'로 니블 무시 가능 — 예: '1A 2B', '1* ** 33'",
-          "match_mode": "데이터 비교 방식. 'startswith'(기본: 앞부분 일치) / 'exact'(길이까지 정확 일치) / 'contains'(데이터 중 어디든 연속 일치) / 'bitmask'(지정 비트가 모두 켜져 있는지)",
+          "match_mode": {
+            "description": "데이터 비교 방식. 'startswith'(기본: 앞부분 일치) / 'exact'(길이까지 정확 일치) / 'contains'(데이터 중 어디든 연속 일치) / 'bitmask'(지정 비트가 모두 켜져 있는지)",
+            "options": [
+              "startswith",
+              "exact",
+              "contains",
+              "bitmask"
+            ]
+          },
           "timeout": "최대 대기 시간 (초, 기본 5). 이 시간 안에 수신되면 즉시 PASS"
         }
       },
@@ -110,7 +124,15 @@
         "params": {
           "message_id": "수신되면 안 되는 CAN 메시지 ID (hex). 예: '0x18DAF141'",
           "expected_data": "기대 데이터 (hex 바이트). 비우면 ID 수신 자체가 FAIL. '*' 니블 무시 가능",
-          "match_mode": "데이터 비교 방식. 'startswith' / 'exact' / 'contains' / 'bitmask'",
+          "match_mode": {
+            "description": "데이터 비교 방식. 'startswith' / 'exact' / 'contains' / 'bitmask'",
+            "options": [
+              "startswith",
+              "exact",
+              "contains",
+              "bitmask"
+            ]
+          },
           "timeout": "감시 시간 (초, 기본 5). 이 시간 동안 미수신이어야 PASS"
         }
       },
@@ -121,7 +143,13 @@
           "cycle_time": "주기",
           "can_message": "메시지 데이터",
           "bus_channel": "CAN 채널",
-          "message_type": "'FD' 또는 'Classic'"
+          "message_type": {
+            "description": "'FD' 또는 'Classic'",
+            "options": [
+              "FD",
+              "Classic"
+            ]
+          }
         }
       },
       "send_can_message_all_stop": {
@@ -194,8 +222,20 @@
         "params": {
           "namespace_name": "네임스페이스 이름",
           "sys_var_name": "시스템 변수 이름",
-          "return_symbolic_name": "심볼릭 이름 반환 여부. 기본 False",
-          "islog": "로그 출력 여부. 기본 True"
+          "return_symbolic_name": {
+            "description": "심볼릭 이름 반환 여부. 기본 False",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
+          "islog": {
+            "description": "로그 출력 여부. 기본 True",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "CheckSysVar": {
@@ -217,7 +257,13 @@
         "description": "환경 변수 값을 읽습니다 (System Variables 네임스페이스 변수라면 GetSysVar 사용).",
         "params": {
           "env_var_name": "환경 변수 이름",
-          "islog": "로그 출력 여부. 기본 True"
+          "islog": {
+            "description": "로그 출력 여부. 기본 True",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "CheckEnvVar": {
@@ -231,7 +277,13 @@
         "description": "지정 ECU의 Tester Present 주기 전송을 켜거나 끕니다.",
         "params": {
           "diag_ecu_qualifier_name": "진단 ECU qualifier 이름",
-          "value": "True = 활성화, False = 비활성화"
+          "value": {
+            "description": "True = 활성화, False = 비활성화",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "DIAG_Request": {
@@ -239,10 +291,28 @@
         "params": {
           "diag_ecu_qualifier_name": "진단 ECU qualifier 이름",
           "request": "요청 데이터. 예: '10 01'",
-          "request_in_bytes": "요청을 바이트로 해석. 기본 True",
-          "return_sender_name": "응답에 송신자 이름 포함. 기본 False",
+          "request_in_bytes": {
+            "description": "요청을 바이트로 해석. 기본 True",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
+          "return_sender_name": {
+            "description": "응답에 송신자 이름 포함. 기본 False",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "timeout": "(미사용 — py_canoe가 미지원)",
-          "islog": "로그 출력 여부. 기본 True"
+          "islog": {
+            "description": "로그 출력 여부. 기본 True",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "CheckDIAG": {
@@ -251,8 +321,20 @@
           "diag_ecu_qualifier_name": "진단 ECU qualifier 이름",
           "request": "요청 데이터. 예: '10 01'",
           "expect_value": "기대 응답 패턴. 예: '50 01 00 32 01 F4'",
-          "request_in_bytes": "요청을 바이트로 해석. 기본 True",
-          "return_sender_name": "응답에 송신자 이름 포함. 기본 False"
+          "request_in_bytes": {
+            "description": "요청을 바이트로 해석. 기본 True",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
+          "return_sender_name": {
+            "description": "응답에 송신자 이름 포함. 기본 False",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "SendDiagMsg": {
@@ -261,8 +343,20 @@
           "diag_ecu_qualifier_name": "진단 ECU qualifier 이름",
           "request": "요청 데이터. 예: '10 01'",
           "timeout": "(미사용 — py_canoe가 미지원)",
-          "request_in_bytes": "요청을 바이트로 해석. 기본 True",
-          "return_sender_name": "응답에 송신자 이름 포함. 기본 False",
+          "request_in_bytes": {
+            "description": "요청을 바이트로 해석. 기본 True",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
+          "return_sender_name": {
+            "description": "응답에 송신자 이름 포함. 기본 False",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "max_retries": "최대 재시도 횟수. 기본 5",
           "retry_delay": "재시도 간격 (초). 기본 10.0"
         }
@@ -302,7 +396,13 @@
           "can_message": "메시지 데이터 (공백 구분 16진수). 예: '01 02 03 04 05 06 07 08'",
           "bus_channel": "버스 채널 (드롭다운: 디바이스 추가 시 설정한 채널을 선택. 내부값=등록 순서 인덱스, 0부터)",
           "message_type": "'FD'(기본) 또는 그 외 문자열 = Classic CAN",
-          "apply_e2e": "True이면 E2E(Alive Counter+CRC16) 적용 주기 송신, False(기본)이면 일반 전송. E2E 사양은 plugins/e2e_config.json의 message_id별 설정을 사용하며 없으면 기본 템플릿 적용. cycle_time>0일 때만 유효."
+          "apply_e2e": {
+            "description": "True이면 E2E(Alive Counter+CRC16) 적용 주기 송신, False(기본)이면 일반 전송. E2E 사양은 plugins/e2e_config.json의 message_id별 설정을 사용하며 없으면 기본 템플릿 적용. cycle_time>0일 때만 유효.",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "canoe_send_message_stop": {
@@ -338,7 +438,13 @@
           "bus_ch": "진단에 사용할 버스 채널 인덱스",
           "tx_id": "요청(Tx) CAN ID(16진수). 예: '0x7E0'",
           "rx_id": "응답(Rx) CAN ID(16진수). 예: '0x7E8'",
-          "can_type": "'FD' 또는 'CC'(Classic CAN, 기본)"
+          "can_type": {
+            "description": "'FD' 또는 'CC'(Classic CAN, 기본)",
+            "options": [
+              "FD",
+              "CC"
+            ]
+          }
         }
       },
       "canoe_start_tester_present": {
@@ -356,7 +462,13 @@
         "params": {
           "can_message": "전송할 진단 데이터 (공백 구분 16진수). 예: '22 F1 90'",
           "timeout": "응답 대기 시간 (초). 기본 '5'",
-          "wait_response": "응답 대기 및 판정 여부. 기본 True"
+          "wait_response": {
+            "description": "응답 대기 및 판정 여부. 기본 True",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       }
     }
@@ -375,8 +487,20 @@
       "ACCOnOff": {
         "description": "ACC(Accessory) 전원을 켜거나 끕니다.",
         "params": {
-          "state": "0 = OFF (끄기), 1 = ON (켜기)",
-          "bench_info": "벤치 종류. 'OLD_BENCH'(기본) 또는 'NEW_BENCH'"
+          "state": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "bench_info": {
+            "description": "벤치 종류. 'OLD_BENCH'(기본) 또는 'NEW_BENCH'",
+            "options": [
+              "OLD_BENCH",
+              "NEW_BENCH"
+            ]
+          }
         }
       },
       "ACCSinglePulse": {
@@ -390,8 +514,20 @@
       "AccControl": {
         "description": "ACC 릴레이를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON",
-          "bench_info": "벤치 종류"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "bench_info": {
+            "description": "벤치 종류",
+            "options": [
+              "OLD_BENCH",
+              "NEW_BENCH"
+            ]
+          }
         }
       },
       "AccVoltage": {
@@ -403,21 +539,51 @@
       "BatteryOnOff": {
         "description": "배터리 전원을 켜거나 끕니다.",
         "params": {
-          "nState": "0 = OFF (배터리 차단), 1 = ON (배터리 연결)",
-          "bench_info": "벤치 종류. 'OLD_BENCH'(기본) 또는 'NEW_BENCH'"
+          "nState": {
+            "description": "'ON' = 배터리 연결, 'OFF' = 배터리 차단 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "bench_info": {
+            "description": "벤치 종류. 'OLD_BENCH'(기본) 또는 'NEW_BENCH'",
+            "options": [
+              "OLD_BENCH",
+              "NEW_BENCH"
+            ]
+          }
         }
       },
       "BatteryControl": {
         "description": "배터리 릴레이를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON",
-          "bench_info": "벤치 종류"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "bench_info": {
+            "description": "벤치 종류",
+            "options": [
+              "OLD_BENCH",
+              "NEW_BENCH"
+            ]
+          }
         }
       },
       "BatteryMinusControl": {
         "description": "배터리 마이너스(-) 단자 릴레이를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF (연결), 1 = ON (차단)"
+          "nStatus": {
+            "description": "'ON' = 차단, 'OFF' = 연결 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "BatteryVoltage": {
@@ -437,206 +603,410 @@
       "IGNControl": {
         "description": "이그니션(IGN) 전원을 제어합니다.",
         "params": {
-          "status": "0 = OFF, 1 = ON"
+          "status": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "IGN3Control": {
         "description": "이그니션 3(IGN3) 전원을 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ALTControl": {
         "description": "알터네이터(발전기) 신호를 제어합니다.",
         "params": {
-          "status": "0 = OFF, 1 = ON"
+          "status": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ILLControl": {
         "description": "일루미네이션(차량 조명 연동 신호)을 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ILLControlMinus": {
         "description": "일루미네이션 마이너스 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ReverseControl": {
         "description": "후진(Reverse) 기어 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF (전진), 1 = ON (후진)"
+          "nStatus": {
+            "description": "'ON' = 후진, 'OFF' = 전진 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ReverseActiveHigh": {
         "description": "후진 신호를 Active High로 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ReverseActiveLow": {
         "description": "후진 신호를 Active Low로 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ParkingControl": {
         "description": "주차(Parking) 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "PPositonControl": {
         "description": "P(주차) 기어 포지션 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "NPositionControl": {
         "description": "N(중립) 기어 포지션 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "SpeedControl": {
         "description": "차량 속도 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF (정지), 1 = ON (주행)"
+          "nStatus": {
+            "description": "'ON' = 주행, 'OFF' = 정지 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "DoorControl": {
         "description": "도어 열림/닫힘 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF (닫힘), 1 = ON (열림)"
+          "nStatus": {
+            "description": "'ON' = 열림, 'OFF' = 닫힘 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "DoorUnLockControl": {
         "description": "도어 잠금 해제 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF (잠금), 1 = ON (해제)"
+          "nStatus": {
+            "description": "'ON' = 해제, 'OFF' = 잠금 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "TransDetectControl": {
         "description": "변속기 감지 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "FUELControl": {
         "description": "연료 관련 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "KeylessBootingControl": {
         "description": "키리스(스마트키) 부팅 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "AutolightControl": {
         "description": "오토라이트(자동 조명) 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "AlarmDetectControl": {
         "description": "알람 감지 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "AirbagCrashDetection": {
         "description": "에어백 충돌 감지 신호를 제어합니다.",
         "params": {
           "model": "차량 모델명",
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ShieldBoxControl": {
         "description": "실드 박스(전파 차폐 박스) 개폐를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF (닫기), 1 = ON (열기)"
+          "nStatus": {
+            "description": "'ON' = 열기, 'OFF' = 닫기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ANTControl": {
         "description": "안테나 릴레이를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "AmpControl": {
         "description": "앰프(외장 오디오 증폭기) 전원을 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "MICControl": {
         "description": "마이크 릴레이를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "AUXControl": {
         "description": "AUX 입력 릴레이를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "CDControl": {
         "description": "CD 드라이브 릴레이를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "IPODControl": {
         "description": "iPod 연결 릴레이를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "RcInControl": {
         "description": "RC 입력 릴레이를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "ComEnableControl": {
         "description": "통신(COM) 활성화를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF (비활성), 1 = ON (활성)"
+          "nStatus": {
+            "description": "'ON' = 활성, 'OFF' = 비활성 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "Detent": {
         "description": "디텐트(볼륨 노브 등 회전 감지) 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "AVNSDDetect": {
         "description": "AVN SD 카드 감지 신호를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF (미삽입), 1 = ON (삽입)"
+          "nStatus": {
+            "description": "'ON' = 삽입, 'OFF' = 미삽입 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "USB1Control": {
         "description": "USB 1 포트 릴레이를 제어합니다.",
         "params": {
-          "Status": "0 = OFF, 1 = ON"
+          "Status": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "USBFrontSwitchControl": {
         "description": "전면 USB 스위치 릴레이를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "USBRearSwitchControl": {
         "description": "후면 USB 스위치 릴레이를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "USBSelectorControl": {
@@ -650,13 +1020,25 @@
         "params": {
           "nType": "스위치 타입",
           "nPortNum": "포트 번호",
-          "nOnOffStatus": "0 = OFF, 1 = ON"
+          "nOnOffStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "Telltale": {
         "description": "텔테일(계기판 경고등) 릴레이를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "TelltaleLED": {
@@ -792,7 +1174,13 @@
       "RequestLightSensorControl": {
         "description": "조도 센서를 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON",
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          },
           "pbData": "PB 데이터",
           "twData": "TW 데이터"
         }
@@ -857,31 +1245,61 @@
       "Relay_10": {
         "description": "릴레이 10번을 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "Relay_11": {
         "description": "릴레이 11번을 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "Relay_12": {
         "description": "릴레이 12번을 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "Relay_13": {
         "description": "릴레이 13번을 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "Relay_14": {
         "description": "릴레이 14번을 제어합니다.",
         "params": {
-          "nStatus": "0 = OFF, 1 = ON"
+          "nStatus": {
+            "description": "'ON' = 켜기, 'OFF' = 끄기 — 이 벤치는 문자열 'ON'/'OFF'로 동작합니다 (0/1 입력은 자동 변환)",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
         }
       },
       "RelayInitialization": {
@@ -944,7 +1362,13 @@
       "AnnouncesAutoTestStartOrEnd": {
         "description": "자동 테스트 시작/종료를 알립니다.",
         "params": {
-          "bisStart": "True = 테스트 시작, False = 테스트 종료"
+          "bisStart": {
+            "description": "True = 테스트 시작, False = 테스트 종료",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "BATSwitchSETtoPC": {
@@ -958,7 +1382,13 @@
       "RequestAudioFrequency": {
         "description": "오디오 주파수 측정을 요청합니다.",
         "params": {
-          "bStart": "True = 시작, False = 중지",
+          "bStart": {
+            "description": "True = 시작, False = 중지",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nMs": "측정 간격 (ms)"
         }
       },
@@ -971,63 +1401,117 @@
       "RequestAudioStatusAndADCValuePeriodicallyNoti": {
         "description": "오디오 상태와 ADC 값을 주기적으로 알림 받습니다.",
         "params": {
-          "bStart": "True = 시작, False = 중지",
+          "bStart": {
+            "description": "True = 시작, False = 중지",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "알림 주기 (ms)"
         }
       },
       "RequestAudioStatusPeriodicallyNoti": {
         "description": "오디오 상태를 주기적으로 알림 받습니다.",
         "params": {
-          "bStart": "True = 시작, False = 중지",
+          "bStart": {
+            "description": "True = 시작, False = 중지",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "알림 주기 (ms)"
         }
       },
       "RequestCurrentPeriodicallyNoti": {
         "description": "전류 값을 주기적으로 알림 받습니다.",
         "params": {
-          "bStart": "True = 시작, False = 중지",
+          "bStart": {
+            "description": "True = 시작, False = 중지",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "알림 주기 (ms)"
         }
       },
       "RequestExtCurrentPeriodicallyNoti": {
         "description": "외부 전류 값을 주기적으로 알림 받습니다.",
         "params": {
-          "bStart": "True = 시작, False = 중지",
+          "bStart": {
+            "description": "True = 시작, False = 중지",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "알림 주기 (ms)"
         }
       },
       "RequestVoltagePeriodicallyNoti": {
         "description": "전압 값을 주기적으로 알림 받습니다.",
         "params": {
-          "bStart": "True = 시작, False = 중지",
+          "bStart": {
+            "description": "True = 시작, False = 중지",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "알림 주기 (ms)"
         }
       },
       "RequestKeyOutVoltagePeriodicallyNoti": {
         "description": "키 출력 전압을 주기적으로 알림 받습니다.",
         "params": {
-          "bStart": "True = 시작, False = 중지",
+          "bStart": {
+            "description": "True = 시작, False = 중지",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "알림 주기 (ms)"
         }
       },
       "RequestLCDStatus": {
         "description": "LCD 상태를 요청합니다.",
         "params": {
-          "bStart": "True = 시작, False = 중지",
+          "bStart": {
+            "description": "True = 시작, False = 중지",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nMs": "응답 대기 시간 (ms)"
         }
       },
       "RequestLCDIllumiSensorValue": {
         "description": "LCD 조도 센서 값을 요청합니다.",
         "params": {
-          "bStart": "True = 시작, False = 중지",
+          "bStart": {
+            "description": "True = 시작, False = 중지",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nMs": "응답 대기 시간 (ms)"
         }
       },
       "RequestLCDStatusAndIllumiSensorValuePeriodicallyNoti": {
         "description": "LCD 상태와 조도 센서 값을 주기적으로 알림 받습니다.",
         "params": {
-          "bStart": "True = 시작, False = 중지",
+          "bStart": {
+            "description": "True = 시작, False = 중지",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "nPeriodMs": "알림 주기 (ms)"
         }
       },
@@ -1063,7 +1547,13 @@
       "ReceiveStart": {
         "description": "벤치 데이터 수신을 시작/중지합니다.",
         "params": {
-          "bStart": "True = 수신 시작, False = 수신 중지",
+          "bStart": {
+            "description": "True = 수신 시작, False = 수신 중지",
+            "options": [
+              "True",
+              "False"
+            ]
+          },
           "queue": "수신 데이터를 넣을 큐 (선택)"
         }
       },
@@ -1210,7 +1700,13 @@
         "params": {
           "command": "전송할 명령어. 예: 'reboot', 'cat /proc/version'",
           "encoding": "인코딩 (기본 utf-8)",
-          "append_newline": "개행 문자 자동 추가. true/false (기본 true)"
+          "append_newline": {
+            "description": "개행 문자 자동 추가. true/false (기본 true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "Send_Packet": {
@@ -1226,7 +1722,13 @@
           "keyword": "FAIL을 일으킬 검출 키워드. 예: 'ERROR', 'Fail', 'crash'",
           "time": "응답 모니터링 시간(초). 기본 5",
           "encoding": "인코딩 (기본 utf-8)",
-          "append_newline": "개행 문자 자동 추가. true/false (기본 true)"
+          "append_newline": {
+            "description": "개행 문자 자동 추가. true/false (기본 true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "SendCommand_pass_on_keyword": {
@@ -1236,7 +1738,13 @@
           "keyword": "PASS를 만족할 키워드. 예: 'OK', 'Pass', 'BootComplete'",
           "time": "응답 대기 시간(초). 기본 5",
           "encoding": "인코딩 (기본 utf-8)",
-          "append_newline": "개행 문자 자동 추가. true/false (기본 true)"
+          "append_newline": {
+            "description": "개행 문자 자동 추가. true/false (기본 true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "Monitor_pass_on_keyword": {
@@ -1244,7 +1752,13 @@
         "params": {
           "keyword": "PASS를 만족할 키워드 (부분 문자열 매칭). 예: '[3 to 4] SD_Reason 0'",
           "time": "미래 로그 대기 시간(초). 기본 5. 0이면 과거 버퍼만 1회 검사",
-          "include_past": "현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)"
+          "include_past": {
+            "description": "현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "Monitor_fail_on_keyword": {
@@ -1252,7 +1766,13 @@
         "params": {
           "keyword": "FAIL을 일으킬 검출 키워드 (부분 문자열 매칭). 예: 'ERROR', 'crash'",
           "time": "미래 로그 모니터링 시간(초). 기본 5. 0이면 과거 버퍼만 검사",
-          "include_past": "현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)"
+          "include_past": {
+            "description": "현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       }
     }
@@ -1271,31 +1791,61 @@
       "Battery": {
         "description": "Battery(+B) 릴레이를 제어합니다.",
         "params": {
-          "status": "'on' 또는 'off'"
+          "status": {
+            "description": "'on' 또는 'off'",
+            "options": [
+              "on",
+              "off"
+            ]
+          }
         }
       },
       "ACC": {
         "description": "ACC 릴레이를 제어합니다.",
         "params": {
-          "status": "'on' 또는 'off'"
+          "status": {
+            "description": "'on' 또는 'off'",
+            "options": [
+              "on",
+              "off"
+            ]
+          }
         }
       },
       "IGN": {
         "description": "IGN 릴레이를 제어합니다.",
         "params": {
-          "status": "'on' 또는 'off'"
+          "status": {
+            "description": "'on' 또는 'off'",
+            "options": [
+              "on",
+              "off"
+            ]
+          }
         }
       },
       "IGN3": {
         "description": "IGN3 릴레이를 제어합니다.",
         "params": {
-          "status": "'on' 또는 'off'"
+          "status": {
+            "description": "'on' 또는 'off'",
+            "options": [
+              "on",
+              "off"
+            ]
+          }
         }
       },
       "USB": {
         "description": "USB 릴레이를 제어합니다.",
         "params": {
-          "status": "'on' 또는 'off'"
+          "status": {
+            "description": "'on' 또는 'off'",
+            "options": [
+              "on",
+              "off"
+            ]
+          }
         }
       },
       "CheckCurrent": {
@@ -1338,7 +1888,13 @@
         "description": "릴레이를 직접 제어합니다.",
         "params": {
           "relay_num": "릴레이 번호",
-          "status": "'on' 또는 'off'"
+          "status": {
+            "description": "'on' 또는 'off'",
+            "options": [
+              "on",
+              "off"
+            ]
+          }
         }
       },
       "SendRaw": {
@@ -1371,7 +1927,19 @@
       "IGN1": {
         "description": "이그니션 1(IGN1) 전원을 켜거나 끕니다. 차량의 시동 전원에 해당합니다.",
         "params": {
-          "on_off": "0 = OFF (전원 끄기), 1 = ON (전원 켜기). 기본값: 1 (ON)"
+          "on_off": {
+            "description": "0 = OFF (전원 끄기), 1 = ON (전원 켜기). 기본값: 1 (ON)",
+            "options": [
+              {
+                "value": "1",
+                "label": "ON (1)"
+              },
+              {
+                "value": "0",
+                "label": "OFF (0)"
+              }
+            ]
+          }
         }
       },
       "IGN1_Read": {
@@ -1381,7 +1949,19 @@
       "IGN2": {
         "description": "이그니션 2(IGN2) 전원을 켜거나 끕니다. 보조 이그니션 전원에 해당합니다.",
         "params": {
-          "on_off": "0 = OFF (전원 끄기), 1 = ON (전원 켜기). 기본값: 1 (ON)"
+          "on_off": {
+            "description": "0 = OFF (전원 끄기), 1 = ON (전원 켜기). 기본값: 1 (ON)",
+            "options": [
+              {
+                "value": "1",
+                "label": "ON (1)"
+              },
+              {
+                "value": "0",
+                "label": "OFF (0)"
+              }
+            ]
+          }
         }
       },
       "IGN2_Read": {
@@ -1391,7 +1971,19 @@
       "ACC": {
         "description": "ACC(Accessory) 전원을 켜거나 끕니다. 차량의 액세서리 전원(라디오, 내비 등 작동 가능 상태)에 해당합니다.",
         "params": {
-          "on_off": "0 = OFF (전원 끄기), 1 = ON (전원 켜기). 기본값: 1 (ON)"
+          "on_off": {
+            "description": "0 = OFF (전원 끄기), 1 = ON (전원 켜기). 기본값: 1 (ON)",
+            "options": [
+              {
+                "value": "1",
+                "label": "ON (1)"
+              },
+              {
+                "value": "0",
+                "label": "OFF (0)"
+              }
+            ]
+          }
         }
       },
       "ACC_Read": {
@@ -1401,7 +1993,19 @@
       "BATTERY": {
         "description": "배터리 릴레이를 켜거나 끕니다. OFF 시 차량에 배터리 전원이 완전히 차단됩니다.",
         "params": {
-          "on_off": "0 = OFF (배터리 차단), 1 = ON (배터리 연결). 기본값: 1 (ON)"
+          "on_off": {
+            "description": "0 = OFF (배터리 차단), 1 = ON (배터리 연결). 기본값: 1 (ON)",
+            "options": [
+              {
+                "value": "1",
+                "label": "ON (1)"
+              },
+              {
+                "value": "0",
+                "label": "OFF (0)"
+              }
+            ]
+          }
         }
       },
       "BATTERY_Read": {
@@ -1458,8 +2062,23 @@
       "canmsg_stop": {
         "description": "CAN 메시지 캡처 종료 및 검증. canmsg_start 이후 버퍼에 쌓인 패킷 중 타겟 MCU/채널/msg_id/data 패턴에 일치하는 메시지가 있었는지 확인합니다. 일치하면 PASS, 없으면 'FAIL:' 을 반환해 스텝이 실패로 판정됩니다. 사용 순서: canmsg_start → 제어 명령 → (대기) → canmsg_stop",
         "params": {
-          "mcu": "수신 대상 MCU (기본값: 'mcu1' / 예: 'mcu1', 'mcu2', 'mcu3')",
-          "channel": "수신 채널 (기본값: 'A' / 'A', 'B', 'C', 'D')",
+          "mcu": {
+            "description": "수신 대상 MCU (기본값: 'mcu1' / 예: 'mcu1', 'mcu2', 'mcu3')",
+            "options": [
+              "mcu1",
+              "mcu2",
+              "mcu3"
+            ]
+          },
+          "channel": {
+            "description": "수신 채널 (기본값: 'A' / 'A', 'B', 'C', 'D')",
+            "options": [
+              "A",
+              "B",
+              "C",
+              "D"
+            ]
+          },
           "msg_id": "검증할 CAN ID. 정수 또는 Hex 문자열 ('0x' 유무 무관. 예: '0x12F', '47A', 1146)",
           "data": "매칭할 데이터 패턴. 공백/쉼표 구분 Hex 바이트. '*' 또는 '**' 자리는 값 무시(와일드카드), 패턴보다 긴 뒷부분 바이트는 비교하지 않음. 예: '00 00 00 00 05 00 00 00' 또는 '** ** ** ** 05'"
         }
@@ -1467,8 +2086,23 @@
       "canmsg": {
         "description": "[구버전 호환용] CAN 메시지 수신 검증. 호출 시점부터 지정한 시간(ms) 동안 수신 패킷을 수집한 뒤 msg_id/data 패턴 일치 여부를 확인합니다. 호출 이전에 발생한 단발성 응답은 잡지 못하므로, 신규 시나리오는 canmsg_start → 제어 → canmsg_stop 방식을 사용하세요.",
         "params": {
-          "mcu": "수신 대상 MCU (기본값: 'mcu1' / 예: 'mcu1', 'mcu2', 'mcu3')",
-          "channel": "수신 채널 (기본값: 'A' / 'A', 'B', 'C', 'D')",
+          "mcu": {
+            "description": "수신 대상 MCU (기본값: 'mcu1' / 예: 'mcu1', 'mcu2', 'mcu3')",
+            "options": [
+              "mcu1",
+              "mcu2",
+              "mcu3"
+            ]
+          },
+          "channel": {
+            "description": "수신 채널 (기본값: 'A' / 'A', 'B', 'C', 'D')",
+            "options": [
+              "A",
+              "B",
+              "C",
+              "D"
+            ]
+          },
           "time": "수집 대기 시간 (ms 단위. 기본값: 1000)",
           "msg_id": "검증할 CAN ID. 정수 또는 Hex 문자열 ('0x' 유무 무관. 예: '0x12F', '47A', 1146)",
           "data": "매칭할 데이터 패턴. 공백/쉼표 구분 Hex 바이트. '*' 또는 '**' 자리는 값 무시(와일드카드), 패턴보다 긴 뒷부분 바이트는 비교하지 않음. 예: '00 00 00 00 05 00 00 00' 또는 '** ** ** ** 05'"
@@ -1763,7 +2397,13 @@
         "description": "지정한 Android 디바이스의 logcat 캡처를 시작합니다(메모리 버퍼). clear=True면 시작 전 logcat 링버퍼를 비웁니다. 디바이스가 reboot/끊겨도 자동으로 logcat을 재기동해 같은 버퍼에 이어서 캡처합니다.",
         "params": {
           "serial": "대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정",
-          "clear": "시작 전 logcat 버퍼 비우기. true/false (기본 true)"
+          "clear": {
+            "description": "시작 전 logcat 버퍼 비우기. true/false (기본 true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "StopLogging": {
@@ -1785,7 +2425,13 @@
           "keyword": "PASS를 만족할 키워드 (부분 문자열 매칭)",
           "time": "미래 로그 대기 시간(초). 기본 5. 0이면 과거 버퍼만 검사",
           "serial": "대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정",
-          "include_past": "현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)"
+          "include_past": {
+            "description": "현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       },
       "Monitor_fail_on_keyword": {
@@ -1794,7 +2440,13 @@
           "keyword": "FAIL을 일으킬 검출 키워드 (부분 문자열 매칭)",
           "time": "미래 로그 모니터링 시간(초). 기본 5. 0이면 과거 버퍼만 검사",
           "serial": "대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정",
-          "include_past": "현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)"
+          "include_past": {
+            "description": "현재까지 캡처된 로그(과거)도 검사할지. true/false (기본 true)",
+            "options": [
+              "True",
+              "False"
+            ]
+          }
         }
       }
     }

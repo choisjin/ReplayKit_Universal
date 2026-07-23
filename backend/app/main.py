@@ -270,16 +270,25 @@ async def _usage_stats_compute_once():
     logger.warning("usage-stats 계산 최종 실패 — 관제 함수통계가 비어 있을 수 있습니다 (재시작 시 재시도)")
 
 
+def _get_monitor_activity() -> str:
+    """현재 활동 상태만 가볍게 판별 — 우선순위: 재생중 > 녹화중 > 창 최상단 포커스 > 대기.
+
+    디바이스 조회 없이 즉시 계산되므로, monitor_client 가 전송 사이에 자주 폴링해
+    **상태 전이 순간 즉시 push**(관제 구간 통계의 짧은 이벤트 포착)에 쓴다.
+    """
+    if playback_service.is_running:
+        return "playing"
+    if recording_service.is_recording:
+        return "recording"
+    if _ui_recently_focused():
+        return "in_use"
+    return "idle"
+
+
 async def _get_monitor_status() -> dict:
     """관제 서버에 보낼 현재 상태를 수집."""
-    # 활동 상태 판별 — 우선순위: 재생중 > 녹화중 > 창 최상단 포커스(사용중) > 대기
-    activity = "idle"
-    if playback_service.is_running:
-        activity = "playing"
-    elif recording_service.is_recording:
-        activity = "recording"
-    elif _ui_recently_focused():
-        activity = "in_use"
+    # 활동 상태 판별 — 경량 판별기(_get_monitor_activity)와 규칙을 공유한다.
+    activity = _get_monitor_activity()
 
     # 디바이스 목록
     # ⚠️ ManagedDevice 에는 is_connected 속성이 없다 — 문자열 status 필드
@@ -581,6 +590,7 @@ async def lifespan(app: FastAPI):
 
     # 관제 클라이언트 콜백 항상 등록 (URL은 나중에 Settings에서 설정 가능)
     monitor_client.set_status_callback(_get_monitor_status)
+    monitor_client.set_activity_callback(_get_monitor_activity)
     monitor_client.set_command_callback(_handle_monitor_command)
     try:
         from .routers.settings import _load as _load_settings

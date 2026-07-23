@@ -742,7 +742,7 @@ export default function RecordPage() {
 
   // 모듈 스텝 추가: 선택된 "디바이스" (해당 디바이스에 매칭된 모듈을 사용)
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
-  const [moduleFunctions, setModuleFunctions] = useState<{ name: string; description?: string; description_en?: string; params: { name: string; required: boolean; default?: string; description?: string; description_en?: string }[] }[]>([]);
+  const [moduleFunctions, setModuleFunctions] = useState<{ name: string; description?: string; description_en?: string; params: { name: string; required: boolean; default?: string; description?: string; description_en?: string; options?: (string | { value: string; label?: string })[] }[] }[]>([]);
   const [selectedModuleFunc, setSelectedModuleFunc] = useState('');
   // PCAN 스텝 channel 드롭다운용 — 드라이버로 실제 감지된 채널명(예: 'PCAN_USBBUS1').
   // CANoe 처럼 등록 시점 스캔값을 쓰되, PCAN 은 device_info 에 저장하지 않으므로 스텝 편집기에서
@@ -755,6 +755,14 @@ export default function RecordPage() {
   // 언어 설정에 따라 함수/파라미터 설명을 선택 (영어 미번역 시 한국어 폴백)
   const pickDesc = (o?: { description?: string; description_en?: string }) =>
     (lang === 'en' && o?.description_en) ? o.description_en : (o?.description || '');
+  // 가이드 JSON(객체형 파라미터)의 options → Select options. True/False, ON/OFF, 0/1 등
+  // 열거형 파라미터를 모듈별 하드코딩 없이 백엔드 메타데이터만으로 드롭다운화한다.
+  const guideSelectOptions = (p?: { options?: (string | { value: string; label?: string })[] }) => {
+    if (!p?.options || p.options.length === 0) return null;
+    return p.options.map(o => typeof o === 'string'
+      ? { value: o, label: o }
+      : { value: o.value, label: o.label || o.value });
+  };
 
   // HKMC hardware keys
   const [hkmcKeys, setHkmcKeys] = useState<HkmcKeyInfo[]>([]);
@@ -6810,6 +6818,13 @@ export default function RecordPage() {
                         if (fn) {
                           const defaults: Record<string, string> = {};
                           fn.params.forEach(p => { if (p.default !== undefined) defaults[p.name] = p.default.replace(/^'(.*)'$/, '$1'); });
+                          // options 선언 파라미터: 기본값이 없으면 첫 옵션을 시드 —
+                          // 드롭다운 표시값과 실제 저장 args 가 어긋나
+                          // "Missing required parameter"가 나지 않게 한다.
+                          fn.params.forEach(p => {
+                            const opts = guideSelectOptions(p);
+                            if (opts && defaults[p.name] === undefined) defaults[p.name] = opts[0].value;
+                          });
                           // CANoe_Ctrl.bus_channel 은 필수(기본값 없음)라 위 시드에서 빠진다.
                           // 드롭다운 기본이 첫 채널(인덱스 0)이므로 미조작 시에도 누락되지 않게 '0' 시드.
                           if (selectedModuleName === 'CANoe_Ctrl' && (v === 'canoe_send_message' || v === 'canoe_send_msg_all_stop')) {
@@ -6957,7 +6972,9 @@ export default function RecordPage() {
                               ? canoeChannelOptions((selectedDevice?.info as any)?.device_info) : null;
                             // PCAN: channel/is_extended/is_fd/brs → 드롭다운 (channel 은 감지된 채널 사용)
                             const pcanOpts = selectedModuleName === 'PCAN' ? pcanSelectOptions(p.name, pcanChannels) : null;
-                            const selectOpts = canPanelOpts || canoeChOpts || pcanOpts;
+                            // 가이드 JSON options 선언 → 범용 드롭다운 (ON/OFF, True/False 등)
+                            const guideOpts = guideSelectOptions(p);
+                            const selectOpts = canPanelOpts || canoeChOpts || pcanOpts || guideOpts;
                             // Frame_Check.Frame_Measure: mode → 콤보박스,
                             // start_image/start_threshold 는 mode='image' 일 때만 표시 (웹캠 크롭 버튼으로 설정).
                             const isFrameCheck = selectedModuleName === 'Frame_Check' && selectedModuleFunc === 'Frame_Measure';
@@ -7928,7 +7945,9 @@ export default function RecordPage() {
                       if (isAndroidSerialHidden) return null;
                       // PCAN: channel/is_extended/is_fd/brs → 드롭다운 (channel 은 감지된 채널 사용)
                       const pcanOptsEdit = editStepParams.module === 'PCAN' ? pcanSelectOptions(k, pcanChannels) : null;
-                      const selectOptions = woohyunOptions || canPanelOptionsEdit || frameCheckModeOptions || canoeChOptsEdit || pcanOptsEdit;
+                      // 가이드 JSON options 선언 → 범용 드롭다운 (ON/OFF, True/False 등)
+                      const guideOptsEdit = guideSelectOptions(paramGuide);
+                      const selectOptions = woohyunOptions || canPanelOptionsEdit || frameCheckModeOptions || canoeChOptsEdit || pcanOptsEdit || guideOptsEdit;
                       return (
                         <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           <div style={{ display: 'flex', gap: 4, alignItems: 'center', width: '100%' }}>
