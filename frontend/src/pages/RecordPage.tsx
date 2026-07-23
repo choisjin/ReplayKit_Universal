@@ -503,7 +503,7 @@ const HKMC_LONG_KEY = 0x44;
 const HKMC_LONG_PRESS_MS = 2000;
 
 export default function RecordPage() {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   // 시나리오 이름에 경로·URL 을 깨뜨리는 문자가 있으면 안내 후 false 반환.
   const validateName = (name: string): boolean => {
     if (findInvalidNameChars((name || '').trim()).length) {
@@ -742,7 +742,7 @@ export default function RecordPage() {
 
   // 모듈 스텝 추가: 선택된 "디바이스" (해당 디바이스에 매칭된 모듈을 사용)
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
-  const [moduleFunctions, setModuleFunctions] = useState<{ name: string; description?: string; params: { name: string; required: boolean; default?: string; description?: string }[] }[]>([]);
+  const [moduleFunctions, setModuleFunctions] = useState<{ name: string; description?: string; description_en?: string; params: { name: string; required: boolean; default?: string; description?: string; description_en?: string }[] }[]>([]);
   const [selectedModuleFunc, setSelectedModuleFunc] = useState('');
   // PCAN 스텝 channel 드롭다운용 — 드라이버로 실제 감지된 채널명(예: 'PCAN_USBBUS1').
   // CANoe 처럼 등록 시점 스캔값을 쓰되, PCAN 은 device_info 에 저장하지 않으므로 스텝 편집기에서
@@ -750,7 +750,11 @@ export default function RecordPage() {
   const [pcanChannels, setPcanChannels] = useState<string[]>([]);
   const [moduleFuncArgs, setModuleFuncArgs] = useState<Record<string, string>>({});
   const [moduleDescription, setModuleDescription] = useState('');
+  const [moduleDescriptionEn, setModuleDescriptionEn] = useState('');
   const [dltBackground, setDltBackground] = useState(false);
+  // 언어 설정에 따라 함수/파라미터 설명을 선택 (영어 미번역 시 한국어 폴백)
+  const pickDesc = (o?: { description?: string; description_en?: string }) =>
+    (lang === 'en' && o?.description_en) ? o.description_en : (o?.description || '');
 
   // HKMC hardware keys
   const [hkmcKeys, setHkmcKeys] = useState<HkmcKeyInfo[]>([]);
@@ -1206,6 +1210,7 @@ export default function RecordPage() {
     if (!selectedModuleName) {
       setModuleFunctions([]);
       setModuleDescription('');
+      setModuleDescriptionEn('');
       setSelectedModuleFunc('');
       setModuleFuncArgs({});
       return;
@@ -1213,9 +1218,10 @@ export default function RecordPage() {
     deviceApi.getModuleFunctions(selectedModuleName).then(res => {
       setModuleFunctions(res.data.functions || []);
       setModuleDescription(res.data.module_description || '');
+      setModuleDescriptionEn(res.data.module_description_en || '');
       setSelectedModuleFunc('');
       setModuleFuncArgs({});
-    }).catch(() => { setModuleFunctions([]); setModuleDescription(''); });
+    }).catch(() => { setModuleFunctions([]); setModuleDescription(''); setModuleDescriptionEn(''); });
   }, [selectedModuleName]);
 
   // PCAN 채널 자동 열거 — 스텝 추가(selectedModuleName) 또는 편집(editStepParams.module)이
@@ -5002,6 +5008,7 @@ export default function RecordPage() {
         deviceApi.getModuleFunctions(s.params.module).then(res => {
           setModuleFunctions(res.data.functions || []);
           setModuleDescription(res.data.module_description || '');
+          setModuleDescriptionEn(res.data.module_description_en || '');
         }).catch(() => {});
       }
       return;
@@ -6788,9 +6795,9 @@ export default function RecordPage() {
                 {/* 2행: 함수 선택 + 파라미터 입력 */}
                 {selectedModuleName && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    {moduleDescription && (
+                    {(lang === 'en' && moduleDescriptionEn ? moduleDescriptionEn : moduleDescription) && (
                       <div style={{ padding: '4px 8px', background: isDark ? '#1a2a1a' : '#f6ffed', borderRadius: 4, fontSize: 11, color: isDark ? '#8bc48b' : '#52c41a', lineHeight: 1.5, border: `1px solid ${isDark ? '#1a3a1a' : '#d9f7be'}` }}>
-                        {moduleDescription}
+                        {lang === 'en' && moduleDescriptionEn ? moduleDescriptionEn : moduleDescription}
                       </div>
                     )}
                     <Select
@@ -6821,7 +6828,7 @@ export default function RecordPage() {
                       optionFilterProp="label"
                       options={moduleFunctions.map(f => {
                         // 인자 시그니처 대신 설명을 붙인다(가독성/검색성). 설명은 첫 줄만.
-                        const desc = (f.description || '').split('\n')[0].trim();
+                        const desc = pickDesc(f).split('\n')[0].trim();
                         return {
                           label: desc ? `${f.name} - ${desc}` : f.name,
                           value: f.name,
@@ -6845,9 +6852,9 @@ export default function RecordPage() {
                       if (!fn) return null;
                       return (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                          {fn.description && (
+                          {pickDesc(fn) && (
                             <div style={{ padding: '4px 8px', background: isDark ? '#1a2332' : '#f0f7ff', borderRadius: 4, fontSize: 11, color: isDark ? '#8bb4e0' : '#1677ff', lineHeight: 1.5, border: `1px solid ${isDark ? '#1a3a5c' : '#d6e8fc'}` }}>
-                              {fn.description}
+                              {pickDesc(fn)}
                             </div>
                           )}
                           {/* OCR CheckText/ClickText/ExtractAllText Region 모드: 크롭 버튼 */}
@@ -7095,7 +7102,7 @@ export default function RecordPage() {
                               </div>
                               {(() => {
                                 // OCR 모듈: 백엔드의 한글 description 대신 i18n 키로 변환 (언어별 표시)
-                                let desc = p.description;
+                                let desc = pickDesc(p);
                                 if (selectedModuleName === 'OCR') {
                                   const fnKey = selectedModuleFunc === 'CheckText' ? 'checkText'
                                               : selectedModuleFunc === 'ClickText' ? 'clickText'
@@ -7832,9 +7839,9 @@ export default function RecordPage() {
             return (
               <div>
                 <div style={{ marginBottom: 6, fontWeight: 600 }}>{editStepParams.module}::{editStepParams.function}()</div>
-                {editFnGuide?.description && (
+                {pickDesc(editFnGuide) && (
                   <div style={{ padding: '4px 8px', marginBottom: 6, background: isDark ? '#1a2332' : '#f0f7ff', borderRadius: 4, fontSize: 11, color: isDark ? '#8bb4e0' : '#1677ff', lineHeight: 1.5, border: `1px solid ${isDark ? '#1a3a5c' : '#d6e8fc'}` }}>
-                    {editFnGuide.description}
+                    {pickDesc(editFnGuide)}
                   </div>
                 )}
                 {/* Frame_Check.Frame_Measure: 측정 이미지는 웹캠 크롭 버튼으로 교체
@@ -7943,9 +7950,9 @@ export default function RecordPage() {
                               />
                             )}
                           </div>
-                          {paramGuide?.description && (
+                          {pickDesc(paramGuide) && (
                             <div style={{ marginLeft: 74, fontSize: 10, color: isDark ? '#888' : '#999', lineHeight: 1.4 }}>
-                              {paramGuide.description}
+                              {pickDesc(paramGuide)}
                             </div>
                           )}
                         </div>

@@ -106,9 +106,14 @@ _MODULES_DIR = Path(__file__).resolve().parent.parent / "modules"
 _last_import_error: dict[str, str] = {}
 
 # 모듈 가이드 JSON (함수/파라미터 설명)
+# 한국어(module_guides.json)가 정본, 영어(module_guides_en.json)는 동일 구조의 번역본 —
+# docs/generate_module_guide.py 의 module-guide(-en).html 생성 소스와 같은 파일이다.
 _GUIDES_FILE = Path(__file__).resolve().parent / "module_guides.json"
+_GUIDES_EN_FILE = Path(__file__).resolve().parent / "module_guides_en.json"
 _guides_cache: dict | None = None
 _guides_mtime: float = 0
+_guides_en_cache: dict | None = None
+_guides_en_mtime: float = 0
 
 # ── 함수명 오타 교정 별칭 ──────────────────────────────────────────────────
 # 외부 모듈(lge.auto .pyd 등)의 실제 함수명에 오타가 있어도 그쪽을 고칠 수 없으므로,
@@ -147,6 +152,52 @@ def _load_guides() -> dict:
         if _guides_cache is None:
             _guides_cache = {}
     return _guides_cache
+
+
+def _load_guides_en() -> dict:
+    """영어 가이드 JSON을 로드 (파일 변경 시 자동 리로드). 없으면 빈 dict."""
+    global _guides_en_cache, _guides_en_mtime
+    if not _GUIDES_EN_FILE.is_file():
+        return {}
+    try:
+        mtime = _GUIDES_EN_FILE.stat().st_mtime
+        if _guides_en_cache is None or mtime != _guides_en_mtime:
+            with open(_GUIDES_EN_FILE, "r", encoding="utf-8") as f:
+                _guides_en_cache = json.load(f)
+            _guides_en_mtime = mtime
+            logger.info("Module guides (en) loaded from %s", _GUIDES_EN_FILE)
+    except Exception as e:
+        logger.warning("Failed to load module guides (en): %s", e)
+        if _guides_en_cache is None:
+            _guides_en_cache = {}
+    return _guides_en_cache
+
+
+def _guides_files_mtime() -> float:
+    """가이드 JSON(ko+en) 변경 감지용 mtime 합 — 둘 중 하나만 바뀌어도 캐시 무효화."""
+    ko = _GUIDES_FILE.stat().st_mtime if _GUIDES_FILE.is_file() else 0.0
+    en = _GUIDES_EN_FILE.stat().st_mtime if _GUIDES_EN_FILE.is_file() else 0.0
+    return ko + en
+
+
+def _apply_func_guides(functions: list[dict], module_name: str) -> None:
+    """가이드 JSON의 함수/파라미터 설명을 함수 목록에 병합한다.
+
+    한국어는 description, 영어는 module_guides_en.json 의 동일 항목을 description_en 으로
+    병합한다. 영어 항목이 없으면 빈 문자열 — 프론트가 한국어 설명으로 폴백한다.
+    """
+    func_guides = _load_guides().get(module_name, {}).get("functions", {})
+    func_guides_en = _load_guides_en().get(module_name, {}).get("functions", {})
+    for fn in functions:
+        fg = func_guides.get(fn["name"], {})
+        fg_en = func_guides_en.get(fn["name"], {})
+        fn["description"] = fg.get("description", "")
+        fn["description_en"] = fg_en.get("description", "")
+        param_guides = fg.get("params", {})
+        param_guides_en = fg_en.get("params", {})
+        for p in fn["params"]:
+            p["description"] = param_guides.get(p["name"], "")
+            p["description_en"] = param_guides_en.get(p["name"], "")
 
 
 def _load_plugin_from_file(py_file: Path):
@@ -774,7 +825,7 @@ def get_module_functions(module_name: str) -> list[dict]:
     플러그인 파일 또는 가이드 JSON이 변경되면 캐시가 자동 무효화된다.
     """
     plugin_mtime = _plugin_file_mtime(module_name)
-    guides_mtime = _GUIDES_FILE.stat().st_mtime if _GUIDES_FILE.is_file() else 0.0
+    guides_mtime = _guides_files_mtime()
     cached = _module_functions_cache.get(module_name)
     if cached is not None:
         cpm, cgm, cfuncs = cached
@@ -819,15 +870,7 @@ def get_module_functions(module_name: str) -> list[dict]:
                 params.append(param_info)
             functions.append({"name": name, "params": params})
         # 가이드 병합
-        guides = _load_guides()
-        mod_guide = guides.get(module_name, {})
-        func_guides = mod_guide.get("functions", {})
-        for fn in functions:
-            fg = func_guides.get(fn["name"], {})
-            fn["description"] = fg.get("description", "")
-            param_guides = fg.get("params", {})
-            for p in fn["params"]:
-                p["description"] = param_guides.get(p["name"], "")
+        _apply_func_guides(functions, module_name)
         _module_functions_cache[module_name] = (plugin_mtime, guides_mtime, functions)
         return functions
 
@@ -863,15 +906,7 @@ def get_module_functions(module_name: str) -> list[dict]:
                     param_info["default"] = repr(p.default)
                 params.append(param_info)
             functions.append({"name": name, "params": params})
-        guides = _load_guides()
-        mod_guide = guides.get(module_name, {})
-        func_guides = mod_guide.get("functions", {})
-        for fn in functions:
-            fg = func_guides.get(fn["name"], {})
-            fn["description"] = fg.get("description", "")
-            param_guides = fg.get("params", {})
-            for p in fn["params"]:
-                p["description"] = param_guides.get(p["name"], "")
+        _apply_func_guides(functions, module_name)
         _module_functions_cache[module_name] = (plugin_mtime, guides_mtime, functions)
         return functions
 
@@ -886,11 +921,18 @@ def get_module_functions(module_name: str) -> list[dict]:
                 "모델 미설치 언어는 번들 기본(중국어)으로 폴백 — "
                 "설치: python scripts/download_ocr_models.py <language>"
             ),
+            "description_en": (
+                "OCR recognition language. 'korean' (Korean+English+digits, default), 'english', "
+                "'japan', 'chinese', 'latin' (Spanish/French/German/Italian etc.), 'cyrillic', "
+                "'arabic', 'devanagari'. Languages without an installed model fall back to the "
+                "bundled default (Chinese) — install: python scripts/download_ocr_models.py <language>"
+            ),
         }
         functions = [
             {
                 "name": "CheckText",
                 "description": "현재 화면에서 텍스트 존재 여부를 판단합니다. 쉼표 구분으로 여러 개 지정 시 모두 존재해야 PASS (AND 조건).",
+                "description_en": "Checks whether text exists on the current screen. With comma-separated multiple texts, all must exist to PASS (AND condition).",
                 "params": [
                     {"name": "text", "required": True,
                      "description": "찾을 텍스트 (쉼표로 여러 개 지정 가능, 예: 'OK,Save')"},
@@ -906,6 +948,7 @@ def get_module_functions(module_name: str) -> list[dict]:
             {
                 "name": "ClickText",
                 "description": "현재 화면에서 텍스트를 찾아 클릭합니다. 찾지 못하면 FAIL 반환.",
+                "description_en": "Finds text on the current screen and clicks it. Returns FAIL if not found.",
                 "params": [
                     {"name": "text", "required": True, "description": "클릭할 텍스트"},
                     {"name": "mode", "required": False, "default": "'Full Screen'",
@@ -920,6 +963,7 @@ def get_module_functions(module_name: str) -> list[dict]:
             {
                 "name": "ExtractAllText",
                 "description": "현재 화면(또는 지정 영역)의 모든 텍스트를 추출하여 결과 메시지로 반환합니다. 디버깅 및 시나리오 작성 시 화면에 어떤 텍스트가 있는지 데이터로 확인하는 용도. 항상 PASS (텍스트가 없어도 PASS). 한 글자짜리 검출은 아이콘 오인식이 많아 기본 제외 (min_length=2).",
+                "description_en": "Extracts all text from the current screen (or a specified region) and returns it in the result message. Used for debugging and, when authoring scenarios, for checking as data what text is on screen. Always PASS (even with no text). Single-character detections are excluded by default as they are often icon misreads (min_length=2).",
                 "params": [
                     {"name": "mode", "required": False, "default": "'Full Screen'",
                      "description": "검색 범위: 'Full Screen' 또는 'Region'"},
@@ -953,15 +997,7 @@ def get_module_functions(module_name: str) -> list[dict]:
             },
         ]
         # 가이드 병합 후 캐싱하고 즉시 반환 (Android 가상 모듈과 동일 패턴)
-        guides = _load_guides()
-        mod_guide = guides.get(module_name, {})
-        func_guides = mod_guide.get("functions", {})
-        for fn in functions:
-            fg = func_guides.get(fn["name"], {})
-            fn["description"] = fg.get("description", "")
-            param_guides = fg.get("params", {})
-            for p in fn["params"]:
-                p["description"] = param_guides.get(p["name"], "")
+        _apply_func_guides(functions, module_name)
         _module_functions_cache[module_name] = (plugin_mtime, guides_mtime, functions)
         return functions
 
@@ -1036,15 +1072,7 @@ def get_module_functions(module_name: str) -> list[dict]:
             },
         ]
         # 가이드 병합 후 캐싱하고 즉시 반환
-        guides = _load_guides()
-        mod_guide = guides.get(module_name, {})
-        func_guides = mod_guide.get("functions", {})
-        for fn in functions:
-            fg = func_guides.get(fn["name"], {})
-            fn["description"] = fg.get("description", "")
-            param_guides = fg.get("params", {})
-            for p in fn["params"]:
-                p["description"] = param_guides.get(p["name"], "")
+        _apply_func_guides(functions, module_name)
         _module_functions_cache[module_name] = (plugin_mtime, guides_mtime, functions)
         return functions
 
@@ -1199,17 +1227,7 @@ def get_module_functions(module_name: str) -> list[dict]:
         })
 
     # 가이드 데이터 병합
-    guides = _load_guides()
-    mod_guide = guides.get(module_name, {})
-    func_guides = mod_guide.get("functions", {})
-    mod_description = mod_guide.get("_description", "")
-
-    for fn in functions:
-        fg = func_guides.get(fn["name"], {})
-        fn["description"] = fg.get("description", "")
-        param_guides = fg.get("params", {})
-        for p in fn["params"]:
-            p["description"] = param_guides.get(p["name"], "")
+    _apply_func_guides(functions, module_name)
 
     _module_functions_cache[module_name] = (plugin_mtime, guides_mtime, functions)
     return functions

@@ -1833,15 +1833,21 @@ async def list_modules():
 async def module_functions(module_name: str):
     """List functions of a specific lge.auto module."""
     import asyncio
-    from ..services.module_service import _load_guides
+    from ..services.module_service import _load_guides, _load_guides_en
     # get_module_functions 는 대상 모듈을 import·introspect 하므로(무거운 HW 라이브러리 포함)
     # 이벤트 루프 블록 방지를 위해 스레드로 오프로드한다.
     functions = await asyncio.to_thread(get_module_functions, module_name)
     if not functions:
         raise HTTPException(status_code=404, detail=f"Module '{module_name}' not found or has no functions")
     guides = await asyncio.to_thread(_load_guides)
-    mod_guide = guides.get(module_name, {})
-    return {"module": module_name, "functions": functions, "module_description": mod_guide.get("_description", "")}
+    guides_en = await asyncio.to_thread(_load_guides_en)
+    return {
+        "module": module_name,
+        "functions": functions,
+        "module_description": guides.get(module_name, {}).get("_description", ""),
+        # 영어 설명은 module_guides_en.json(문서 en HTML 과 동일 소스)에서 — 없으면 프론트가 한국어 폴백
+        "module_description_en": guides_en.get(module_name, {}).get("_description", ""),
+    }
 
 
 class DltViewerRequest(BaseModel):

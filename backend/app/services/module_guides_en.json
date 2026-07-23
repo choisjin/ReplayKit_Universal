@@ -1528,6 +1528,15 @@
           "timeout": "Max wait time in seconds. Default: 300"
         }
       },
+      "Check_Logic": {
+        "description": "Executes a command and judges the output against multiple keywords with and/or logic (blocking). Returns a 'FAIL:' prefix on failure, which causes the step to be marked as fail.",
+        "params": {
+          "command": "Command to execute",
+          "keywords": "Keyword list, comma-separated. e.g. 'OK,ready,done'",
+          "logic": "Judgement logic: 'and' (pass if all keywords are present) or 'or' (pass if at least one is present). Default: and",
+          "timeout": "Max wait time in seconds. Default: 30"
+        }
+      },
       "RunCapture": {
         "description": "Executes a command in the background and immediately returns a '[BG_TASK:bg_x]' placeholder (non-blocking). The actual output can be retrieved later via the polling endpoint.",
         "params": {

@@ -6,9 +6,6 @@ import { useTranslation } from '../i18n';
 
 const { Text } = Typography;
 
-// ChatWidget 과 동일한 세션 저장소 — 제보자 프리필에 재사용
-const CHAT_SESSION_KEY = 'chat_session';
-
 interface StepTestEntry {
   ts: string;
   scenario: string;
@@ -88,30 +85,16 @@ export default function BugReportModal({ open, onClose }: { open: boolean; onClo
     setRunSteps([]);
     setPercent(0);
     setPhase('');
-    // 제보자 프리필 — 로그인 사용자 우선, 없으면 채팅 세션 폴백.
-    // (채팅 폴백을 먼저 돌리면 늦게 도착한 로그인 사용자가 밀리므로 context 응답 후 결정)
-    const prefillFromChat = () => {
-      try {
-        const raw = localStorage.getItem(CHAT_SESSION_KEY);
-        if (raw) {
-          const s = JSON.parse(raw);
-          if (s?.name && !form.getFieldValue('reporter')) {
-            form.setFieldValue('reporter', s.department ? `${s.name}/${s.department}` : s.name);
-          }
-        }
-      } catch { /* 프리필 실패는 무시 */ }
-    };
+    // 제보자 프리필 — 로그인 사용자 기준.
     bugreportApi.context()
       .then((res) => {
         setCtx(res.data);
         const u = res.data?.user;
         if (u?.name && !form.getFieldValue('reporter')) {
           form.setFieldValue('reporter', u.team ? `${u.name}/${u.team}` : u.name);
-        } else {
-          prefillFromChat();
         }
       })
-      .catch(() => { setCtx(null); prefillFromChat(); });
+      .catch(() => { setCtx(null); });
   }, [open, form]);
 
   // 재생 결과 선택 → 스텝 목록 로드 (기존 결과 상세 API 재사용)

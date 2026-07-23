@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Input, Modal, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
 import { SearchOutlined, UserOutlined } from '@ant-design/icons';
 import { userApi, LoginUser, LoginProject } from '../services/api';
+import { useTranslation } from '../i18n';
 
 const { Text } = Typography;
 
@@ -30,6 +31,7 @@ const ALL_TEAM = '__all__';
  * 사용자 선택 + 프로젝트(HKMC/Nissan 등) 선택 후 확인하면 저장된다.
  */
 export default function LoginModal({ open, user, onDone, onClose }: Props) {
+  const { t } = useTranslation();
   const [keyword, setKeyword] = useState('');
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<SearchUser[]>([]);
@@ -67,7 +69,7 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
   const doSearch = useCallback(async () => {
     const kw = keyword.trim();
     if (!kw) {
-      message.warning('검색어를 입력해주세요 (이름/아이디/조직명)');
+      message.warning(t('login.enterKeyword'));
       return;
     }
     setSearching(true);
@@ -77,13 +79,13 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
       setResults(users);
       setTeamFilter(ALL_TEAM);
       setSelectedId('');
-      if (users.length === 0) message.info(`"${kw}" 에 해당하는 사용자가 없습니다`);
+      if (users.length === 0) message.info(t('login.noUsersFound', { kw }));
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || 'Jira 유저 검색에 실패했습니다');
+      message.error(e?.response?.data?.detail || t('login.searchFailed'));
     } finally {
       setSearching(false);
     }
-  }, [keyword]);
+  }, [keyword, t]);
 
   const teams = useMemo(
     () => Array.from(new Set(results.map(r => r.team).filter(Boolean))).sort(),
@@ -98,11 +100,11 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
   /** temporary=true — 임시 로그인: 이번 실행 동안만 유효, 다음 실행 시 다시 묻는다. */
   const confirm = async (temporary: boolean) => {
     if (!selected) {
-      message.warning('사용자를 선택해주세요');
+      message.warning(t('login.selectUser'));
       return;
     }
     if (!project) {
-      message.warning('프로젝트를 선택해주세요');
+      message.warning(t('login.selectProject'));
       return;
     }
     setSaving(temporary ? 'temp' : 'keep');
@@ -118,38 +120,38 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
       });
       if (res.data.user) onDone(res.data.user, res.data.temporary);
     } catch {
-      message.error('사용자 저장에 실패했습니다');
+      message.error(t('login.saveFailed'));
     } finally {
       setSaving('');
     }
   };
 
   const columns = [
-    { title: '이름', dataIndex: 'name', width: 90, ellipsis: true },
-    { title: '직급', dataIndex: 'title', width: 130, ellipsis: true },
-    { title: '팀', dataIndex: 'team', ellipsis: true },
+    { title: t('common.name'), dataIndex: 'name', width: 90, ellipsis: true },
+    { title: t('login.colTitle'), dataIndex: 'title', width: 130, ellipsis: true },
+    { title: t('login.colTeam'), dataIndex: 'team', ellipsis: true },
     { title: 'ID', dataIndex: 'user_id', width: 130, ellipsis: true },
   ];
 
   return (
     <Modal
-      title={<span><UserOutlined /> {user ? '사용자 변경' : '로그인 — 사용자 선택'}</span>}
+      title={<span><UserOutlined /> {user ? t('login.titleChange') : t('login.titleLogin')}</span>}
       open={open}
       onCancel={onClose}
       width={640}
       maskClosable={false}
       footer={[
         <Button key="later" onClick={onClose}>
-          {user ? '취소' : '나중에 하기'}
+          {user ? t('common.cancel') : t('login.later')}
         </Button>,
-        <Tooltip key="temp" title="이번 실행 동안만 — 다음 실행 시 로그인 창이 다시 뜹니다">
+        <Tooltip key="temp" title={t('login.tempTooltip')}>
           <Button onClick={() => confirm(true)} loading={saving === 'temp'} disabled={!selected || !project}>
-            임시 로그인
+            {t('login.tempLogin')}
           </Button>
         </Tooltip>,
-        <Tooltip key="ok" title="사용자 변경 버튼을 누르기 전까지 유지됩니다">
+        <Tooltip key="ok" title={t('login.keepTooltip')}>
           <Button type="primary" onClick={() => confirm(false)} loading={saving === 'keep'} disabled={!selected || !project}>
-            로그인 (유지)
+            {t('login.keepLogin')}
           </Button>
         </Tooltip>,
       ]}
@@ -157,14 +159,14 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
       {!jiraReady && (
         <Alert
           type="warning" showIcon style={{ marginBottom: 12 }}
-          message="Jira 검색을 사용할 수 없습니다"
-          description="관제 서버(Manager) 설정 페이지에 Jira ID/비밀번호가 등록되어 있어야 합니다. 관리자에게 문의하세요."
+          message={t('login.jiraUnavailable')}
+          description={t('login.jiraUnavailableDesc')}
         />
       )}
 
       <Space.Compact style={{ width: '100%', marginBottom: 8 }}>
         <Input
-          placeholder="이름 / 아이디(EP로그인용 아이디) / 조직명 입력 후 Enter"
+          placeholder={t('login.searchPlaceholder')}
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
           onPressEnter={doSearch}
@@ -172,20 +174,20 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
           autoFocus
         />
         <Button icon={<SearchOutlined />} onClick={doSearch} loading={searching} disabled={!jiraReady}>
-          검색
+          {t('common.search')}
         </Button>
       </Space.Compact>
 
       {teams.length > 0 && (
         <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Text type="secondary" style={{ fontSize: 12 }}>팀:</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>{t('login.team')}</Text>
           <Select
             size="small"
             style={{ minWidth: 220, flex: 1 }}
             value={teamFilter}
             onChange={setTeamFilter}
-            options={[{ label: `전체 (${results.length}명)`, value: ALL_TEAM },
-              ...teams.map(t => ({ label: t, value: t }))]}
+            options={[{ label: t('login.allTeams', { count: results.length }), value: ALL_TEAM },
+              ...teams.map(tm => ({ label: tm, value: tm }))]}
             showSearch
             optionFilterProp="label"
           />
@@ -200,7 +202,7 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
         pagination={false}
         scroll={{ y: 240 }}
         loading={searching}
-        locale={{ emptyText: '검색 결과 없음 — 이름이나 팀명으로 검색하세요' }}
+        locale={{ emptyText: t('login.emptyText') }}
         onRow={(r) => ({
           onClick: () => setSelectedId(r.user_id || r.display_name),
           onDoubleClick: () => setSelectedId(r.user_id || r.display_name),
@@ -215,22 +217,22 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
 
       {/* 프로젝트/모델 — 주 디바이스 카탈로그의 선택지를 그대로 쓴다 */}
       <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <Text style={{ fontSize: 12 }}>프로젝트:</Text>
+        <Text style={{ fontSize: 12 }}>{t('login.project')}</Text>
         <Select
           style={{ minWidth: 130 }}
           value={project || undefined}
           onChange={(v) => { setProject(v); setModel(''); }}
-          placeholder="프로젝트 선택"
+          placeholder={t('login.projectPlaceholder')}
           options={projects.map(p => ({ label: p.name, value: p.name }))}
           showSearch
           optionFilterProp="label"
         />
-        <Text style={{ fontSize: 12 }}>모델:</Text>
+        <Text style={{ fontSize: 12 }}>{t('login.model')}</Text>
         <Select
           style={{ minWidth: 150 }}
           value={model || undefined}
           onChange={(v) => setModel(v || '')}
-          placeholder="모델 (선택)"
+          placeholder={t('login.modelPlaceholder')}
           allowClear
           disabled={!project}
           options={(projects.find(p => p.name === project)?.models || []).map(m => ({ label: m, value: m }))}

@@ -149,8 +149,10 @@
       <a href="#mod-Android" class="toc-h3">Android</a>
       <a href="#mod-CMD" class="toc-h3">CMD</a>
       <a href="#cat-etc" class="toc-h2">Others</a>
+      <a href="#mod-PCAN" class="toc-h3">PCAN</a>
       <a href="#mod-SHELL" class="toc-h3">SHELL</a>
       <a href="#mod-HKMC6th" class="toc-h3">HKMC6th</a>
+      <a href="#mod-Frame_Check" class="toc-h3">Frame_Check</a>
     </nav>
   </aside>
 
@@ -165,15 +167,16 @@
     </div>
 
     <h2 id="overview">All Modules</h2>
-    <p>Total <strong>13</strong> modules, <strong>230</strong> functions registered.</p>
+    <p>Total <strong>15</strong> modules, <strong>141</strong> functions registered.</p>
     <table>
       <thead><tr><th>Module</th><th>Description</th><th>Functions</th></tr></thead>
       <tbody>
-        <tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>Sends and receives CAN bus messages via CANat hardware</td><td style="text-align:center">7</td></tr>
+        <tr><td><a href="#mod-PCAN"><strong>PCAN</strong></a></td><td>Connects to CAN interfaces such as PCAN/Vector/Kvaser via python-can to send CAN/CAN FD messages and save CSV logs. Register one device per hardware unit and select the channel via each step&#x27;s channel argument. Connection lifecycle is managed automatically by the scenario.</td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>Sends and receives CAN bus messages via CANat hardware</td><td style="text-align:center">10</td></tr>
 <tr><td><a href="#mod-CANoe_RBS"><strong>CANoe_RBS</strong></a></td><td>Drives the CANoe application via COM to start/stop cfg (RBS)-based measurement, control signals and system/environment variables, and run UDS diagnostics.</td><td style="text-align:center">16</td></tr>
-<tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Sends/receives CAN/CAN FD messages, saves ASC logs, and runs ISO-TP (UDS) diagnostics via Vector CAN hardware (python-can VectorBus). No CANoe application required.</td><td style="text-align:center">11</td></tr>
-<tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>Comprehensive control of relays, power, sensors, audio, LCD, buttons, and USB on the serial-connected QE test bench</td><td style="text-align:center">117</td></tr>
-<tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>Connects to remote devices via SSH for command execution and file transfer</td><td style="text-align:center">9</td></tr>
+<tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Sends/receives CAN/CAN FD messages, saves ASC logs, and runs ISO-TP (UDS) diagnostics via Vector CAN hardware (python-can VectorBus). No CANoe application required.</td><td style="text-align:center">13</td></tr>
+<tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>Comprehensive control of relays, power, sensors, audio, LCD, buttons, and USB on the serial-connected QE test bench</td><td style="text-align:center">8</td></tr>
+<tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>Connects to remote devices via SSH for command execution and file transfer</td><td style="text-align:center">10</td></tr>
 <tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>Captures and saves logs via direct TCP connection to the DLT daemon, with keyword-based PASS/FAIL evaluation (no GUI required)</td><td style="text-align:center">5</td></tr>
 <tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>Captures serial port logs with keyword-based fail detection.
 
@@ -189,11 +192,12 @@ Standard usage pattern:
   2) SendCommand / SendCommand_*_on_keyword ...  ← middle steps
   3) StopLogging()                               ← last step (writes log file + ends capture, port stays open)</td><td style="text-align:center">8</td></tr>
 <tr><td><a href="#mod-SmartBench"><strong>SmartBench</strong></a></td><td>Controls power, buttons, current, and LEDs on Smart Bench equipment via TCP socket</td><td style="text-align:center">15</td></tr>
-<tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>Integrated UDP test bench: vehicle power control (IGN/ACC/Battery) + CAN FD signal transmission</td><td style="text-align:center">25</td></tr>
-<tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Executes Windows command prompt (CMD) commands. Used for running external programs or system commands</td><td style="text-align:center">4</td></tr>
+<tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>Integrated UDP test bench: vehicle power control (IGN/ACC/Battery) + CAN FD signal transmission</td><td style="text-align:center">28</td></tr>
+<tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Executes Windows command prompt (CMD) commands. Used for running external programs or system commands</td><td style="text-align:center">5</td></tr>
 <tr><td><a href="#mod-SHELL"><strong>SHELL</strong></a></td><td>Executes Linux/macOS bash commands. Linux counterpart of CMD. Used for running external programs or system commands.</td><td style="text-align:center">4</td></tr>
 <tr><td><a href="#mod-HKMC6th"><strong>HKMC6th</strong></a></td><td>Screen capture / touch / swipe / HW key control over a TCP socket protocol. Calls the HKMC6thService functions of the connected hkmc_agent device directly.</td><td style="text-align:center">4</td></tr>
-<tr><td><a href="#mod-Android"><strong>Android</strong></a></td><td></td><td style="text-align:center">5</td></tr>
+<tr><td><a href="#mod-Android"><strong>Android</strong></a></td><td></td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-Frame_Check"><strong>Frame_Check</strong></a></td><td>Operation-time measurement tool based on the test recording video (webcam). Add a Frame_Measure step to the scenario; when the scenario ends, webcam recording stops automatically and the video is analyzed frame by frame to report the elapsed time (ms) from the measurement start point to the first appearance of the target image, along with a clip of the measured section (5s before start to 5s after end). The PIP webcam must be open before playback for recording/measurement.</td><td style="text-align:center">1</td></tr>
       </tbody>
     </table>
 
@@ -206,29 +210,9 @@ Standard usage pattern:
 <thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
 <tbody>
 <tr>
-<td><code>Connect</code></td>
-<td>Connects to the bench via serial. Automatically called when adding the device.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>Disconnect</code></td>
-<td>Disconnects from the bench.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
 <td><code>ACCOnOff</code></td>
 <td>Turns ACC (Accessory) power on or off.</td>
 <td style="font-size:12px"><code>state</code>: 0 = OFF, 1 = ON<br><code>bench_info</code>: Bench type. &#x27;OLD_BENCH&#x27; (default) or &#x27;NEW_BENCH&#x27;</td>
-</tr>
-<tr>
-<td><code>ACCSinglePulse</code></td>
-<td>Generates a single pulse on ACC power. Used for momentary voltage fluctuation testing.</td>
-<td style="font-size:12px"><code>nVoltage</code>: Pulse voltage (V)<br><code>nDelay</code>: Delay between pulses (ms)<br><code>nCnt</code>: Number of pulse repetitions</td>
-</tr>
-<tr>
-<td><code>AccControl</code></td>
-<td>Controls the ACC relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON<br><code>bench_info</code>: Bench type</td>
 </tr>
 <tr>
 <td><code>AccVoltage</code></td>
@@ -241,24 +225,9 @@ Standard usage pattern:
 <td style="font-size:12px"><code>nState</code>: 0 = OFF (disconnect battery), 1 = ON (connect battery)<br><code>bench_info</code>: Bench type. &#x27;OLD_BENCH&#x27; (default) or &#x27;NEW_BENCH&#x27;</td>
 </tr>
 <tr>
-<td><code>BatteryControl</code></td>
-<td>Controls the battery relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON<br><code>bench_info</code>: Bench type</td>
-</tr>
-<tr>
-<td><code>BatteryMinusControl</code></td>
-<td>Controls the battery negative (-) terminal relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (connected), 1 = ON (disconnected)</td>
-</tr>
-<tr>
 <td><code>BatteryVoltage</code></td>
 <td>Sets the battery voltage state.</td>
 <td style="font-size:12px"><code>nState</code>: Voltage state value</td>
-</tr>
-<tr>
-<td><code>BatterySinglePulse</code></td>
-<td>Generates a single pulse on the battery.</td>
-<td style="font-size:12px"><code>nVoltage</code>: Pulse voltage (V)<br><code>nDelay</code>: Delay between pulses (ms)<br><code>nCnt</code>: Number of pulse repetitions</td>
 </tr>
 <tr>
 <td><code>IGNControl</code></td>
@@ -271,156 +240,6 @@ Standard usage pattern:
 <td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
 </tr>
 <tr>
-<td><code>ALTControl</code></td>
-<td>Controls the alternator signal.</td>
-<td style="font-size:12px"><code>status</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ILLControl</code></td>
-<td>Controls the illumination signal (vehicle lighting interlock).</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ILLControlMinus</code></td>
-<td>Controls the illumination negative signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ReverseControl</code></td>
-<td>Controls the reverse gear signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (forward), 1 = ON (reverse)</td>
-</tr>
-<tr>
-<td><code>ReverseActiveHigh</code></td>
-<td>Controls the reverse signal as Active High.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ReverseActiveLow</code></td>
-<td>Controls the reverse signal as Active Low.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ParkingControl</code></td>
-<td>Controls the parking signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>PPositonControl</code></td>
-<td>Controls the P (Park) gear position signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>NPositionControl</code></td>
-<td>Controls the N (Neutral) gear position signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>SpeedControl</code></td>
-<td>Controls the vehicle speed signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (stopped), 1 = ON (driving)</td>
-</tr>
-<tr>
-<td><code>DoorControl</code></td>
-<td>Controls the door open/close signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (closed), 1 = ON (open)</td>
-</tr>
-<tr>
-<td><code>DoorUnLockControl</code></td>
-<td>Controls the door unlock signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (locked), 1 = ON (unlocked)</td>
-</tr>
-<tr>
-<td><code>TransDetectControl</code></td>
-<td>Controls the transmission detection signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>FUELControl</code></td>
-<td>Controls the fuel-related signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>KeylessBootingControl</code></td>
-<td>Controls the keyless (smart key) boot signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AutolightControl</code></td>
-<td>Controls the auto-light signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AlarmDetectControl</code></td>
-<td>Controls the alarm detection signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AirbagCrashDetection</code></td>
-<td>Controls the airbag crash detection signal.</td>
-<td style="font-size:12px"><code>model</code>: Vehicle model name<br><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ShieldBoxControl</code></td>
-<td>Controls the shield box (RF shielding box) open/close.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (close), 1 = ON (open)</td>
-</tr>
-<tr>
-<td><code>ANTControl</code></td>
-<td>Controls the antenna relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AmpControl</code></td>
-<td>Controls the external audio amplifier power.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>MICControl</code></td>
-<td>Controls the microphone relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AUXControl</code></td>
-<td>Controls the AUX input relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>CDControl</code></td>
-<td>Controls the CD drive relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>IPODControl</code></td>
-<td>Controls the iPod connection relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>RcInControl</code></td>
-<td>Controls the RC input relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ComEnableControl</code></td>
-<td>Controls the COM (communication) enable.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (disabled), 1 = ON (enabled)</td>
-</tr>
-<tr>
-<td><code>Detent</code></td>
-<td>Controls the detent (rotary encoder for volume knob, etc.) signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AVNSDDetect</code></td>
-<td>Controls the AVN SD card detection signal.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (not inserted), 1 = ON (inserted)</td>
-</tr>
-<tr>
-<td><code>USB1Control</code></td>
-<td>Controls the USB 1 port relay.</td>
-<td style="font-size:12px"><code>Status</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
 <td><code>USBFrontSwitchControl</code></td>
 <td>Controls the front USB switch relay.</td>
 <td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
@@ -429,366 +248,6 @@ Standard usage pattern:
 <td><code>USBRearSwitchControl</code></td>
 <td>Controls the rear USB switch relay.</td>
 <td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>USBSelectorControl</code></td>
-<td>Selects a USB selector port.</td>
-<td style="font-size:12px"><code>nOnPortNum</code>: USB port number to activate</td>
-</tr>
-<tr>
-<td><code>USBSelector10CHSwitch5CH</code></td>
-<td>Controls the USB selector 10-channel/5-channel switch.</td>
-<td style="font-size:12px"><code>nType</code>: Switch type<br><code>nPortNum</code>: Port number<br><code>nOnOffStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Telltale</code></td>
-<td>Controls the telltale (dashboard warning indicator) relay.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>TelltaleLED</code></td>
-<td>Sets the telltale LED blink period.</td>
-<td style="font-size:12px"><code>nPeriod</code>: Blink period (ms)</td>
-</tr>
-<tr>
-<td><code>CheckTelltale</code></td>
-<td>Checks the telltale (warning indicator) status.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>LEDPulse</code></td>
-<td>Sets the LED blink period.</td>
-<td style="font-size:12px"><code>nPeriod</code>: Blink period (ms)</td>
-</tr>
-<tr>
-<td><code>LedTCU4</code></td>
-<td>Sets the TCU4 LED blink period.</td>
-<td style="font-size:12px"><code>nPeriod</code>: Blink period (ms)</td>
-</tr>
-<tr>
-<td><code>CheckLedTCU4</code></td>
-<td>Checks the TCU4 LED status.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>GetLEDPulse</code></td>
-<td>Reads the current LED pulse value.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CheckLCD</code></td>
-<td>Checks the LCD display status.</td>
-<td style="font-size:12px"><code>nStatus</code>: Status value to check</td>
-</tr>
-<tr>
-<td><code>CheckLCDDimming</code></td>
-<td>Checks the LCD dimming (brightness control) status.</td>
-<td style="font-size:12px"><code>nStatus</code>: Status value to check</td>
-</tr>
-<tr>
-<td><code>SetLCDValue</code></td>
-<td>Sets the LCD value.</td>
-<td style="font-size:12px"><code>nLCDValue</code>: LCD value to set</td>
-</tr>
-<tr>
-<td><code>GetLCDValue</code></td>
-<td>Reads the current LCD value.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CheckVoltage</code></td>
-<td>Checks whether voltage is within the specified range.</td>
-<td style="font-size:12px"><code>nMin</code>: Minimum voltage (V)<br><code>nMax</code>: Maximum voltage (V)</td>
-</tr>
-<tr>
-<td><code>CheckCurrent</code></td>
-<td>Checks whether current is within the specified range.</td>
-<td style="font-size:12px"><code>nMin</code>: Minimum current (A)<br><code>nMax</code>: Maximum current (A)</td>
-</tr>
-<tr>
-<td><code>ExtCheckCurrent</code></td>
-<td>Checks whether external current is within the specified range.</td>
-<td style="font-size:12px"><code>fMin</code>: Minimum current (A)<br><code>fMax</code>: Maximum current (A)</td>
-</tr>
-<tr>
-<td><code>EXT_CURRENT</code></td>
-<td>Checks external current within range after a delay.</td>
-<td style="font-size:12px"><code>min_current</code>: Minimum current (A)<br><code>max_current</code>: Maximum current (A)<br><code>check_delay</code>: Delay before check (seconds)</td>
-</tr>
-<tr>
-<td><code>GetEXTCurrent</code></td>
-<td>Reads the current external current value.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CheckEXTCurrentList</code></td>
-<td>Checks whether collected external current values are within range.</td>
-<td style="font-size:12px"><code>nMin</code>: Minimum current (A)<br><code>nMax</code>: Maximum current (A)</td>
-</tr>
-<tr>
-<td><code>ClearEXTCurrentList</code></td>
-<td>Clears the collected external current list.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CheckKeyOutVoltage</code></td>
-<td>Checks whether key output voltage is within range.</td>
-<td style="font-size:12px"><code>nMin</code>: Minimum voltage (V)<br><code>nMax</code>: Maximum voltage (V)</td>
-</tr>
-<tr>
-<td><code>ClearKeyOutVoltageList</code></td>
-<td>Clears the key output voltage list.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CheckSound</code></td>
-<td>Checks the audio output status.</td>
-<td style="font-size:12px"><code>nStatus</code>: Status value to check</td>
-</tr>
-<tr>
-<td><code>PlaySound</code></td>
-<td>Plays a sound file on the bench.</td>
-<td style="font-size:12px"><code>strFileName</code>: File name to play<br><code>nFileNameLen</code>: File name length</td>
-</tr>
-<tr>
-<td><code>InitSoundUpdate</code></td>
-<td>Initializes the sound update.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>WaitSoundUpdate</code></td>
-<td>Waits until the sound update completes.</td>
-<td style="font-size:12px"><code>timeout</code>: Max wait time in seconds</td>
-</tr>
-<tr>
-<td><code>RequestLightSensorControl</code></td>
-<td>Controls the light sensor.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON<br><code>pbData</code>: PB data<br><code>twData</code>: TW data</td>
-</tr>
-<tr>
-<td><code>GetLightSensorData</code></td>
-<td>Reads light sensor data.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CheckLightSensorResult</code></td>
-<td>Checks the light sensor result.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>TenButton</code></td>
-<td>Presses a button on the 10-button panel.</td>
-<td style="font-size:12px"><code>nButton</code>: Button number (0-9)<br><code>nDelay</code>: Button press duration (ms)</td>
-</tr>
-<tr>
-<td><code>ThreeButton</code></td>
-<td>Presses a button on the 3-button panel.</td>
-<td style="font-size:12px"><code>nButton</code>: Button number (0-2)<br><code>nDelay</code>: Button press duration (ms)</td>
-</tr>
-<tr>
-<td><code>ThreeButton_Front</code></td>
-<td>Presses a button on the front 3-button panel.</td>
-<td style="font-size:12px"><code>nButton</code>: Button number (0-2)<br><code>nDelay</code>: Button press duration (ms)</td>
-</tr>
-<tr>
-<td><code>ThreeButton_Rear</code></td>
-<td>Presses a button on the rear 3-button panel.</td>
-<td style="font-size:12px"><code>nButton</code>: Button number (0-2)<br><code>nDelay</code>: Button press duration (ms)</td>
-</tr>
-<tr>
-<td><code>TwoButton</code></td>
-<td>Presses a button on the 2-button panel.</td>
-<td style="font-size:12px"><code>nButton</code>: Button number (0-1)<br><code>nDelay</code>: Button press duration (ms)</td>
-</tr>
-<tr>
-<td><code>rf_btn_press</code></td>
-<td>Presses an RF button.</td>
-<td style="font-size:12px"><code>btnNum</code>: Button number<br><code>delay</code>: Press duration (ms)</td>
-</tr>
-<tr>
-<td><code>FileToSD</code></td>
-<td>Copies a file to the SD card.</td>
-<td style="font-size:12px"><code>userFilePath</code>: Source file path on PC<br><code>sdCardFileName</code>: File name to save on SD card</td>
-</tr>
-<tr>
-<td><code>Relay_10</code></td>
-<td>Controls relay 10.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Relay_11</code></td>
-<td>Controls relay 11.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Relay_12</code></td>
-<td>Controls relay 12.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Relay_13</code></td>
-<td>Controls relay 13.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Relay_14</code></td>
-<td>Controls relay 14.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>RelayInitialization</code></td>
-<td>Resets all relays to their default values.</td>
-<td style="font-size:12px"><code>init_value</code>: Initialization value</td>
-</tr>
-<tr>
-<td><code>SetRelayConfig</code></td>
-<td>Sets the relay configuration.</td>
-<td style="font-size:12px"><code>nRelayCfg</code>: Relay configuration value</td>
-</tr>
-<tr>
-<td><code>CallRelayFunc</code></td>
-<td>Calls a relay function by index.</td>
-<td style="font-size:12px"><code>func_index</code>: Function index number<br><code>data</code>: Data to pass</td>
-</tr>
-<tr>
-<td><code>RequestRelayInitialStatus</code></td>
-<td>Requests the initial relay status.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>RequestRelaySet</code></td>
-<td>Sets relays using a command list.</td>
-<td style="font-size:12px"><code>nCmdList</code>: Relay command list</td>
-</tr>
-<tr>
-<td><code>SystemReset</code></td>
-<td>Resets the bench system.</td>
-<td style="font-size:12px"><code>nMs</code>: Wait time after reset (ms). Default: 1000</td>
-</tr>
-<tr>
-<td><code>SetSystemTime</code></td>
-<td>Sets the bench system time to the current PC time.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>RequestSystemVersion</code></td>
-<td>Requests the bench system version information.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>CalcCRC16</code></td>
-<td>Calculates a CRC-16 checksum. Used for communication data verification.</td>
-<td style="font-size:12px"><code>listData</code>: Data list<br><code>nLen</code>: Data length</td>
-</tr>
-<tr>
-<td><code>CalibrationStartOrStop</code></td>
-<td>Starts or stops calibration.</td>
-<td style="font-size:12px"><code>sensitivity</code>: Sensitivity value<br><code>threshold</code>: Threshold value</td>
-</tr>
-<tr>
-<td><code>AnnouncesAutoTestStartOrEnd</code></td>
-<td>Announces the start/end of an automated test.</td>
-<td style="font-size:12px"><code>bisStart</code>: True = test start, False = test end</td>
-</tr>
-<tr>
-<td><code>BATSwitchSETtoPC</code></td>
-<td>Switches the battery switch from SET to PC.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>BATSwitchUSBtoPC</code></td>
-<td>Switches the battery switch from USB to PC.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>RequestAudioFrequency</code></td>
-<td>Requests audio frequency measurement.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nMs</code>: Measurement interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestAudioStatusAndADCValue</code></td>
-<td>Requests audio status and ADC value.</td>
-<td style="font-size:12px"><code>nMs</code>: Response wait time (ms)</td>
-</tr>
-<tr>
-<td><code>RequestAudioStatusAndADCValuePeriodicallyNoti</code></td>
-<td>Receives periodic notifications of audio status and ADC value.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestAudioStatusPeriodicallyNoti</code></td>
-<td>Receives periodic notifications of audio status.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestCurrentPeriodicallyNoti</code></td>
-<td>Receives periodic notifications of current value.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestExtCurrentPeriodicallyNoti</code></td>
-<td>Receives periodic notifications of external current value.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestVoltagePeriodicallyNoti</code></td>
-<td>Receives periodic notifications of voltage value.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestKeyOutVoltagePeriodicallyNoti</code></td>
-<td>Receives periodic notifications of key output voltage.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestLCDStatus</code></td>
-<td>Requests LCD status.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nMs</code>: Response wait time (ms)</td>
-</tr>
-<tr>
-<td><code>RequestLCDIllumiSensorValue</code></td>
-<td>Requests LCD illumination sensor value.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nMs</code>: Response wait time (ms)</td>
-</tr>
-<tr>
-<td><code>RequestLCDStatusAndIllumiSensorValuePeriodicallyNoti</code></td>
-<td>Receives periodic notifications of LCD status and illumination sensor value.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start, False = stop<br><code>nPeriodMs</code>: Notification interval (ms)</td>
-</tr>
-<tr>
-<td><code>RequestSoundFileInfo</code></td>
-<td>Requests sound file information.</td>
-<td style="font-size:12px"><code>nSoundType</code>: Sound type</td>
-</tr>
-<tr>
-<td><code>RequestSoundFileList</code></td>
-<td>Requests the sound file list.</td>
-<td style="font-size:12px"><code>nSoundType</code>: Sound type</td>
-</tr>
-<tr>
-<td><code>Read</code></td>
-<td>Reads data from the bench.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
-</tr>
-<tr>
-<td><code>Send</code></td>
-<td>Sends raw byte data to the bench.</td>
-<td style="font-size:12px"><code>listData</code>: Data list to send<br><code>nLen</code>: Data length</td>
-</tr>
-<tr>
-<td><code>WriteRawString</code></td>
-<td>Sends a raw string to the bench.</td>
-<td style="font-size:12px"><code>string</code>: String to send</td>
-</tr>
-<tr>
-<td><code>ReceiveStart</code></td>
-<td>Starts or stops bench data reception.</td>
-<td style="font-size:12px"><code>bStart</code>: True = start receiving, False = stop receiving<br><code>queue</code>: Queue to store received data (optional)</td>
-</tr>
-<tr>
-<td><code>timer_compare</code></td>
-<td>Compares timer values.</td>
-<td style="font-size:12px"><code>Time_Init</code>: Start time<br><code>Time_Check</code>: Time to compare</td>
 </tr>
 </tbody>
 </table>
@@ -952,13 +411,8 @@ Standard usage pattern:
 <td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 <tr>
-<td><code>SendCommand</code></td>
-<td>Sends a raw UDP command to the bench. For advanced users; using the individual functions above is recommended.</td>
-<td style="font-size:12px"><code>cmd1</code>: Command code 1 (integer, e.g. 0x24 = 36)<br><code>cmd2</code>: Command code 2 (integer, e.g. 0x21 = 33)<br><code>data_hex</code>: Additional data (space-separated hex string). e.g. &#x27;FF 01&#x27;. Default: empty string</td>
-</tr>
-<tr>
 <td><code>GetInfo</code></td>
-<td>Returns the bench&#x27;s current connection information (IP, port, signal_file, loaded signal count, connection state).</td>
+<td>Returns the bench&#x27;s current connection information (connected MCUs, signal_file, connection state).</td>
 <td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 <tr>
@@ -982,29 +436,49 @@ Standard usage pattern:
 <td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 <tr>
-<td><code>CheckSignals</code></td>
-<td>Dumps the loaded CAN FD signal definitions to the log.</td>
+<td><code>SendTimeSync</code></td>
+<td>Broadcasts a time-sync packet over UDP to all bench equipment. Automatically called on Connect, so manual invocation is usually unnecessary.</td>
 <td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 <tr>
-<td><code>SendCanFd</code></td>
-<td>Sends a raw CAN FD frame directly (no signal definition needed). Repeats 5 times at 200 ms.</td>
-<td style="font-size:12px"><code>can_id</code>: CAN ID (integer or hex string, e.g. &#x27;0x448&#x27;)<br><code>payload_hex</code>: Payload (spaces/commas/brackets allowed, e.g. &#x27;01,02,03&#x27; or &#x27;01 02 03&#x27;)<br><code>can_type</code>: Frame type: &#x27;STA&#x27; (standard, default) / &#x27;EXT&#x27; (extended frame, AVN) / &#x27;FD&#x27; (CAN FD, Cluster)</td>
+<td><code>canmsg_start</code></td>
+<td>Starts pre-capturing CAN messages. Begins recording all received packets on every channel into a background ring buffer (up to 100k entries). Call this BEFORE the control step (e.g. IGN1) so that short one-shot responses fired right after the command are not missed. Verify afterwards with canmsg_stop.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 <tr>
-<td><code>SendAvnCan</code></td>
-<td>Sends a raw CAN frame on the AVN channel (0x03 header). The destination is always fixed to AVN while the frame type is chosen via the type argument (both standard 0x33E and extended 1004001 are sent on the AVN channel). Repeats 5 times at 200 ms.</td>
-<td style="font-size:12px"><code>msg_id</code>: CAN ID (integer or hex string, e.g. &#x27;0x33E&#x27;, &#x27;0x414&#x27;, &#x27;1004001&#x27;)<br><code>type</code>: Frame type: &#x27;STA&#x27; (standard frame) / &#x27;EXT&#x27; (extended frame) / &#x27;FD&#x27; (CAN FD)<br><code>payload_hex</code>: Payload hex bytes (spaces/commas/brackets allowed, e.g. &#x27;00,00,00,00,00,00,00,00&#x27;)</td>
+<td><code>canmsg_stop</code></td>
+<td>Stops the CAN capture and verifies the buffer. Checks whether any packet captured since canmsg_start matches the target MCU/channel/msg_id/data pattern. Returns PASS on a match, or a &#x27;FAIL:&#x27; string so the step is marked failed. Usage order: canmsg_start → control command → (wait) → canmsg_stop</td>
+<td style="font-size:12px"><code>mcu</code>: Target MCU to listen on (default: &#x27;mcu1&#x27; / e.g. &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;)<br><code>channel</code>: Rx channel (default: &#x27;A&#x27; / &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;)<br><code>msg_id</code>: CAN ID to verify. Integer or hex string (with or without &#x27;0x&#x27;. e.g. &#x27;0x12F&#x27;, &#x27;47A&#x27;, 1146)<br><code>data</code>: Data pattern to match. Hex bytes separated by spaces/commas. &#x27;*&#x27; or &#x27;**&#x27; positions are wildcards (ignored), and received bytes beyond the pattern length are not compared. e.g. &#x27;00 00 00 00 05 00 00 00&#x27; or &#x27;** ** ** ** 05&#x27;</td>
 </tr>
 <tr>
-<td><code>SendClusterCan</code></td>
-<td>Sends a raw CAN FD frame on the Cluster channel. Identical to send_can.py TARGET=CLUSTER (CANTYPE.FD, frame_byte = 0x80 | DLC). Repeats 5 times at 200 ms.</td>
-<td style="font-size:12px"><code>msg_id</code>: CAN ID (integer or hex string, e.g. &#x27;0x65&#x27;)<br><code>payload_hex</code>: Payload hex bytes (spaces/commas/brackets allowed, e.g. &#x27;00,00,00,00,00,00,00,00&#x27;)</td>
+<td><code>canmsg</code></td>
+<td>[Legacy compatibility] Verifies CAN message reception. Collects packets for the specified time (ms) starting at the moment of the call, then checks for a msg_id/data pattern match. One-shot responses that occur before the call cannot be caught, so use canmsg_start → control → canmsg_stop for new scenarios.</td>
+<td style="font-size:12px"><code>mcu</code>: Target MCU to listen on (default: &#x27;mcu1&#x27; / e.g. &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;)<br><code>channel</code>: Rx channel (default: &#x27;A&#x27; / &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;)<br><code>time</code>: Collection window in milliseconds (default: 1000)<br><code>msg_id</code>: CAN ID to verify. Integer or hex string (with or without &#x27;0x&#x27;. e.g. &#x27;0x12F&#x27;, &#x27;47A&#x27;, 1146)<br><code>data</code>: Data pattern to match. Hex bytes separated by spaces/commas. &#x27;*&#x27; or &#x27;**&#x27; positions are wildcards (ignored), and received bytes beyond the pattern length are not compared. e.g. &#x27;00 00 00 00 05 00 00 00&#x27; or &#x27;** ** ** ** 05&#x27;</td>
 </tr>
 <tr>
-<td><code>ReinitCanFd</code></td>
-<td>Re-initialises the CAN FD bus (when baudrate / data bit time needs to change). Defaults 500k/2M.</td>
-<td style="font-size:12px"><code>baudrate</code>: Arbitration phase baudrate (2-byte integer, default 0x1F4)<br><code>databit_time</code>: Data phase bit time (2-byte integer, default 0x7D0)</td>
+<td><code>SendCan</code></td>
+<td>Sends a raw CAN frame. Transmits a standard/extended/FD frame to the given device (mcu) and channel, either once or periodically.</td>
+<td style="font-size:12px"><code>mcu</code>: Target MCU (default: &#x27;mcu1&#x27; / e.g. &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;)<br><code>msg_id</code>: CAN ID. Integer or hex string (parsed as hex regardless of &#x27;0x&#x27; prefix. e.g. &#x27;0x33E&#x27;, &#x27;47A&#x27;)<br><code>type</code>: Frame type (default: &#x27;STA&#x27; / &#x27;STA&#x27;=standard, &#x27;EXT&#x27;=extended, &#x27;FD&#x27;=CAN FD)<br><code>payload_hex</code>: Payload hex bytes (spaces/commas allowed, no brackets. e.g. &#x27;00,00,00,00,00,C0,00,00&#x27; or &#x27;FF 01 02&#x27;)<br><code>channel</code>: Transmit channel (default: &#x27;A&#x27; / e.g. &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;)<br><code>repeat</code>: Send mode (default: 0 / 0=single shot, 1=periodic)<br><code>cycle_ms</code>: Send interval in ms when repeat=1 (default: 200)</td>
+</tr>
+<tr>
+<td><code>SendStopCan</code></td>
+<td>Stops the periodic transmission of a specific Raw CAN message corresponding to the provided msg_id.</td>
+<td style="font-size:12px"><code>mcu</code>: Target MCU to control (default: &#x27;mcu1&#x27; / e.g. &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;)<br><code>msg_id</code>: Target CAN ID to stop (integer or hex string. Parsed as hex regardless of the &#x27;0x&#x27; prefix. e.g. &#x27;0x33E&#x27;, &#x27;47A&#x27;)</td>
+</tr>
+<tr>
+<td><code>SendAllStopCan</code></td>
+<td>Stops all active periodic Raw CAN message transmissions across all connected MCUs simultaneously.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>CanSaveStart</code></td>
+<td>Starts unified real-time logging of Rx/Tx CAN data from every connected MCU/channel into a single CSV file.</td>
+<td style="font-size:12px"><code>save_dir</code>: CSV save folder path. Defaults to ./canlog when empty (filename CAN_LOG_&lt;timestamp&gt;.csv is auto-generated)</td>
+</tr>
+<tr>
+<td><code>CanSaveStop</code></td>
+<td>Stops unified CAN logging and closes the CSV file.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 </tbody>
 </table>
@@ -1128,13 +602,23 @@ Standard usage pattern:
 </tr>
 <tr>
 <td><code>canoe_send_message</code></td>
-<td>Sends a CAN/CAN FD message. A non-zero cycle time sends periodically; 0 sends once.</td>
-<td style="font-size:12px"><code>message_id</code>: CAN ID (hex string). e.g. &#x27;0x288&#x27;<br><code>cycle_time</code>: Transmit cycle (ms). 0 = send once<br><code>can_message</code>: Message data (space-separated hex). e.g. &#x27;01 02 03 04 05 06 07 08&#x27;<br><code>bus_channel</code>: Bus channel index (from 0, in device_info order)<br><code>message_type</code>: &#x27;FD&#x27; (default) or any other string = Classic CAN</td>
+<td>Sends a CAN/CAN FD message. A non-zero cycle time sends periodically; 0 sends once. When apply_e2e=True, the Alive Counter and CRC16 are recomputed in real time every cycle for an E2E-protected periodic transmit.</td>
+<td style="font-size:12px"><code>message_id</code>: CAN ID (hex string). e.g. &#x27;0x288&#x27;<br><code>cycle_time</code>: Transmit cycle (ms). 0 = send once<br><code>can_message</code>: Message data (space-separated hex). e.g. &#x27;01 02 03 04 05 06 07 08&#x27;<br><code>bus_channel</code>: Bus channel index (from 0, in device_info order)<br><code>message_type</code>: &#x27;FD&#x27; (default) or any other string = Classic CAN<br><code>apply_e2e</code>: True = E2E (Alive Counter + CRC16) periodic transmit; False (default) = plain transmit. E2E spec is read per message_id from plugins/e2e_config.json, falling back to a default template. Only effective when cycle_time &gt; 0.</td>
+</tr>
+<tr>
+<td><code>canoe_send_message_stop</code></td>
+<td>Stops the periodic transmit of a single CAN ID (both E2E and plain periodic). Other periodic messages keep running.</td>
+<td style="font-size:12px"><code>message_id</code>: CAN ID to stop (hex string). e.g. &#x27;0xA0&#x27;<br><code>bus_channel</code>: Bus channel index</td>
 </tr>
 <tr>
 <td><code>canoe_send_msg_all_stop</code></td>
-<td>Stops all periodic transmits on the given channel.</td>
+<td>Stops all periodic transmits on the given channel (including E2E).</td>
 <td style="font-size:12px"><code>bus_channel</code>: Bus channel index</td>
+</tr>
+<tr>
+<td><code>load_e2e_config</code></td>
+<td>Reloads the E2E spec JSON file. Defaults to plugins/e2e_config.json when omitted. (Auto-loaded once at module init; call only to re-apply after editing the file.)</td>
+<td style="font-size:12px"><code>config_path</code>: Path to the E2E config JSON. Leave empty to use the default file (plugins/e2e_config.json).</td>
 </tr>
 <tr>
 <td><code>find_msg_from_latest_log</code></td>
@@ -1183,6 +667,21 @@ Standard usage pattern:
 <td><code>send_can_message</code></td>
 <td>Sends a CAN message.</td>
 <td style="font-size:12px"><code>message_id</code>: CAN message ID<br><code>cycle_time</code>: Transmission interval (ms). 0 for one-shot<br><code>can_message</code>: Message data (hex)<br><code>bus_channel</code>: CAN channel<br><code>message_type</code>: &#x27;FD&#x27; (default) or &#x27;Classic&#x27;</td>
+</tr>
+<tr>
+<td><code>CAN_PANEL</code></td>
+<td>Reaction-time visualization panel for CAN. With state=On and no signal it shows a black panel and waits; with state=On and a signal (message_id + can_message) it flashes the panel yellow while simultaneously sending send_can_message with no delay (film the panel with a camera and count frames from the yellow flash to the on-screen reaction to measure latency); with state=OFF it resets the panel to black only if it is already open (does nothing if not open — never spawns a new window); with state=Close it closes the panel.</td>
+<td style="font-size:12px"><code>state</code>: Panel state. &#x27;On&#x27; (show/flash+send), &#x27;OFF&#x27; (reset to black only if already open, no spawn), &#x27;Close&#x27; (close panel)<br><code>message_id</code>: CAN message ID. When state=on and both this and can_message are set, it sends + flashes (black panel only if either is empty)<br><code>cycle_time</code>: Transmission interval (ms). 0 for one-shot<br><code>can_message</code>: Message data (hex)<br><code>bus_channel</code>: CAN channel<br><code>message_type</code>: &#x27;FD&#x27; (default) or &#x27;Classic&#x27;<br><code>x</code>: Panel top-left X (px). Empty = bottom-left default. Auto-filled by the &#x27;Crop monitor&#x27; button<br><code>y</code>: Panel top-left Y (px). Empty = bottom-left default<br><code>width</code>: Panel width (px, default 300)<br><code>height</code>: Panel height (px, default 300)</td>
+</tr>
+<tr>
+<td><code>check_can_message</code></td>
+<td>Checks whether a specific CAN message is received (RX) within the timeout. PASS if received, FAIL otherwise. Leave data empty to check message ID reception only. Works as a single step — no prepare/cleanup steps needed.</td>
+<td style="font-size:12px"><code>message_id</code>: CAN message ID to check (hex). e.g. &#x27;0x18DAF141&#x27; or &#x27;291&#x27;<br><code>expected_data</code>: Expected data (hex bytes, space-separated). Empty = ID-only check. &#x27;*&#x27; ignores a nibble — e.g. &#x27;1A 2B&#x27;, &#x27;1* ** 33&#x27;<br><code>match_mode</code>: Data comparison mode. &#x27;startswith&#x27; (default: prefix match) / &#x27;exact&#x27; (full-length match) / &#x27;contains&#x27; (match anywhere in data) / &#x27;bitmask&#x27; (all set bits present)<br><code>timeout</code>: Max wait time in seconds (default 5). Returns PASS immediately when matched</td>
+</tr>
+<tr>
+<td><code>check_no_can_message</code></td>
+<td>Inverse check — PASS only if the message is NOT received during the timeout. Fails immediately on first reception (e.g. a message must stop after entering sleep).</td>
+<td style="font-size:12px"><code>message_id</code>: CAN message ID that must not be received (hex). e.g. &#x27;0x18DAF141&#x27;<br><code>expected_data</code>: Expected data (hex bytes). Empty = any reception of the ID fails. &#x27;*&#x27; nibble wildcard supported<br><code>match_mode</code>: Data comparison mode. &#x27;startswith&#x27; / &#x27;exact&#x27; / &#x27;contains&#x27; / &#x27;bitmask&#x27;<br><code>timeout</code>: Watch duration in seconds (default 5). PASS if not received for this long</td>
 </tr>
 <tr>
 <td><code>stop_can_message</code></td>
@@ -1325,6 +824,11 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td style="font-size:12px"><code>remote_path</code>: File path on remote device<br><code>local_path</code>: Destination path on PC</td>
 </tr>
 <tr>
+<td><code>get_folder</code></td>
+<td>Recursively downloads an entire folder (including subfolders) from the remote device to the PC via SFTP. Non-regular files such as symlinks are skipped. If some files fail, returns a &#x27;FAIL:&#x27; prefix so the step is judged as fail.</td>
+<td style="font-size:12px"><code>remote_path</code>: Folder path on remote device. e.g. &#x27;/var/log&#x27;<br><code>local_path</code>: Destination folder path on PC. If empty during playback, saved automatically under the run folder&#x27;s logs/ with the remote folder name. If a folder with the same name already has content, it is NOT overwritten — &#x27;_2&#x27;, &#x27;_3&#x27; … is appended instead (keeps each run separate)</td>
+</tr>
+<tr>
 <td><code>get_file_list_in_dir</code></td>
 <td>Lists files in a directory on the remote device.</td>
 <td style="font-size:12px"><code>path</code>: Directory path to list<br><code>_filter</code>: File filter pattern. Default: &#x27;*&#x27; (all). e.g. &#x27;*.log&#x27;</td>
@@ -1339,13 +843,13 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <tbody>
 <tr>
 <td><code>StartLogging</code></td>
-<td>Connects to DLT and starts capture. Streams all logs immediately to a text file (auto path) while keeping only recent entries in memory (stays fast even for long runs). The viewer modal opens automatically.</td>
+<td>Connects to DLT and starts capture. Streams all logs immediately to a text file (auto path) while keeping only recent entries in memory (stays fast even for long runs). A raw .dlt file (same path, .dlt extension) is written in parallel so the capture can be reopened in DLT Viewer. The viewer modal opens automatically.</td>
 <td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 <tr>
 <td><code>StopLogging</code></td>
-<td>Stops DLT capture. Logs are already saved to file in real time; specifying save_path only moves the file to that location.</td>
-<td style="font-size:12px"><code>save_path</code>: Save file path. If empty, keeps the streaming file as-is (during replay: run_dir/logs/dlt_*.log, step test: backend/results/Temp_logs/dlt_*.log)</td>
+<td>Stops DLT capture. Logs are already saved to file in real time; specifying save_path only moves the file to that location. The raw .dlt file is moved alongside it (same path, .dlt extension).</td>
+<td style="font-size:12px"><code>save_path</code>: Save file path. If empty, keeps the streaming files as-is (during replay: run_dir/logs/dlt_*.log + dlt_*.dlt, step test: backend/results/Temp_logs/)</td>
 </tr>
 <tr>
 <td><code>WaitLog</code></td>
@@ -1374,6 +878,16 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <table>
 <thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
 <tbody>
+<tr>
+<td><code>Check</code></td>
+<td>Runs an ADB shell command and compares the output against an expected value for PASS/FAIL (same contract as Check in the CMD/SSH modules). The shell prefix is added automatically if missing. On mismatch, the &#x27;FAIL:&#x27; prefix makes the step fail automatically.</td>
+<td style="font-size:12px"><code>command</code>: Device shell command to run (e.g. getprop ro.build.version.release — shell prefix optional)<br><code>expected</code>: Expected value. If empty, passes only when there is no output (no-output check)<br><code>match_mode</code>: contains (substring match, default) or exact (full match)<br><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device</td>
+</tr>
+<tr>
+<td><code>Check_Logic</code></td>
+<td>Runs an ADB shell command and judges multiple keywords with and/or logic (same contract as Check_Logic in the CMD/SSH modules). The shell prefix is added automatically if missing. On mismatch, the &#x27;FAIL:&#x27; prefix makes the step fail automatically.</td>
+<td style="font-size:12px"><code>command</code>: Device shell command to run (e.g. dumpsys activity — shell prefix optional)<br><code>keywords</code>: Keyword list, comma-separated (e.g. OK,ready,done)<br><code>logic</code>: and (pass when all keywords present, default) or or (pass when at least one present)<br><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device</td>
+</tr>
 <tr>
 <td><code>StartLogging</code></td>
 <td>Start capturing logcat for the given Android device (in-memory buffer). If clear=True, flushes the logcat ring buffer first. Auto-restarts logcat into the same buffer if the device reboots/disconnects.</td>
@@ -1418,6 +932,11 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td style="font-size:12px"><code>command</code>: Command to execute<br><code>expected</code>: Expected substring or full match value<br><code>match_mode</code>: Comparison mode: &#x27;contains&#x27; (substring) or &#x27;exact&#x27; (full match). Default: contains<br><code>timeout</code>: Max wait time in seconds. Default: 300</td>
 </tr>
 <tr>
+<td><code>Check_Logic</code></td>
+<td>Executes a command and judges the output against multiple keywords with and/or logic (blocking). Returns a &#x27;FAIL:&#x27; prefix on failure, which causes the step to be marked as fail.</td>
+<td style="font-size:12px"><code>command</code>: Command to execute<br><code>keywords</code>: Keyword list, comma-separated. e.g. &#x27;OK,ready,done&#x27;<br><code>logic</code>: Judgement logic: &#x27;and&#x27; (pass if all keywords are present) or &#x27;or&#x27; (pass if at least one is present). Default: and<br><code>timeout</code>: Max wait time in seconds. Default: 30</td>
+</tr>
+<tr>
 <td><code>RunBackground</code></td>
 <td>Spawns a subprocess fire-and-forget. Returns the PID but the output cannot be retrieved.</td>
 <td style="font-size:12px"><code>command</code>: Command to execute. e.g. &#x27;notepad&#x27;, &#x27;python script.py&#x27;</td>
@@ -1433,6 +952,49 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 
 
 <h2 id="cat-etc">Others</h2>
+
+<h3 id="mod-PCAN">PCAN</h3>
+<div class="callout callout-info">PCAN (python-can) — Connects to CAN interfaces such as PCAN/Vector/Kvaser via python-can to send CAN/CAN FD messages and save CSV logs. Register one device per hardware unit and select the channel via each step&#x27;s channel argument. Connection lifecycle is managed automatically by the scenario.</div>
+<table>
+<thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
+<tbody>
+<tr>
+<td><code>send_can</code></td>
+<td>Sends a single CAN/CAN FD frame on the given channel.</td>
+<td style="font-size:12px"><code>msg_id</code>: CAN message ID (hex). e.g. &#x27;0x621&#x27; or &#x27;621&#x27; (both mean 0x621).<br><code>data</code>: Data bytes (space- or comma-separated hex). e.g. &#x27;45 40 FF FF FF FF FF FF&#x27;<br><code>channel</code>: Target channel name (e.g. &#x27;PCAN_USBBUS1&#x27;, &#x27;PCAN_USBBUS2&#x27;). Default PCAN_USBBUS1.<br><code>is_extended</code>: Extended (29-bit) ID? True/False (default False = standard 11-bit).<br><code>is_fd</code>: Send this frame as CAN FD? True/False (auto FD if the bus is in FD mode).<br><code>brs</code>: FD Bit Rate Switch. Leave empty to auto-enable on FD frames (matches the reference sender; standard for 500k/2M buses). Always OFF for classic frames.</td>
+</tr>
+<tr>
+<td><code>send_periodic_can</code></td>
+<td>Starts or updates a cyclic (periodic) send on the given channel. Calling again with the same channel+ID only updates the data. Stop with stop_all_tx or can_all_stop.</td>
+<td style="font-size:12px"><code>msg_id</code>: CAN message ID (hex). e.g. &#x27;0x621&#x27;<br><code>data</code>: Data bytes (space/comma-separated hex). e.g. &#x27;45 40 FF FF FF FF FF FF&#x27;<br><code>channel</code>: Target channel name (e.g. &#x27;PCAN_USBBUS1&#x27;, &#x27;PCAN_USBBUS2&#x27;). Default PCAN_USBBUS1.<br><code>period_ms</code>: Send period in milliseconds. e.g. &#x27;500&#x27;. Default 1000.<br><code>is_extended</code>: Extended (29-bit) ID? True/False (default False).<br><code>is_fd</code>: CAN FD? True/False.<br><code>brs</code>: FD Bit Rate Switch. Leave empty to auto-enable on FD frames (matches the reference sender; standard for 500k/2M buses). Always OFF for classic frames.</td>
+</tr>
+<tr>
+<td><code>stop_all_tx</code></td>
+<td>Stops all running cyclic (periodic) send tasks across all channels.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>start_logging</code></td>
+<td>Starts logging CAN traffic from all open channels into a single CSV file (Timestamp,Message_id,Dir,DLC,Data,channel — the channel column distinguishes channels).</td>
+<td style="font-size:12px"><code>csv_file</code>: CSV path to save. If empty, auto-saved under the playback run folder (logs/) or results/PCAN_Log.</td>
+</tr>
+<tr>
+<td><code>stop_logging</code></td>
+<td>Stops CSV logging and saves the file (flush+close).</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>can_all_stop</code></td>
+<td>Stops all periodic sends and logging across all channels at once (connection kept alive).</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>check_status</code></td>
+<td>Diagnostics: reports the channel&#x27;s bus state (ok/error/bus-off) and the number of open channels &amp; periodic tasks. Use to narrow down why sends aren&#x27;t working (channel/bitrate vs ID/data/wakeup).</td>
+<td style="font-size:12px"><code>channel</code>: Target channel name (e.g. &#x27;PCAN_USBBUS1&#x27;, &#x27;PCAN_USBBUS2&#x27;). Default PCAN_USBBUS1.</td>
+</tr>
+</tbody>
+</table>
 
 <h3 id="mod-SHELL">SHELL</h3>
 <div class="callout callout-info">Shell Command Execution — Executes Linux/macOS bash commands. Linux counterpart of CMD. Used for running external programs or system commands.</div>
@@ -1486,6 +1048,19 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td><code>send_shell_cmd</code></td>
 <td>Sends a simple shell string command to the device.</td>
 <td style="font-size:12px"><code>str_data</code>: Command string to send</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-Frame_Check">Frame_Check</h3>
+<div class="callout callout-info">Operation-time measurement tool based on the test recording video (webcam). Add a Frame_Measure step to the scenario; when the scenario ends, webcam recording stops automatically and the video is analyzed frame by frame to report the elapsed time (ms) from the measurement start point to the first appearance of the target image, along with a clip of the measured section (5s before start to 5s after end). The PIP webcam must be open before playback for recording/measurement.</div>
+<table>
+<thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
+<tbody>
+<tr>
+<td><code>Frame_Measure</code></td>
+<td>Defines one operation-time measurement. The start point is this step&#x27;s execution time with mode=&#x27;function&#x27;, or the first frame where start_image appears (after execution) with mode=&#x27;image&#x27;. The target is the first frame where target_image appears after start point + wait_time; if not found within max_time seconds it is reported as not found. Use the edit button to crop the current PIP webcam frame.</td>
+<td style="font-size:12px"><code>mode</code>: Start-point basis: &#x27;function&#x27; (step execution time) or &#x27;image&#x27; (first frame start_image appears)<br><code>start_image</code>: Start-point image (required when mode=&#x27;image&#x27;). Set by cropping the webcam frame via the edit button<br><code>start_threshold</code>: Start image match similarity threshold (0.0~1.0, default 0.8)<br><code>wait_time</code>: Grace period in seconds before the target can appear. Target scanning skips this interval after the start point (default 0)<br><code>target_image</code>: Target image (required). Set by cropping the webcam frame via the edit button<br><code>target_threshold</code>: Target image match similarity threshold (0.0~1.0, default 0.8)<br><code>max_time</code>: Maximum scan time in seconds from the scan start point. 0 = unlimited (default 60)</td>
 </tr>
 </tbody>
 </table>

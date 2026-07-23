@@ -149,8 +149,10 @@
       <a href="#mod-Android" class="toc-h3">Android</a>
       <a href="#mod-CMD" class="toc-h3">CMD</a>
       <a href="#cat-etc" class="toc-h2">기타</a>
+      <a href="#mod-PCAN" class="toc-h3">PCAN</a>
       <a href="#mod-SHELL" class="toc-h3">SHELL</a>
       <a href="#mod-HKMC6th" class="toc-h3">HKMC6th</a>
+      <a href="#mod-Frame_Check" class="toc-h3">Frame_Check</a>
     </nav>
   </aside>
 
@@ -165,15 +167,16 @@
     </div>
 
     <h2 id="overview">전체 모듈 목록</h2>
-    <p>총 <strong>13개</strong> 모듈, <strong>231개</strong> 함수가 등록되어 있습니다.</p>
+    <p>총 <strong>15개</strong> 모듈, <strong>141개</strong> 함수가 등록되어 있습니다.</p>
     <table>
       <thead><tr><th>모듈</th><th>설명</th><th>함수 수</th></tr></thead>
       <tbody>
-        <tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>CANat 하드웨어를 통해 CAN 버스 메시지를 송수신하는 모듈</td><td style="text-align:center">7</td></tr>
+        <tr><td><a href="#mod-PCAN"><strong>PCAN</strong></a></td><td>python-can 라이브러리로 PCAN/Vector/Kvaser 등 CAN 인터페이스에 연결해 CAN/CAN FD 메시지를 송신하고 CSV 로그를 저장하는 모듈. 하드웨어 1대를 디바이스 1개로 등록하고, 채널은 각 스텝의 channel 인자로 선택합니다. 연결/해제는 시나리오가 자동 관리합니다.</td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>CANat 하드웨어를 통해 CAN 버스 메시지를 송수신하는 모듈</td><td style="text-align:center">10</td></tr>
 <tr><td><a href="#mod-CANoe_RBS"><strong>CANoe_RBS</strong></a></td><td>CANoe 애플리케이션을 COM으로 구동하여 cfg(RBS) 기반 측정 시작/정지, 시그널·시스템/환경 변수 제어, UDS 진단을 수행하는 모듈</td><td style="text-align:center">16</td></tr>
-<tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Vector CAN 하드웨어(python-can VectorBus)로 CAN/CAN FD 메시지 송수신, ASC 로그 저장, ISO-TP(UDS) 진단을 수행하는 모듈 (CANoe 앱 불필요)</td><td style="text-align:center">11</td></tr>
-<tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>시리얼 연결된 QE 테스트 벤치의 릴레이, 전원, 센서, 오디오, LCD, 버튼, USB 등을 종합 제어하는 모듈</td><td style="text-align:center">117</td></tr>
-<tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>SSH로 원격 장비에 접속하여 명령 실행, 파일 전송을 수행하는 모듈</td><td style="text-align:center">9</td></tr>
+<tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Vector CAN 하드웨어(python-can VectorBus)로 CAN/CAN FD 메시지 송수신, ASC 로그 저장, ISO-TP(UDS) 진단을 수행하는 모듈 (CANoe 앱 불필요)</td><td style="text-align:center">13</td></tr>
+<tr><td><a href="#mod-IVIQEBenchIOClient"><strong>IVIQEBenchIOClient</strong></a></td><td>시리얼 연결된 QE 테스트 벤치의 릴레이, 전원, 센서, 오디오, LCD, 버튼, USB 등을 종합 제어하는 모듈</td><td style="text-align:center">8</td></tr>
+<tr><td><a href="#mod-SSHManager"><strong>SSHManager</strong></a></td><td>SSH로 원격 장비에 접속하여 명령 실행, 파일 전송을 수행하는 모듈</td><td style="text-align:center">10</td></tr>
 <tr><td><a href="#mod-DLTLogging"><strong>DLTLogging</strong></a></td><td>DLT 데몬에 TCP 직접 연결하여 로그를 캡처·저장하고 키워드 PASS/FAIL 판정하는 모듈 (GUI 불필요)</td><td style="text-align:center">5</td></tr>
 <tr><td><a href="#mod-SerialLogging"><strong>SerialLogging</strong></a></td><td>시리얼 포트의 로그를 캡처·저장하고 키워드 검출하는 모듈.
 
@@ -189,11 +192,12 @@
   2) SendCommand / SendCommand_*_on_keyword ...  ← 중간 스텝들
   3) StopLogging()                               ← 시나리오 마지막 스텝 (로그 파일 저장 + 캡처 종료, 포트는 유지)</td><td style="text-align:center">8</td></tr>
 <tr><td><a href="#mod-SmartBench"><strong>SmartBench</strong></a></td><td>TCP 소켓으로 Smart Bench 장비의 전원, 버튼, 전류, LED를 제어하는 모듈</td><td style="text-align:center">15</td></tr>
-<tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>UDP 통신으로 차량 전원(IGN/ACC/배터리) 제어 + CAN FD 신호 송신을 지원하는 통합 테스트 벤치</td><td style="text-align:center">25</td></tr>
+<tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>UDP 통신으로 차량 전원(IGN/ACC/배터리) 제어 + CAN FD 신호 송신을 지원하는 통합 테스트 벤치</td><td style="text-align:center">28</td></tr>
 <tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Windows 명령 프롬프트(CMD) 명령을 실행하는 모듈. 외부 프로그램 실행이나 시스템 명령에 사용</td><td style="text-align:center">5</td></tr>
 <tr><td><a href="#mod-SHELL"><strong>SHELL</strong></a></td><td>Linux/macOS bash 명령을 실행하는 모듈. CMD 의 Linux 대응. 외부 프로그램 실행이나 시스템 명령에 사용</td><td style="text-align:center">4</td></tr>
 <tr><td><a href="#mod-HKMC6th"><strong>HKMC6th</strong></a></td><td>TCP 소켓 프로토콜로 화면 캡처/터치/스와이프/HW 키 제어. 연결된 hkmc_agent 디바이스의 HKMC6thService 함수를 그대로 호출합니다.</td><td style="text-align:center">4</td></tr>
-<tr><td><a href="#mod-Android"><strong>Android</strong></a></td><td></td><td style="text-align:center">5</td></tr>
+<tr><td><a href="#mod-Android"><strong>Android</strong></a></td><td></td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-Frame_Check"><strong>Frame_Check</strong></a></td><td>테스트 녹화 영상(웹캠)을 이용한 동작 시간 측정 도구. 시나리오에 Frame_Measure 스텝을 추가하면, 시나리오 종료 시 웹캠 녹화가 자동 종료된 후 해당 영상을 프레임 단위로 분석하여 측정 시작점→타겟 이미지 최초 등장까지의 경과 시간(ms)을 결과에 표기하고, 측정 구간 클립(시작 5초 전~종료 5초 후)도 함께 제공합니다. 재생 전 PIP 웹캠이 열려 있어야 녹화/측정이 가능합니다.</td><td style="text-align:center">1</td></tr>
       </tbody>
     </table>
 
@@ -206,29 +210,9 @@
 <thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
 <tbody>
 <tr>
-<td><code>Connect</code></td>
-<td>벤치에 시리얼 연결합니다. 장비 추가 시 자동 호출됩니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>Disconnect</code></td>
-<td>벤치 연결을 해제합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
 <td><code>ACCOnOff</code></td>
 <td>ACC(Accessory) 전원을 켜거나 끕니다.</td>
 <td style="font-size:12px"><code>state</code>: 0 = OFF (끄기), 1 = ON (켜기)<br><code>bench_info</code>: 벤치 종류. &#x27;OLD_BENCH&#x27;(기본) 또는 &#x27;NEW_BENCH&#x27;</td>
-</tr>
-<tr>
-<td><code>ACCSinglePulse</code></td>
-<td>ACC 전원에 단일 펄스를 생성합니다. 전압을 순간적으로 변동시키는 테스트에 사용합니다.</td>
-<td style="font-size:12px"><code>nVoltage</code>: 펄스 전압 (V)<br><code>nDelay</code>: 펄스 간 지연 시간 (ms)<br><code>nCnt</code>: 펄스 반복 횟수</td>
-</tr>
-<tr>
-<td><code>AccControl</code></td>
-<td>ACC 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON<br><code>bench_info</code>: 벤치 종류</td>
 </tr>
 <tr>
 <td><code>AccVoltage</code></td>
@@ -241,24 +225,9 @@
 <td style="font-size:12px"><code>nState</code>: 0 = OFF (배터리 차단), 1 = ON (배터리 연결)<br><code>bench_info</code>: 벤치 종류. &#x27;OLD_BENCH&#x27;(기본) 또는 &#x27;NEW_BENCH&#x27;</td>
 </tr>
 <tr>
-<td><code>BatteryControl</code></td>
-<td>배터리 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON<br><code>bench_info</code>: 벤치 종류</td>
-</tr>
-<tr>
-<td><code>BatteryMinusControl</code></td>
-<td>배터리 마이너스(-) 단자 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (연결), 1 = ON (차단)</td>
-</tr>
-<tr>
 <td><code>BatteryVoltage</code></td>
 <td>배터리 전압 상태를 설정합니다.</td>
 <td style="font-size:12px"><code>nState</code>: 전압 상태 값</td>
-</tr>
-<tr>
-<td><code>BatterySinglePulse</code></td>
-<td>배터리에 단일 펄스를 생성합니다.</td>
-<td style="font-size:12px"><code>nVoltage</code>: 펄스 전압 (V)<br><code>nDelay</code>: 펄스 간 지연 시간 (ms)<br><code>nCnt</code>: 펄스 반복 횟수</td>
 </tr>
 <tr>
 <td><code>IGNControl</code></td>
@@ -271,156 +240,6 @@
 <td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
 </tr>
 <tr>
-<td><code>ALTControl</code></td>
-<td>알터네이터(발전기) 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>status</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ILLControl</code></td>
-<td>일루미네이션(차량 조명 연동 신호)을 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ILLControlMinus</code></td>
-<td>일루미네이션 마이너스 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ReverseControl</code></td>
-<td>후진(Reverse) 기어 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (전진), 1 = ON (후진)</td>
-</tr>
-<tr>
-<td><code>ReverseActiveHigh</code></td>
-<td>후진 신호를 Active High로 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ReverseActiveLow</code></td>
-<td>후진 신호를 Active Low로 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ParkingControl</code></td>
-<td>주차(Parking) 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>PPositonControl</code></td>
-<td>P(주차) 기어 포지션 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>NPositionControl</code></td>
-<td>N(중립) 기어 포지션 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>SpeedControl</code></td>
-<td>차량 속도 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (정지), 1 = ON (주행)</td>
-</tr>
-<tr>
-<td><code>DoorControl</code></td>
-<td>도어 열림/닫힘 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (닫힘), 1 = ON (열림)</td>
-</tr>
-<tr>
-<td><code>DoorUnLockControl</code></td>
-<td>도어 잠금 해제 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (잠금), 1 = ON (해제)</td>
-</tr>
-<tr>
-<td><code>TransDetectControl</code></td>
-<td>변속기 감지 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>FUELControl</code></td>
-<td>연료 관련 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>KeylessBootingControl</code></td>
-<td>키리스(스마트키) 부팅 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AutolightControl</code></td>
-<td>오토라이트(자동 조명) 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AlarmDetectControl</code></td>
-<td>알람 감지 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AirbagCrashDetection</code></td>
-<td>에어백 충돌 감지 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>model</code>: 차량 모델명<br><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ShieldBoxControl</code></td>
-<td>실드 박스(전파 차폐 박스) 개폐를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (닫기), 1 = ON (열기)</td>
-</tr>
-<tr>
-<td><code>ANTControl</code></td>
-<td>안테나 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AmpControl</code></td>
-<td>앰프(외장 오디오 증폭기) 전원을 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>MICControl</code></td>
-<td>마이크 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AUXControl</code></td>
-<td>AUX 입력 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>CDControl</code></td>
-<td>CD 드라이브 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>IPODControl</code></td>
-<td>iPod 연결 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>RcInControl</code></td>
-<td>RC 입력 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>ComEnableControl</code></td>
-<td>통신(COM) 활성화를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (비활성), 1 = ON (활성)</td>
-</tr>
-<tr>
-<td><code>Detent</code></td>
-<td>디텐트(볼륨 노브 등 회전 감지) 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>AVNSDDetect</code></td>
-<td>AVN SD 카드 감지 신호를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF (미삽입), 1 = ON (삽입)</td>
-</tr>
-<tr>
-<td><code>USB1Control</code></td>
-<td>USB 1 포트 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>Status</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
 <td><code>USBFrontSwitchControl</code></td>
 <td>전면 USB 스위치 릴레이를 제어합니다.</td>
 <td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
@@ -429,366 +248,6 @@
 <td><code>USBRearSwitchControl</code></td>
 <td>후면 USB 스위치 릴레이를 제어합니다.</td>
 <td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>USBSelectorControl</code></td>
-<td>USB 셀렉터의 포트를 선택합니다.</td>
-<td style="font-size:12px"><code>nOnPortNum</code>: 활성화할 USB 포트 번호</td>
-</tr>
-<tr>
-<td><code>USBSelector10CHSwitch5CH</code></td>
-<td>USB 셀렉터의 10채널/5채널 스위치를 제어합니다.</td>
-<td style="font-size:12px"><code>nType</code>: 스위치 타입<br><code>nPortNum</code>: 포트 번호<br><code>nOnOffStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Telltale</code></td>
-<td>텔테일(계기판 경고등) 릴레이를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>TelltaleLED</code></td>
-<td>텔테일 LED 점멸 주기를 설정합니다.</td>
-<td style="font-size:12px"><code>nPeriod</code>: 점멸 주기 (ms)</td>
-</tr>
-<tr>
-<td><code>CheckTelltale</code></td>
-<td>텔테일(경고등) 상태를 확인합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>LEDPulse</code></td>
-<td>LED 점멸 주기를 설정합니다.</td>
-<td style="font-size:12px"><code>nPeriod</code>: 점멸 주기 (ms)</td>
-</tr>
-<tr>
-<td><code>LedTCU4</code></td>
-<td>TCU4 LED 점멸 주기를 설정합니다.</td>
-<td style="font-size:12px"><code>nPeriod</code>: 점멸 주기 (ms)</td>
-</tr>
-<tr>
-<td><code>CheckLedTCU4</code></td>
-<td>TCU4 LED 상태를 확인합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>GetLEDPulse</code></td>
-<td>현재 LED 펄스 값을 읽어옵니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>CheckLCD</code></td>
-<td>LCD 디스플레이 상태를 확인합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 확인할 상태 값</td>
-</tr>
-<tr>
-<td><code>CheckLCDDimming</code></td>
-<td>LCD 디밍(밝기 조절) 상태를 확인합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 확인할 상태 값</td>
-</tr>
-<tr>
-<td><code>SetLCDValue</code></td>
-<td>LCD 값을 설정합니다.</td>
-<td style="font-size:12px"><code>nLCDValue</code>: 설정할 LCD 값</td>
-</tr>
-<tr>
-<td><code>GetLCDValue</code></td>
-<td>현재 LCD 값을 읽어옵니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>CheckVoltage</code></td>
-<td>전압이 지정 범위 내에 있는지 확인합니다.</td>
-<td style="font-size:12px"><code>nMin</code>: 최소 전압 (V)<br><code>nMax</code>: 최대 전압 (V)</td>
-</tr>
-<tr>
-<td><code>CheckCurrent</code></td>
-<td>전류가 지정 범위 내에 있는지 확인합니다.</td>
-<td style="font-size:12px"><code>nMin</code>: 최소 전류 (A)<br><code>nMax</code>: 최대 전류 (A)</td>
-</tr>
-<tr>
-<td><code>ExtCheckCurrent</code></td>
-<td>외부 전류가 지정 범위 내에 있는지 확인합니다.</td>
-<td style="font-size:12px"><code>fMin</code>: 최소 전류 (A)<br><code>fMax</code>: 최대 전류 (A)</td>
-</tr>
-<tr>
-<td><code>EXT_CURRENT</code></td>
-<td>외부 전류를 지연 후 범위 확인합니다.</td>
-<td style="font-size:12px"><code>min_current</code>: 최소 전류 (A)<br><code>max_current</code>: 최대 전류 (A)<br><code>check_delay</code>: 확인 전 지연 시간 (초)</td>
-</tr>
-<tr>
-<td><code>GetEXTCurrent</code></td>
-<td>현재 외부 전류 값을 읽어옵니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>CheckEXTCurrentList</code></td>
-<td>수집된 외부 전류 목록이 범위 내인지 확인합니다.</td>
-<td style="font-size:12px"><code>nMin</code>: 최소 전류 (A)<br><code>nMax</code>: 최대 전류 (A)</td>
-</tr>
-<tr>
-<td><code>ClearEXTCurrentList</code></td>
-<td>수집된 외부 전류 목록을 초기화합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>CheckKeyOutVoltage</code></td>
-<td>키 출력 전압이 범위 내에 있는지 확인합니다.</td>
-<td style="font-size:12px"><code>nMin</code>: 최소 전압 (V)<br><code>nMax</code>: 최대 전압 (V)</td>
-</tr>
-<tr>
-<td><code>ClearKeyOutVoltageList</code></td>
-<td>키 출력 전압 목록을 초기화합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>CheckSound</code></td>
-<td>오디오 출력 상태를 확인합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 확인할 상태 값</td>
-</tr>
-<tr>
-<td><code>PlaySound</code></td>
-<td>벤치에서 사운드 파일을 재생합니다.</td>
-<td style="font-size:12px"><code>strFileName</code>: 재생할 파일 이름<br><code>nFileNameLen</code>: 파일 이름 길이</td>
-</tr>
-<tr>
-<td><code>InitSoundUpdate</code></td>
-<td>사운드 업데이트를 초기화합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>WaitSoundUpdate</code></td>
-<td>사운드 업데이트가 완료될 때까지 대기합니다.</td>
-<td style="font-size:12px"><code>timeout</code>: 최대 대기 시간 (초)</td>
-</tr>
-<tr>
-<td><code>RequestLightSensorControl</code></td>
-<td>조도 센서를 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON<br><code>pbData</code>: PB 데이터<br><code>twData</code>: TW 데이터</td>
-</tr>
-<tr>
-<td><code>GetLightSensorData</code></td>
-<td>조도 센서 데이터를 읽어옵니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>CheckLightSensorResult</code></td>
-<td>조도 센서 결과를 확인합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>TenButton</code></td>
-<td>10버튼 패널에서 버튼을 누릅니다.</td>
-<td style="font-size:12px"><code>nButton</code>: 버튼 번호 (0~9)<br><code>nDelay</code>: 버튼 누름 지속 시간 (ms)</td>
-</tr>
-<tr>
-<td><code>ThreeButton</code></td>
-<td>3버튼 패널에서 버튼을 누릅니다.</td>
-<td style="font-size:12px"><code>nButton</code>: 버튼 번호 (0~2)<br><code>nDelay</code>: 버튼 누름 지속 시간 (ms)</td>
-</tr>
-<tr>
-<td><code>ThreeButton_Front</code></td>
-<td>전면 3버튼 패널에서 버튼을 누릅니다.</td>
-<td style="font-size:12px"><code>nButton</code>: 버튼 번호 (0~2)<br><code>nDelay</code>: 버튼 누름 지속 시간 (ms)</td>
-</tr>
-<tr>
-<td><code>ThreeButton_Rear</code></td>
-<td>후면 3버튼 패널에서 버튼을 누릅니다.</td>
-<td style="font-size:12px"><code>nButton</code>: 버튼 번호 (0~2)<br><code>nDelay</code>: 버튼 누름 지속 시간 (ms)</td>
-</tr>
-<tr>
-<td><code>TwoButton</code></td>
-<td>2버튼 패널에서 버튼을 누릅니다.</td>
-<td style="font-size:12px"><code>nButton</code>: 버튼 번호 (0~1)<br><code>nDelay</code>: 버튼 누름 지속 시간 (ms)</td>
-</tr>
-<tr>
-<td><code>rf_btn_press</code></td>
-<td>RF 버튼을 누릅니다.</td>
-<td style="font-size:12px"><code>btnNum</code>: 버튼 번호<br><code>delay</code>: 누름 지속 시간 (ms)</td>
-</tr>
-<tr>
-<td><code>FileToSD</code></td>
-<td>파일을 SD 카드로 복사합니다.</td>
-<td style="font-size:12px"><code>userFilePath</code>: PC의 원본 파일 경로<br><code>sdCardFileName</code>: SD 카드에 저장될 파일 이름</td>
-</tr>
-<tr>
-<td><code>Relay_10</code></td>
-<td>릴레이 10번을 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Relay_11</code></td>
-<td>릴레이 11번을 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Relay_12</code></td>
-<td>릴레이 12번을 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Relay_13</code></td>
-<td>릴레이 13번을 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>Relay_14</code></td>
-<td>릴레이 14번을 제어합니다.</td>
-<td style="font-size:12px"><code>nStatus</code>: 0 = OFF, 1 = ON</td>
-</tr>
-<tr>
-<td><code>RelayInitialization</code></td>
-<td>모든 릴레이를 초기값으로 설정합니다.</td>
-<td style="font-size:12px"><code>init_value</code>: 초기화 값</td>
-</tr>
-<tr>
-<td><code>SetRelayConfig</code></td>
-<td>릴레이 구성을 설정합니다.</td>
-<td style="font-size:12px"><code>nRelayCfg</code>: 릴레이 구성 값</td>
-</tr>
-<tr>
-<td><code>CallRelayFunc</code></td>
-<td>릴레이 함수를 인덱스로 호출합니다.</td>
-<td style="font-size:12px"><code>func_index</code>: 함수 인덱스 번호<br><code>data</code>: 전달할 데이터</td>
-</tr>
-<tr>
-<td><code>RequestRelayInitialStatus</code></td>
-<td>릴레이 초기 상태를 요청합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>RequestRelaySet</code></td>
-<td>릴레이를 명령 목록으로 설정합니다.</td>
-<td style="font-size:12px"><code>nCmdList</code>: 릴레이 명령 목록</td>
-</tr>
-<tr>
-<td><code>SystemReset</code></td>
-<td>벤치 시스템을 리셋합니다.</td>
-<td style="font-size:12px"><code>nMs</code>: 리셋 후 대기 시간 (ms). 기본값: 1000</td>
-</tr>
-<tr>
-<td><code>SetSystemTime</code></td>
-<td>벤치 시스템 시간을 현재 PC 시간으로 설정합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>RequestSystemVersion</code></td>
-<td>벤치 시스템 버전 정보를 요청합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>CalcCRC16</code></td>
-<td>CRC-16 체크섬을 계산합니다. 통신 데이터 검증용.</td>
-<td style="font-size:12px"><code>listData</code>: 데이터 리스트<br><code>nLen</code>: 데이터 길이</td>
-</tr>
-<tr>
-<td><code>CalibrationStartOrStop</code></td>
-<td>캘리브레이션(보정)을 시작하거나 중지합니다.</td>
-<td style="font-size:12px"><code>sensitivity</code>: 감도 값<br><code>threshold</code>: 임계값</td>
-</tr>
-<tr>
-<td><code>AnnouncesAutoTestStartOrEnd</code></td>
-<td>자동 테스트 시작/종료를 알립니다.</td>
-<td style="font-size:12px"><code>bisStart</code>: True = 테스트 시작, False = 테스트 종료</td>
-</tr>
-<tr>
-<td><code>BATSwitchSETtoPC</code></td>
-<td>배터리 스위치를 SET→PC로 전환합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>BATSwitchUSBtoPC</code></td>
-<td>배터리 스위치를 USB→PC로 전환합니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>RequestAudioFrequency</code></td>
-<td>오디오 주파수 측정을 요청합니다.</td>
-<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nMs</code>: 측정 간격 (ms)</td>
-</tr>
-<tr>
-<td><code>RequestAudioStatusAndADCValue</code></td>
-<td>오디오 상태와 ADC 값을 요청합니다.</td>
-<td style="font-size:12px"><code>nMs</code>: 응답 대기 시간 (ms)</td>
-</tr>
-<tr>
-<td><code>RequestAudioStatusAndADCValuePeriodicallyNoti</code></td>
-<td>오디오 상태와 ADC 값을 주기적으로 알림 받습니다.</td>
-<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
-</tr>
-<tr>
-<td><code>RequestAudioStatusPeriodicallyNoti</code></td>
-<td>오디오 상태를 주기적으로 알림 받습니다.</td>
-<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
-</tr>
-<tr>
-<td><code>RequestCurrentPeriodicallyNoti</code></td>
-<td>전류 값을 주기적으로 알림 받습니다.</td>
-<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
-</tr>
-<tr>
-<td><code>RequestExtCurrentPeriodicallyNoti</code></td>
-<td>외부 전류 값을 주기적으로 알림 받습니다.</td>
-<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
-</tr>
-<tr>
-<td><code>RequestVoltagePeriodicallyNoti</code></td>
-<td>전압 값을 주기적으로 알림 받습니다.</td>
-<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
-</tr>
-<tr>
-<td><code>RequestKeyOutVoltagePeriodicallyNoti</code></td>
-<td>키 출력 전압을 주기적으로 알림 받습니다.</td>
-<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
-</tr>
-<tr>
-<td><code>RequestLCDStatus</code></td>
-<td>LCD 상태를 요청합니다.</td>
-<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nMs</code>: 응답 대기 시간 (ms)</td>
-</tr>
-<tr>
-<td><code>RequestLCDIllumiSensorValue</code></td>
-<td>LCD 조도 센서 값을 요청합니다.</td>
-<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nMs</code>: 응답 대기 시간 (ms)</td>
-</tr>
-<tr>
-<td><code>RequestLCDStatusAndIllumiSensorValuePeriodicallyNoti</code></td>
-<td>LCD 상태와 조도 센서 값을 주기적으로 알림 받습니다.</td>
-<td style="font-size:12px"><code>bStart</code>: True = 시작, False = 중지<br><code>nPeriodMs</code>: 알림 주기 (ms)</td>
-</tr>
-<tr>
-<td><code>RequestSoundFileInfo</code></td>
-<td>사운드 파일 정보를 요청합니다.</td>
-<td style="font-size:12px"><code>nSoundType</code>: 사운드 타입</td>
-</tr>
-<tr>
-<td><code>RequestSoundFileList</code></td>
-<td>사운드 파일 목록을 요청합니다.</td>
-<td style="font-size:12px"><code>nSoundType</code>: 사운드 타입</td>
-</tr>
-<tr>
-<td><code>Read</code></td>
-<td>벤치에서 데이터를 읽어옵니다.</td>
-<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
-</tr>
-<tr>
-<td><code>Send</code></td>
-<td>벤치에 직접 바이트 데이터를 전송합니다.</td>
-<td style="font-size:12px"><code>listData</code>: 전송할 데이터 리스트<br><code>nLen</code>: 데이터 길이</td>
-</tr>
-<tr>
-<td><code>WriteRawString</code></td>
-<td>벤치에 원시 문자열을 전송합니다.</td>
-<td style="font-size:12px"><code>string</code>: 전송할 문자열</td>
-</tr>
-<tr>
-<td><code>ReceiveStart</code></td>
-<td>벤치 데이터 수신을 시작/중지합니다.</td>
-<td style="font-size:12px"><code>bStart</code>: True = 수신 시작, False = 수신 중지<br><code>queue</code>: 수신 데이터를 넣을 큐 (선택)</td>
-</tr>
-<tr>
-<td><code>timer_compare</code></td>
-<td>타이머 값을 비교합니다.</td>
-<td style="font-size:12px"><code>Time_Init</code>: 시작 시간<br><code>Time_Check</code>: 비교할 시간</td>
 </tr>
 </tbody>
 </table>
@@ -952,13 +411,8 @@
 <td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
 </tr>
 <tr>
-<td><code>SendCommand</code></td>
-<td>벤치에 직접 UDP 명령을 전송합니다. 고급 사용자용이며, 일반적으로 위의 개별 함수 사용을 권장합니다.</td>
-<td style="font-size:12px"><code>cmd1</code>: 명령 코드 1 (정수, 예: 0x24 → 36)<br><code>cmd2</code>: 명령 코드 2 (정수, 예: 0x21 → 33)<br><code>data_hex</code>: 추가 데이터 (공백으로 구분된 16진수 문자열). 예: &#x27;FF 01&#x27;. 기본값: 빈 문자열</td>
-</tr>
-<tr>
 <td><code>GetInfo</code></td>
-<td>벤치의 현재 연결 정보(IP, 포트, signal_file, 로드된 신호 수, 연결 상태)를 반환합니다.</td>
+<td>벤치의 현재 연결 정보(연결된 MCU 목록, signal_file, 연결 상태)를 반환합니다.</td>
 <td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
 </tr>
 <tr>
@@ -982,29 +436,49 @@
 <td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
 </tr>
 <tr>
-<td><code>CheckSignals</code></td>
-<td>로드된 CAN FD 신호 정의 목록을 로그로 덤프합니다.</td>
+<td><code>SendTimeSync</code></td>
+<td>모든 벤치 장비에 UDP 브로드캐스트로 시간 동기화 패킷을 전송합니다. Connect 시 자동 호출되므로 보통 수동 호출이 필요 없습니다.</td>
 <td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
 </tr>
 <tr>
-<td><code>SendCanFd</code></td>
-<td>Raw CAN FD 프레임을 직접 송신합니다 (신호 정의 불필요, 저수준 디버깅용). 200ms × 5회 반복.</td>
-<td style="font-size:12px"><code>can_id</code>: CAN ID (정수 또는 hex 문자열, 예: &#x27;0x448&#x27;)<br><code>payload_hex</code>: 페이로드 (공백/쉼표/대괄호 허용, 예: &#x27;01,02,03&#x27; 또는 &#x27;01 02 03&#x27;)<br><code>can_type</code>: 프레임 타입: &#x27;STA&#x27;(표준, 기본값) / &#x27;EXT&#x27;(확장 프레임, AVN) / &#x27;FD&#x27;(CAN FD, Cluster)</td>
+<td><code>canmsg_start</code></td>
+<td>CAN 메시지 사전 캡처 시작. 모든 채널의 수신 패킷을 백그라운드 링버퍼(최대 10만 개)에 기록하기 시작합니다. 제어 명령(예: IGN1) 직후 짧게 지나가는 단발성 응답도 놓치지 않도록, 반드시 제어 스텝 이전에 호출하세요. 이후 canmsg_stop 으로 검증합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
 </tr>
 <tr>
-<td><code>SendAvnCan</code></td>
-<td>AVN 채널(0x03 헤더) Raw CAN 프레임 송신. 목적지는 항상 AVN으로 고정하고 프레임 타입은 type 인자로 지정합니다(표준 0x33E·확장 1004001 모두 AVN 채널로 송신). 200ms × 5회 반복.</td>
-<td style="font-size:12px"><code>msg_id</code>: CAN ID (정수 또는 hex 문자열, 예: &#x27;0x33E&#x27;, &#x27;0x414&#x27;, &#x27;1004001&#x27;)<br><code>type</code>: 프레임 타입: &#x27;STA&#x27;(표준 프레임) / &#x27;EXT&#x27;(확장 프레임) / &#x27;FD&#x27;(CAN FD)<br><code>payload_hex</code>: 페이로드 hex 바이트 (공백/쉼표/대괄호 허용, 예: &#x27;00,00,00,00,00,00,00,00&#x27;)</td>
+<td><code>canmsg_stop</code></td>
+<td>CAN 메시지 캡처 종료 및 검증. canmsg_start 이후 버퍼에 쌓인 패킷 중 타겟 MCU/채널/msg_id/data 패턴에 일치하는 메시지가 있었는지 확인합니다. 일치하면 PASS, 없으면 &#x27;FAIL:&#x27; 을 반환해 스텝이 실패로 판정됩니다. 사용 순서: canmsg_start → 제어 명령 → (대기) → canmsg_stop</td>
+<td style="font-size:12px"><code>mcu</code>: 수신 대상 MCU (기본값: &#x27;mcu1&#x27; / 예: &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;)<br><code>channel</code>: 수신 채널 (기본값: &#x27;A&#x27; / &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;)<br><code>msg_id</code>: 검증할 CAN ID. 정수 또는 Hex 문자열 (&#x27;0x&#x27; 유무 무관. 예: &#x27;0x12F&#x27;, &#x27;47A&#x27;, 1146)<br><code>data</code>: 매칭할 데이터 패턴. 공백/쉼표 구분 Hex 바이트. &#x27;*&#x27; 또는 &#x27;**&#x27; 자리는 값 무시(와일드카드), 패턴보다 긴 뒷부분 바이트는 비교하지 않음. 예: &#x27;00 00 00 00 05 00 00 00&#x27; 또는 &#x27;** ** ** ** 05&#x27;</td>
 </tr>
 <tr>
-<td><code>SendClusterCan</code></td>
-<td>Cluster 채널 Raw CAN FD 프레임 송신. send_can.py TARGET=CLUSTER 과 동일 동작 (CANTYPE.FD, frame_byte=0x80|DLC). 200ms × 5회 반복.</td>
-<td style="font-size:12px"><code>msg_id</code>: CAN ID (정수 또는 hex 문자열, 예: &#x27;0x65&#x27;)<br><code>payload_hex</code>: 페이로드 hex 바이트 (공백/쉼표/대괄호 허용, 예: &#x27;00,00,00,00,00,00,00,00&#x27;)</td>
+<td><code>canmsg</code></td>
+<td>[구버전 호환용] CAN 메시지 수신 검증. 호출 시점부터 지정한 시간(ms) 동안 수신 패킷을 수집한 뒤 msg_id/data 패턴 일치 여부를 확인합니다. 호출 이전에 발생한 단발성 응답은 잡지 못하므로, 신규 시나리오는 canmsg_start → 제어 → canmsg_stop 방식을 사용하세요.</td>
+<td style="font-size:12px"><code>mcu</code>: 수신 대상 MCU (기본값: &#x27;mcu1&#x27; / 예: &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;)<br><code>channel</code>: 수신 채널 (기본값: &#x27;A&#x27; / &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;)<br><code>time</code>: 수집 대기 시간 (ms 단위. 기본값: 1000)<br><code>msg_id</code>: 검증할 CAN ID. 정수 또는 Hex 문자열 (&#x27;0x&#x27; 유무 무관. 예: &#x27;0x12F&#x27;, &#x27;47A&#x27;, 1146)<br><code>data</code>: 매칭할 데이터 패턴. 공백/쉼표 구분 Hex 바이트. &#x27;*&#x27; 또는 &#x27;**&#x27; 자리는 값 무시(와일드카드), 패턴보다 긴 뒷부분 바이트는 비교하지 않음. 예: &#x27;00 00 00 00 05 00 00 00&#x27; 또는 &#x27;** ** ** ** 05&#x27;</td>
 </tr>
 <tr>
-<td><code>ReinitCanFd</code></td>
-<td>CAN FD 버스 재초기화 (baudrate/data bit time 변경 시). 기본 500k/2M.</td>
-<td style="font-size:12px"><code>baudrate</code>: arbitration phase baudrate (2바이트 정수, 기본 0x1F4)<br><code>databit_time</code>: data phase bit time (2바이트 정수, 기본 0x7D0)</td>
+<td><code>SendCan</code></td>
+<td>Raw CAN 프레임 송신. 지정한 장비(mcu)와 채널(channel)로 표준/확장/FD 프레임을 단발 또는 주기 송신합니다.</td>
+<td style="font-size:12px"><code>mcu</code>: 송신 대상 MCU (기본값: &#x27;mcu1&#x27; / 예: &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;)<br><code>msg_id</code>: CAN ID. 정수 또는 Hex 문자열 (&#x27;0x&#x27; 유무와 상관없이 16진수로 파싱. 예: &#x27;0x33E&#x27;, &#x27;47A&#x27;)<br><code>type</code>: 프레임 타입 (기본값: &#x27;STA&#x27; / &#x27;STA&#x27;=표준, &#x27;EXT&#x27;=확장, &#x27;FD&#x27;=CAN FD)<br><code>payload_hex</code>: 페이로드 Hex 바이트 (공백/쉼표 구분 허용, 대괄호 불가. 예: &#x27;00,00,00,00,00,C0,00,00&#x27; 또는 &#x27;FF 01 02&#x27;)<br><code>channel</code>: 송신 채널 (기본값: &#x27;A&#x27; / 예: &#x27;A&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;D&#x27;)<br><code>repeat</code>: 송신 모드 (기본값: 0 / 0=단발 송신, 1=주기 송신)<br><code>cycle_ms</code>: repeat=1 일 때 송신 주기 (ms, 기본값: 200)</td>
+</tr>
+<tr>
+<td><code>SendStopCan</code></td>
+<td>특정 CAN ID의 주기적인 Raw CAN 메시지 송신을 중단합니다.</td>
+<td style="font-size:12px"><code>mcu</code>: 제어 대상 장비 (기본값: &#x27;mcu1&#x27; / 예: &#x27;mcu1&#x27;, &#x27;mcu2&#x27;, &#x27;mcu3&#x27;)<br><code>msg_id</code>: 전송을 중단할 CAN ID (정수 또는 16진수 문자열. &#x27;0x&#x27; 접두사 유무와 무관하게 16진수로 자동 파싱. 예: &#x27;0x33E&#x27;, &#x27;47A&#x27;)</td>
+</tr>
+<tr>
+<td><code>SendAllStopCan</code></td>
+<td>현재 모든 장비에서 주기적으로 송신 중인 전체 Raw CAN 메시지 전송을 일괄 중단합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>CanSaveStart</code></td>
+<td>연결된 모든 MCU·채널의 Rx/Tx CAN 데이터를 하나의 CSV 파일로 실시간 통합 로깅 시작합니다.</td>
+<td style="font-size:12px"><code>save_dir</code>: CSV 저장 폴더 경로. 비우면 ./canlog 사용 (파일명은 CAN_LOG_타임스탬프.csv 자동 생성)</td>
+</tr>
+<tr>
+<td><code>CanSaveStop</code></td>
+<td>통합 CAN 로깅을 종료하고 CSV 파일을 닫습니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
 </tr>
 </tbody>
 </table>
@@ -1128,13 +602,23 @@
 </tr>
 <tr>
 <td><code>canoe_send_message</code></td>
-<td>CAN/CAN FD 메시지를 전송합니다. 주기를 지정하면 주기 송신, 0이면 1회 송신.</td>
-<td style="font-size:12px"><code>message_id</code>: CAN ID(16진수 문자열). 예: &#x27;0x288&#x27;<br><code>cycle_time</code>: 전송 주기 (ms). 0이면 1회 전송<br><code>can_message</code>: 메시지 데이터 (공백 구분 16진수). 예: &#x27;01 02 03 04 05 06 07 08&#x27;<br><code>bus_channel</code>: 버스 채널 인덱스 (0부터, device_info 등록 순서)<br><code>message_type</code>: &#x27;FD&#x27;(기본) 또는 그 외 문자열 = Classic CAN</td>
+<td>CAN/CAN FD 메시지를 전송합니다. 주기를 지정하면 주기 송신, 0이면 1회 송신. apply_e2e=True이면 Alive Counter와 CRC16을 매 주기 실시간 계산하여 E2E 보호 메시지로 주기 송신합니다.</td>
+<td style="font-size:12px"><code>message_id</code>: CAN ID(16진수 문자열). 예: &#x27;0x288&#x27;<br><code>cycle_time</code>: 전송 주기 (ms). 0이면 1회 전송<br><code>can_message</code>: 메시지 데이터 (공백 구분 16진수). 예: &#x27;01 02 03 04 05 06 07 08&#x27;<br><code>bus_channel</code>: 버스 채널 (드롭다운: 디바이스 추가 시 설정한 채널을 선택. 내부값=등록 순서 인덱스, 0부터)<br><code>message_type</code>: &#x27;FD&#x27;(기본) 또는 그 외 문자열 = Classic CAN<br><code>apply_e2e</code>: True이면 E2E(Alive Counter+CRC16) 적용 주기 송신, False(기본)이면 일반 전송. E2E 사양은 plugins/e2e_config.json의 message_id별 설정을 사용하며 없으면 기본 템플릿 적용. cycle_time&gt;0일 때만 유효.</td>
+</tr>
+<tr>
+<td><code>canoe_send_message_stop</code></td>
+<td>특정 CAN ID의 주기 송신만 개별 중지합니다 (E2E·일반 주기 모두 지원). 다른 메시지의 주기 송신은 계속 유지됩니다.</td>
+<td style="font-size:12px"><code>message_id</code>: 중지할 CAN ID(16진수 문자열). 예: &#x27;0xA0&#x27;<br><code>bus_channel</code>: 버스 채널 (드롭다운: 디바이스 추가 시 설정한 채널을 선택)</td>
 </tr>
 <tr>
 <td><code>canoe_send_msg_all_stop</code></td>
-<td>지정 채널의 모든 주기 송신을 중지합니다.</td>
-<td style="font-size:12px"><code>bus_channel</code>: 버스 채널 인덱스</td>
+<td>지정 채널의 모든 주기 송신을 중지합니다 (E2E 포함).</td>
+<td style="font-size:12px"><code>bus_channel</code>: 버스 채널 (드롭다운: 디바이스 추가 시 설정한 채널을 선택)</td>
+</tr>
+<tr>
+<td><code>load_e2e_config</code></td>
+<td>E2E 사양 JSON 파일을 다시 불러옵니다. 미지정 시 plugins/e2e_config.json을 사용합니다. (모듈 로드 시 자동 1회 로드되므로 파일 수정 후 재적용할 때만 호출)</td>
+<td style="font-size:12px"><code>config_path</code>: E2E 설정 JSON 파일 경로. 비우면 기본 파일(plugins/e2e_config.json) 사용</td>
 </tr>
 <tr>
 <td><code>find_msg_from_latest_log</code></td>
@@ -1183,6 +667,21 @@
 <td><code>send_can_message</code></td>
 <td>CAN 메시지를 전송합니다.</td>
 <td style="font-size:12px"><code>message_id</code>: CAN 메시지 ID<br><code>cycle_time</code>: 전송 주기 (ms). 0이면 1회 전송<br><code>can_message</code>: 메시지 데이터 (16진수)<br><code>bus_channel</code>: CAN 채널<br><code>message_type</code>: &#x27;FD&#x27;(기본) 또는 &#x27;Classic&#x27;</td>
+</tr>
+<tr>
+<td><code>CAN_PANEL</code></td>
+<td>CAN 반응속도 측정용 시각화 패널. state=On·신호 없음이면 검은 패널을 띄워 대기, state=On·신호 있음(message_id+can_message)이면 패널을 노랑으로 점등하면서 동시에 send_can_message를 전송(지연 없음 — 카메라로 점등~화면반응 프레임을 세어 반응속도 측정), state=OFF면 이미 떠 있는 패널만 검정으로 되돌리고(안 떠 있으면 무시, 창을 새로 띄우지 않음), state=Close면 패널을 닫습니다.</td>
+<td style="font-size:12px"><code>state</code>: 패널 상태. &#x27;On&#x27;(점등 대기/전송), &#x27;OFF&#x27;(떠 있을 때만 검정으로 리셋, 창 안 띄움), &#x27;Close&#x27;(패널 닫기)<br><code>message_id</code>: CAN 메시지 ID. state=on이고 이 값과 can_message가 모두 있으면 전송+점등 (둘 중 비면 검은 패널만)<br><code>cycle_time</code>: 전송 주기 (ms). 0이면 1회 전송<br><code>can_message</code>: 메시지 데이터 (16진수)<br><code>bus_channel</code>: CAN 채널<br><code>message_type</code>: &#x27;FD&#x27;(기본) 또는 &#x27;Classic&#x27;<br><code>x</code>: 패널 좌상단 X 좌표(px). 비우면 좌하단 기본 배치. &#x27;모니터 크롭&#x27; 버튼으로 자동 입력<br><code>y</code>: 패널 좌상단 Y 좌표(px). 비우면 좌하단 기본 배치<br><code>width</code>: 패널 너비(px, 기본 300)<br><code>height</code>: 패널 높이(px, 기본 300)</td>
+</tr>
+<tr>
+<td><code>check_can_message</code></td>
+<td>지정 시간(timeout) 안에 특정 CAN 메시지가 수신(RX)되는지 확인합니다. 수신되면 PASS, 시간 안에 못 찾으면 FAIL. 데이터를 비우면 메시지 ID 수신 여부만 확인합니다. 준비/정리 스텝 없이 이 스텝 하나로 동작합니다.</td>
+<td style="font-size:12px"><code>message_id</code>: 확인할 CAN 메시지 ID (hex). 예: &#x27;0x18DAF141&#x27; 또는 &#x27;291&#x27;<br><code>expected_data</code>: 기대 데이터 (hex 바이트, 공백 구분). 비우면 ID만 확인. &#x27;*&#x27;로 니블 무시 가능 — 예: &#x27;1A 2B&#x27;, &#x27;1* ** 33&#x27;<br><code>match_mode</code>: 데이터 비교 방식. &#x27;startswith&#x27;(기본: 앞부분 일치) / &#x27;exact&#x27;(길이까지 정확 일치) / &#x27;contains&#x27;(데이터 중 어디든 연속 일치) / &#x27;bitmask&#x27;(지정 비트가 모두 켜져 있는지)<br><code>timeout</code>: 최대 대기 시간 (초, 기본 5). 이 시간 안에 수신되면 즉시 PASS</td>
+</tr>
+<tr>
+<td><code>check_no_can_message</code></td>
+<td>지정 시간(timeout) 동안 특정 CAN 메시지가 수신되지 않아야 PASS 하는 역검증입니다. 한 번이라도 수신되면 즉시 FAIL (예: Sleep 진입 후 특정 메시지가 더 이상 나오면 안 되는 경우).</td>
+<td style="font-size:12px"><code>message_id</code>: 수신되면 안 되는 CAN 메시지 ID (hex). 예: &#x27;0x18DAF141&#x27;<br><code>expected_data</code>: 기대 데이터 (hex 바이트). 비우면 ID 수신 자체가 FAIL. &#x27;*&#x27; 니블 무시 가능<br><code>match_mode</code>: 데이터 비교 방식. &#x27;startswith&#x27; / &#x27;exact&#x27; / &#x27;contains&#x27; / &#x27;bitmask&#x27;<br><code>timeout</code>: 감시 시간 (초, 기본 5). 이 시간 동안 미수신이어야 PASS</td>
 </tr>
 <tr>
 <td><code>stop_can_message</code></td>
@@ -1326,6 +825,11 @@
 <td style="font-size:12px"><code>remote_path</code>: 원격 장비의 파일 경로<br><code>local_path</code>: PC의 저장 경로</td>
 </tr>
 <tr>
+<td><code>get_folder</code></td>
+<td>원격 장비의 폴더를 하위 폴더까지 통째로 PC에 다운로드합니다 (SFTP 재귀). 심볼릭 링크 등 일반 파일이 아닌 항목은 건너뜁니다. 일부 파일 실패 시 &#x27;FAIL:&#x27; 접두사를 반환하여 스텝이 fail로 판정됩니다.</td>
+<td style="font-size:12px"><code>remote_path</code>: 원격 장비의 폴더 경로. 예: &#x27;/var/log&#x27;<br><code>local_path</code>: PC의 저장 폴더 경로. 비워두면 재생 중 런 폴더 logs/ 하위에 원격 폴더명으로 자동 저장. 같은 이름의 폴더에 이미 내용이 있으면 덮어쓰지 않고 &#x27;_2&#x27;, &#x27;_3&#x27; … 을 붙인 새 폴더에 저장됩니다 (반복 실행 시 회차별 보존)</td>
+</tr>
+<tr>
 <td><code>get_file_list_in_dir</code></td>
 <td>원격 장비의 디렉토리 내 파일 목록을 조회합니다.</td>
 <td style="font-size:12px"><code>path</code>: 조회할 디렉토리 경로<br><code>_filter</code>: 파일 필터 패턴. 기본값: &#x27;*&#x27; (전체). 예: &#x27;*.log&#x27;</td>
@@ -1340,13 +844,13 @@
 <tbody>
 <tr>
 <td><code>StartLogging</code></td>
-<td>DLT 연결 + 캡처 시작. 모든 로그를 즉시 텍스트 파일(자동 경로)에 스트리밍 저장하고 메모리는 최근분만 유지합니다 (장시간 로깅에도 느려지지 않음). 뷰어 모달이 자동 오픈됩니다.</td>
+<td>DLT 연결 + 캡처 시작. 모든 로그를 즉시 텍스트 파일(자동 경로)에 스트리밍 저장하고 메모리는 최근분만 유지합니다 (장시간 로깅에도 느려지지 않음). 같은 경로에 확장자만 다른 .dlt 원본 파일도 동시에 저장되어 DLT Viewer로 열 수 있습니다. 뷰어 모달이 자동 오픈됩니다.</td>
 <td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
 </tr>
 <tr>
 <td><code>StopLogging</code></td>
-<td>DLT 캡처 종료. 로그는 이미 파일에 실시간 저장되어 있으며, save_path 지정 시 그 위치로 이동만 합니다.</td>
-<td style="font-size:12px"><code>save_path</code>: 저장 파일 경로. 빈 값이면 스트리밍 파일 그대로 유지 (재생 중: run_dir/logs/dlt_*.log, 스텝 테스트: backend/results/Temp_logs/dlt_*.log)</td>
+<td>DLT 캡처 종료. 로그는 이미 파일에 실시간 저장되어 있으며, save_path 지정 시 그 위치로 이동만 합니다. .dlt 원본 파일도 같은 경로(확장자만 .dlt)로 함께 이동됩니다.</td>
+<td style="font-size:12px"><code>save_path</code>: 저장 파일 경로. 빈 값이면 스트리밍 파일 그대로 유지 (재생 중: run_dir/logs/dlt_*.log + dlt_*.dlt, 스텝 테스트: backend/results/Temp_logs/)</td>
 </tr>
 <tr>
 <td><code>WaitLog</code></td>
@@ -1375,6 +879,16 @@
 <table>
 <thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
 <tbody>
+<tr>
+<td><code>Check</code></td>
+<td>ADB 셸 명령을 실행하고 출력 결과를 기대값과 비교하여 PASS/FAIL 판정합니다 (CMD/SSH 모듈의 Check와 동일 규약). command에 shell 접두사가 없으면 자동으로 붙습니다. 불통과 시 &#x27;FAIL:&#x27; 접두사로 스텝이 자동 fail 처리됩니다.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 디바이스 셸 명령 (예: getprop ro.build.version.release — shell 접두사 생략 가능)<br><code>expected</code>: 기대값. 비우면 &#x27;출력이 없을 때만 pass&#x27; (no-output 검증)<br><code>match_mode</code>: contains(부분 일치, 기본) 또는 exact(완전 일치)<br><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정</td>
+</tr>
+<tr>
+<td><code>Check_Logic</code></td>
+<td>ADB 셸 명령을 실행하고 여러 키워드를 and/or 로직으로 합부 판정합니다 (CMD/SSH 모듈의 Check_Logic과 동일 규약). command에 shell 접두사가 없으면 자동으로 붙습니다. 불통과 시 &#x27;FAIL:&#x27; 접두사로 스텝이 자동 fail 처리됩니다.</td>
+<td style="font-size:12px"><code>command</code>: 실행할 디바이스 셸 명령 (예: dumpsys activity — shell 접두사 생략 가능)<br><code>keywords</code>: 키워드 목록, 콤마 구분 (예: OK,ready,done)<br><code>logic</code>: and(모든 키워드 포함 시 pass, 기본) 또는 or(하나 이상 포함 시 pass)<br><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정</td>
+</tr>
 <tr>
 <td><code>StartLogging</code></td>
 <td>지정한 Android 디바이스의 logcat 캡처를 시작합니다(메모리 버퍼). clear=True면 시작 전 logcat 링버퍼를 비웁니다. 디바이스가 reboot/끊겨도 자동으로 logcat을 재기동해 같은 버퍼에 이어서 캡처합니다.</td>
@@ -1440,6 +954,49 @@
 
 <h2 id="cat-etc">기타</h2>
 
+<h3 id="mod-PCAN">PCAN</h3>
+<div class="callout callout-info">PCAN (python-can) — python-can 라이브러리로 PCAN/Vector/Kvaser 등 CAN 인터페이스에 연결해 CAN/CAN FD 메시지를 송신하고 CSV 로그를 저장하는 모듈. 하드웨어 1대를 디바이스 1개로 등록하고, 채널은 각 스텝의 channel 인자로 선택합니다. 연결/해제는 시나리오가 자동 관리합니다.</div>
+<table>
+<thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
+<tbody>
+<tr>
+<td><code>send_can</code></td>
+<td>지정 채널로 단발 CAN/CAN FD 프레임 1개를 송신합니다.</td>
+<td style="font-size:12px"><code>msg_id</code>: CAN 메시지 ID (16진수). 예: &#x27;0x621&#x27; 또는 &#x27;621&#x27; (둘 다 0x621).<br><code>data</code>: 데이터 바이트 (공백 또는 콤마 구분 16진수). 예: &#x27;45 40 FF FF FF FF FF FF&#x27;<br><code>channel</code>: 대상 채널명 (예: &#x27;PCAN_USBBUS1&#x27;, &#x27;PCAN_USBBUS2&#x27;). 기본 PCAN_USBBUS1.<br><code>is_extended</code>: 확장 ID(29비트) 여부. True/False (기본 False = 표준 11비트).<br><code>is_fd</code>: 이 프레임을 CAN FD 로 보낼지. True/False (연결이 FD 모드면 자동 FD).<br><code>brs</code>: FD Bit Rate Switch. 비우면 FD 프레임에서 자동 ON(참조 송신기와 동일, 500k/2M 버스 표준). classic 프레임에서는 항상 OFF.</td>
+</tr>
+<tr>
+<td><code>send_periodic_can</code></td>
+<td>지정 채널에서 주기(cyclic) 송신을 시작하거나 갱신합니다. 같은 채널·ID 로 다시 호출하면 데이터만 갱신됩니다. stop_all_tx 또는 can_all_stop 으로 정지합니다.</td>
+<td style="font-size:12px"><code>msg_id</code>: CAN 메시지 ID (16진수). 예: &#x27;0x621&#x27;<br><code>data</code>: 데이터 바이트 (공백/콤마 구분 16진수). 예: &#x27;45 40 FF FF FF FF FF FF&#x27;<br><code>channel</code>: 대상 채널명 (예: &#x27;PCAN_USBBUS1&#x27;, &#x27;PCAN_USBBUS2&#x27;). 기본 PCAN_USBBUS1.<br><code>period_ms</code>: 송신 주기(밀리초). 예: &#x27;500&#x27; (0.5초마다). 기본 1000.<br><code>is_extended</code>: 확장 ID(29비트) 여부. True/False (기본 False).<br><code>is_fd</code>: CAN FD 여부. True/False.<br><code>brs</code>: FD Bit Rate Switch. 비우면 FD 프레임에서 자동 ON(참조 송신기와 동일, 500k/2M 버스 표준). classic 프레임에서는 항상 OFF.</td>
+</tr>
+<tr>
+<td><code>stop_all_tx</code></td>
+<td>모든 채널의 실행 중인 주기(cyclic) 송신 작업을 정지합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>start_logging</code></td>
+<td>열린 모든 채널의 CAN 트래픽을 하나의 CSV 파일로 로깅 시작합니다 (Timestamp,Message_id,Dir,DLC,Data,channel — channel 컬럼으로 채널 구분).</td>
+<td style="font-size:12px"><code>csv_file</code>: 저장할 CSV 경로. 비우면 재생 런 폴더(logs/) 또는 results/PCAN_Log 아래로 자동 저장됩니다.</td>
+</tr>
+<tr>
+<td><code>stop_logging</code></td>
+<td>CSV 로깅을 정지하고 파일을 저장(flush+close)합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>can_all_stop</code></td>
+<td>모든 채널의 주기 송신과 로깅을 한 번에 정지합니다 (연결은 유지).</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>check_status</code></td>
+<td>진단: 지정 채널의 버스 상태(정상/에러/버스오프), 열린 채널·주기송신 개수를 보고합니다. 송신이 안 먹힐 때 원인(채널/bitrate vs ID·데이터·웨이크업)을 좁히는 용도.</td>
+<td style="font-size:12px"><code>channel</code>: 대상 채널명 (예: &#x27;PCAN_USBBUS1&#x27;, &#x27;PCAN_USBBUS2&#x27;). 기본 PCAN_USBBUS1.</td>
+</tr>
+</tbody>
+</table>
+
 <h3 id="mod-SHELL">SHELL</h3>
 <div class="callout callout-info">Shell 명령어 실행 — Linux/macOS bash 명령을 실행하는 모듈. CMD 의 Linux 대응. 외부 프로그램 실행이나 시스템 명령에 사용</div>
 <table>
@@ -1492,6 +1049,19 @@
 <td><code>send_shell_cmd</code></td>
 <td>단순 shell 문자열 명령을 디바이스에 전달합니다.</td>
 <td style="font-size:12px"><code>str_data</code>: 전송할 명령 문자열</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-Frame_Check">Frame_Check</h3>
+<div class="callout callout-info">테스트 녹화 영상(웹캠)을 이용한 동작 시간 측정 도구. 시나리오에 Frame_Measure 스텝을 추가하면, 시나리오 종료 시 웹캠 녹화가 자동 종료된 후 해당 영상을 프레임 단위로 분석하여 측정 시작점→타겟 이미지 최초 등장까지의 경과 시간(ms)을 결과에 표기하고, 측정 구간 클립(시작 5초 전~종료 5초 후)도 함께 제공합니다. 재생 전 PIP 웹캠이 열려 있어야 녹화/측정이 가능합니다.</div>
+<table>
+<thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
+<tbody>
+<tr>
+<td><code>Frame_Measure</code></td>
+<td>동작 시간 측정 1건을 정의합니다. 시작점은 mode=&#x27;function&#x27;이면 이 스텝이 실행된 시점, mode=&#x27;image&#x27;면 스텝 실행 이후 start_image가 영상에 처음 나타난 프레임입니다. 타겟은 시작점+wait_time(여유시간) 이후 target_image가 처음 나타난 프레임이며, max_time초를 넘기면 미발견 처리됩니다. 이미지는 편집 버튼으로 현재 PIP 웹캠 화면을 크롭하여 지정합니다.</td>
+<td style="font-size:12px"><code>mode</code>: 시작점 기준: &#x27;function&#x27;(스텝 실행 시점) 또는 &#x27;image&#x27;(start_image 최초 등장 프레임)<br><code>start_image</code>: 시작점 이미지 (mode=&#x27;image&#x27;일 때 필수). 편집 버튼으로 웹캠 화면을 크롭하여 설정<br><code>start_threshold</code>: 시작 이미지 매칭 유사도 임계값 (0.0~1.0, 기본 0.8)<br><code>wait_time</code>: 타겟 발생 전까지 여유시간(초). 시작점 이후 이 시간 동안은 타겟 탐색을 건너뜀 (기본 0)<br><code>target_image</code>: 타겟 이미지 (필수). 편집 버튼으로 웹캠 화면을 크롭하여 설정<br><code>target_threshold</code>: 타겟 이미지 매칭 유사도 임계값 (0.0~1.0, 기본 0.8)<br><code>max_time</code>: 타겟 이미지 최대 확인 시간(초). 탐색 시작점부터 이 시간을 넘기면 미발견 처리. 0=무제한 (기본 60)</td>
 </tr>
 </tbody>
 </table>

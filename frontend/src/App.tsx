@@ -37,7 +37,6 @@ import AnnouncementBanner from './components/AnnouncementBanner';
 import AnnouncementListModal from './components/AnnouncementListModal';
 import { AnnouncementsProvider } from './context/AnnouncementsContext';
 import PlaybackStatusBanner from './components/PlaybackStatusBanner';
-import ChatWidget from './components/ChatWidget';
 import BugReportModal from './components/BugReportModal';
 import LoginModal from './components/LoginModal';
 import { userApi, LoginUser } from './services/api';
@@ -86,7 +85,6 @@ function AppContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [siderCollapsed, setSiderCollapsed] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
   // 로그인(사용자 식별) — 웹에 접근한 사용자가 누구인지 고르게 한다 (pw 없음).
   const [loginUser, setLoginUser] = useState<LoginUser | null>(null);
@@ -679,8 +677,6 @@ function AppContent() {
       <CompositorEditor open={compositorOpen} onClose={() => setCompositorOpen(false)} isDark={isDark} />
 
       <AnnouncementListModal />
-
-      <ChatWidget open={chatOpen} onClose={() => setChatOpen(false)} />
 
       <BugReportModal open={bugReportOpen} onClose={() => setBugReportOpen(false)} />
       <LoginModal
