@@ -42,8 +42,7 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
   const [jiraReady, setJiraReady] = useState(true);
   const [project, setProject] = useState('');
   const [model, setModel] = useState('');
-  // 어느 버튼(유지/임시)이 진행 중인지 — 로딩 스피너를 해당 버튼에만 표시
-  const [saving, setSaving] = useState<'' | 'keep' | 'temp'>('');
+  const [saving, setSaving] = useState(false);
 
   // 모달 오픈 시 구성(프로젝트/모델 목록) 로드 + 상태 초기화
   useEffect(() => {
@@ -97,8 +96,7 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
     () => filtered.find(r => (r.user_id || r.display_name) === selectedId) || null,
     [filtered, selectedId]);
 
-  /** temporary=true — 임시 로그인: 이번 실행 동안만 유효, 다음 실행 시 다시 묻는다. */
-  const confirm = async (temporary: boolean) => {
+  const confirm = async () => {
     if (!selected) {
       message.warning(t('login.selectUser'));
       return;
@@ -107,7 +105,7 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
       message.warning(t('login.selectProject'));
       return;
     }
-    setSaving(temporary ? 'temp' : 'keep');
+    setSaving(true);
     try {
       const res = await userApi.setCurrent({
         user_id: selected.user_id,
@@ -116,13 +114,13 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
         team: selected.team,
         project,
         model,
-        temporary,
+        temporary: false,
       });
       if (res.data.user) onDone(res.data.user, res.data.temporary);
     } catch {
       message.error(t('login.saveFailed'));
     } finally {
-      setSaving('');
+      setSaving(false);
     }
   };
 
@@ -144,13 +142,8 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
         <Button key="later" onClick={onClose}>
           {user ? t('common.cancel') : t('login.later')}
         </Button>,
-        <Tooltip key="temp" title={t('login.tempTooltip')}>
-          <Button onClick={() => confirm(true)} loading={saving === 'temp'} disabled={!selected || !project}>
-            {t('login.tempLogin')}
-          </Button>
-        </Tooltip>,
         <Tooltip key="ok" title={t('login.keepTooltip')}>
-          <Button type="primary" onClick={() => confirm(false)} loading={saving === 'keep'} disabled={!selected || !project}>
+          <Button type="primary" onClick={confirm} loading={saving} disabled={!selected || !project}>
             {t('login.keepLogin')}
           </Button>
         </Tooltip>,
