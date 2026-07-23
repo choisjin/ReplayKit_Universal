@@ -353,6 +353,18 @@ HKMC_KEYS = {
     "R_RRC_VOLUME_RIGHT_ANTI_CLOCK":  {"cmd": CMD_RRC, "key": RRC_HKNOB_VOLUME_RIGHT, "monitor": RIGHT_MONITOR, "dial": True, "direction": ANTI_CLOCK},
 }
 
+# CCRC 키 source 변형 자동 생성 — 동일 KeyType ordinal을 RRC(0x02)/SOFTKEY(0x0E) 소스로도
+# 송신할 수 있게 CCRC 전 키의 변형을 추가한다 (BRRC로 미동작인 키의 대체 소스 실기 검증용).
+# 이름 prefix가 프론트 하드키 패널의 그룹이 되므로 CCRCRRC/CCRCSK 별도 그룹으로 노출된다.
+# 검증 후 동작 확인된 (키, 소스) 조합만 남기고 정리 예정 (2026-07).
+for _ccrc_name in [n for n, i in HKMC_KEYS.items()
+                   if i.get("ccrc") and n.startswith("CCRC_")]:
+    _base = HKMC_KEYS[_ccrc_name]
+    _suffix = _ccrc_name[len("CCRC_"):]
+    HKMC_KEYS[f"CCRCRRC_{_suffix}"] = {**_base, "source": CCRC_SRC_RRC}
+    HKMC_KEYS[f"CCRCSK_{_suffix}"] = {**_base, "source": CCRC_SRC_SOFTKEY}
+del _ccrc_name, _base, _suffix
+
 
 def _enable_tcp_keepalive(sock: socket.socket,
                           idle: int = 5, interval: int = 2, count: int = 3) -> None:
