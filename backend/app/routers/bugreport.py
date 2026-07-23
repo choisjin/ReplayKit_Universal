@@ -141,11 +141,14 @@ async def get_context():
         return step_tests, recent
 
     step_tests, recent = await asyncio.to_thread(_sync)
+    from ..services import login_service
     return {
         **_env_info(),
         "devices": _device_summary(),
         "step_tests": list(reversed(step_tests)),  # 최신순
         "recent_results": recent,
+        # 로그인 사용자 — 제보자 프리필 + 제출 meta(user_name/user_team/project)에 쓴다
+        "user": login_service.get_login_user(),
     }
 
 

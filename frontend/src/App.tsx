@@ -9,6 +9,7 @@ import {
   DatabaseOutlined,
   DesktopOutlined,
   FolderOpenOutlined,
+  UserOutlined,
   FundProjectionScreenOutlined,
   HistoryOutlined,
   LoadingOutlined,
@@ -38,6 +39,8 @@ import { AnnouncementsProvider } from './context/AnnouncementsContext';
 import PlaybackStatusBanner from './components/PlaybackStatusBanner';
 import ChatWidget from './components/ChatWidget';
 import BugReportModal from './components/BugReportModal';
+import LoginModal from './components/LoginModal';
+import { userApi, LoginUser } from './services/api';
 import { WebcamProvider } from './context/WebcamContext';
 
 const { Sider, Content } = Layout;
@@ -85,6 +88,12 @@ function AppContent() {
   const [siderCollapsed, setSiderCollapsed] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
+  // 로그인(사용자 식별) — 웹에 접근한 사용자가 누구인지 고르게 한다 (pw 없음).
+  const [loginUser, setLoginUser] = useState<LoginUser | null>(null);
+  // 임시 로그인 여부 — 이번 실행 동안만 유효, 다음 실행 시 로그인 창 재표시
+  const [loginTemp, setLoginTemp] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const loginCheckedRef = useRef(false);
   const [diskInfoList, setDiskInfoList] = useState<{ drive: string; free_gb: number; total_gb: number; used_percent: number }[]>([]);
   const [appVersion, setAppVersion] = useState<string>('');
   // boot_id: 백엔드 프로세스 시작 시점에 생성되는 unique id. version.txt 가 안 바뀌어도
@@ -196,6 +205,17 @@ function AppContent() {
             setAppVersion(res.data?.version || '');
             setAppBootId(res.data?.boot_id || '');
           }).catch(() => {});
+          // 로그인 사용자 확인 — 미선택이면 로그인 모달을 띄운다 (세션당 1회,
+          // '나중에 하기'로 닫으면 새로고침 전까지 다시 묻지 않는다).
+          if (!loginCheckedRef.current) {
+            loginCheckedRef.current = true;
+            userApi.current().then(res => {
+              const u = res.data?.user || null;
+              setLoginUser(u);
+              setLoginTemp(!!res.data?.temporary);
+              if (!u && sessionStorage.getItem('login_skip') !== '1') setLoginOpen(true);
+            }).catch(() => {});
+          }
         }
       } catch {
         // 단발 실패는 무시(이벤트 루프가 무거운 동기작업으로 잠깐 막힌 경우). 연속 실패가
@@ -501,6 +521,65 @@ function AppContent() {
               </Button>
             </Tooltip>
           </div>
+          {/* 로그인 사용자 표기 — 버튼 그룹과 하단(디스크 게이지) 사이 빈 공간.
+              클릭하면 사용자 변경 모달. 미로그인이면 로그인 버튼으로 보인다. */}
+          <div style={{ padding: '4px 8px' }}>
+            {loginUser ? (
+              <Tooltip
+                placement="right"
+                title={
+                  <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                    <div><b>{loginUser.name}</b>{loginUser.title ? ` ${loginUser.title}` : ''}</div>
+                    {loginUser.team && <div>{loginUser.team}</div>}
+                    {loginUser.project && (
+                      <div>{loginUser.project}{loginUser.model ? ` · ${loginUser.model}` : ''}</div>
+                    )}
+                    {loginTemp && <div style={{ color: '#faad14' }}>임시 로그인 — 다음 실행 시 다시 묻습니다</div>}
+                    <div style={{ opacity: 0.7 }}>클릭하면 사용자 변경</div>
+                  </div>
+                }
+              >
+                <div
+                  onClick={() => setLoginOpen(true)}
+                  style={{
+                    cursor: 'pointer', borderRadius: 6, padding: '6px 6px',
+                    border: '1px solid rgba(140,140,140,0.35)', textAlign: 'center',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div style={{
+                    fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+                    overflow: 'hidden', textOverflow: 'ellipsis',
+                    color: isDark ? '#eee' : '#333',
+                  }}>
+                    <UserOutlined /> {siderCollapsed ? '' : loginUser.name}
+                    {!siderCollapsed && loginTemp && (
+                      <span style={{ color: '#faad14', fontSize: 10, fontWeight: 400 }}> 임시</span>
+                    )}
+                  </div>
+                  {!siderCollapsed && loginUser.team && (
+                    <div style={{
+                      fontSize: 10, color: '#888', whiteSpace: 'nowrap',
+                      overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>
+                      {loginUser.team}
+                    </div>
+                  )}
+                  {!siderCollapsed && loginUser.project && (
+                    <div style={{ fontSize: 10, color: '#1677ff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {loginUser.project}{loginUser.model ? ` · ${loginUser.model}` : ''}
+                    </div>
+                  )}
+                </div>
+              </Tooltip>
+            ) : (
+              <Tooltip title="로그인 — 사용자 선택" placement="right">
+                <Button block icon={<UserOutlined />} onClick={() => setLoginOpen(true)}>
+                  {!siderCollapsed && '로그인'}
+                </Button>
+              </Tooltip>
+            )}
+          </div>
           <div style={{ marginTop: 'auto' }}>
           {diskInfoList.length > 0 && (
             <div style={{ padding: siderCollapsed ? '8px 4px' : '8px 8px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
@@ -604,6 +683,16 @@ function AppContent() {
       <ChatWidget open={chatOpen} onClose={() => setChatOpen(false)} />
 
       <BugReportModal open={bugReportOpen} onClose={() => setBugReportOpen(false)} />
+      <LoginModal
+        open={loginOpen}
+        user={loginUser}
+        onDone={(u, temp) => { setLoginUser(u); setLoginTemp(temp); setLoginOpen(false); }}
+        onClose={() => {
+          // 최초 로그인에서 '나중에 하기' — 이 세션에서는 다시 묻지 않는다
+          if (!loginUser) sessionStorage.setItem('login_skip', '1');
+          setLoginOpen(false);
+        }}
+      />
 
       <Modal
         title={

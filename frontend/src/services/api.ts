@@ -390,6 +390,30 @@ export const compositorApi = {
     api.post('/compositor/presets/activate', { name, enabled }),
 };
 
+// 로그인(사용자 식별) APIs — pw 없는 식별용. Jira 검색은 백엔드가 대행한다.
+export interface LoginUser {
+  user_id: string;
+  name: string;
+  title: string;
+  team: string;      // 부서/팀
+  project: string;   // 카탈로그 프로젝트 (HKMC / VW 등)
+  model: string;     // 카탈로그 모델 (ccIC27 / MIB 등, 선택)
+}
+
+export interface LoginProject { name: string; models: string[] }
+
+export const userApi = {
+  current: () => api.get<{ user: LoginUser | null; temporary: boolean }>('/user/current'),
+  // temporary=true — 임시 로그인: 이번 실행 동안만, 다음 실행 시 로그인 창 재표시
+  setCurrent: (user: Partial<LoginUser> & { name: string; temporary?: boolean }) =>
+    api.post<{ user: LoginUser | null; temporary: boolean }>('/user/current', user),
+  clear: () => api.delete('/user/current'),
+  config: () => api.get<{ projects: LoginProject[]; jira_ready: boolean }>('/user/config'),
+  search: (keyword: string) =>
+    api.get<{ users: { name: string; title: string; team: string; display_name: string; user_id: string }[] }>(
+      '/user/search', { params: { keyword } }),
+};
+
 // Backup / Restore APIs
 export const backupApi = {
   list: () => api.get('/backup/list'),

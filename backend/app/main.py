@@ -37,8 +37,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from .routers import bugreport as bugreport_router, compositor as compositor_router, device, dlt as dlt_router, results, scenario, serial_log as serial_log_router, logcat_log as logcat_log_router, settings, webcam, backup as backup_router
+from .routers import bugreport as bugreport_router, compositor as compositor_router, device, dlt as dlt_router, results, scenario, serial_log as serial_log_router, logcat_log as logcat_log_router, settings, user as user_router, webcam, backup as backup_router
 from .dependencies import adb_service, device_manager, playback_service, recording_service, monitor_client
+from .services import login_service
 from .services.adb_service import resolve_sf_display_id, resolve_input_display_id
 # build_dist.py가 배포 시 __init__.py를 빈 파일로 만들기 때문에 서브모듈 직접 import.
 from .services.capture.ffmpeg_runtime import log_runtime_status as _log_capture_runtime_status
@@ -360,6 +361,9 @@ async def _get_monitor_status() -> dict:
         "usage_stats": _usage_stats_cache["data"],
         # 현재 UI 모드(#test/#admin/#stats/normal)와 보고 있는 페이지
         "ui": _current_ui_state(),
+        # 로그인 사용자(부서/프로젝트 포함, None=미로그인) — 관제/통계 표기용.
+        # 키를 항상 포함해야 매니저가 로그아웃(None)도 반영한다.
+        "user": login_service.get_login_user(),
     }
 
 
@@ -571,6 +575,10 @@ async def lifespan(app: FastAPI):
     # (2초 status 루프 stall 방지 + 전 시나리오 주기적 재파싱 낭비 제거).
     usage_stats_task = asyncio.create_task(_usage_stats_compute_once())
 
+    # 로그인 구성(Jira 계정/프로젝트 목록) 선수신 — Manager 에서 받아 캐시해 둔다.
+    # 실패해도 앱은 정상 동작(유저 검색 시 재시도)하므로 스레드로 던지고 잊는다.
+    asyncio.create_task(asyncio.to_thread(login_service.prefetch_login_config))
+
     # 관제 클라이언트 콜백 항상 등록 (URL은 나중에 Settings에서 설정 가능)
     monitor_client.set_status_callback(_get_monitor_status)
     monitor_client.set_command_callback(_handle_monitor_command)
@@ -668,6 +676,7 @@ app.include_router(serial_log_router.router)
 app.include_router(logcat_log_router.router)
 app.include_router(backup_router.router)
 app.include_router(bugreport_router.router)
+app.include_router(user_router.router)
 
 # Serve app static assets (Tabulator 등 라이브러리)
 _static_dir = Path(__file__).resolve().parent / "static"

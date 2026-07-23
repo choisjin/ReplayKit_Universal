@@ -36,6 +36,8 @@ interface BugReportContext {
   hostname: string;
   step_tests: StepTestEntry[];
   recent_results: RecentResult[];
+  // 로그인 사용자 — 제보자 프리필 + 제출 meta(부서/프로젝트)에 쓴다
+  user?: { user_id: string; name: string; title: string; team: string; project: string; model: string } | null;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -86,18 +88,30 @@ export default function BugReportModal({ open, onClose }: { open: boolean; onClo
     setRunSteps([]);
     setPercent(0);
     setPhase('');
-    bugreportApi.context()
-      .then((res) => setCtx(res.data))
-      .catch(() => setCtx(null));
-    try {
-      const raw = localStorage.getItem(CHAT_SESSION_KEY);
-      if (raw) {
-        const s = JSON.parse(raw);
-        if (s?.name && !form.getFieldValue('reporter')) {
-          form.setFieldValue('reporter', s.department ? `${s.name}/${s.department}` : s.name);
+    // 제보자 프리필 — 로그인 사용자 우선, 없으면 채팅 세션 폴백.
+    // (채팅 폴백을 먼저 돌리면 늦게 도착한 로그인 사용자가 밀리므로 context 응답 후 결정)
+    const prefillFromChat = () => {
+      try {
+        const raw = localStorage.getItem(CHAT_SESSION_KEY);
+        if (raw) {
+          const s = JSON.parse(raw);
+          if (s?.name && !form.getFieldValue('reporter')) {
+            form.setFieldValue('reporter', s.department ? `${s.name}/${s.department}` : s.name);
+          }
         }
-      }
-    } catch { /* 프리필 실패는 무시 */ }
+      } catch { /* 프리필 실패는 무시 */ }
+    };
+    bugreportApi.context()
+      .then((res) => {
+        setCtx(res.data);
+        const u = res.data?.user;
+        if (u?.name && !form.getFieldValue('reporter')) {
+          form.setFieldValue('reporter', u.team ? `${u.name}/${u.team}` : u.name);
+        } else {
+          prefillFromChat();
+        }
+      })
+      .catch(() => { setCtx(null); prefillFromChat(); });
   }, [open, form]);
 
   // 재생 결과 선택 → 스텝 목록 로드 (기존 결과 상세 API 재사용)
@@ -193,6 +207,11 @@ export default function BugReportModal({ open, onClose }: { open: boolean; onClo
         platform: ctx?.platform || '',
         hostname: ctx?.hostname || '',
         created_at: new Date().toISOString(),
+        // 로그인 사용자 — 매니저 버그리포트 목록의 부서/프로젝트 컬럼
+        user_name: ctx?.user?.name || '',
+        user_team: ctx?.user?.team || '',
+        project: ctx?.user?.project || '',
+        user_model: ctx?.user?.model || '',
       };
       try {
         const fd = new FormData();
