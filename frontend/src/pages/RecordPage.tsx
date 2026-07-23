@@ -3924,8 +3924,12 @@ export default function RecordPage() {
       const res = await scenarioApi.addStep({
         type: 'module_command',
         device_id: selectedDeviceId,
-        // OCR 스텝: 현재 화면 디바이스를 screenshot_device_id로 저장 (재생 시 스크린샷 대상)
-        ...(selectedModuleName === 'OCR' && screenshotDeviceId ? { screenshot_device_id: screenshotDeviceId } : {}),
+        // OCR 스텝: 현재 보고 있는 미러 화면(디바이스+screen_type)을 그대로 저장 (재생 시 스크린샷 대상).
+        // screen_type 누락 시 재생이 front_center로 폴백 → ccRC(후석 전용) 등에서 캡처 타임아웃.
+        ...(selectedModuleName === 'OCR' && screenshotDeviceId ? {
+          screenshot_device_id: screenshotDeviceId,
+          screen_type: screenTypeArgForDevice(screenshotDeviceId),
+        } : {}),
         params,
         description: `${selectedModuleName}::${funcName}()`,
         delay_after_ms: delayMs,

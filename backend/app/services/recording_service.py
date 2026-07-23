@@ -409,6 +409,8 @@ class RecordingService:
         roi: Optional[dict] = None,
         similarity_threshold: float = 0.95,
         skip_execute: bool = False,
+        screenshot_device_id: Optional[str] = None,
+        screen_type: Optional[str] = None,
     ) -> tuple[Step, str | None]:
         """Add a recorded step and optionally execute the action on the target device.
 
@@ -426,9 +428,11 @@ class RecordingService:
 
         # Ensure device_id is recorded in device_map (maps to real address)
         mapped_id = self._ensure_device_mapped(device_id) if device_id else None
+        # OCR 등 캡처 디바이스가 액션 디바이스와 다른 스텝 — device_map에 함께 등록
+        mapped_shot_id = self._ensure_device_mapped(screenshot_device_id) if screenshot_device_id else None
 
-        # params에 screen_type이 있으면 Step 최상위 필드에도 저장
-        step_screen_type = params.get("screen_type") if params else None
+        # 명시 인자 우선, 없으면 params의 screen_type을 Step 최상위 필드에도 저장
+        step_screen_type = screen_type or (params.get("screen_type") if params else None)
 
         step = Step(
             id=step_id,
@@ -441,6 +445,7 @@ class RecordingService:
             description=description,
             roi=ROI(**roi) if roi else None,
             similarity_threshold=similarity_threshold,
+            screenshot_device_id=mapped_shot_id,
         )
         self._current_scenario.steps.append(step)
         self._last_action_time = time.time()

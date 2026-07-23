@@ -2254,13 +2254,26 @@ class PlaybackService:
             resolved = self._resolve_alias(device_id, self._device_map)
             dev = self.dm.get_device(resolved) or self.dm.get_device(device_id)
             if dev:
-                screen_type = step.screen_type or "front_center"
+                screen_type = step.screen_type or self._default_ocr_screen_type(dev)
                 return {"type": dev.type, "id": dev.id, "address": dev.address, "screen_type": screen_type}
         # fallback: 주 디바이스 중 첫 번째
         for d in self.dm.list_primary():
             if d.type in ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent", "icas_agent", "mib_agent", "bmw_agent", "vision_camera", "webcam"):
-                return {"type": d.type, "id": d.id, "address": d.address, "screen_type": "front_center"}
+                return {"type": d.type, "id": d.id, "address": d.address, "screen_type": self._default_ocr_screen_type(d)}
         return None
+
+    @staticmethod
+    def _default_ocr_screen_type(dev) -> str:
+        """screen_type 미저장 스텝(레거시)의 캡처 화면 폴백.
+
+        ccRC는 후석 전용(rear_left/rear_right)이라 front_center 캡처 요청 시
+        에이전트가 응답하지 않아 타임아웃으로 실패한다. 프론트 라이브 뷰의
+        ccRC 기본값(rear_right)과 동일하게 폴백한다."""
+        if dev.type == "hkmc_agent":
+            blob = f"{(dev.info or {}).get('device_model', '')} {dev.id}".lower()
+            if "ccrc" in blob:
+                return "rear_right"
+        return "front_center"
 
     async def _screencap_bytes(self, dev_info: dict) -> Optional[bytes]:
         """디바이스 정보로부터 스크린샷 bytes 반환."""

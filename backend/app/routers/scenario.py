@@ -97,6 +97,10 @@ class AddStepRequest(BaseModel):
     roi: Optional[dict] = None
     similarity_threshold: float = 0.95
     skip_execute: bool = False
+    # OCR 등 캡처 대상이 액션 디바이스와 다른 스텝용 — 녹화 시 보고 있던 미러 화면을 기록.
+    # (미선언 시 pydantic이 프론트가 보낸 값을 조용히 버려 재생 때 front_center 폴백됨)
+    screenshot_device_id: Optional[str] = None
+    screen_type: Optional[str] = None
 
 
 @router.post("/record/start")
@@ -122,6 +126,8 @@ async def add_step(req: AddStepRequest):
             roi=req.roi,
             similarity_threshold=req.similarity_threshold,
             skip_execute=req.skip_execute,
+            screenshot_device_id=req.screenshot_device_id,
+            screen_type=req.screen_type,
         )
         result = {"status": "ok", "step": step.model_dump()}
         if response is not None:
