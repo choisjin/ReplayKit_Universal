@@ -251,6 +251,46 @@ HKMC_KEYS = {
     "CCRC_VOLUME_RIGHT": {"cmd": CMD_CCRC, "key": 0x18, "ccrc": True, "source": CCRC_SRC_BRRC},  # VOLUME_RIGHT
     "CCRC_POWER_LEFT":   {"cmd": CMD_CCRC, "key": 0x1A, "ccrc": True, "source": CCRC_SRC_BRRC},  # POWER_LEFT
     "CCRC_POWER_RIGHT":  {"cmd": CMD_CCRC, "key": 0x1B, "ccrc": True, "source": CCRC_SRC_BRRC},  # POWER_RIGHT
+    # IVI KeyType enum 전체 반영 — BRRC 리모컨 스펙 외 나머지 키. 후석 소스(BRRC)에서
+    # IVI가 수용하는지 실기 검증 후 미동작 키는 제거 예정 (2026-07).
+    "CCRC_LEFT_UP":      {"cmd": CMD_CCRC, "key": 0x02, "ccrc": True, "source": CCRC_SRC_BRRC},  # LEFT_UP
+    "CCRC_LEFT_DOWN":    {"cmd": CMD_CCRC, "key": 0x04, "ccrc": True, "source": CCRC_SRC_BRRC},  # LEFT_DOWN
+    "CCRC_RIGHT_UP":     {"cmd": CMD_CCRC, "key": 0x05, "ccrc": True, "source": CCRC_SRC_BRRC},  # RIGHT_UP
+    "CCRC_RIGHT_DOWN":   {"cmd": CMD_CCRC, "key": 0x07, "ccrc": True, "source": CCRC_SRC_BRRC},  # RIGHT_DOWN
+    "CCRC_MENU":         {"cmd": CMD_CCRC, "key": 0x0A, "ccrc": True, "source": CCRC_SRC_BRRC},  # MENU
+    "CCRC_MAP":          {"cmd": CMD_CCRC, "key": 0x0B, "ccrc": True, "source": CCRC_SRC_BRRC},  # MAP
+    "CCRC_NAV":          {"cmd": CMD_CCRC, "key": 0x0C, "ccrc": True, "source": CCRC_SRC_BRRC},  # NAV
+    "CCRC_RADIO":        {"cmd": CMD_CCRC, "key": 0x0D, "ccrc": True, "source": CCRC_SRC_BRRC},  # RADIO
+    "CCRC_MEDIA":        {"cmd": CMD_CCRC, "key": 0x0E, "ccrc": True, "source": CCRC_SRC_BRRC},  # MEDIA
+    "CCRC_SEEK_UP":      {"cmd": CMD_CCRC, "key": 0x0F, "ccrc": True, "source": CCRC_SRC_BRRC},  # SEEK_UP
+    "CCRC_SEEK_DOWN":    {"cmd": CMD_CCRC, "key": 0x10, "ccrc": True, "source": CCRC_SRC_BRRC},  # SEEK_DOWN
+    "CCRC_SETUP":        {"cmd": CMD_CCRC, "key": 0x12, "ccrc": True, "source": CCRC_SRC_BRRC},  # SETUP
+    "CCRC_CAMERA":       {"cmd": CMD_CCRC, "key": 0x13, "ccrc": True, "source": CCRC_SRC_BRRC},  # CAMERA
+    "CCRC_TUNE_UP":      {"cmd": CMD_CCRC, "key": 0x1C, "ccrc": True, "source": CCRC_SRC_BRRC},  # TUNE_UP
+    "CCRC_TUNE_DOWN":    {"cmd": CMD_CCRC, "key": 0x1D, "ccrc": True, "source": CCRC_SRC_BRRC},  # TUNE_DOWN
+    "CCRC_TUNE_PUSH":    {"cmd": CMD_CCRC, "key": 0x1E, "ccrc": True, "source": CCRC_SRC_BRRC},  # TUNE_PUSH (RG3 미사용)
+    "CCRC_CLIMATE":      {"cmd": CMD_CCRC, "key": 0x1F, "ccrc": True, "source": CCRC_SRC_BRRC},  # CLIMATE
+    "CCRC_PRESET_UP":    {"cmd": CMD_CCRC, "key": 0x20, "ccrc": True, "source": CCRC_SRC_BRRC},  # PRESET_UP
+    "CCRC_PRESET_DOWN":  {"cmd": CMD_CCRC, "key": 0x21, "ccrc": True, "source": CCRC_SRC_BRRC},  # PRESET_DOWN
+    "CCRC_PTT":          {"cmd": CMD_CCRC, "key": 0x22, "ccrc": True, "source": CCRC_SRC_BRRC},  # PTT
+    "CCRC_MODE":         {"cmd": CMD_CCRC, "key": 0x23, "ccrc": True, "source": CCRC_SRC_BRRC},  # MODE
+    "CCRC_SEND":         {"cmd": CMD_CCRC, "key": 0x25, "ccrc": True, "source": CCRC_SRC_BRRC},  # SEND
+    "CCRC_END":          {"cmd": CMD_CCRC, "key": 0x26, "ccrc": True, "source": CCRC_SRC_BRRC},  # END
+    "CCRC_SOS":          {"cmd": CMD_CCRC, "key": 0x27, "ccrc": True, "source": CCRC_SRC_BRRC},  # SOS
+    "CCRC_CCS":          {"cmd": CMD_CCRC, "key": 0x28, "ccrc": True, "source": CCRC_SRC_BRRC},  # CONNECTEDCAR_SERVICE
+    "CCRC_PHONE":        {"cmd": CMD_CCRC, "key": 0x29, "ccrc": True, "source": CCRC_SRC_BRRC},  # PHONE
+    "CCRC_CONCIERGE":    {"cmd": CMD_CCRC, "key": 0x2A, "ccrc": True, "source": CCRC_SRC_BRRC},  # CONCIERGE
+    "CCRC_CONCIERGE_POI": {"cmd": CMD_CCRC, "key": 0x2B, "ccrc": True, "source": CCRC_SRC_BRRC},  # CONCIERGE_POI
+    "CCRC_VOICE_LOCAL_SEARCH": {"cmd": CMD_CCRC, "key": 0x2C, "ccrc": True, "source": CCRC_SRC_BRRC},  # VOICE_LOCAL_SEARCH
+    "CCRC_ROADSIDE_ASSISTANT": {"cmd": CMD_CCRC, "key": 0x2D, "ccrc": True, "source": CCRC_SRC_BRRC},  # ROADSIDE_ASSISTANT
+    "CCRC_CAPTURE":      {"cmd": CMD_CCRC, "key": 0x2E, "ccrc": True, "source": CCRC_SRC_BRRC},  # CAPTURE (MEDIA+RADIO+SETUP)
+    "CCRC_FAST_FORWARD": {"cmd": CMD_CCRC, "key": 0x30, "ccrc": True, "source": CCRC_SRC_BRRC},  # FAST_FORWARD
+    "CCRC_REWIND":       {"cmd": CMD_CCRC, "key": 0x31, "ccrc": True, "source": CCRC_SRC_BRRC},  # REWIND
+    "CCRC_PLAY":         {"cmd": CMD_CCRC, "key": 0x32, "ccrc": True, "source": CCRC_SRC_BRRC},  # PLAY
+    "CCRC_PAUSE":        {"cmd": CMD_CCRC, "key": 0x33, "ccrc": True, "source": CCRC_SRC_BRRC},  # PAUSE
+    "CCRC_TUMBLER_PUSH": {"cmd": CMD_CCRC, "key": 0x34, "ccrc": True, "source": CCRC_SRC_BRRC},  # TUMBLER_PUSH
+    "CCRC_CUSTOM_2":     {"cmd": CMD_CCRC, "key": 0x35, "ccrc": True, "source": CCRC_SRC_BRRC},  # CUSTOM_2
+    "CCRC_CUSTOM_3":     {"cmd": CMD_CCRC, "key": 0x36, "ccrc": True, "source": CCRC_SRC_BRRC},  # CUSTOM_3
 
     # ---------- hkccic SWRC2 (CMD_SWRC2=0x71) ----------
     "SWRC2_BACK":       {"cmd": CMD_SWRC2, "key": 0x01},
