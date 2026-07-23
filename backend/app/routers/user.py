@@ -12,7 +12,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..services import login_service
@@ -43,8 +43,10 @@ class UserSelectRequest(BaseModel):
 
 @router.post("/current")
 async def set_current_user(req: UserSelectRequest):
-    payload = req.model_dump()
-    temporary = bool(payload.pop("temporary", False))
+    # model_dump() 는 pydantic v2 전용 — 배포 PC 의 구버전(v1)에서도 돌도록 직접 구성
+    payload = {k: getattr(req, k) for k in
+               ("user_id", "name", "title", "team", "project", "model")}
+    temporary = bool(req.temporary)
     user = login_service.set_login_user(payload, persist=not temporary)
     logger.info("로그인 사용자 설정%s: %s / %s / %s%s",
                 " (임시)" if temporary else "",
@@ -71,8 +73,16 @@ async def get_login_config():
 
 
 @router.get("/search")
-async def search_users(keyword: str = Query(..., min_length=1)):
-    """Jira 유저 검색 (이름/아이디/조직명). 동기 requests 는 스레드로 오프로드."""
+async def search_users(keyword: str = ""):
+    """Jira 유저 검색 (이름/아이디/조직명). 동기 requests 는 스레드로 오프로드.
+
+    ⚠️ 기본값에 fastapi.Query(...) 를 쓰지 않는다 — 배포 PC 의 FastAPI/pydantic
+    버전에서 라우터 import 시점에 "TypeError: Expected str, got Query" 로
+    서버 기동 자체가 실패했다 (2026-07-23). 검증은 함수 안에서 직접 한다.
+    """
+    keyword = (keyword or "").strip()
+    if not keyword:
+        raise HTTPException(status_code=400, detail="검색어(keyword)를 입력하세요")
     try:
         users = await asyncio.to_thread(login_service.search_users, keyword)
     except RuntimeError as e:
