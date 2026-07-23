@@ -154,11 +154,6 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
         </Tooltip>,
       ]}
     >
-      <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
-        누가 이 PC 를 사용하는지 식별하기 위한 선택입니다 (비밀번호 없음).
-        선택한 사용자·부서·프로젝트는 관제 페이지와 사용량 통계, 버그 리포트에 표기됩니다.
-      </Typography.Paragraph>
-
       {!jiraReady && (
         <Alert
           type="warning" showIcon style={{ marginBottom: 12 }}
@@ -169,7 +164,7 @@ export default function LoginModal({ open, user, onDone, onClose }: Props) {
 
       <Space.Compact style={{ width: '100%', marginBottom: 8 }}>
         <Input
-          placeholder="이름 / 아이디 / 조직명 입력 후 Enter"
+          placeholder="이름 / 아이디(EP로그인용 아이디) / 조직명 입력 후 Enter"
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
           onPressEnter={doSearch}

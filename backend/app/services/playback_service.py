@@ -2246,20 +2246,37 @@ class PlaybackService:
 
     # ── OCR 가상 모듈 헬퍼 ─────────────────────────────────────────────────
 
+    _OCR_CAPTURE_TYPES = ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent",
+                          "icas_agent", "mib_agent", "bmw_agent", "vision_camera", "webcam")
+
     def _find_ocr_device(self, step: Step) -> Optional[dict]:
         """OCR 스텝에서 스크린샷 대상 디바이스 정보 반환.
-        step.screenshot_device_id 우선, 없으면 주 디바이스 첫 번째로 fallback."""
+        step.screenshot_device_id 우선, 없으면 **연결된** 주 디바이스로 fallback."""
         device_id = step.screenshot_device_id
         if device_id:
             resolved = self._resolve_alias(device_id, self._device_map)
             dev = self.dm.get_device(resolved) or self.dm.get_device(device_id)
             if dev:
                 screen_type = step.screen_type or self._default_ocr_screen_type(dev)
+                logger.info("OCR capture target (explicit): device=%s type=%s status=%s screen=%s",
+                            dev.id, dev.type, dev.status, screen_type)
                 return {"type": dev.type, "id": dev.id, "address": dev.address, "screen_type": screen_type}
-        # fallback: 주 디바이스 중 첫 번째
-        for d in self.dm.list_primary():
-            if d.type in ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent", "icas_agent", "mib_agent", "bmw_agent", "vision_camera", "webcam"):
+            logger.warning("OCR capture: screenshot_device_id=%s (resolved=%s) 미등록 — fallback 사용",
+                           device_id, resolved)
+        # fallback (screen_type 미저장 레거시 스텝): 연결된 주 디바이스 우선.
+        # list_primary는 등록만 되고 연결 안 된 디바이스도 포함하므로 status를 봐야
+        # 오프라인 디바이스를 잡아 캡처가 통째로 실패하는 문제를 피할 수 있다.
+        candidates = [d for d in self.dm.list_primary() if d.type in self._OCR_CAPTURE_TYPES]
+        for d in candidates:
+            if d.status == "connected":
+                logger.info("OCR capture target (fallback): device=%s type=%s screen=%s",
+                            d.id, d.type, self._default_ocr_screen_type(d))
                 return {"type": d.type, "id": d.id, "address": d.address, "screen_type": self._default_ocr_screen_type(d)}
+        # 연결된 것이 없으면 기존 동작 유지 (첫 번째 — 캡처 시도 자체는 하도록)
+        for d in candidates:
+            logger.warning("OCR capture target (fallback, disconnected): device=%s type=%s status=%s",
+                           d.id, d.type, d.status)
+            return {"type": d.type, "id": d.id, "address": d.address, "screen_type": self._default_ocr_screen_type(d)}
         return None
 
     @staticmethod
@@ -2276,7 +2293,10 @@ class PlaybackService:
         return "front_center"
 
     async def _screencap_bytes(self, dev_info: dict) -> Optional[bytes]:
-        """디바이스 정보로부터 스크린샷 bytes 반환."""
+        """디바이스 정보로부터 스크린샷 bytes 반환.
+
+        None 반환 = OCR 스텝 "FAIL: 스크린샷 캡처 실패". 서비스 인스턴스가 없어
+        (연결 끊김 등) 캡처를 시도조차 못한 경우도 조용히 None이 되므로 반드시 로그를 남긴다."""
         dev_type = dev_info["type"]
         dev_id = dev_info["id"]
         screen_type = dev_info.get("screen_type", "front_center")
@@ -2314,7 +2334,11 @@ class PlaybackService:
                     loop = asyncio.get_event_loop()
                     return await loop.run_in_executor(None, cam.CaptureBytes, "png")
         except Exception as e:
-            logger.error("OCR screencap 실패 (device=%s type=%s): %s", dev_id, dev_type, e)
+            logger.error("OCR screencap 실패 (device=%s type=%s screen=%s): %s",
+                         dev_id, dev_type, screen_type, e)
+            return None
+        logger.error("OCR screencap 실패 (device=%s type=%s screen=%s): 서비스 인스턴스 없음 (연결 끊김?)",
+                     dev_id, dev_type, screen_type)
         return None
 
     async def _tap_ocr_device(self, dev_info: dict, x: int, y: int) -> None:
