@@ -314,6 +314,9 @@ const ParamDbButtons: React.FC<Props> = ({ module, func, currentArgs, onLoadRow,
                   value={saveSheet}
                   onChange={v => setSaveSheet(v)}
                   options={existingSheets.map(s => ({ value: s }))}
+                  filterOption={(input, option) =>
+                    String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+                  allowClear
                   style={{ flex: 1 }}
                 />
                 <Button size="small" type="primary" loading={saving} onClick={handleSaveCurrent}>{t('common.save')}</Button>
@@ -364,6 +367,9 @@ const ParamDbButtons: React.FC<Props> = ({ module, func, currentArgs, onLoadRow,
                   value={editing.sheet}
                   onChange={v => setEditing(prev => prev && { ...prev, sheet: v })}
                   options={existingSheets.map(s => ({ value: s }))}
+                  filterOption={(input, option) =>
+                    String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+                  allowClear
                   style={{ flex: 1 }}
                 />
               </div>
