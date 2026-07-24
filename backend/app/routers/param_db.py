@@ -5,9 +5,10 @@
 서버에 두므로 같은 서버를 쓰는 사용자끼리 자동 공유된다.
 
 CSV 포맷 (utf-8-sig, Excel 호환):
-    Sheet,Description,<param1>,<param2>,...
-- Sheet: 카테고리(시트) 이름. UI 모달에서 탭으로 구분된다. 비우면 기본 시트.
+    Category,Description,<param1>,<param2>,...
+- Category: 카테고리 이름. UI 모달에서 탭으로 구분된다. 비우면 기본(Default).
   (CSV 에는 엑셀식 시트 개념이 없으므로 열 값으로 그룹핑한다)
+  읽기는 구 헤더명 'Sheet' 도 허용, 저장은 항상 'Category'.
 - Description: 항목 설명 — DB 모달 목록의 기준 열(맨 왼쪽).
 - 나머지 열: 함수 인자명 그대로. 값은 전부 문자열(프론트 args 와 동일).
 
@@ -37,7 +38,8 @@ _PARAM_DB_DIR = Path(__file__).resolve().parent.parent.parent / "param_db"
 _write_lock = threading.Lock()
 
 # 예약 열 이름 (인자 열이 아님)
-_SHEET_COL = "Sheet"
+_SHEET_COL = "Category"
+_SHEET_COL_LEGACY = "Sheet"  # 초기 버전 헤더명 — 읽기만 허용
 _DESC_COL = "Description"
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
@@ -82,6 +84,8 @@ def _parse_csv_text(text: str) -> tuple[list[str], list[dict]]:
     if not rows:
         return [], []
     header = [h.strip() for h in rows[0]]
+    # 구 헤더명 'Sheet' → 'Category' 로 정규화 (읽기 호환)
+    header = [_SHEET_COL if h == _SHEET_COL_LEGACY else h for h in header]
     if _DESC_COL not in header:
         raise HTTPException(
             status_code=400,
