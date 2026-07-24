@@ -6868,8 +6868,7 @@ export default function RecordPage() {
                         </span>
                       )}
                     />
-                    {/* 파라미터 DB 는 실험 기능 — #test 모드에서만 노출 */}
-                    {testMode && selectedModuleName && selectedModuleFunc && (moduleFunctions.find(f => f.name === selectedModuleFunc)?.params.length ?? 0) > 0 && (
+                    {selectedModuleName && selectedModuleFunc && (moduleFunctions.find(f => f.name === selectedModuleFunc)?.params.length ?? 0) > 0 && (
                       <ParamDbButtons
                         module={selectedModuleName}
                         func={selectedModuleFunc}
