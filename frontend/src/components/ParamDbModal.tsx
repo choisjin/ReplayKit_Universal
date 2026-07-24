@@ -164,15 +164,16 @@ const ParamDbButtons: React.FC<Props> = ({ module, func, currentArgs, onLoadRow,
     }
   };
 
+  // 값은 잘라내지 않는다 — 전체를 표시하되, 아주 긴 값만 420px 에서 줄바꿈.
+  // (x: 'max-content' 스크롤과 조합: 열은 내용 폭만큼 넓어지고 초과분은 가로 스크롤)
   const cellStyle: React.CSSProperties = {
     fontFamily: 'monospace',
     fontSize: 11,
-    maxWidth: 160,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    maxWidth: 420,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-all',
     display: 'inline-block',
-    verticalAlign: 'bottom',
+    verticalAlign: 'top',
   };
 
   const buildColumns = (headers: string[]) => [
@@ -183,18 +184,14 @@ const ParamDbButtons: React.FC<Props> = ({ module, func, currentArgs, onLoadRow,
       fixed: 'left' as const,
       width: 180,
       render: (v: string) => (
-        <Tooltip title={v}>
-          <span style={{ fontWeight: 600, maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>{v}</span>
-        </Tooltip>
+        <span style={{ fontWeight: 600, wordBreak: 'break-word' }}>{v}</span>
       ),
     },
     ...headers.map(h => ({
       title: h,
       key: h,
       render: (_: any, row: ParamDbRow) => (
-        <Tooltip title={row.args[h]}>
-          <span style={cellStyle}>{row.args[h]}</span>
-        </Tooltip>
+        <span style={cellStyle}>{row.args[h]}</span>
       ),
     })),
     {
