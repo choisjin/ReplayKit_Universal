@@ -3947,9 +3947,8 @@ export default function RecordPage() {
           screen_type: screenTypeArgForDevice(screenshotDeviceId),
         } : {}),
         params,
-        description: override?.description
-          ? `${selectedModuleName}::${funcName}() — ${override.description}`
-          : `${selectedModuleName}::${funcName}()`,
+        // 파라미터 DB 불러오기: DB 행의 설명만 사용 (모듈::함수() 접두어 없이)
+        description: override?.description || `${selectedModuleName}::${funcName}()`,
         delay_after_ms: delayMs,
         skip_execute: true,
       });
