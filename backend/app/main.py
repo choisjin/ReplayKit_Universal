@@ -37,7 +37,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from .routers import bugreport as bugreport_router, compositor as compositor_router, device, dlt as dlt_router, results, scenario, serial_log as serial_log_router, logcat_log as logcat_log_router, settings, user as user_router, webcam, backup as backup_router
+from .routers import bugreport as bugreport_router, compositor as compositor_router, device, dlt as dlt_router, param_db as param_db_router, results, scenario, serial_log as serial_log_router, logcat_log as logcat_log_router, settings, user as user_router, webcam, backup as backup_router
 from .dependencies import adb_service, device_manager, playback_service, recording_service, monitor_client
 from .services import login_service
 from .services.adb_service import resolve_sf_display_id, resolve_input_display_id
@@ -687,6 +687,7 @@ app.include_router(logcat_log_router.router)
 app.include_router(backup_router.router)
 app.include_router(bugreport_router.router)
 app.include_router(user_router.router)
+app.include_router(param_db_router.router)
 
 # Serve app static assets (Tabulator 등 라이브러리)
 _static_dir = Path(__file__).resolve().parent / "static"

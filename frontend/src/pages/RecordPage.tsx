@@ -12,6 +12,7 @@ import { useTranslation } from '../i18n';
 import type { TranslationKey } from '../i18n/translations';
 import { findInvalidNameChars, INVALID_NAME_CHARS_DISPLAY } from '../utils/entityName';
 import DLTViewer from '../components/DLTViewer';
+import ParamDbButtons from '../components/ParamDbModal';
 import SerialViewer from '../components/SerialViewer';
 import { useDLTSessions } from '../hooks/useDLTSessions';
 import { useSerialSessions, useLogcatSessions } from '../hooks/useSerialSessions';
@@ -3912,7 +3913,8 @@ export default function RecordPage() {
     }
   };
 
-  const addManualStep = async () => {
+  // override: 파라미터 DB "불러오기" — DB 행의 인자/설명으로 스텝 추가 (입력 필드 상태와 무관)
+  const addManualStep = async (override?: { args: Record<string, string>; description?: string }) => {
     if (!recording) return;
     if (!selectedDeviceId || !selectedModuleName) {
       message.warning(t('record.selectModule'));
@@ -3927,7 +3929,7 @@ export default function RecordPage() {
     if (selectedModuleName === 'DLTViewer' && selectedModuleFunc === 'WaitLog' && dltBackground) {
       funcName = 'StartMonitor';
     }
-    const params: any = { module: selectedModuleName, function: funcName, args: { ...moduleFuncArgs } };
+    const params: any = { module: selectedModuleName, function: funcName, args: { ...(override?.args ?? moduleFuncArgs) } };
     // OCR ClickText: 일체형 표시 보정. 재생 시 _execute_ocr_step이 step.params.x_offset를
     // OCR이 찾은 좌표에 더해 실제 터치 좌표계로 환산한다. 탭 대상은 캡처(화면) 디바이스.
     if (selectedModuleName === 'OCR' && funcName === 'ClickText') {
@@ -3945,7 +3947,9 @@ export default function RecordPage() {
           screen_type: screenTypeArgForDevice(screenshotDeviceId),
         } : {}),
         params,
-        description: `${selectedModuleName}::${funcName}()`,
+        description: override?.description
+          ? `${selectedModuleName}::${funcName}() — ${override.description}`
+          : `${selectedModuleName}::${funcName}()`,
         delay_after_ms: delayMs,
         skip_execute: true,
       });
@@ -6732,7 +6736,7 @@ export default function RecordPage() {
                   size="small"
                   type="primary"
                   icon={<PlusOutlined />}
-                  onClick={addManualStep}
+                  onClick={() => addManualStep()}
                   disabled={!selectedDeviceId || !selectedModuleFunc}
                 >
                   {t('record.addStep')}
@@ -6808,6 +6812,8 @@ export default function RecordPage() {
                         {lang === 'en' && moduleDescriptionEn ? moduleDescriptionEn : moduleDescription}
                       </div>
                     )}
+                    {/* 함수 선택 드롭다운 + 우측 파라미터 DB(DB/가져오기/내보내기) 버튼 */}
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                     <Select
                       showSearch
                       placeholder={t('record.selectFunction')}
@@ -6839,7 +6845,7 @@ export default function RecordPage() {
                         }
                       }}
                       size="small"
-                      style={{ width: '100%' }}
+                      style={{ flex: 1, minWidth: 0 }}
                       optionFilterProp="label"
                       options={moduleFunctions.map(f => {
                         // 인자 시그니처 대신 설명을 붙인다(가독성/검색성). 설명은 첫 줄만.
@@ -6862,6 +6868,17 @@ export default function RecordPage() {
                         </span>
                       )}
                     />
+                    {/* 파라미터 DB 는 실험 기능 — #test 모드에서만 노출 */}
+                    {testMode && selectedModuleName && selectedModuleFunc && (moduleFunctions.find(f => f.name === selectedModuleFunc)?.params.length ?? 0) > 0 && (
+                      <ParamDbButtons
+                        module={selectedModuleName}
+                        func={selectedModuleFunc}
+                        currentArgs={moduleFuncArgs}
+                        onLoadRow={(args, desc) => { setModuleFuncArgs(args); addManualStep({ args, description: desc }); }}
+                        isDark={isDark}
+                      />
+                    )}
+                    </div>
                     {selectedModuleFunc && (() => {
                       const fn = moduleFunctions.find(f => f.name === selectedModuleFunc);
                       if (!fn) return null;

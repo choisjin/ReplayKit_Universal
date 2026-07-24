@@ -30,6 +30,7 @@ backend/screenshots/
 backend/results/
 backend/scenarios/
 backend/backups/
+backend/param_db/
 backend/auxiliary_devices.json
 backend/settings.json
 Results/

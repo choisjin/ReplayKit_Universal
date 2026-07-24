@@ -93,6 +93,23 @@ export const deviceApi = {
     api.post('/device/wincontrol/resize', { client_w: clientW, client_h: clientH }),
 };
 
+// 모듈 함수 파라미터 DB (CSV) APIs — 자주 쓰는 인자 조합 저장/공유
+export const paramDbApi = {
+  get: (module: string, func: string) =>
+    api.get(`/paramdb/${encodeURIComponent(module)}/${encodeURIComponent(func)}`),
+  addRow: (module: string, func: string, row: { sheet?: string; description: string; args: Record<string, string> }) =>
+    api.post(`/paramdb/${encodeURIComponent(module)}/${encodeURIComponent(func)}/rows`, row),
+  deleteRow: (module: string, func: string, index: number) =>
+    api.post(`/paramdb/${encodeURIComponent(module)}/${encodeURIComponent(func)}/delete-row`, { index }),
+  exportCsv: (module: string, func: string) =>
+    api.get(`/paramdb/${encodeURIComponent(module)}/${encodeURIComponent(func)}/export`, { responseType: 'blob' }),
+  importCsv: (module: string, func: string, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post(`/paramdb/${encodeURIComponent(module)}/${encodeURIComponent(func)}/import`, form);
+  },
+};
+
 // Scenario APIs
 export const scenarioApi = {
   list: () => api.get('/scenario/list'),
