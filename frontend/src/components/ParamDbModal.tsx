@@ -55,6 +55,9 @@ const ParamDbButtons: React.FC<Props> = ({ module, func, currentArgs, onLoadRow,
   const [saveDesc, setSaveDesc] = useState('');
   const [saveSheet, setSaveSheet] = useState('');
   const [saving, setSaving] = useState(false);
+  // 행 수정 폼 (index = 파일 내 절대 인덱스)
+  const [editing, setEditing] = useState<{ index: number; description: string; sheet: string; args: Record<string, string> } | null>(null);
+  const [updating, setUpdating] = useState(false);
 
   const fetchData = async (): Promise<ParamDbData | null> => {
     setLoading(true);
@@ -73,6 +76,7 @@ const ParamDbButtons: React.FC<Props> = ({ module, func, currentArgs, onLoadRow,
   const openDb = async () => {
     setDbOpen(true);
     setSaveOpen(false);
+    setEditing(null);
     const d = await fetchData();
     if (d && d.sheets.length > 0) setActiveSheet(d.sheets[0].name);
   };
@@ -155,9 +159,37 @@ const ParamDbButtons: React.FC<Props> = ({ module, func, currentArgs, onLoadRow,
     }
   };
 
+  const handleUpdateRow = async () => {
+    if (!editing) return;
+    if (!editing.description.trim()) {
+      message.warning(t('paramDb.descRequired'));
+      return;
+    }
+    setUpdating(true);
+    try {
+      await paramDbApi.updateRow(module, func, {
+        index: editing.index,
+        sheet: editing.sheet.trim(),
+        description: editing.description.trim(),
+        args: editing.args,
+      });
+      message.success(t('paramDb.updated'));
+      const target = editing.sheet.trim() || 'Default';
+      setEditing(null);
+      await fetchData();
+      setActiveSheet(target);
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || t('paramDb.updateFailed'));
+    } finally {
+      setUpdating(false);
+    }
+  };
+
   const handleDeleteRow = async (index: number) => {
     try {
       await paramDbApi.deleteRow(module, func, index);
+      // 삭제로 절대 인덱스가 밀리므로 수정 중이던 행 참조는 폐기
+      setEditing(null);
       await fetchData();
     } catch (e: any) {
       message.error(e.response?.data?.detail || t('paramDb.deleteFailed'));
@@ -176,7 +208,7 @@ const ParamDbButtons: React.FC<Props> = ({ module, func, currentArgs, onLoadRow,
     verticalAlign: 'top',
   };
 
-  const buildColumns = (headers: string[]) => [
+  const buildColumns = (headers: string[], sheetName: string) => [
     {
       title: t('paramDb.description'),
       dataIndex: 'description',
@@ -198,11 +230,25 @@ const ParamDbButtons: React.FC<Props> = ({ module, func, currentArgs, onLoadRow,
       title: '',
       key: '__actions',
       fixed: 'right' as const,
-      width: 120,
+      width: 168,
       render: (_: any, row: ParamDbRow) => (
         <Space size={4}>
           <Button size="small" type="primary" onClick={() => onLoadRow({ ...row.args }, row.description)}>
             {t('paramDb.load')}
+          </Button>
+          <Button
+            size="small"
+            onClick={() => {
+              setSaveOpen(false);
+              setEditing({
+                index: row.index,
+                description: row.description,
+                sheet: sheetName === 'Default' ? '' : sheetName,
+                args: { ...row.args },
+              });
+            }}
+          >
+            {t('paramDb.edit')}
           </Button>
           <Popconfirm title={t('paramDb.deleteConfirm')} onConfirm={() => handleDeleteRow(row.index)}>
             <Button size="small" danger>{t('paramDb.delete')}</Button>
@@ -217,7 +263,7 @@ const ParamDbButtons: React.FC<Props> = ({ module, func, currentArgs, onLoadRow,
       size="small"
       rowKey="index"
       dataSource={sheet.rows}
-      columns={buildColumns(data?.headers || [])}
+      columns={buildColumns(data?.headers || [], sheet.name)}
       pagination={sheet.rows.length > 50 ? { pageSize: 50, size: 'small' } : false}
       scroll={{ x: 'max-content', y: 400 }}
     />
@@ -251,31 +297,94 @@ const ParamDbButtons: React.FC<Props> = ({ module, func, currentArgs, onLoadRow,
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {/* 현재 입력값 저장 */}
           {saveOpen ? (
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center', padding: 8, borderRadius: 6, background: isDark ? '#1a2332' : '#f0f7ff' }}>
-              <Input
-                size="small"
-                placeholder={t('paramDb.descPlaceholder')}
-                value={saveDesc}
-                onChange={e => setSaveDesc(e.target.value)}
-                onPressEnter={handleSaveCurrent}
-                style={{ flex: 2 }}
-                autoFocus
-              />
-              <AutoComplete
-                size="small"
-                placeholder={t('paramDb.sheetPlaceholder')}
-                value={saveSheet}
-                onChange={v => setSaveSheet(v)}
-                options={existingSheets.map(s => ({ value: s }))}
-                style={{ flex: 1 }}
-              />
-              <Button size="small" type="primary" loading={saving} onClick={handleSaveCurrent}>{t('common.save')}</Button>
-              <Button size="small" onClick={() => setSaveOpen(false)}>{t('common.cancel')}</Button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 8, borderRadius: 6, background: isDark ? '#1a2332' : '#f0f7ff' }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <Input
+                  size="small"
+                  placeholder={t('paramDb.descPlaceholder')}
+                  value={saveDesc}
+                  onChange={e => setSaveDesc(e.target.value)}
+                  onPressEnter={handleSaveCurrent}
+                  style={{ flex: 2 }}
+                  autoFocus
+                />
+                <AutoComplete
+                  size="small"
+                  placeholder={t('paramDb.sheetPlaceholder')}
+                  value={saveSheet}
+                  onChange={v => setSaveSheet(v)}
+                  options={existingSheets.map(s => ({ value: s }))}
+                  style={{ flex: 1 }}
+                />
+                <Button size="small" type="primary" loading={saving} onClick={handleSaveCurrent}>{t('common.save')}</Button>
+                <Button size="small" onClick={() => setSaveOpen(false)}>{t('common.cancel')}</Button>
+              </div>
+              {/* 저장될 현재 입력값 미리보기 */}
+              <div style={{ fontSize: 11, color: isDark ? '#8bb4e0' : '#1677ff' }}>{t('paramDb.currentValues')}</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {(data?.headers.length ? data.headers : Object.keys(currentArgs)).map(h => (
+                  <span
+                    key={h}
+                    style={{
+                      fontFamily: 'monospace', fontSize: 11, padding: '1px 6px', borderRadius: 4,
+                      background: isDark ? '#111a26' : '#fff',
+                      border: `1px solid ${isDark ? '#2a3a50' : '#d6e8fc'}`,
+                      wordBreak: 'break-all',
+                    }}
+                  >
+                    <span style={{ color: isDark ? '#8bb4e0' : '#1677ff' }}>{h}</span>
+                    {' = '}
+                    {currentArgs[h] ?? ''}
+                  </span>
+                ))}
+              </div>
             </div>
-          ) : (
-            <Button size="small" icon={<PlusOutlined />} style={{ alignSelf: 'flex-start' }} onClick={() => { setSaveOpen(true); setSaveSheet(activeSheet === 'Default' ? '' : activeSheet); }}>
+          ) : !editing ? (
+            <Button size="small" icon={<PlusOutlined />} style={{ alignSelf: 'flex-start' }} onClick={() => { setEditing(null); setSaveOpen(true); setSaveSheet(activeSheet === 'Default' ? '' : activeSheet); }}>
               {t('paramDb.saveCurrent')}
             </Button>
+          ) : null}
+
+          {/* 행 수정 폼 */}
+          {editing && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 8, borderRadius: 6, background: isDark ? '#2a2416' : '#fffbe6', border: `1px solid ${isDark ? '#4a3f1e' : '#ffe58f'}` }}>
+              <div style={{ fontSize: 11, fontWeight: 600 }}>{t('paramDb.editRow')}</div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <Input
+                  size="small"
+                  placeholder={t('paramDb.descPlaceholder')}
+                  value={editing.description}
+                  onChange={e => setEditing(prev => prev && { ...prev, description: e.target.value })}
+                  style={{ flex: 2 }}
+                  autoFocus
+                />
+                <AutoComplete
+                  size="small"
+                  placeholder={t('paramDb.sheetPlaceholder')}
+                  value={editing.sheet}
+                  onChange={v => setEditing(prev => prev && { ...prev, sheet: v })}
+                  options={existingSheets.map(s => ({ value: s }))}
+                  style={{ flex: 1 }}
+                />
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {(data?.headers.length ? data.headers : Object.keys(editing.args)).map(h => (
+                  <div key={h} style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 140, flex: '1 1 140px', maxWidth: 260 }}>
+                    <span style={{ fontSize: 10, fontFamily: 'monospace', color: isDark ? '#b0a060' : '#ad8b00' }}>{h}</span>
+                    <Input
+                      size="small"
+                      value={editing.args[h] ?? ''}
+                      onChange={e => setEditing(prev => prev && { ...prev, args: { ...prev.args, [h]: e.target.value } })}
+                      style={{ fontFamily: 'monospace', fontSize: 11 }}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                <Button size="small" onClick={() => setEditing(null)}>{t('common.cancel')}</Button>
+                <Button size="small" type="primary" loading={updating} onClick={handleUpdateRow}>{t('common.save')}</Button>
+              </div>
+            </div>
           )}
 
           {loading ? null : !data || data.total === 0 ? (

@@ -146,6 +146,13 @@ class DeleteRowRequest(BaseModel):
     index: int  # GET 응답의 rows[].index (파일 내 절대 인덱스)
 
 
+class UpdateRowRequest(BaseModel):
+    index: int  # GET 응답의 rows[].index (파일 내 절대 인덱스)
+    sheet: str = ""
+    description: str
+    args: dict[str, str] = {}
+
+
 @router.get("/{module}/{function}")
 async def get_param_db(module: str, function: str):
     """함수의 파라미터 DB 조회. 파일이 없으면 함수 인자 기반 빈 템플릿 반환."""
@@ -189,6 +196,33 @@ async def add_param_db_row(module: str, function: str, req: AddRowRequest):
 
     total = await asyncio.to_thread(_do)
     return {"success": True, "total": total}
+
+
+@router.post("/{module}/{function}/update-row")
+async def update_param_db_row(module: str, function: str, req: UpdateRowRequest):
+    """행 수정 (index = GET 응답 rows[].index). 설명/시트/인자 전부 교체."""
+    if not req.description.strip():
+        raise HTTPException(status_code=400, detail="Description is required")
+    path = _safe_path(module, function)
+
+    def _do():
+        with _write_lock:
+            arg_cols, entries = _read_db(path)
+            if not (0 <= req.index < len(entries)):
+                raise HTTPException(status_code=404, detail="Row not found")
+            # 기존 헤더에 없는 새 인자는 열로 추가 (함수 시그니처 변경 대응)
+            for k in req.args.keys():
+                if k not in arg_cols:
+                    arg_cols.append(k)
+            entries[req.index] = {
+                "sheet": req.sheet.strip(),
+                "description": req.description.strip(),
+                "args": {c: str(req.args.get(c, "")) for c in arg_cols},
+            }
+            _write_db(path, arg_cols, entries)
+
+    await asyncio.to_thread(_do)
+    return {"success": True}
 
 
 @router.post("/{module}/{function}/delete-row")

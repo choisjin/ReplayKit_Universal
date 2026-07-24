@@ -99,6 +99,8 @@ export const paramDbApi = {
     api.get(`/paramdb/${encodeURIComponent(module)}/${encodeURIComponent(func)}`),
   addRow: (module: string, func: string, row: { sheet?: string; description: string; args: Record<string, string> }) =>
     api.post(`/paramdb/${encodeURIComponent(module)}/${encodeURIComponent(func)}/rows`, row),
+  updateRow: (module: string, func: string, row: { index: number; sheet?: string; description: string; args: Record<string, string> }) =>
+    api.post(`/paramdb/${encodeURIComponent(module)}/${encodeURIComponent(func)}/update-row`, row),
   deleteRow: (module: string, func: string, index: number) =>
     api.post(`/paramdb/${encodeURIComponent(module)}/${encodeURIComponent(func)}/delete-row`, { index }),
   exportCsv: (module: string, func: string) =>
