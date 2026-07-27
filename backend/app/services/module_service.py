@@ -1095,6 +1095,9 @@ def get_module_functions(module_name: str) -> list[dict]:
         "SerialLogging": {"Connect", "Disconnect", "IsConnected"},
         # PCAN: 연결은 시나리오가 자동 관리 — 스텝엔 송신/로깅 함수만 노출.
         "PCAN": {"Connect", "Disconnect", "IsConnected"},
+        # POWER: Connect(port, bps)/DisConnect 는 디바이스 연결/해제가 자동 수행
+        # (_MODULE_LIFECYCLE). 스텝엔 전원 제어 함수만 노출.
+        "POWER": {"Connect", "DisConnect"},
         # SCAR.Disconnect 는 device_manager 연결해제/등록삭제 시 netns 복원용으로 자동 호출 —
         # 시나리오 스텝에 노출할 필요 없음 (Reconnect/Setup/SendApi/Exec 등은 그대로 노출).
         "SCAR": {"Disconnect"},
@@ -1243,8 +1246,56 @@ def get_module_functions(module_name: str) -> list[dict]:
     return functions
 
 
+# ── 생성자만으로는 연결되지 않는 모듈의 연결/해제 lifecycle ────────────────────
+# lge.auto.POWER 는 __init__(self) 가 인자를 받지 않고 Connect(port, bps) 로 포트를 연다.
+# 그래서 _create_and_register 의 기존 자동 연결 경로 두 가지에 모두 걸리지 않는다
+#   - ctor_args 경로: 생성자가 port/bps 를 안 받으므로 진입 못 함
+#   - Connect() 자동 호출: 필수 인자가 있어(required 0개 조건) 건너뜀
+# 결과적으로 인스턴스의 내부 시리얼 핸들(ser)이 None 인 채 남아, 첫 스텝이
+# "'NoneType' object has no attribute 'write'" 로 실패했다.
+# 여기 선언된 모듈은 디바이스 연결 시 connect 메서드를 constructor_kwargs 로 자동 호출하고,
+# 연결 해제 시 disconnect 메서드로 포트를 닫는다 (스텝 UI 에서는 두 함수를 숨김 —
+# get_module_functions 의 per_module_excluded 참조).
+_MODULE_LIFECYCLE: dict[str, dict[str, Any]] = {
+    "POWER": {
+        "connect": "Connect",
+        # 호출 인자 매핑: 메서드 파라미터명 → constructor_kwargs 키
+        "connect_args": {"port": "port", "bps": "bps"},
+        # ⚠️ 'DisConnect' — C 가 대문자다(pyd 실제 이름). 일반 teardown 후보 목록의
+        #    'Disconnect'/'Close' 와 매칭되지 않아 포트가 닫히지 않던 원인.
+        "disconnect": "DisConnect",
+        # 연결 여부 판별용 인스턴스 속성 (pyserial Serial 객체 or None)
+        "conn_attr": "ser",
+    },
+}
+
+
+def _lifecycle_spec(instance_or_name) -> Optional[dict]:
+    """인스턴스 또는 모듈명으로 _MODULE_LIFECYCLE 스펙 조회.
+
+    pyd 모듈은 클래스명 == 모듈명이므로 인스턴스로도 역참조할 수 있다.
+    """
+    if isinstance(instance_or_name, str):
+        return _MODULE_LIFECYCLE.get(instance_or_name)
+    return _MODULE_LIFECYCLE.get(type(instance_or_name).__name__)
+
+
 def _is_connected(instance) -> bool:
     """Check if a module instance appears to have a live connection."""
+    # lifecycle 선언 모듈(POWER 등): 내부 시리얼 핸들로 판별.
+    # 이 분기가 없으면 POWER 는 아래의 어떤 지표도 없어 마지막 줄의
+    # "판별 불가 → True" 로 떨어져, 포트를 못 연 인스턴스가 '연결됨'으로 보인다.
+    _lc = _lifecycle_spec(instance)
+    if _lc and _lc.get("conn_attr"):
+        conn = getattr(instance, _lc["conn_attr"], None)
+        if conn is None:
+            return False
+        is_open = getattr(conn, "is_open", None)
+        if callable(is_open):
+            return is_open()
+        if isinstance(is_open, bool):
+            return is_open
+        return True
     # VisionCamera: IsConnected() 메서드
     if hasattr(instance, "IsConnected") and callable(getattr(instance, "IsConnected")):
         try:
@@ -1479,6 +1530,49 @@ def _get_instance(module_name: str, constructor_kwargs: Optional[dict] = None,
     return _instances[key]
 
 
+def _lifecycle_connect(instance, module_name: str, key: str,
+                       constructor_kwargs: Optional[dict]) -> bool:
+    """_MODULE_LIFECYCLE 에 선언된 연결 메서드를 디바이스 정보로 자동 호출.
+
+    Returns: 자동 연결을 수행했으면 True, 대상 모듈이 아니면 False.
+    Raises: 연결 메서드가 예외를 던지면 그대로 전파 — 호출자가 인스턴스를 캐시하지
+        않도록 하기 위함 (포트 사용 중/장비 미연결이 '연결됨'으로 보이면 안 된다).
+    """
+    spec = _MODULE_LIFECYCLE.get(module_name)
+    if not spec or not constructor_kwargs:
+        return False
+    method_name = spec.get("connect")
+    fn = getattr(instance, method_name, None) if method_name else None
+    if not callable(fn):
+        return False
+    call_args: dict[str, Any] = {}
+    for pname, src_key in (spec.get("connect_args") or {}).items():
+        if src_key not in constructor_kwargs:
+            # 필수 인자가 없으면 자동 연결을 포기한다 (예외 아님) — 스텝에서 수동 호출 가능.
+            logger.warning("Auto-connect %s.%s skipped: '%s' missing in device info",
+                           module_name, method_name, src_key)
+            return False
+        call_args[pname] = constructor_kwargs[src_key]
+    # baudrate 계열은 정수로 — 카탈로그에 문자열("115200")로 저장된 경우 대비.
+    for pname in ("bps", "baudrate", "baud"):
+        if pname in call_args:
+            try:
+                call_args[pname] = _cast_arg(call_args[pname], int)
+            except (ValueError, TypeError):
+                pass
+    result = fn(**call_args)
+    # ⚠️ POWER.pyd 의 Connect 는 SerialException 을 내부에서 삼키고(stderr 로 traceback 만
+    #    출력) 정상 반환한다 — 반환값만 믿으면 '연결됨'으로 오판한다. 실제 핸들로 재확인.
+    if not _is_connected(instance):
+        raise RuntimeError(
+            f"{module_name}.{method_name}({call_args}) did not open the connection — "
+            f"포트가 이미 사용 중이거나 장비가 응답하지 않습니다"
+        )
+    logger.info("Auto-called %s.%s(%s) → %s", module_name, method_name, call_args, result)
+    _auto_connected.add(key)
+    return True
+
+
 def _create_and_register(module_name: str, key: str, constructor_kwargs: Optional[dict],
                          shared_serial_conn) -> None:
     """인스턴스 생성 + auto-Connect/init + _instances[key] 등록.
@@ -1555,8 +1649,12 @@ def _create_and_register(module_name: str, key: str, constructor_kwargs: Optiona
             # Constructor doesn't accept the provided kwargs (e.g. BENCH, CANAT)
             # Create instance normally, then try auto-connect/init
             instance = cls()
-            connected = False
-            if "host" in constructor_kwargs:
+            # lifecycle 선언 모듈(POWER 등): Connect(port, bps) 를 디바이스 정보로 자동 호출.
+            # 실패 시 예외를 올려 인스턴스를 캐시하지 않는다 — 반쯤 연결된 인스턴스가
+            # 캐시에 남으면 이후 모든 스텝이 NoneType 오류로 실패하기 때문. 예외는
+            # connect_device_by_id 가 잡아 '연결 실패' 로 표시하고, 재시도가 가능해진다.
+            connected = _lifecycle_connect(instance, module_name, key, constructor_kwargs)
+            if not connected and "host" in constructor_kwargs:
                 # Socket-based modules: auto-call connect method
                 for method_name in ("socket_connect", "connect", "Connect"):
                     connect_fn = getattr(instance, method_name, None)
@@ -2049,6 +2147,17 @@ def _execute_sync(module_name: str, function_name: str, args: dict,
 
     instance = _get_instance(module_name, constructor_kwargs, shared_serial_conn, ssh_credentials)
 
+    # lifecycle 자동 관리 모듈(POWER 등)의 Connect/DisConnect 스텝은 무해하게 흡수한다.
+    # UI 드롭다운에서는 숨겼지만, 자동 연결 도입 이전에 작성된 시나리오에는 남아 있을 수
+    # 있다. 그대로 실행하면 이미 열린 포트를 재오픈(Access denied)하거나, 시나리오 도중
+    # 포트를 닫아 이후 스텝이 전부 NoneType 오류로 죽는다.
+    _lc = _MODULE_LIFECYCLE.get(module_name)
+    if _lc:
+        if function_name == _lc.get("connect") and _is_connected(instance):
+            return "ok: already connected (managed by device connection)"
+        if function_name == _lc.get("disconnect"):
+            return "ok: skipped — disconnect is managed by device disconnect"
+
     # SSHManager.send_command 특수 처리: SSHManager가 UTF-8로 강제 디코딩하면서
     # Windows(CP949) 등 비-UTF8 출력이 깨지므로, paramiko를 직접 호출해서 raw bytes를
     # 다중 인코딩 fallback으로 처리한다.
@@ -2526,7 +2635,9 @@ def disconnect_instance(module_name: str, endpoint: Optional[str] = None):
     for key in keys:
         inst = _instances.get(key)
         if inst is not None:
-            for method_name in ("Disconnect", "disconnect", "Close", "close"):
+            # "DisConnect" — lge.auto.POWER 처럼 C 가 대문자인 철자도 포함해야
+            # 연결 해제 시 COM 포트가 실제로 닫힌다.
+            for method_name in ("Disconnect", "disconnect", "DisConnect", "Close", "close"):
                 method = getattr(inst, method_name, None)
                 if callable(method):
                     try:
@@ -2610,7 +2721,7 @@ def cleanup_active_instances(reason: str = "") -> dict[str, str]:
         # Disconnect → Close → close → StopLogging/StopSave 순서로 시도 (대소문자 다양성).
         # SerialLogging은 Disconnect가 진행 중 로깅 세션 발견 시 자체적으로 StopLogging을 먼저
         # 호출하므로, 여기서 StopLogging을 별도로 부를 필요 없음.
-        for method_name in ("Disconnect", "disconnect", "Close", "close",
+        for method_name in ("Disconnect", "disconnect", "DisConnect", "Close", "close",
                              "StopLogging", "StopSave"):
             method = getattr(inst, method_name, None)
             if callable(method):
