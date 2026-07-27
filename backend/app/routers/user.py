@@ -64,11 +64,15 @@ async def clear_current_user():
 @router.get("/config")
 async def get_login_config():
     """로그인 모달 구성 — 프로젝트/모델 목록(주 디바이스 카탈로그 원본) +
-    Jira 검색 가능 여부만 노출한다 (Jira 계정은 백엔드에만)."""
+    유저 검색 가능 여부.
+
+    검색은 Manager 가 대행하므로 이 백엔드에 Jira 계정 자체가 없다 — jira_ready 는
+    'Manager 가 검색해 줄 수 있는 상태인지'를 뜻한다(프론트 키 이름은 호환 유지).
+    """
     cfg = await asyncio.to_thread(login_service.fetch_login_config)
     return {
         "projects": login_service.login_projects(),
-        "jira_ready": bool(cfg["jira"]["id"] and cfg["jira"]["pw"]),
+        "jira_ready": bool(cfg["ready"] and cfg["search_url"]),
     }
 
 

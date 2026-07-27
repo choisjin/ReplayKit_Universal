@@ -2,11 +2,14 @@
 """로그인(사용자 식별) 서비스 — Jira 유저 검색 + 선택 사용자 영속화.
 
 비밀번호 인증이 아니라 **누가 이 PC 를 쓰는지 식별**하는 용도다.
-- Jira 계정(검색용)과 프로젝트 목록은 Manager(관제 서버)가 관리하며,
-  서버 시작 시 GET {monitor_server_url}/api/login-config 로 받아온다.
-  Jira 계정은 이 백엔드에만 머물고 브라우저(프론트)에는 절대 내려주지 않는다.
-- 유저 검색은 Jira Server REST(user/search)를 requests 로 직접 호출한다
-  (jira 패키지 의존 없음 — person_org_search.py 의 파싱/페이지네이션 이식).
+- 유저 검색은 **Manager(관제 서버)가 대행**한다. 이 PC 는 Jira 자격증명을 갖지 않는다.
+  GET {monitor_server_url}/api/user-search?keyword= → {"users": [...]}
+  (2026-07-28 보안 변경. 예전에는 Manager 가 Jira id/pw 를 평문으로 내려주고 각 PC 가
+   Jira 를 직접 호출했다 — 인증 없는 엔드포인트라 사내망에서 계정이 통째로 유출됐다.
+   자격증명이 여기까지 오지 않으므로 이 파일에는 Jira 접속 코드가 없다.)
+- 검색 가능 여부(ready)와 검색 URL 은 GET {monitor_server_url}/api/login-config 로
+  받아 TTL 캐시한다.
+- 프로젝트/모델 목록은 Manager 가 아니라 로컬 디바이스 카탈로그가 원본이다.
 - 선택된 사용자는 backend/login_user.json 에 저장되어 재시작 후에도 유지되고,
   관제 status_update payload 의 "user" 로 실려 관제/통계/버그리포트에 표기된다.
 """
@@ -33,7 +36,7 @@ _user_loaded = False
 # 임시 로그인 여부 — True 면 파일에 저장하지 않아 다음 실행 시 로그인 창이 다시 뜬다.
 _user_temporary = False
 
-# Manager 에서 받아온 로그인 구성 {jira: {server,id,pw}, projects: [...]}
+# Manager 에서 받아온 로그인 구성 {"search_url": str, "ready": bool}
 _config_cache: dict | None = None
 _config_fetched_at = 0.0
 _CONFIG_TTL_SEC = 300.0
@@ -110,10 +113,20 @@ def _manager_url() -> str:
     return (_load_settings().get("monitor_server_url") or "").rstrip("/")
 
 
-def fetch_login_config(force: bool = False) -> dict:
-    """Manager 의 /api/login-config(Jira 계정)를 받아온다 (TTL 캐시, 실패 시 마지막 값 유지).
+def _default_config(url: str = "") -> dict:
+    """Manager 응답이 없을 때 쓰는 기본 구성.
 
-    반환: {"jira": {"server","id","pw"}} — 항상 이 형태를 보장.
+    search_url 은 Manager URL 로부터 유추한다 — 구버전 Manager(응답에 search_url 이
+    없는)라면 이 URL 이 404 를 내고, search_users 가 '매니저 업데이트 필요' 로 안내한다.
+    """
+    return {"search_url": f"{url}/api/user-search" if url else "", "ready": bool(url)}
+
+
+def fetch_login_config(force: bool = False) -> dict:
+    """Manager 의 /api/login-config 를 받아온다 (TTL 캐시, 실패 시 마지막 값 유지).
+
+    반환: {"search_url": str, "ready": bool} — 항상 이 형태를 보장.
+    **Jira 자격증명은 받지 않는다** — 검색은 Manager 가 대행한다(모듈 docstring 참고).
     프로젝트/모델 목록은 Manager 가 아니라 로컬 디바이스 카탈로그에서 온다
     (login_projects 참고).
     """
@@ -129,28 +142,27 @@ def fetch_login_config(force: bool = False) -> dict:
             resp = requests.get(f"{url}/api/login-config", timeout=10)
             resp.raise_for_status()
             data = resp.json()
-            jira = data.get("jira") or {}
+            search_url = str(data.get("search_url") or "").strip()
             _config_cache = {
-                "jira": {
-                    "server": str(jira.get("server") or ""),
-                    "id": str(jira.get("id") or ""),
-                    "pw": str(jira.get("pw") or ""),
-                },
+                "search_url": search_url or f"{url}/api/user-search",
+                # 구버전 Manager 는 ready 를 안 보낸다 — 그땐 일단 가능으로 두고
+                # 실제 검색 시점의 404/오류로 안내한다(로그인 창을 미리 막지 않는다).
+                "ready": bool(data.get("ready", True)),
             }
             _config_fetched_at = now
             return _config_cache
         except Exception as e:
             logger.warning("Manager 로그인 구성 조회 실패(%s): %s", url, e)
 
-    # 실패 — 마지막으로 성공한 값이 있으면 그대로, 없으면 빈 구성
-    return _config_cache or {"jira": {"server": "", "id": "", "pw": ""}}
+    # 실패 — 마지막으로 성공한 값이 있으면 그대로, 없으면 Manager URL 기반 기본값
+    return _config_cache or _default_config(url)
 
 
 def prefetch_login_config() -> None:
     """서버 시작 시 1회 미리 받아두기 (백그라운드 스레드에서 호출)."""
     cfg = fetch_login_config(force=True)
-    ready = bool(cfg["jira"]["id"] and cfg["jira"]["pw"])
-    logger.info("로그인 구성 수신: jira_ready=%s", ready)
+    logger.info("로그인 구성 수신: search_ready=%s (%s)",
+                cfg["ready"], cfg["search_url"] or "-")
 
 
 def login_projects() -> list[dict]:
@@ -177,78 +189,53 @@ def login_projects() -> list[dict]:
     return out
 
 
-# ---------------------------------------------------------------- Jira 유저 검색
-# person_org_search.py 이식 — displayName 형식 가정:
-#   "최세진/(협력사) 선임연구원/VS TC설계/검증자동화팀(sejin3569.choi)"
-#   → 이름 / 직급 / 조직... 순. 세 번째 이후를 합쳐 팀으로 취급하고
-#     '(' 앞까지만 사용 (뒤의 계정 ID 표기는 제거).
+# ---------------------------------------------------------------- 유저 검색 (Manager 대행)
 
-def parse_display_name(display_name: str) -> dict:
-    result = {"name": "", "title": "", "team": ""}
-    if not display_name:
-        return result
-    parts = [p.strip() for p in display_name.split("/")]
-    result["name"] = parts[0]
-    if len(parts) >= 2:
-        result["title"] = parts[1]
-    if len(parts) >= 3:
-        team = "/".join(parts[2:])
-        result["team"] = team.split("(")[0].strip()
-    return result
+def search_users(keyword: str, max_results: int = 500) -> list[dict]:
+    """키워드(이름/아이디/이메일/조직명)로 사용자 검색 — Manager 가 Jira 를 대신 조회한다.
 
+    displayName 에 조직명이 포함되므로 팀명으로도 검색 가능(파싱은 Manager 담당).
+    반환: {"name","title","team","display_name","user_id"} 리스트.
 
-def search_users(keyword: str, max_results: int = 500, batch: int = 1000) -> list[dict]:
-    """키워드(이름/아이디/이메일/조직명)로 Jira 사용자 검색.
-
-    displayName 에 조직명이 포함되므로 팀명으로도 검색 가능.
-    이름 없는 계정은 제외. 반환: {"name","title","team","display_name","user_id"} 리스트.
+    실패는 RuntimeError 로 올린다 — 라우터가 그대로 사용자에게 보여준다.
     """
     keyword = (keyword or "").strip()
     if not keyword:
         return []
 
     cfg = fetch_login_config()
-    jira = cfg["jira"]
-    if not (jira["server"] and jira["id"] and jira["pw"]):
+    search_url = cfg["search_url"]
+    if not search_url:
         raise RuntimeError(
-            "Jira 계정이 설정되지 않았습니다 — 관제 서버(Manager) 설정 페이지에서 "
-            "Jira ID/비밀번호를 등록하세요.")
+            "관제 서버(Manager) 주소가 설정되지 않았습니다 — #admin 에서 관제 서버 URL 을 "
+            "등록하세요.")
 
     import requests
-    session = requests.Session()
-    session.auth = (jira["id"], jira["pw"])
-    base = jira["server"].rstrip("/")
-
-    results: list[dict] = []
-    seen: set[str] = set()
-    start = 0
-    while len(results) < max_results:
-        resp = session.get(
-            f"{base}/rest/api/2/user/search",
-            params={"username": keyword, "startAt": start, "maxResults": batch},
-            timeout=15,
+    try:
+        resp = requests.get(
+            search_url,
+            params={"keyword": keyword, "max_results": max_results},
+            timeout=30,   # Jira 왕복을 Manager 가 대신하므로 로컬 호출보다 넉넉히
         )
-        if resp.status_code in (401, 403):
-            raise RuntimeError("Jira 인증 실패 — Manager 에 저장된 Jira 계정을 확인하세요.")
-        resp.raise_for_status()
-        page = resp.json()
-        if not page:
-            break
-        for user in page:
-            display_name = user.get("displayName") or ""
-            info = parse_display_name(display_name)
-            if not info["name"]:
-                continue
-            user_id = user.get("name") or user.get("key") or ""
-            dedup_key = user_id or display_name
-            if dedup_key in seen:
-                continue
-            seen.add(dedup_key)
-            info["display_name"] = display_name
-            info["user_id"] = user_id
-            results.append(info)
-        if len(page) < batch:
-            break
-        start += len(page)
+    except Exception as e:
+        raise RuntimeError(f"관제 서버에 연결하지 못했습니다: {e}")
 
-    return results[:max_results]
+    # 구버전 Manager 판별 — /api/user-search 가 없는 서버는 404 를 주거나,
+    # SPA 폴백이 index.html 을 200 으로 돌려준다(상태코드만으로는 구분되지 않는다).
+    if resp.status_code == 404 or "json" not in (resp.headers.get("Content-Type") or "").lower():
+        raise RuntimeError(
+            "관제 서버(Manager)가 유저 검색을 지원하지 않습니다 — Manager 를 최신 버전으로 "
+            "업데이트하세요.")
+    if resp.status_code >= 400:
+        detail = ""
+        try:
+            detail = str((resp.json() or {}).get("detail") or "")
+        except Exception:
+            pass
+        raise RuntimeError(detail or f"유저 검색 실패 (HTTP {resp.status_code})")
+
+    try:
+        users = (resp.json() or {}).get("users") or []
+    except Exception as e:
+        raise RuntimeError(f"유저 검색 응답을 해석하지 못했습니다: {e}")
+    return users[:max_results]
