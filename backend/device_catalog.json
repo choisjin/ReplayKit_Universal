@@ -206,7 +206,7 @@
     "Uart": false,
     "CAN": false,
     "Ignition": false,
-    "POWER": false,
+    "POWER": true,
     "WebcamDevice": false,
     "VisionCameraClient": false,
     "SP25Bench": false,
