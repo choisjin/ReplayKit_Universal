@@ -2242,7 +2242,6 @@ async def _run_play_job(data: dict):
                     await _webcam_session_next_cycle(webcam_session, iteration)
 
             _step_idx = 0
-            _pending_seq = 0
             async for item in playback_service.execute_scenario_stream(
                 scen, verify=verify, repeat_index=iteration,
                 device_map_override=device_map_override,
@@ -2255,8 +2254,6 @@ async def _run_play_job(data: dict):
                     start_data = {k: v for k, v in item.items() if k != "_type"}
                     if _is_multi_cycle:
                         global_step_seq += 1
-                        _pending_seq = global_step_seq
-                        start_data["step_id"] = _pending_seq
                         start_data["description"] = f"[Cycle {iteration}] {start_data.get('description', '')}"
                     # exec_seq: 실행 단위 고유 ID — 조건부이동/사이클 반복으로 같은 step_id를 재실행해도
                     # 매 실행마다 새 값. 프론트는 이걸로 dedup하므로 세션 전체에서 monotonic해야 한다
@@ -2270,16 +2267,11 @@ async def _run_play_job(data: dict):
                     })
                 else:
                     step_result = item
-                    # parent_step_id가 있는 항목은 sync 모드 fail_on_keyword가 trigger한 인라인 fail.
-                    # 일반 스텝과 다르게 처리: step_id(9000+)는 보존, parent_step_id를 직전 스텝의 _pending_seq로 remap.
-                    is_runtime_fail = step_result.parent_step_id is not None
+                    # step_id는 시나리오에 정의된 스텝 순번을 그대로 유지한다 — 반복/조건부이동으로
+                    # 재실행돼도 "시나리오의 몇 번째 스텝인지"가 보여야 역추적이 쉽다.
+                    # 실행 단위 고유성은 exec_seq가 담당하므로 누적 번호로 덮어쓰지 않는다.
                     if _is_multi_cycle:
-                        if is_runtime_fail:
-                            step_result.parent_step_id = _pending_seq
-                            step_result.description = f"[Cycle {iteration}] {step_result.description}" if step_result.description else f"[Cycle {iteration}]"
-                        else:
-                            step_result.step_id = _pending_seq
-                            step_result.description = f"[Cycle {iteration}] {step_result.description}" if step_result.description else f"[Cycle {iteration}]"
+                        step_result.description = f"[Cycle {iteration}] {step_result.description}" if step_result.description else f"[Cycle {iteration}]"
                     # NDJSON에 먼저 durable 기록 (remap된 step_id/description 반영분)
                     if _steps_ndjson is not None:
                         _append_step_ndjson(_steps_ndjson, step_result)
@@ -2638,7 +2630,8 @@ async def _run_play_group_job(data: dict):
                             _cycle_step += 1
                             playback_service._monitor_state["current_step"] = _cycle_step
                             start_data = {k: v for k, v in item.items() if k != "_type"}
-                            start_data["step_id"] = _pending_seq
+                            # step_id는 각 시나리오에 정의된 순번 그대로 — 어느 시나리오인지는
+                            # description의 sc_prefix로 구분한다.
                             start_data["description"] = f"{sc_prefix} {start_data.get('description', '')}" if start_data.get('description') else sc_prefix
                             # exec_seq: 그룹 전체에서 monotonic — 시나리오 간/조건부이동 revisit 모두 새 값.
                             # 프론트가 step_id+repeat_index 대신 이것으로 dedup해서 revisit 행이 누락되지 않도록.
@@ -2651,15 +2644,11 @@ async def _run_play_group_job(data: dict):
                             })
                             continue
                         step_result = item
-                        original_step_id = step_result.step_id
                         # 그룹 step_jumps 는 uid 키 (step_id 는 편집 시 재부여되어 어긋남)
                         original_step_uid = step_result.step_uid
                         is_runtime_fail = step_result.parent_step_id is not None
-                        if is_runtime_fail:
-                            # parent를 직전 일반 스텝의 _pending_seq로 remap, step_id(9000+)는 보존
-                            step_result.parent_step_id = _pending_seq
-                        else:
-                            step_result.step_id = _pending_seq
+                        # step_id/parent_step_id는 시나리오 정의 순번 그대로 유지 (누적 remap 안 함)
+                        # — 실행 단위 고유성은 exec_seq(_pending_seq)가 담당.
                         step_result.description = f"{sc_prefix} {step_result.description}" if step_result.description else sc_prefix
 
                         # 조건부이동 '결과 미반영' 처리 — status(실제 pass/fail)는 그대로 두어

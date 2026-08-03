@@ -1360,7 +1360,9 @@ export default function ResultsPage() {
         if (r.parent_step_id != null && r.fail_index != null) {
           return <span style={{ color: '#ff4d4f' }}>↳ Fail_Count_{r.fail_index}</span>;
         }
-        return r._seq || r.step_id;
+        // 시나리오에 정의된 스텝 순번(step_id)을 그대로 표시 — 반복/조건부이동으로
+        // 재실행돼도 어떤 스텝인지 역추적할 수 있게 누적 연번(_seq)은 쓰지 않는다.
+        return r.step_id ?? r._seq;
       },
       _hide: false,
     },
@@ -2014,7 +2016,8 @@ export default function ResultsPage() {
                 <Table
                   columns={stepColumns}
                   dataSource={detail.step_results}
-                  rowKey={(r: StepResultDetail) => `${r.step_id}_${r.repeat_index}`}
+                  // step_id는 반복/조건부이동 재실행 시 중복되므로 행 위치로 키 부여
+                  rowKey={(_r: StepResultDetail, idx?: number) => `row_${idx}`}
                   size="small"
                   virtual
                   // 고정폭 합계 + Remark 최소폭. 컬럼을 접으면 x 가 줄어 Remark 가 그만큼 넓어진다.
