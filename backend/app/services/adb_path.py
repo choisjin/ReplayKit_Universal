@@ -71,3 +71,18 @@ def resolve_adb_path() -> str:
         except OSError:
             continue
     return "adb"
+
+
+@functools.lru_cache(maxsize=1)
+def resolve_adb_shell_path() -> str:
+    """shell=True 문자열 명령 조립용 adb 경로 — 공백 포함 시 따옴표로 감싼다.
+
+    배포 경로에 공백이 있으면(예: ``D:\\5. Replay kit\\ReplayKit``) 따옴표 없는
+    경로가 cmd 에서 ``'D:\\5.' is not recognized`` 로 잘려 모든 adb 호출이 죽는다.
+    리스트 형태(subprocess([...]))에는 절대 쓰지 말 것 — 따옴표가 파일명의 일부로
+    취급되어 실행이 실패한다. 그쪽은 resolve_adb_path() 를 그대로 사용한다.
+    """
+    p = resolve_adb_path()
+    if " " in p and not p.startswith('"'):
+        return f'"{p}"'
+    return p

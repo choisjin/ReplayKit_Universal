@@ -18,13 +18,17 @@ from typing import Optional
 from .capture.scrcpy_server import (
     ScrcpyServerBackend, detect_scrcpy_server, SCRCPY_V1, SCRCPY_V3,
 )
-from .adb_path import resolve_adb_path
+from .adb_path import resolve_adb_path, resolve_adb_shell_path
 
 logger = logging.getLogger(__name__)
 
 # 전 PC 동일 adb 보장 — 번들 tools/platform-tools/adb 우선, 미배치 시 PATH 'adb' 폴백.
 # (adb 서버 포트는 기본 5037 공유 — 격리 시 USB 디바이스 경합으로 스캔 실패)
 ADB_PATH = resolve_adb_path()
+# shell=True 문자열 명령 조립 전용 — 배포 경로에 공백이 있으면(D:\5. Replay kit\...)
+# 따옴표 없는 ADB_PATH 가 cmd 에서 'D:\5.' 로 잘려 모든 adb 호출이 실패한다.
+# f-string 명령에는 반드시 이걸 쓰고, 리스트 형태 subprocess 에는 ADB_PATH 를 쓴다.
+ADB_Q = resolve_adb_shell_path()
 
 
 def resolve_sf_display_id(dev_info: dict | None, logical_id: int | None) -> str | None:
@@ -432,12 +436,12 @@ class ADBService:
             return "none"
         loop = asyncio.get_event_loop()
         dev = touch[0]
-        test_cmd = f'{ADB_PATH} -s {serial} shell "sendevent {dev} 0 0 0"'
+        test_cmd = f'{ADB_Q} -s {serial} shell "sendevent {dev} 0 0 0"'
         _, test_err, test_rc = await loop.run_in_executor(None, functools.partial(_run_sync, test_cmd, 3))
         if test_rc == 0 and "Permission denied" not in test_err:
             self._sendevent_mode[serial] = "direct"
             return "direct"
-        test_su = f'{ADB_PATH} -s {serial} shell "su 0 sendevent {dev} 0 0 0"'
+        test_su = f'{ADB_Q} -s {serial} shell "su 0 sendevent {dev} 0 0 0"'
         _, test_err, test_rc = await loop.run_in_executor(None, functools.partial(_run_sync, test_su, 3))
         if test_rc == 0 and "not found" not in test_err and "Permission denied" not in test_err:
             self._sendevent_mode[serial] = "su"
@@ -577,12 +581,12 @@ class ADBService:
             f.write(script)
             local_path = f.name
         try:
-            push_cmd = f'{ADB_PATH} -s {serial} push "{local_path}" {self._MT_SCRIPT_REMOTE}'
+            push_cmd = f'{ADB_Q} -s {serial} push "{local_path}" {self._MT_SCRIPT_REMOTE}'
             await loop.run_in_executor(None, functools.partial(_run_sync, push_cmd, 5))
             if su:
-                adb_cmd = f'{ADB_PATH} -s {serial} shell "su 0 sh {self._MT_SCRIPT_REMOTE}"'
+                adb_cmd = f'{ADB_Q} -s {serial} shell "su 0 sh {self._MT_SCRIPT_REMOTE}"'
             else:
-                adb_cmd = f'{ADB_PATH} -s {serial} shell "sh {self._MT_SCRIPT_REMOTE}"'
+                adb_cmd = f'{ADB_Q} -s {serial} shell "sh {self._MT_SCRIPT_REMOTE}"'
             stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync, adb_cmd, timeout))
             if rc != 0:
                 logger.error("pattern sendevent failed: %s", stderr.strip())
@@ -602,7 +606,7 @@ class ADBService:
             return self._touch_device_cache[serial]
 
         # getevent는 호스트 레벨 /dev/input/ 접근 → GVM 래핑 없이 직접 실행
-        cmd = f"{ADB_PATH} -s {serial} shell getevent -lp"
+        cmd = f"{ADB_Q} -s {serial} shell getevent -lp"
         loop = asyncio.get_event_loop()
         output, _, _ = await loop.run_in_executor(None, functools.partial(_run_sync, cmd, 10))
         current_device: str | None = None
@@ -697,7 +701,7 @@ class ADBService:
             loop = asyncio.get_event_loop()
             dev = touch[0]
             # 1) direct 권한 테스트
-            test_cmd = f'{ADB_PATH} -s {serial} shell "sendevent {dev} 0 0 0"'
+            test_cmd = f'{ADB_Q} -s {serial} shell "sendevent {dev} 0 0 0"'
             _, test_err, test_rc = await loop.run_in_executor(None, functools.partial(_run_sync, test_cmd, 3))
             if test_rc == 0 and "Permission denied" not in test_err:
                 self._sendevent_mode[serial] = "direct"
@@ -705,7 +709,7 @@ class ADBService:
                 return await self._sendevent_raw(fingers, duration_ms, serial, su=False)
 
             # 2) su 0 권한 테스트
-            test_su = f'{ADB_PATH} -s {serial} shell "su 0 sendevent {dev} 0 0 0"'
+            test_su = f'{ADB_Q} -s {serial} shell "su 0 sendevent {dev} 0 0 0"'
             _, test_err, test_rc = await loop.run_in_executor(None, functools.partial(_run_sync, test_su, 3))
             if test_rc == 0 and "not found" not in test_err and "Permission denied" not in test_err:
                 self._sendevent_mode[serial] = "su"
@@ -796,13 +800,13 @@ class ADBService:
             f.write(script)
             local_path = f.name
         try:
-            push_cmd = f'{ADB_PATH} -s {serial} push "{local_path}" {self._MT_SCRIPT_REMOTE}'
+            push_cmd = f'{ADB_Q} -s {serial} push "{local_path}" {self._MT_SCRIPT_REMOTE}'
             await loop.run_in_executor(None, functools.partial(_run_sync, push_cmd, 5))
 
             if su:
-                adb_cmd = f'{ADB_PATH} -s {serial} shell "su 0 sh {self._MT_SCRIPT_REMOTE}"'
+                adb_cmd = f'{ADB_Q} -s {serial} shell "su 0 sh {self._MT_SCRIPT_REMOTE}"'
             else:
-                adb_cmd = f'{ADB_PATH} -s {serial} shell "sh {self._MT_SCRIPT_REMOTE}"'
+                adb_cmd = f'{ADB_Q} -s {serial} shell "sh {self._MT_SCRIPT_REMOTE}"'
             stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync, adb_cmd, timeout))
             if rc != 0:
                 logger.error("sendevent failed: %s", stderr.strip())
@@ -878,7 +882,7 @@ class ADBService:
         sc = self._gvm_screencap_cmd(container, f"{dflag}-p")
         loop = asyncio.get_event_loop()
         # 먼저 exec-out 시도 (빠름)
-        cmd = f'{ADB_PATH} -s {s} exec-out {sc} > "{save_path}"'
+        cmd = f'{ADB_Q} -s {s} exec-out {sc} > "{save_path}"'
         stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync, cmd))
         # 깨진 PNG 확인 → 파일 경유 폴백
         try:
@@ -889,9 +893,9 @@ class ADBService:
         except Exception:
             logger.debug("exec-out screencap corrupted, falling back to file method")
             remote_path = "/data/local/tmp/_rk_screencap.png"
-            cmd_save = f'{ADB_PATH} -s {s} shell "{sc} {remote_path}"'
+            cmd_save = f'{ADB_Q} -s {s} shell "{sc} {remote_path}"'
             await loop.run_in_executor(None, functools.partial(_run_sync, cmd_save))
-            cmd_pull = f'{ADB_PATH} -s {s} pull {remote_path} "{save_path}"'
+            cmd_pull = f'{ADB_Q} -s {s} pull {remote_path} "{save_path}"'
             _, stderr2, rc2 = await loop.run_in_executor(None, functools.partial(_run_sync, cmd_pull))
             if rc2 != 0:
                 logger.error("screencap pull error: %s", stderr2)
@@ -912,7 +916,7 @@ class ADBService:
         sc = self._gvm_screencap_cmd(container, f"{dflag}-p")
 
         # 먼저 exec-out (빠름) 시도
-        cmd = f"{ADB_PATH} -s {s} exec-out {sc}"
+        cmd = f"{ADB_Q} -s {s} exec-out {sc}"
         loop = asyncio.get_event_loop()
         stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync_bytes, cmd))
 
@@ -920,11 +924,11 @@ class ADBService:
         if rc != 0 or (stdout and len(stdout) > 0 and stdout[:4] != b'\x89PNG'):
             logger.debug("exec-out screencap failed or corrupted, falling back to file method")
             remote_path = "/data/local/tmp/_rk_screencap.png"
-            cmd_save = f'{ADB_PATH} -s {s} shell "{sc} {remote_path}"'
+            cmd_save = f'{ADB_Q} -s {s} shell "{sc} {remote_path}"'
             _, stderr2, rc2 = await loop.run_in_executor(None, functools.partial(_run_sync, cmd_save))
             if rc2 == 0:
                 cat_cmd = "cat" if not container else f"lxc-attach -n {container} -- cat"
-                cmd_cat = f"{ADB_PATH} -s {s} exec-out {cat_cmd} {remote_path}"
+                cmd_cat = f"{ADB_Q} -s {s} exec-out {cat_cmd} {remote_path}"
                 stdout, _, _ = await loop.run_in_executor(None, functools.partial(_run_sync_bytes, cmd_cat))
             else:
                 raise RuntimeError(f"screencap failed: {stderr2}")
@@ -952,7 +956,7 @@ class ADBService:
     # ------------------------------------------------------------------
 
     async def _run(self, args: str) -> str:
-        cmd = f"{ADB_PATH} {args}"
+        cmd = f"{ADB_Q} {args}"
         logger.debug("ADB cmd: %s", cmd)
         loop = asyncio.get_event_loop()
         stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync, cmd))
@@ -971,14 +975,14 @@ class ADBService:
 
         # 일반 Android인지 확인: getprop 응답이 있으면 비GVM
         loop = asyncio.get_event_loop()
-        cmd = f'{ADB_PATH} -s {serial} shell getprop ro.build.version.sdk'
+        cmd = f'{ADB_Q} -s {serial} shell getprop ro.build.version.sdk'
         stdout, _, rc = await loop.run_in_executor(None, functools.partial(_run_sync, cmd, 5))
         if rc == 0 and stdout.strip():
             self._gvm_container[serial] = None
             return None
 
         # lxc-ls로 컨테이너 목록 조회
-        cmd = f'{ADB_PATH} -s {serial} shell lxc-ls'
+        cmd = f'{ADB_Q} -s {serial} shell lxc-ls'
         stdout, _, rc = await loop.run_in_executor(None, functools.partial(_run_sync, cmd, 5))
         if rc != 0 or not stdout.strip():
             self._gvm_container[serial] = None
@@ -986,7 +990,7 @@ class ADBService:
 
         # 각 컨테이너에서 Android 확인
         for container in stdout.strip().split():
-            cmd = f'{ADB_PATH} -s {serial} shell "lxc-attach -n {container} -- getprop ro.build.version.sdk"'
+            cmd = f'{ADB_Q} -s {serial} shell "lxc-attach -n {container} -- getprop ro.build.version.sdk"'
             out, _, rc = await loop.run_in_executor(None, functools.partial(_run_sync, cmd, 5))
             if rc == 0 and out.strip():
                 self._gvm_container[serial] = container
@@ -1016,7 +1020,7 @@ class ADBService:
         if args.startswith("shell ") or args.startswith("exec-out "):
             container = await self._detect_gvm_container(serial)
             args = self._wrap_shell_cmd(args, container)
-        cmd = f"{ADB_PATH} -s {serial} {args}"
+        cmd = f"{ADB_Q} -s {serial} {args}"
         logger.debug("ADB cmd: %s", cmd)
         loop = asyncio.get_event_loop()
         stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync, cmd, timeout))
