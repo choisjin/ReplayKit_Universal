@@ -82,6 +82,32 @@ def resolve_input_display_id(dev_info: dict | None, our_index: int | None) -> in
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
+# adb 클라이언트/서버 버전 불일치 시 adb가 5037 서버를 말없이 kill/재시작한다.
+# 이때 `adb connect`로 붙어 있던 네트워크 트랜스포트가 전부 소멸해 "연결 시도하면
+# adb devices에서 사라짐" 증상이 된다. rc=0이라 기존 에러 로깅에는 안 잡히므로
+# stderr 마커를 별도로 감시한다. (Linux는 번들 adb가 없어 PATH adb 버전에 의존 →
+# 사용자 터미널 adb와 백엔드 adb가 다른 버전으로 5037을 공유하면 서로 죽고 살림)
+_SERVER_RESTART_MARKERS = (
+    "killing",
+    "server version",
+    "daemon not running",
+    "daemon started successfully",
+)
+
+
+def _warn_if_server_restarted(context: str, stderr: str) -> None:
+    if not stderr:
+        return
+    low = stderr.lower()
+    if any(m in low for m in _SERVER_RESTART_MARKERS):
+        logger.warning(
+            "ADB server side-effect detected (%s): %s — adb 클라이언트 버전 불일치로 "
+            "5037 서버가 재시작되면 네트워크 디바이스 연결이 전부 끊깁니다. "
+            "ADB_PATH 환경변수로 터미널과 동일한 adb를 지정하세요 (현재: %s)",
+            context, stderr.strip().splitlines()[0][:200], ADB_PATH,
+        )
+
+
 def _run_sync(cmd: str, timeout: int = 10) -> tuple[str, str, int]:
     """Run a command synchronously and return (stdout, stderr, returncode)."""
     try:
@@ -930,6 +956,7 @@ class ADBService:
         logger.debug("ADB cmd: %s", cmd)
         loop = asyncio.get_event_loop()
         stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync, cmd))
+        _warn_if_server_restarted(f"args={args!r}", stderr)
         if rc != 0:
             # stderr가 ADB 도움말 dump면 매우 길어지므로 첫 줄만. 명령도 함께 출력해
             # 어떤 cmd가 거부됐는지 식별 가능하게 한다.
@@ -993,6 +1020,7 @@ class ADBService:
         logger.debug("ADB cmd: %s", cmd)
         loop = asyncio.get_event_loop()
         stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync, cmd, timeout))
+        _warn_if_server_restarted(f"device {serial}, args={args!r}", stderr)
         if rc != 0:
             err_short = (stderr.split("\n", 1)[0] if stderr else "").strip()
             logger.error(

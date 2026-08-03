@@ -1585,7 +1585,7 @@
       "send_command": {
         "description": "SSH로 명령어를 실행하고 완료 후 전체 출력을 반환합니다 (블로킹). 한국어 Windows 출력은 cp949/euc-kr 인코딩으로 자동 처리. 명령을 'bash -s < 로컬경로' 형식으로 적으면 해당 로컬(PC) 파일을 stdin으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다.",
         "params": {
-          "command": "실행할 명령어. 예: 'ls -al', 'cat /etc/version'. 'bash -s < 로컬경로' 형태로 적으면 해당 로컬(PC) 파일을 stdin 으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다. 예: 'sudo bash -s < C:\\ReplayKit\\scripts\\Check_Battery.sh'"
+          "command": "실행할 명령어. 예: 'ls -al', 'cat /etc/version'. 'bash -s < 로컬경로' 형태로 적으면 해당 로컬(PC) 파일을 stdin 으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다. 예: 'sudo bash -s < C:\\ReplayKit\\scripts\\Check_Battery.sh'. 재생 중 {cycle}(현재 반복 회차)/{timestamp}(YYYYMMDD_HHMMSS) 변수가 치환됩니다 — 예: 'slog2info -w all > /var/qnx_slog_{cycle}_{timestamp}.txt &'"
         }
       },
       "send_command_stream": {
@@ -1652,7 +1652,7 @@
       "StopLogging": {
         "description": "DLT 캡처 종료. 로그는 이미 파일에 실시간 저장되어 있으며, save_path 지정 시 그 위치로 이동만 합니다. .dlt 원본 파일도 같은 경로(확장자만 .dlt)로 함께 이동됩니다.",
         "params": {
-          "save_path": "저장 파일 경로. 빈 값이면 스트리밍 파일 그대로 유지 (재생 중: run_dir/logs/dlt_*.log + dlt_*.dlt, 스텝 테스트: backend/results/Temp_logs/)"
+          "save_path": "저장 파일 경로. 빈 값이면 스트리밍 파일 그대로 유지 (재생 중: run_dir/logs/dlt/c{사이클}_dlt_*.log + .dlt, 스텝 테스트: backend/results/Temp_logs/). {cycle}/{timestamp} 변수 사용 가능"
         }
       },
       "WaitLog": {
@@ -1692,13 +1692,13 @@
       "StopLogging": {
         "description": "메모리 버퍼를 파일로 일괄 저장 + 캡처 세션 종료. **시리얼 포트는 그대로 유지** — 후속 SendCommand 등이 디바이스를 재초기화하지 않습니다. 포트를 닫고 싶다면 Device 탭에서 Disconnect 하세요.\n\n**⚠️ StartLogging과 반드시 짝으로 호출하세요.** 이 함수가 호출되어야:\n  • 메모리에 누적된 로그가 .log 파일로 디스크에 저장됨\n  • capture 스레드가 정리되어 리소스 누수 방지\n  • 다음 StartLogging이 새 세션으로 시작 가능\n파일 저장 단계에서 예외가 발생해도 finally에서 캡처 정리는 무조건 수행됩니다.",
         "params": {
-          "save_path": "저장 파일 경로. 빈 값이면 자동 (재생 중: run_dir/logs/serial_*.log, 스텝 테스트: backend/results/Temp_logs/serial_*.log)"
+          "save_path": "저장 파일 경로. 빈 값이면 자동 (재생 중: run_dir/logs/serial/c{사이클}_serial_{포트}_*.log, 스텝 테스트: backend/results/Temp_logs/serial_*.log). {cycle}/{timestamp} 변수 사용 가능"
         }
       },
       "SendCommand": {
         "description": "시리얼 포트로 문자열 명령어를 전송합니다.",
         "params": {
-          "command": "전송할 명령어. 예: 'reboot', 'cat /proc/version'",
+          "command": "전송할 명령어. 예: 'reboot', 'cat /proc/version'. 재생 중 {cycle}/{timestamp} 변수가 치환됩니다",
           "encoding": "인코딩 (기본 utf-8)",
           "append_newline": {
             "description": "개행 문자 자동 추가. true/false (기본 true)",
@@ -2407,7 +2407,7 @@
         }
       },
       "StopLogging": {
-        "description": "logcat 캡처를 종료하고 메모리 버퍼를 파일로 저장합니다. 재생 중이면 {run_dir}/logs/logcat_*.log, 스텝 테스트면 results/Temp_logs/에 저장됩니다.",
+        "description": "logcat 캡처를 종료하고 메모리 버퍼를 파일로 저장합니다. 재생 중이면 {run_dir}/logs/logcat/c{사이클}_logcat_*.log, 스텝 테스트면 results/Temp_logs/에 저장됩니다.",
         "params": {
           "serial": "대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정",
           "save_path": "저장 경로. 비우면 자동 경로 사용"

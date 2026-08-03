@@ -139,16 +139,29 @@ def _is_scenario_playback() -> bool:
         return False
 
 
-def _auto_save_path(prefix: str = "serial") -> str:
+def _cycle_prefix() -> str:
+    """재생 중이면 'c{N:03d}_' (N=현재 반복 사이클). 스텝 테스트면 빈 문자열."""
+    try:
+        from backend.app.services.playback_service import get_current_step_context
+        return f"c{get_current_step_context()[1]:03d}_"
+    except Exception:
+        return ""
+
+
+def _auto_save_path(prefix: str = "serial", port: str = "") -> str:
     """컨텍스트별 자동 저장 경로.
 
-    - 재생 중: {run_dir}/logs/{prefix}_{ts}.log
-    - 스텝 테스트: backend/results/Temp_logs/{prefix}_{ts}.log
+    - 재생 중: {run_dir}/logs/serial/c{cycle}_{prefix}_{port}_{ts}.log
+      (로그 종류별 하위 폴더 + 사이클 접두사 — 장시간 반복 시 회차 구분용.
+       port를 넣어 qnx/sail/mcu 등 멀티 포트 로그를 파일명으로 식별)
+    - 스텝 테스트: backend/results/Temp_logs/{prefix}_{port}_{ts}.log
     """
     ts = time.strftime("%Y%m%d_%H%M%S")
     run_dir = _get_run_output_dir()
+    cyc = ""
     if run_dir:
-        log_dir = run_dir / "logs"
+        log_dir = run_dir / "logs" / "serial"
+        cyc = _cycle_prefix()
     else:
         try:
             from backend.app.services.playback_service import RESULTS_DIR
@@ -156,7 +169,14 @@ def _auto_save_path(prefix: str = "serial") -> str:
         except Exception:
             log_dir = Path(__file__).resolve().parent.parent.parent / "results" / "Temp_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    return str(log_dir / f"{prefix}_{ts}.log")
+    safe_port = "".join(c if c.isalnum() or c in "-._" else "_" for c in port).strip("_")
+    stem = f"{cyc}{prefix}_{safe_port}_{ts}" if safe_port else f"{cyc}{prefix}_{ts}"
+    path = log_dir / f"{stem}.log"
+    n = 2
+    while path.exists():  # 같은 초에 중복 저장 시 덮어쓰기 방지
+        path = log_dir / f"{stem}_{n}.log"
+        n += 1
+    return str(path)
 
 
 class SerialLogging:
@@ -372,8 +392,8 @@ class SerialLogging:
 
         Args:
             save_path: 저장할 파일 경로. 빈 값이면 컨텍스트별 자동 저장:
-                - 재생 중: {run_dir}/logs/serial_{timestamp}.log
-                - 스텝 테스트: backend/results/Temp_logs/serial_{timestamp}.log
+                - 재생 중: {run_dir}/logs/serial/c{cycle}_serial_{port}_{timestamp}.log
+                - 스텝 테스트: backend/results/Temp_logs/serial_{port}_{timestamp}.log
 
         파일 저장 단계의 어떤 예외(경로 해석/mkdir/open)가 발생해도 finally에서 캡처
         스레드는 무조건 정지되어 리소스 누수를 막는다. 포트 close가 필요하면 별도로
@@ -390,7 +410,7 @@ class SerialLogging:
         save_error = ""
         try:
             if not save_path:
-                save_path = _auto_save_path("serial")
+                save_path = _auto_save_path("serial", port=self._port)
             elif not os.path.dirname(save_path):
                 base_dir = Path(_auto_save_path("serial")).parent
                 save_path = str(base_dir / save_path)

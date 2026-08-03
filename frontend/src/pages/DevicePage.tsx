@@ -1222,8 +1222,16 @@ export default function DevicePage() {
         const ct = getModuleConnectType(editModule);
         if (ct) updates.connect_type = ct;
       }
+      // 실제로 바뀐 extra_field만 전송 — 시리얼은 extra_fields가 오면 재연결이 트리거되므로
+      // 별칭만 바꾸는 저장이 포트 재연결(캡처 중단)을 일으키지 않게 한다.
       if (Object.keys(editExtraFields).length > 0) {
-        updates.extra_fields = editExtraFields;
+        const changedExtras: Record<string, any> = {};
+        for (const [k, v] of Object.entries(editExtraFields)) {
+          if ((editDevice.info?.[k] ?? '') !== v) changedExtras[k] = v;
+        }
+        if (Object.keys(changedExtras).length > 0) {
+          updates.extra_fields = changedExtras;
+        }
       }
       // MIB 해상도 변경: 기존 resolution_str과 비교, 다르면 extra_fields.resolution으로 전달.
       if (editDevice.type === 'mib_agent') {
@@ -1378,8 +1386,12 @@ export default function DevicePage() {
       <Tag color={getStatusColor(d.status)} style={{ flexShrink: 0 }}>
         {getStatusLabel(d.status)}
       </Tag>
-      {/* wincontrol 디바이스는 OS 별 표시명(LinuxControl/WinControl) 사용 — ID 는 시나리오 호환 위해 "WinControl" 고정. */}
-      <span style={{ fontWeight: 500, flexShrink: 0 }}>{d.type === 'wincontrol' && d.name ? d.name : d.id}</span>
+      {/* 별칭(name)이 있으면 우선 표시, ID는 회색 태그로 병기 — 시나리오/스텝은 항상 ID를 참조하므로
+          별칭은 표시 전용이다. wincontrol 은 OS 별 표시명(LinuxControl/WinControl), ID "WinControl" 고정. */}
+      <span style={{ fontWeight: 500, flexShrink: 0 }}>{d.name && d.name !== d.id ? d.name : d.id}</span>
+      {d.name && d.name !== d.id && d.type !== 'wincontrol' && (
+        <Tag style={{ flexShrink: 0, color: '#888' }}>{d.id}</Tag>
+      )}
       {d.protected && <Tag color="gold" style={{ flexShrink: 0 }}>SYSTEM</Tag>}
       <span style={{ color: '#aaa', fontSize: 11, flexShrink: 0 }}>{d.address}</span>
       {d.info?.module && <Tag color="cyan" style={{ flexShrink: 0 }}>{d.info.module}</Tag>}
@@ -3456,6 +3468,18 @@ export default function DevicePage() {
               )}
             </div>
             {/* 수정 가능한 필드 */}
+            <div>
+              <span style={{ fontSize: 11, color: '#888' }}>{t('device.aliasLabel')}:</span>
+              <Input
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder={editDevice.id}
+                allowClear
+              />
+              <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
+                {t('device.aliasHint')}
+              </div>
+            </div>
             {editDevice.type === 'mib_agent' && (
               <div>
                 <span style={{ fontSize: 11, color: '#888' }}>Resolution:</span>

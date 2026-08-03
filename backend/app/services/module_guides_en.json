@@ -1585,7 +1585,7 @@
       "send_command": {
         "description": "Executes a command via SSH and returns the full output on completion (blocking). Korean Windows output is automatically handled via cp949/euc-kr encoding. Writing the command as 'bash -s < <local path>' auto-injects that local (PC) file as stdin, running a local script remotely without uploading.",
         "params": {
-          "command": "Command to execute. e.g. 'ls -al', 'cat /etc/version'. Writing it as 'bash -s < <local path>' auto-injects that local (PC) file as stdin so a local script runs remotely without uploading. e.g. 'sudo bash -s < C:\\ReplayKit\\scripts\\Check_Battery.sh'"
+          "command": "Command to execute. e.g. 'ls -al', 'cat /etc/version'. Writing it as 'bash -s < <local path>' auto-injects that local (PC) file as stdin so a local script runs remotely without uploading. e.g. 'sudo bash -s < C:\\ReplayKit\\scripts\\Check_Battery.sh'. During playback, {cycle} (current repeat index) and {timestamp} (YYYYMMDD_HHMMSS) are substituted — e.g. 'slog2info -w all > /var/qnx_slog_{cycle}_{timestamp}.txt &'"
         }
       },
       "send_command_stream": {
@@ -1652,7 +1652,7 @@
       "StopLogging": {
         "description": "Stops DLT capture. Logs are already saved to file in real time; specifying save_path only moves the file to that location. The raw .dlt file is moved alongside it (same path, .dlt extension).",
         "params": {
-          "save_path": "Save file path. If empty, keeps the streaming files as-is (during replay: run_dir/logs/dlt_*.log + dlt_*.dlt, step test: backend/results/Temp_logs/)"
+          "save_path": "Save file path. If empty, keeps the streaming files as-is (during replay: run_dir/logs/dlt/c{cycle}_dlt_*.log + .dlt, step test: backend/results/Temp_logs/). Supports {cycle}/{timestamp} variables"
         }
       },
       "WaitLog": {
@@ -1692,13 +1692,13 @@
       "StopLogging": {
         "description": "Writes the memory buffer to a file and ends the capture session. **The serial port is kept open** — subsequent SendCommand calls will not re-initialize the device. To close the port, use the Device tab Disconnect.\n\n**⚠️ Must be paired with StartLogging.** This call is what:\n  • Flushes the in-memory log buffer to a .log file on disk\n  • Tears down the capture thread to avoid resource leaks\n  • Allows the next StartLogging to begin a fresh session\nEven if the file-save step throws, the finally block guarantees the capture is torn down.",
         "params": {
-          "save_path": "Save file path. Auto if empty (during playback: run_dir/logs/serial_*.log, step test: backend/results/Temp_logs/serial_*.log)"
+          "save_path": "Save file path. Auto if empty (during playback: run_dir/logs/serial/c{cycle}_serial_{port}_*.log, step test: backend/results/Temp_logs/serial_*.log). Supports {cycle}/{timestamp} variables"
         }
       },
       "SendCommand": {
         "description": "Sends a text command via the serial port.",
         "params": {
-          "command": "Command to send. e.g. 'reboot', 'cat /proc/version'",
+          "command": "Command to send. e.g. 'reboot', 'cat /proc/version'. During playback, {cycle}/{timestamp} variables are substituted",
           "encoding": "Encoding (default: utf-8)",
           "append_newline": {
             "description": "Auto-append newline. true/false (default: true)",
@@ -2407,7 +2407,7 @@
         }
       },
       "StopLogging": {
-        "description": "Stop logcat capture and save the buffer to a file ({run_dir}/logs/logcat_*.log during playback, results/Temp_logs/ for step tests).",
+        "description": "Stop logcat capture and save the buffer to a file ({run_dir}/logs/logcat/c{cycle}_logcat_*.log during playback, results/Temp_logs/ for step tests).",
         "params": {
           "serial": "Target ADB device serial. Empty = derived from the step's device",
           "save_path": "Save path. Empty = automatic path"

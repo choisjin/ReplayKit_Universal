@@ -2732,6 +2732,29 @@ class PlaybackService:
             return info["id"]
         return None
 
+    def _substitute_arg_templates(self, args: dict) -> dict:
+        """모듈 스텝 문자열 인자의 {cycle}/{timestamp} 토큰 치환.
+
+        반복 재생 시 사이클별 파일명을 만들 수 있게 한다 — 예: SendCommand
+        "slog2info -w all > /var/qnx_slog_{cycle}_{timestamp}.txt &".
+        지정 토큰만 replace 하므로 다른 중괄호 표현(쉘 ${VAR}, awk {print} 등)은
+        건드리지 않는다. 원본 dict는 수정하지 않는다 (시나리오 저장물 오염 방지).
+        """
+        if not args or not isinstance(args, dict):
+            return args
+        cycle = int(getattr(self, "_current_repeat_index", 1) or 1)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out = {}
+        changed = False
+        for k, v in args.items():
+            if isinstance(v, str) and ("{cycle}" in v or "{timestamp}" in v):
+                v = v.replace("{cycle}", str(cycle)).replace("{timestamp}", ts)
+                changed = True
+            out[k] = v
+        if changed:
+            logger.info("Module arg templates substituted (cycle=%d): %s", cycle, out)
+        return out
+
     async def _run_action(self, step: Step) -> None:
         """Execute step action on the appropriate device."""
         params = step.params
@@ -2747,7 +2770,7 @@ class PlaybackService:
         if step.type == StepType.MODULE_COMMAND:
             module_name = params.get("module", "")
             func_name = params.get("function", "")
-            func_args = params.get("args", {})
+            func_args = self._substitute_arg_templates(params.get("args", {}))
 
             # OCR 가상 모듈 — 별도 처리 후 즉시 반환
             if module_name == "OCR":

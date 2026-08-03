@@ -554,6 +554,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug("ADB server pre-start: %s", e)
 
+    # 사용 중인 adb 경로/버전 기록 — Linux는 번들 adb가 없어 PATH adb를 쓰므로,
+    # 사용자 터미널 adb와 버전이 다르면 5037 서버가 서로 kill/재시작하며 네트워크
+    # 디바이스가 끊긴다. 어떤 adb가 잡혔는지 startup에 남겨 진단 가능하게 한다.
+    try:
+        from .services.adb_service import ADB_PATH as _adb_path
+        ver_out = await adb_service._run("version")
+        ver_line = " / ".join(
+            l.strip() for l in ver_out.strip().splitlines()[:2] if l.strip()
+        )
+        logger.info("ADB client: %s (%s)", _adb_path, ver_line or "version unknown")
+    except Exception as e:
+        logger.debug("ADB version check: %s", e)
+
     # 이벤트 루프 스톨 감시 — 동기 작업이 루프를 오래 막으면(=/api/health 굶김,
     # "서버 연결 중..." 배너의 원인) 그 시점의 메인 스레드 스택을 로그로 덤프한다.
     try:
@@ -633,11 +646,17 @@ async def lifespan(app: FastAPI):
         await adb_service.close_all_scrcpy_backends()
     except Exception as e:
         logger.debug("close_all_scrcpy_backends: %s", e)
-    logger.info("Killing ADB server...")
-    try:
-        await adb_service._run("kill-server")
-    except Exception as e:
-        logger.debug("ADB kill-server: %s", e)
+    # Linux는 사용자 터미널과 5037 adb 서버를 공유한다(번들 adb 없음) — 여기서
+    # kill-server 하면 ReplayKit 재시작마다 사용자의 adb connect 디바이스가 전부
+    # 끊긴다. Windows는 server.py가 어차피 adb.exe를 정리하므로 기존 동작 유지.
+    if _sys.platform == "win32":
+        logger.info("Killing ADB server...")
+        try:
+            await adb_service._run("kill-server")
+        except Exception as e:
+            logger.debug("ADB kill-server: %s", e)
+    else:
+        logger.info("Leaving shared ADB server running (non-Windows)")
 
 
 app = FastAPI(

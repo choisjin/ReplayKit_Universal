@@ -144,14 +144,17 @@ def _get_run_output_dir() -> Optional[Path]:
 def _auto_save_path(serial: str, prefix: str = "logcat") -> str:
     """컨텍스트별 자동 저장 경로 (SerialLogging과 동일 규약).
 
-    - 재생 중: {run_dir}/logs/{prefix}_{serial}_{ts}.log
+    - 재생 중: {run_dir}/logs/logcat/c{cycle}_{prefix}_{serial}_{ts}.log
+      (로그 종류별 하위 폴더 + 사이클 접두사 — 장시간 반복 시 회차 구분용)
     - 스텝 테스트: backend/results/Temp_logs/{prefix}_{serial}_{ts}.log
     """
     ts = time.strftime("%Y%m%d_%H%M%S")
     safe_serial = "".join(c if c.isalnum() or c in "-._" else "_" for c in serial)[:40]
     run_dir = _get_run_output_dir()
+    cyc = ""
     if run_dir:
-        log_dir = run_dir / "logs"
+        log_dir = run_dir / "logs" / "logcat"
+        cyc = f"c{_current_step_context()[1]:03d}_"
     else:
         try:
             from .playback_service import RESULTS_DIR
@@ -159,7 +162,13 @@ def _auto_save_path(serial: str, prefix: str = "logcat") -> str:
         except Exception:
             log_dir = Path(__file__).resolve().parent.parent.parent / "results" / "Temp_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    return str(log_dir / f"{prefix}_{safe_serial}_{ts}.log")
+    stem = f"{cyc}{prefix}_{safe_serial}_{ts}"
+    path = log_dir / f"{stem}.log"
+    n = 2
+    while path.exists():  # 같은 초에 중복 저장 시 덮어쓰기 방지
+        path = log_dir / f"{stem}_{n}.log"
+        n += 1
+    return str(path)
 
 
 def _current_step_context() -> tuple[Optional[int], int]:

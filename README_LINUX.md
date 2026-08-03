@@ -114,6 +114,18 @@ sudo usermod -aG plugdev $USER
 adb devices    # 디바이스 목록 확인
 ```
 
+> **⚠️ adb 버전 불일치 주의**: Linux 는 번들 adb 가 없어 ReplayKit 백엔드가 PATH 의
+> adb 를 사용합니다. 터미널에서 쓰는 adb(예: Android SDK `~/Android/Sdk/platform-tools/adb`)와
+> 백엔드가 잡은 adb(예: 배포판 `/usr/bin/adb`)의 **버전이 다르면**, 두 클라이언트가 5037
+> 서버를 서로 kill/재시작하면서 `adb connect` 로 붙인 네트워크 디바이스가 연결 시도 때마다
+> 목록에서 사라집니다. 이 경우 백엔드 시작 전에 터미널과 동일한 adb 를 지정하세요:
+> ```bash
+> export ADB_PATH=~/Android/Sdk/platform-tools/adb   # 터미널에서 which adb 로 확인한 경로
+> ./ReplayKit.sh
+> ```
+> 백엔드가 어떤 adb 를 쓰는지는 기동 로그의 `ADB client: <경로> (<버전>)` 줄로 확인할 수 있고,
+> 서버 재시작이 감지되면 `ADB server side-effect detected` 경고가 backend.log 에 남습니다.
+
 ## 3. 실행
 
 ### 개발 모드 (UI 변경 hot reload)

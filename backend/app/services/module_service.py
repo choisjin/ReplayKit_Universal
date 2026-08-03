@@ -2508,19 +2508,31 @@ def _compute_module_timeout(args: dict, user_timeout: Optional[float]) -> float:
 
     우선순위:
     1. 호출자가 명시적으로 `user_timeout`을 넘기면 그 값 사용
-    2. args에 `timeout` 키가 있으면 `timeout * max_retries * 1.5 + buffer`로 계산
+    2. args에 `timeout`/`time`/`time_s` 키가 있으면 `값 * max_retries * 1.5 + buffer`로 계산
        - 예: DLTLogging.ExpectFound(timeout=60, max_retries=5) → 60*5*1.5+60 = 510s
+       - Monitor_pass_on_keyword(time=1200) 같은 장시간 키워드 대기도 잘리지 않음
     3. 그 외에는 DEFAULT_MODULE_TIMEOUT_S 사용
 
     주의: 모든 플러그인이 동일한 key 네이밍을 쓰지 않을 수 있으므로 이건 힌트일 뿐.
-    감지 실패 시에도 default가 충분히 크도록(10분) 잡아 정당한 작업을 끊지 않음.
+    감지 실패 시에도 default가 충분히 크도록(1시간) 잡아 정당한 작업을 끊지 않음.
     """
     if user_timeout is not None and user_timeout > 0:
         return float(user_timeout)
     if not isinstance(args, dict):
         return DEFAULT_MODULE_TIMEOUT_S
-    t = args.get("timeout")
-    if not isinstance(t, (int, float)) or t <= 0:
+
+    def _num(v) -> Optional[float]:
+        try:
+            f = float(v)
+            return f if f > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    # Monitor_*_on_keyword / SendCommand_*_on_keyword 계열은 대기 시간 파라미터명이
+    # `time`(Serial)/`time_s`(Android)라 `timeout` 키만 보면 감지가 안 된다 —
+    # 장시간 sleep 진입 대기(예: 20분+)를 default에 잘리지 않게 함께 본다.
+    t = _num(args.get("timeout")) or _num(args.get("time")) or _num(args.get("time_s"))
+    if t is None:
         return DEFAULT_MODULE_TIMEOUT_S
     retries = args.get("max_retries") or args.get("retries") or 1
     if not isinstance(retries, (int, float)) or retries <= 0:
