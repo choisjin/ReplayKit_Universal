@@ -3334,8 +3334,9 @@ class DeviceManager:
                     except Exception:
                         pass
 
-                # 연결 확인 (최대 3회 재시도)
-                for attempt in range(3):
+                # 연결 확인 (최대 4회 재시도)
+                found = None
+                for attempt in range(4):
                     devs = await self.adb.list_devices()
                     found = next((d for d in devs if d.serial == dev.address), None)
                     if found and found.status == "device":
@@ -3352,11 +3353,30 @@ class DeviceManager:
                         #  화면 캡처가 멈춰 보이는 현상 방지)
                         asyncio.create_task(self.adb.prewarm_touch_input(dev.address))
                         return f"ADB connected: {dev.id} ({dev.address})"
-                    if attempt < 2:
+                    # 네트워크 타겟이 1초 뒤에도 offline/absent → 장치 adbd가 이전 세션을
+                    # 물고 있는 half-open 스테일일 가능성이 높다. 재생 경로(playback의
+                    # ADB net reconnect)와 동일하게 disconnect→connect 로 트랜스포트를
+                    # 리프레시한 뒤 남은 폴링으로 재확인한다. (단순 connect 재시도로는
+                    # 스테일 offline 이 풀리지 않음)
+                    if ":" in dev.address and attempt == 1:
+                        logger.info(
+                            "ADB connect: %s still %s after 1s — refreshing transport "
+                            "(disconnect→connect)", dev.id,
+                            found.status if found else "absent",
+                        )
+                        try:
+                            if found:
+                                await self.adb.disconnect_device(dev.address)
+                            await self.adb.connect_device(dev.address)
+                        except Exception:
+                            pass
+                    if attempt < 3:
                         await asyncio.sleep(1)
 
                 dev.status = found.status if found else "offline"
-                return f"ADB not ready: {dev.id} ({dev.status})"
+                # 진단용으로 '목록에 있는데 offline'과 '목록에서 사라짐'을 구분해 기록
+                state = dev.status if found else "absent from adb devices"
+                return f"ADB not ready: {dev.id} ({state})"
             except Exception as e:
                 dev.status = "offline"
                 return f"ADB connect failed: {dev.id} — {e}"
