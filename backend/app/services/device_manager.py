@@ -3324,19 +3324,14 @@ class DeviceManager:
 
         elif dev.type == "adb":
             try:
-                # WiFi: adb connect, USB: adb reconnect
-                if ":" in dev.address:
-                    await self.adb.connect_device(dev.address)
-                else:
-                    # USB 디바이스: reconnect 시도 (connecting 상태 해결)
-                    try:
-                        await self.adb._run(f"-s {dev.address} reconnect")
-                    except Exception:
-                        pass
-
-                # 연결 확인 (최대 4회 재시도)
+                # ⚠️ 연결 액션은 '필요할 때만' — 이미 device 로 붙어 있는 트랜스포트에
+                # USB `adb reconnect` / 네트워크 disconnect→connect 를 날리면 멀쩡한
+                # 연결을 끊고 재수립시킨다. 재핸드셰이크가 느린 장치(CDC Feature VM 등)는
+                # 폴링 창 안에 못 돌아와 "연결 누르면 adb devices 에서 사라짐"이 된다.
+                # → 먼저 목록을 보고, 정상이면 아무것도 건드리지 않는다.
+                is_net = ":" in dev.address
                 found = None
-                for attempt in range(4):
+                for attempt in range(10):
                     devs = await self.adb.list_devices()
                     found = next((d for d in devs if d.serial == dev.address), None)
                     if found and found.status == "device":
@@ -3353,24 +3348,33 @@ class DeviceManager:
                         #  화면 캡처가 멈춰 보이는 현상 방지)
                         asyncio.create_task(self.adb.prewarm_touch_input(dev.address))
                         return f"ADB connected: {dev.id} ({dev.address})"
-                    # 네트워크 타겟이 1초 뒤에도 offline/absent → 장치 adbd가 이전 세션을
-                    # 물고 있는 half-open 스테일일 가능성이 높다. 재생 경로(playback의
-                    # ADB net reconnect)와 동일하게 disconnect→connect 로 트랜스포트를
-                    # 리프레시한 뒤 남은 폴링으로 재확인한다. (단순 connect 재시도로는
-                    # 스테일 offline 이 풀리지 않음)
-                    if ":" in dev.address and attempt == 1:
+
+                    if attempt == 0:
+                        # 최초 1회만 연결 액션 (이미 device 였으면 위에서 return 됨)
+                        if is_net:
+                            await self.adb.connect_device(dev.address)
+                        elif found:
+                            # USB: 목록에 있는데 offline/connecting 등 비정상일 때만 reconnect.
+                            # 목록에 없으면 reconnect 대상이 없으므로 폴링만 한다.
+                            try:
+                                await self.adb._run(f"-s {dev.address} reconnect")
+                            except Exception:
+                                pass
+                    elif is_net and attempt == 4 and found and found.status == "offline":
+                        # 네트워크 타겟이 목록에 'offline' 으로 고착 → 장치 adbd 가 이전
+                        # 세션을 물고 있는 half-open 스테일. disconnect→connect 로 트랜스
+                        # 포트를 리프레시한다. absent/핸드셰이크 진행 중에는 건드리지 않는다
+                        # (여기서 disconnect 를 날리면 재수립 중인 연결을 끊어 더 악화됨).
                         logger.info(
-                            "ADB connect: %s still %s after 1s — refreshing transport "
+                            "ADB connect: %s stuck offline — refreshing transport "
                             "(disconnect→connect)", dev.id,
-                            found.status if found else "absent",
                         )
                         try:
-                            if found:
-                                await self.adb.disconnect_device(dev.address)
+                            await self.adb.disconnect_device(dev.address)
                             await self.adb.connect_device(dev.address)
                         except Exception:
                             pass
-                    if attempt < 3:
+                    if attempt < 9:
                         await asyncio.sleep(1)
 
                 dev.status = found.status if found else "offline"
