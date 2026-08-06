@@ -416,6 +416,7 @@ export default function AdminPage() {
                   {a.type === 'isap_agent' && '— iSAP Agent TCP 프로토콜'}
                   {a.type === 'icas_agent' && '— VW ICAS SSH 프로토콜'}
                   {a.type === 'mib_agent' && '— VW MIB SSH+ksend 프로토콜'}
+                  {a.type === 'fpk_agent' && '— VW FPK 클러스터 SSH+프레임버퍼 (캡처 전용, 조작 불가)'}
                   {a.type === 'bmw_agent' && '— BMW 후석 듀얼 디스플레이 ADB (WebOS+Android)'}
                   {a.type === 'vision_camera' && '— GigE 비전 카메라 (스크린샷 전용)'}
                   {a.type === 'webcam' && '— USB 웹캠 (관찰 전용)'}

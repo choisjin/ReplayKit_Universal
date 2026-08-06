@@ -21,6 +21,7 @@ from .hkmc5th_wide_service import HKMC5thWideService
 from .isap_agent_service import ISAPAgentService
 from .icas_agent_service import ICASAgentService
 from .mib_agent_service import MIBAgentService
+from .fpk_agent_service import FPKAgentService
 from .bmw_agent_service import BMWAgentService
 from .ssh_service import SSHConnection
 from .wincontrol_service import WinControlService
@@ -891,6 +892,8 @@ class DeviceManager:
         self._icas_reconnect_attempts: dict[str, int] = {}
         self._mib_conns: dict[str, MIBAgentService] = {}  # device_id -> MIBAgentService
         self._mib_reconnect_attempts: dict[str, int] = {}
+        self._fpk_conns: dict[str, FPKAgentService] = {}  # device_id -> FPKAgentService
+        self._fpk_reconnect_attempts: dict[str, int] = {}
         self._bmw_conns: dict[str, BMWAgentService] = {}  # device_id -> BMWAgentService
         self._bmw_reconnect_attempts: dict[str, int] = {}
         self._adb_reconnect_attempts: dict[str, int] = {}  # device_id -> 연속 재연결 실패 횟수
@@ -1110,6 +1113,8 @@ class DeviceManager:
             prefix = "ICAS"
         elif dev_type == "mib_agent":
             prefix = "MIB"
+        elif dev_type == "fpk_agent":
+            prefix = "FPK"
         elif dev_type == "bmw_agent":
             prefix = "BMW"
         elif dev_type == "vision_camera":
@@ -1134,7 +1139,7 @@ class DeviceManager:
         aux = [
             d.to_dict()
             for d in self._devices.values()
-            if d.category == "auxiliary" or d.type in ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent", "icas_agent", "mib_agent", "bmw_agent", "vision_camera", "webcam", "ssh")
+            if d.category == "auxiliary" or d.type in ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent", "icas_agent", "mib_agent", "fpk_agent", "bmw_agent", "vision_camera", "webcam", "ssh")
         ]
         try:
             _AUX_DEVICES_FILE.write_text(json.dumps(aux, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1484,6 +1489,73 @@ class DeviceManager:
             return self._mib_conns.get(dev.id)
         return None
 
+    async def add_fpk_agent_device(self, host: str, port: int = 22, device_id: str = "",
+                                   name: str = "", device_model: str = "",
+                                   username: str = "root", password: str = "",
+                                   resolution: str = "1280x480",
+                                   fb_device: str = "/dev/fb0",
+                                   pixel_order: str = "BGRX") -> ManagedDevice:
+        """FPK Agent 디바이스 등록만 (연결은 connect_device_by_id로 별도 수행).
+
+        VW FPK 클러스터용 — SSH + /dev/fb0 직접 읽기 기반의 **캡처 전용** 디바이스.
+        이 플랫폼은 ksend/LayerManagerControl이 없어 터치·하드키 등 화면 조작이 불가능하다.
+        """
+        final_id = device_id or self._generate_device_id("fpk_agent", device_model=device_model)
+        display_name = name or f"FPK ({host}:{port})"
+        try:
+            rw_s, rh_s = str(resolution).upper().split("X")
+            res_dict = {"width": int(rw_s), "height": int(rh_s)}
+        except Exception:
+            res_dict = {"width": 1280, "height": 480}
+
+        info: dict = {
+            "port": int(port),
+            "username": username,
+            "password": password,
+            "resolution": res_dict,
+            "resolution_str": str(resolution),
+            "fb_device": fb_device or "/dev/fb0",
+            "pixel_order": (pixel_order or "BGRX").upper(),
+            "input_supported": False,
+        }
+        if device_model:
+            info["device_model"] = device_model
+
+        # 재등록이 자동 감지된 해상도를 지우지 않도록 기존 info 위에 폼 값만 덮어쓴다.
+        existing = self._devices.get(final_id)
+        if existing is not None and existing.type == "fpk_agent":
+            merged = dict(existing.info)
+            merged.update(info)
+            if existing.info.get("resolution_str"):
+                merged["resolution"] = existing.info["resolution"]
+                merged["resolution_str"] = existing.info["resolution_str"]
+            info = merged
+            if not name:
+                display_name = existing.name
+
+        dev = ManagedDevice(
+            id=final_id,
+            type="fpk_agent",
+            category="primary",
+            address=host,
+            status="disconnected",
+            name=display_name,
+            info=info,
+        )
+        self._devices[final_id] = dev
+        self._save_auxiliary_devices()
+        return dev
+
+    def get_fpk_service(self, device_id: str) -> Optional[FPKAgentService]:
+        """Get FPKAgentService instance for a device. Returns None if not found."""
+        svc = self._fpk_conns.get(device_id)
+        if svc:
+            return svc
+        dev = self.get_device(device_id)
+        if dev and dev.type == "fpk_agent":
+            return self._fpk_conns.get(dev.id)
+        return None
+
     async def add_bmw_agent_device(self, serial: str, device_id: str = "",
                                    name: str = "", device_model: str = "",
                                    resolution: str = "1920x1080",
@@ -1662,6 +1734,13 @@ class DeviceManager:
             if dev.type == "mib_agent":
                 mib = self._mib_conns.get(dev.id)
                 if mib and mib.is_connected:
+                    dev.status = "connected"
+                elif dev.status != "reconnecting":
+                    dev.status = "disconnected"
+                continue
+            if dev.type == "fpk_agent":
+                fpk = self._fpk_conns.get(dev.id)
+                if fpk and fpk.is_connected:
                     dev.status = "connected"
                 elif dev.status != "reconnecting":
                     dev.status = "disconnected"
@@ -3153,6 +3232,77 @@ class DeviceManager:
                 dev.status = "disconnected"
                 return f"MIB connect failed: {dev.id} — {e}"
 
+        elif dev.type == "fpk_agent":
+            port = int(dev.info.get("port", 22) or 22)
+            username = dev.info.get("username", "root") or "root"
+            password = dev.info.get("password", "") or ""
+            res_str = dev.info.get("resolution_str")
+            if not res_str:
+                res_val = dev.info.get("resolution")
+                if isinstance(res_val, dict) and "width" in res_val and "height" in res_val:
+                    res_str = f"{res_val['width']}x{res_val['height']}"
+                elif isinstance(res_val, str):
+                    res_str = res_val
+                else:
+                    res_str = "1280x480"
+
+            # 프레임버퍼 실제 해상도가 등록값과 다르면 dev.info 자동 갱신 + 영구 저장.
+            target_dev_id = dev.id
+
+            def _on_fpk_resolution_changed(wxh: str, _did: str = target_dev_id) -> None:
+                d = self._devices.get(_did)
+                if d is None or d.type != "fpk_agent":
+                    return
+                try:
+                    rw_s, rh_s = wxh.upper().split("X")
+                    rw, rh = int(rw_s), int(rh_s)
+                except Exception:
+                    return
+                cur = d.info.get("resolution") if isinstance(d.info.get("resolution"), dict) else None
+                if cur and cur.get("width") == rw and cur.get("height") == rh:
+                    return
+                d.info["resolution"] = {"width": rw, "height": rh}
+                d.info["resolution_str"] = f"{rw}x{rh}"
+                if isinstance(d.info.get("screens"), dict):
+                    for k in d.info["screens"]:
+                        d.info["screens"][k] = {"width": rw, "height": rh}
+                logger.info("FPK auto-detected resolution: %s → %s", _did, f"{rw}x{rh}")
+                try:
+                    self._save_auxiliary_devices()
+                except Exception as e:
+                    logger.warning("FPK auto-detect persist failed: %s", e)
+
+            try:
+                svc = FPKAgentService(
+                    dev.address, port=port, device_id=dev.id,
+                    username=username, password=password, resolution=res_str,
+                    fb_device=dev.info.get("fb_device", "/dev/fb0") or "/dev/fb0",
+                    pixel_order=dev.info.get("pixel_order", "BGRX") or "BGRX",
+                    on_resolution_changed=_on_fpk_resolution_changed,
+                )
+                ok = await svc.async_connect()
+                if ok:
+                    self._fpk_conns[dev.id] = svc
+                    dev.status = "connected"
+                    _mark_connected()
+                    info = svc.get_info()
+                    dev.info["agent_version"] = svc.agent_version
+                    dev.info["screens"] = info["screens"]
+                    dev.info["resolution"] = dev.info["screens"].get(
+                        svc.default_screen, {"width": 1280, "height": 480}
+                    )
+                    # 표기는 소문자 'x'로 통일 (svc.resolution 은 내부적으로 대문자 정규화됨)
+                    dev.info["resolution_str"] = f"{svc.res_x}x{svc.res_y}"
+                    dev.info["fb_info"] = info.get("fb_info", {})
+                    dev.info["input_supported"] = False
+                    return f"FPK connected: {dev.id} ({dev.address}:{port})"
+                else:
+                    dev.status = "disconnected"
+                    return f"FPK connect failed: {dev.id}"
+            except Exception as e:
+                dev.status = "disconnected"
+                return f"FPK connect failed: {dev.id} — {e}"
+
         elif dev.type == "module":
             module_name = dev.info.get("module", "")
             if not module_name:
@@ -3473,6 +3623,16 @@ class DeviceManager:
 
         elif dev.type == "mib_agent":
             svc = self._mib_conns.pop(device_id, None)
+            if svc:
+                try:
+                    svc.disconnect()
+                except Exception:
+                    pass
+            dev.status = "disconnected"
+            return f"Disconnected: {dev.id}"
+
+        elif dev.type == "fpk_agent":
+            svc = self._fpk_conns.pop(device_id, None)
             if svc:
                 try:
                     svc.disconnect()

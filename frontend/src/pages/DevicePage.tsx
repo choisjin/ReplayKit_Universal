@@ -397,7 +397,7 @@ export default function DevicePage() {
   // PCAN(PEAK/SysMax 호환) 채널 스캔 결과
   type PcanChannel = { channel: string; device_id?: number | null; controller?: number | null; supports_fd: boolean };
   const [scannedPcan, setScannedPcan] = useState<{ ok: boolean; driver_missing: boolean; channels: PcanChannel[]; error?: string | null }>({ ok: false, driver_missing: false, channels: [] });
-  const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'bmw_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
+  const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'fpk_agent' | 'bmw_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
   // BMW RSE Agent 전용 — 캡처 백엔드(adb screencap vs WebOS 컴포지터) + 해상도 fallback
   const [bmwCaptureBackend, setBmwCaptureBackend] = useState<'auto' | 'adb' | 'webos'>('auto');
   const [bmwResolution, setBmwResolution] = useState<string>('1920x1080');
@@ -414,6 +414,11 @@ export default function DevicePage() {
   ];
   const MIB_DEFAULT_RESOLUTION = '1560x700';
   const [mibResolution, setMibResolution] = useState<string>(MIB_DEFAULT_RESOLUTION);
+  // FPK(VW 클러스터) — SSH + /dev/fb0 직접 읽기. 캡처/이미지비교 전용(화면 조작 불가).
+  // 해상도는 연결 시 프레임버퍼 실제 값(FBIOGET_VSCREENINFO)으로 자동 보정된다.
+  const FPK_DEFAULT_RESOLUTION = '1280x480';
+  const [fpkResolution, setFpkResolution] = useState<string>(FPK_DEFAULT_RESOLUTION);
+  const [fpkFbDevice, setFpkFbDevice] = useState<string>('/dev/fb0');
   // MIB 패널 프로파일 — 해상도가 같아도 터치 디지타이저 보정이 다르다.
   // 예: 12.9"와 13.1"는 둘 다 1920x1080 이지만 12.9"는 Y÷2(대칭), 13.1"는 Y×1(비대칭).
   // 연결 시 프로파일을 골라 resolution + touch_x_scale/touch_y_scale 를 함께 적용한다.
@@ -865,8 +870,8 @@ export default function DevicePage() {
           }
         }
       }
-      const tcpPort = (devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent') ? hkmcPort : undefined;
-      const model = (devType === 'adb' || devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent' || devType === 'bmw_agent') ? (deviceModel || undefined) : undefined;
+      const tcpPort = (devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent' || devType === 'fpk_agent') ? hkmcPort : undefined;
+      const model = (devType === 'adb' || devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent' || devType === 'fpk_agent' || devType === 'bmw_agent') ? (deviceModel || undefined) : undefined;
       // ICAS Agent는 SSH 자격증명이 필요 — extra_fields로 전달
       if (devType === 'icas_agent') {
         extra = extra || {};
@@ -880,6 +885,15 @@ export default function DevicePage() {
         extra.username = (sshUser && sshUser.trim()) || 'root';
         extra.password = sshPass || '';
         extra.resolution = (mibResolution || MIB_DEFAULT_RESOLUTION).trim();
+      }
+      // FPK Agent: SSH 자격증명 + 프레임버퍼 해상도. 캡처 전용(터치/하드키 미지원).
+      // 해상도는 연결 시 /dev/fb0 실제 값으로 자동 보정되므로 기본값으로 충분.
+      if (devType === 'fpk_agent') {
+        extra = extra || {};
+        extra.username = (sshUser && sshUser.trim()) || 'root';
+        extra.password = sshPass || '';
+        extra.resolution = (fpkResolution || FPK_DEFAULT_RESOLUTION).trim();
+        extra.fb_device = (fpkFbDevice || '/dev/fb0').trim();
       }
       // BMW RSE Agent: ADB serial 기반 (address=serial). 캡처 백엔드 + 해상도 fallback 전달.
       if (devType === 'bmw_agent') {
@@ -3021,6 +3035,7 @@ export default function DevicePage() {
                         {modalCategory === 'primary' && <Option value="isap_agent">iSAP Agent (TCP)</Option>}
                         {modalCategory === 'primary' && <Option value="icas_agent">ICAS Agent (SSH)</Option>}
                         {modalCategory === 'primary' && <Option value="mib_agent">MIB Agent (SSH)</Option>}
+                        {modalCategory === 'primary' && <Option value="fpk_agent">FPK Agent (SSH, 캡처 전용)</Option>}
                         {modalCategory === 'primary' && <Option value="bmw_agent">BMW Agent (ADB)</Option>}
                         {modalCategory === 'primary' && <Option value="vision_camera">Vision Camera</Option>}
                         {modalCategory === 'primary' && <Option value="webcam">{t('device.webcam')}</Option>}
@@ -3243,6 +3258,50 @@ export default function DevicePage() {
                         </Space>
                         <div style={{ fontSize: 10, color: '#888' }}>
                           MIB는 캡처 시 PNG 실제 크기로 자동 보정됩니다. 등록 후 수정 모달에서도 변경/자동 감지 가능.
+                        </div>
+                      </>
+                    )}
+
+                    {!selectedModule && connectType === 'fpk_agent' && (
+                      <>
+                        <Input
+                          placeholder="FPK IP (IPv6 가능, 예: fd53:7cb8:383:5::14)"
+                          value={connectAddress}
+                          onChange={(e) => setConnectAddress(e.target.value)}
+                          onPressEnter={handleConnect}
+                        />
+                        <Space wrap>
+                          <span style={{ fontSize: 11, color: '#888' }}>SSH Port:</span>
+                          <InputNumber
+                            value={hkmcPort}
+                            onChange={(v) => setHkmcPort(v || 22)}
+                            min={1} max={65535}
+                            style={{ width: 100 }}
+                          />
+                          <span style={{ fontSize: 11, color: '#888' }}>User:</span>
+                          <Input value={sshUser} onChange={(e) => setSshUser(e.target.value)} style={{ width: 120 }} placeholder="root" />
+                          <span style={{ fontSize: 11, color: '#888' }}>Password:</span>
+                          <Input.Password value={sshPass} onChange={(e) => setSshPass(e.target.value)} style={{ width: 160 }} placeholder="(blank if none)" />
+                        </Space>
+                        <Space wrap>
+                          <span style={{ fontSize: 11, color: '#888' }}>Resolution:</span>
+                          <Input
+                            placeholder="WxH"
+                            value={fpkResolution}
+                            onChange={(e) => setFpkResolution(e.target.value)}
+                            style={{ width: 140 }}
+                          />
+                          <span style={{ fontSize: 11, color: '#888' }}>Framebuffer:</span>
+                          <Input
+                            placeholder="/dev/fb0"
+                            value={fpkFbDevice}
+                            onChange={(e) => setFpkFbDevice(e.target.value)}
+                            style={{ width: 140 }}
+                          />
+                        </Space>
+                        <div style={{ fontSize: 10, color: '#888' }}>
+                          FPK 클러스터는 <b>캡처·이미지 비교 전용</b>입니다 — 터치/스와이프/하드키 등 화면 조작은 지원되지 않습니다.
+                          해상도는 연결 시 프레임버퍼 실제 값으로 자동 보정됩니다.
                         </div>
                       </>
                     )}

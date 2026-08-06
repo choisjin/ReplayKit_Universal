@@ -81,7 +81,23 @@ while True:
 
 
 class LiveStreamMixin:
-    """실화면(screen dump) 라이브 스트리밍 — 캡처/전송 공용. 터치/해상도 정책은 서비스별."""
+    """실화면(screen dump) 라이브 스트리밍 — 캡처/전송 공용. 터치/해상도 정책은 서비스별.
+
+    디바이스 스트리머와 프레임 페이로드는 서브클래스가 교체할 수 있다:
+      - `_live_streamer_src`: 디바이스에서 `python3 -u -` 로 실행할 소스 (기본 = LayerManagerControl dump)
+      - `_live_magic`: 프레임 매직 4바이트 (기본 b"MIBP")
+      - `_live_decode_frame(payload, sw, sh)`: 페이로드 → PIL.Image (기본 = PNG 디코드)
+    헤더는 공통으로 magic(4) + struct('<IHH', payload_len, sw, sh).
+    """
+
+    # 서브클래스 override 지점 (FPK: fb0 raw + zlib) — 기본값은 MIB/ICAS의 dump screen PNG.
+    _live_streamer_src: str = _LIVE_STREAMER
+    _live_magic: bytes = b"MIBP"
+
+    def _live_decode_frame(self, payload: bytes, sw: int, sh: int):
+        """프레임 페이로드 → PIL.Image. 기본 구현은 완성 PNG 바이트."""
+        from PIL import Image
+        return Image.open(io.BytesIO(payload)).convert("RGB")
 
     def _init_live_stream(self) -> None:
         # 라이브는 전용 SSH 연결을 쓴다 — 풀해상도 screencap이 공유 SSH를 리셋해도 안 끊기게 격리.
@@ -141,7 +157,7 @@ class LiveStreamMixin:
                 return False
             chan = transport.open_session()
             chan.exec_command("python3 -u -")
-            chan.sendall(_LIVE_STREAMER.encode("utf-8"))
+            chan.sendall(self._live_streamer_src.encode("utf-8"))
             chan.shutdown_write()  # 스트리머는 stdin을 읽지 않음 → 즉시 EOF
             t = threading.Thread(target=self._live_reader, args=(chan,), daemon=True)
             with self._live_lock:
@@ -171,8 +187,8 @@ class LiveStreamMixin:
         합성/black-key 없음 — 컴포지터가 이미 알파·z순서 룰로 합성한 화면을 그대로 표시.
         프레임 형식: b"MIBP" + struct('<IHH', png_len, sw, sh) + PNG bytes
         """
-        from PIL import Image
-        HDR = 12  # b"MIBP"(4) + '<IHH'(8)
+        MAGIC = self._live_magic
+        HDR = 12  # magic(4) + '<IHH'(8)
         buf = b""
         try:
             chan.settimeout(5.0)
@@ -196,7 +212,7 @@ class LiveStreamMixin:
                 break  # 채널 닫힘 → 스트리머 종료
             buf += data
             while True:
-                idx = buf.find(b"MIBP")
+                idx = buf.find(MAGIC)
                 if idx < 0:
                     if len(buf) > (1 << 23):
                         buf = buf[-8:]
@@ -225,7 +241,7 @@ class LiveStreamMixin:
                         except Exception as e:
                             logger.debug("%s live resolution sync failed: %s", self._live_label, e)
                 try:
-                    img = Image.open(io.BytesIO(png)).convert("RGB")
+                    img = self._live_decode_frame(png, sw, sh)
                     bio = io.BytesIO()
                     img.save(bio, format="JPEG", quality=self._live_jpeg_q)
                     jpg = bio.getvalue()

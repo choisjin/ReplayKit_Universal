@@ -919,6 +919,7 @@ async def websocket_screen_mirror(websocket: WebSocket):
     is_isap = dev and dev.type == "isap_agent"
     is_icas = dev and dev.type == "icas_agent"
     is_mib = dev and dev.type == "mib_agent"
+    is_fpk = dev and dev.type == "fpk_agent"
     is_bmw = dev and dev.type == "bmw_agent"
     is_vision_camera = dev and dev.type == "vision_camera"
     is_webcam = dev and dev.type == "webcam"
@@ -929,9 +930,10 @@ async def websocket_screen_mirror(websocket: WebSocket):
         ("isap" if is_isap else
          ("icas" if is_icas else
           ("mib" if is_mib else
-           ("vision_camera" if is_vision_camera else
-            ("webcam" if is_webcam else
-             ("wincontrol" if is_wincontrol else "adb")))))))
+           ("fpk" if is_fpk else
+            ("vision_camera" if is_vision_camera else
+             ("webcam" if is_webcam else
+              ("wincontrol" if is_wincontrol else "adb"))))))))
     logger.debug("Screen mirror: device=%s type=%s", target_device_id, dev_type_label)
 
     # scrcpy 제거 — 항상 JPEG screencap 사용
@@ -1165,6 +1167,57 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                 "MIB capture error (%s): type=%s repr=%r",
                                 screen_type, cls_name, ce,
                             )
+                            await asyncio.sleep(0.5)
+                            continue
+                    else:
+                        await asyncio.sleep(0.3)
+                        continue
+                elif is_fpk:
+                    fpk = device_manager.get_fpk_service(target_device_id)
+                    if fpk and fpk.is_connected:
+                        # FPK는 화면이 하나(클러스터)뿐이라 screen_type 분기 없이 항상 라이브 경로.
+                        # 디바이스 python이 /dev/fb0의 현재 표시 버퍼를 zlib으로 밀어준다(~3fps).
+                        if not fpk.is_live_running():
+                            started = await fpk.async_start_live_stream()
+                            if started:
+                                live_last_frame_id = -1
+                        if fpk.is_live_running():
+                            try:
+                                jpeg_bytes, fid = fpk.get_live_frame()
+                                if jpeg_bytes is not None and fid != live_last_frame_id:
+                                    live_last_frame_id = fid
+                                    await websocket.send_bytes(jpeg_bytes)
+                                    await asyncio.sleep(0.015)
+                                else:
+                                    await asyncio.sleep(0.03)
+                                continue
+                            except WebSocketDisconnect:
+                                break
+                            except Exception as ce:
+                                cls_name = type(ce).__name__
+                                if cls_name in ("ClientDisconnected", "ConnectionClosed",
+                                                "ConnectionClosedOK", "ConnectionClosedError"):
+                                    break
+                                logger.warning("FPK live send error: type=%s repr=%r",
+                                               cls_name, ce)
+                                await asyncio.sleep(0.3)
+                                continue
+                        # ── 폴백: 단발 캡처 반복 (스트리머 기동 실패 환경) ──
+                        try:
+                            jpeg_bytes = await fpk.async_screencap_bytes(
+                                screen_type="HU", fmt="jpeg"
+                            )
+                            await websocket.send_bytes(jpeg_bytes)
+                            await asyncio.sleep(0.2)
+                            continue
+                        except WebSocketDisconnect:
+                            break
+                        except Exception as ce:
+                            cls_name = type(ce).__name__
+                            if cls_name in ("ClientDisconnected", "ConnectionClosed",
+                                            "ConnectionClosedOK", "ConnectionClosedError"):
+                                break
+                            logger.warning("FPK capture error: type=%s repr=%r", cls_name, ce)
                             await asyncio.sleep(0.5)
                             continue
                     else:
@@ -1569,6 +1622,16 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     )
                 except Exception as e:
                     logger.debug("MIB live stream stop on disconnect failed: %s", e)
+        # FPK 라이브 스트림 정리 — 미종료 시 device python이 fb0를 계속 읽는다.
+        if is_fpk:
+            _fpk = device_manager.get_fpk_service(target_device_id)
+            if _fpk is not None and _fpk.is_live_running():
+                try:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, _fpk.stop_live_stream
+                    )
+                except Exception as e:
+                    logger.debug("FPK live stream stop on disconnect failed: %s", e)
         if is_icas:
             _icas = device_manager.get_icas_service(target_device_id)
             if _icas is not None and _icas.is_live_running():

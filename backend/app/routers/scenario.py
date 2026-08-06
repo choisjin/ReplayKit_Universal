@@ -428,6 +428,11 @@ async def capture_expected_image(req: CaptureExpectedImageRequest):
                 raise HTTPException(status_code=400, detail=f"MIB device {req.device_id} not connected")
             st = req.screen_type if req.screen_type in ("HU", "IID", "HUD") else "HU"
             png_bytes = await mib.async_screencap_bytes(screen_type=st, fmt="png")
+        elif dev and dev.type == "fpk_agent":
+            fpk = dm.get_fpk_service(req.device_id)
+            if not fpk:
+                raise HTTPException(status_code=400, detail=f"FPK device {req.device_id} not connected")
+            png_bytes = await fpk.async_screencap_bytes(screen_type="HU", fmt="png")
         elif dev and dev.type == "bmw_agent":
             bmw = dm.get_bmw_service(req.device_id)
             if not bmw:
@@ -731,6 +736,11 @@ async def record_image_tap(req: ImageTapRequest):
                 {"x": tap_x, "y": center_y, "duration_ms": duration_ms,
                  "screen_type": req.screen_type or "front_center"},
                 req.device_id,
+            )
+        elif dev_type == "fpk_agent":
+            raise HTTPException(
+                status_code=400,
+                detail="FPK 클러스터는 화면 조작을 지원하지 않습니다 — 이미지 비교 전용 디바이스입니다.",
             )
         elif dev_type in ("icas_agent", "mib_agent"):
             await recording_svc._execute_step_action(

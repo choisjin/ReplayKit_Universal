@@ -140,6 +140,11 @@
           "value": "VW EU",
           "enabled": true,
           "agent": "MIB Agent"
+        },
+        {
+          "value": "FPK",
+          "enabled": true,
+          "agent": "FPK Agent"
         }
       ]
     },
@@ -258,6 +263,11 @@
     {
       "name": "MIB Agent",
       "type": "mib_agent",
+      "enabled": true
+    },
+    {
+      "name": "FPK Agent",
+      "type": "fpk_agent",
       "enabled": true
     },
     {

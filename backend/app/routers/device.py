@@ -147,6 +147,7 @@ _DEFAULT_DEVICE_CATALOG: dict = {
             "enabled": True,
             "models": [
                 {"value": "MIB", "enabled": True, "agent": "MIB Agent"},
+                {"value": "FPK", "enabled": True, "agent": "FPK Agent"},
             ],
         },
         {
@@ -177,6 +178,7 @@ _DEFAULT_DEVICE_CATALOG: dict = {
         {"name": "iSAP Agent",   "type": "isap_agent",    "enabled": True},
         {"name": "ICAS Agent",   "type": "icas_agent",    "enabled": True},
         {"name": "MIB Agent",    "type": "mib_agent",     "enabled": True},
+        {"name": "FPK Agent",    "type": "fpk_agent",     "enabled": True},
         {"name": "BMWRSE_Agent", "type": "bmw_agent",     "enabled": True},
         {"name": "VisionCamera", "type": "vision_camera", "enabled": True},
         {"name": "Webcam",       "type": "webcam",        "enabled": True},
@@ -284,7 +286,7 @@ def _build_constructor_kwargs(dev) -> dict | None:
 
 
 class ConnectRequest(BaseModel):
-    type: str  # "adb" | "serial" | "module" | "hkmc_agent" | "isap_agent" | "icas_agent" | "mib_agent" | "bmw_agent" | "vision_camera" | "webcam" | "ssh"
+    type: str  # "adb" | "serial" | "module" | "hkmc_agent" | "isap_agent" | "icas_agent" | "mib_agent" | "fpk_agent" | "bmw_agent" | "vision_camera" | "webcam" | "ssh"
     category: str = ""  # "primary" | "auxiliary" — auto-detected if empty
     address: str = ""  # COM port for serial, IP for socket/HKMC/SSH, etc.
     baudrate: Optional[int] = 115200
@@ -836,6 +838,34 @@ async def connect_device(req: ConnectRequest):
                 connect_msg = f"registered but connect failed: {e}"
             return {
                 "result": f"MIB registered: {dev.name} (ID: {dev.id}) — {connect_msg}",
+                "primary": _with_protected_flag(dm.list_primary()),
+                "auxiliary": _with_protected_flag(dm.list_auxiliary()),
+            }
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    elif req.type == "fpk_agent":
+        if not req.address:
+            raise HTTPException(status_code=400, detail="FPK Agent requires address (host)")
+        ef = req.extra_fields or {}
+        try:
+            dev = await dm.add_fpk_agent_device(
+                host=req.address,
+                port=int(req.port or 22),
+                device_id=custom_id,
+                name=req.name or "",
+                device_model=req.device_model or "",
+                username=ef.get("username", "root") or "root",
+                password=ef.get("password", "") or "",
+                resolution=ef.get("resolution", "1280x480") or "1280x480",
+                fb_device=ef.get("fb_device", "/dev/fb0") or "/dev/fb0",
+                pixel_order=str(ef.get("pixel_order", "BGRX") or "BGRX"),
+            )
+            try:
+                connect_msg = await dm.connect_device_by_id(dev.id)
+            except Exception as e:
+                connect_msg = f"registered but connect failed: {e}"
+            return {
+                "result": f"FPK registered: {dev.name} (ID: {dev.id}) — {connect_msg}",
                 "primary": _with_protected_flag(dm.list_primary()),
                 "auxiliary": _with_protected_flag(dm.list_auxiliary()),
             }
@@ -1685,7 +1715,7 @@ async def update_device(req: UpdateDeviceRequest):
         for k, v in req.extra_fields.items():
             # MIB의 resolution은 dict 스키마({width,height})를 보존해야 하므로
             # 문자열 "WxH"로 들어온 경우 파싱하여 두 형태 모두 갱신.
-            if dev.type == "mib_agent" and k == "resolution" and isinstance(v, str):
+            if dev.type in ("mib_agent", "fpk_agent") and k == "resolution" and isinstance(v, str):
                 try:
                     rw_s, rh_s = v.upper().split("X")
                     rw, rh = int(rw_s), int(rh_s)
@@ -1699,14 +1729,15 @@ async def update_device(req: UpdateDeviceRequest):
                     )
             else:
                 dev.info[k] = v
-        # 활성 MIBAgentService에 즉시 반영 — _x_mult/_y_mult가 새 해상도로 재계산.
+        # 활성 서비스에 즉시 반영 — MIB은 _x_mult/_y_mult가 새 해상도로 재계산.
         if mib_resolution_changed:
-            svc = dm.get_mib_service(dev.id)
+            svc = (dm.get_fpk_service(dev.id) if dev.type == "fpk_agent"
+                   else dm.get_mib_service(dev.id))
             if svc is not None:
                 try:
                     svc.resolution = dev.info["resolution_str"]
                 except Exception as e:
-                    logger.warning("Failed to update live MIB resolution: %s", e)
+                    logger.warning("Failed to update live agent resolution: %s", e)
         # MIB 터치 보정 오프셋 라이브 반영 (touch_x_offset/touch_y_offset). reconnect 없이 캘리브레이션.
         if dev.type == "mib_agent" and (
             "touch_x_offset" in req.extra_fields or "touch_y_offset" in req.extra_fields
@@ -1764,7 +1795,8 @@ async def update_device(req: UpdateDeviceRequest):
     # Persist changes — auxiliary는 항상, primary 중 mib_agent는 해상도/터치보정 변경 시 저장.
     # 터치 스케일/오프셋은 라이브 반영만 하고 저장하지 않으면 백엔드 재시작 시 유실된다.
     if dev.category == "auxiliary" or (
-        dev.type == "mib_agent" and (mib_resolution_changed or mib_touch_calib_changed)
+        dev.type in ("mib_agent", "fpk_agent")
+        and (mib_resolution_changed or mib_touch_calib_changed)
     ):
         dm._save_auxiliary_devices()
 
@@ -2953,6 +2985,14 @@ async def get_screenshot(device_id: str, fmt: str = "jpeg", screen_type: str = "
                 raise HTTPException(status_code=400, detail=f"MIB device {device_id} not connected")
             st = screen_type if screen_type in ("HU", "IID", "HUD") else "HU"
             img_bytes = await mib.async_screencap_bytes(screen_type=st, fmt=fmt)
+            b64 = base64.b64encode(img_bytes).decode("ascii")
+            return {"image": b64, "format": fmt}
+        elif dev and dev.type == "fpk_agent":
+            fpk = dm.get_fpk_service(device_id)
+            if not fpk:
+                raise HTTPException(status_code=400, detail=f"FPK device {device_id} not connected")
+            # FPK는 클러스터 단일 화면 — screen_type 무시.
+            img_bytes = await fpk.async_screencap_bytes(screen_type="HU", fmt=fmt)
             b64 = base64.b64encode(img_bytes).decode("ascii")
             return {"image": b64, "format": fmt}
         elif dev and dev.type == "vision_camera":

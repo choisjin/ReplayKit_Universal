@@ -1068,6 +1068,15 @@ class PlaybackService:
                         Path(actual_path).write_bytes(img_bytes)
                     else:
                         raise RuntimeError(f"MIB device {ss_device['id']} not connected")
+                elif ss_device["type"] == "fpk_agent":
+                    fpk_svc = self.dm.get_fpk_service(ss_device["id"])
+                    if fpk_svc:
+                        img_bytes = await fpk_svc.async_screencap_bytes(
+                            screen_type="HU", fmt="png"
+                        )
+                        Path(actual_path).write_bytes(img_bytes)
+                    else:
+                        raise RuntimeError(f"FPK device {ss_device['id']} not connected")
                 elif ss_device["type"] == "bmw_agent":
                     bmw_svc = self.dm.get_bmw_service(ss_device["id"])
                     if bmw_svc:
@@ -2053,6 +2062,32 @@ class PlaybackService:
                             return
                 dev.status = "disconnected"
 
+        elif dev.type == "fpk_agent":
+            fpk = self.dm.get_fpk_service(device_id)
+            if fpk and fpk.is_connected:
+                return
+            # FPK 재연결도 device_manager.connect_device_by_id를 재사용(해상도 콜백 등 동일 적용).
+            lock = self.dm.get_reconnect_lock(device_id)
+            async with lock:
+                fpk = self.dm.get_fpk_service(device_id)
+                if fpk and fpk.is_connected:
+                    return
+                for attempt in range(1, max_retries + 1):
+                    if self._should_stop:
+                        return
+                    logger.info("Playback: FPK reconnect %s attempt %d/%d", device_id, attempt, max_retries)
+                    try:
+                        msg = await self.dm.connect_device_by_id(device_id)
+                        if "connected" in msg.lower() and "failed" not in msg.lower():
+                            logger.info("Playback: FPK reconnected %s", device_id)
+                            return
+                    except Exception as e:
+                        logger.debug("Playback: FPK reconnect %s failed: %s", device_id, e)
+                    if attempt < max_retries:
+                        if await self._interruptible_sleep(retry_interval):
+                            return
+                dev.status = "disconnected"
+
         elif dev.type == "bmw_agent":
             bmw = self.dm.get_bmw_service(device_id)
             if bmw and bmw.is_connected:
@@ -2247,7 +2282,8 @@ class PlaybackService:
     # ── OCR 가상 모듈 헬퍼 ─────────────────────────────────────────────────
 
     _OCR_CAPTURE_TYPES = ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent",
-                          "icas_agent", "mib_agent", "bmw_agent", "vision_camera", "webcam")
+                          "icas_agent", "mib_agent", "fpk_agent", "bmw_agent",
+                          "vision_camera", "webcam")
 
     def _find_ocr_device(self, step: Step) -> Optional[dict]:
         """OCR 스텝에서 스크린샷 대상 디바이스 정보 반환.
@@ -2290,6 +2326,8 @@ class PlaybackService:
             blob = f"{(dev.info or {}).get('device_model', '')} {dev.id}".lower()
             if "ccrc" in blob:
                 return "rear_right"
+        if dev.type in ("icas_agent", "mib_agent", "fpk_agent"):
+            return "HU"
         return "front_center"
 
     async def _screencap_bytes(self, dev_info: dict) -> Optional[bytes]:
@@ -2323,6 +2361,10 @@ class PlaybackService:
                 svc = self.dm.get_mib_service(dev_id)
                 if svc:
                     return await svc.async_screencap_bytes(screen_type=screen_type or "HU", fmt="png")
+            elif dev_type == "fpk_agent":
+                svc = self.dm.get_fpk_service(dev_id)
+                if svc:
+                    return await svc.async_screencap_bytes(screen_type="HU", fmt="png")
             elif dev_type == "bmw_agent":
                 svc = self.dm.get_bmw_service(dev_id)
                 if svc:
@@ -2626,6 +2668,8 @@ class PlaybackService:
                 if ss_dev.type == "mib_agent":
                     screen_type = step.screen_type or step.params.get("screen_type", "HU")
                     return {"type": "mib_agent", "id": ss_dev.id, "screen_type": screen_type}
+                if ss_dev.type == "fpk_agent":
+                    return {"type": "fpk_agent", "id": ss_dev.id, "screen_type": "HU"}
                 if ss_dev.type == "bmw_agent":
                     screen_type = step.screen_type or step.params.get("screen_type", "0")
                     return {"type": "bmw_agent", "id": ss_dev.id, "screen_type": screen_type}
@@ -2674,6 +2718,8 @@ class PlaybackService:
             elif dev and dev.type == "mib_agent":
                 screen_type = step.screen_type or step.params.get("screen_type", "HU")
                 return {"type": "mib_agent", "id": dev.id, "screen_type": screen_type}
+            elif dev and dev.type == "fpk_agent":
+                return {"type": "fpk_agent", "id": dev.id, "screen_type": "HU"}
             elif dev and dev.type == "bmw_agent":
                 screen_type = step.screen_type or step.params.get("screen_type", "0")
                 return {"type": "bmw_agent", "id": dev.id, "screen_type": screen_type}
@@ -3596,6 +3642,12 @@ class PlaybackService:
             png_bytes = await svc.async_screencap_bytes(
                 screen_type=screen_type or "HU", fmt="png",
             )
+        elif dev.type == "fpk_agent":
+            # 캡처만 가능 — 아래 탭 디스패치에서 미지원으로 명확히 실패한다.
+            svc = self.dm.get_fpk_service(real_id)
+            if not svc:
+                raise RuntimeError(f"image_tap: FPK device {real_id} not connected")
+            png_bytes = await svc.async_screencap_bytes(screen_type="HU", fmt="png")
         elif dev.type == "bmw_agent":
             svc = self.dm.get_bmw_service(real_id)
             if not svc:
@@ -3700,6 +3752,11 @@ class PlaybackService:
                 await svc.async_long_press(tap_x, center_y, duration_ms, screen_type or "front_center")
             else:
                 await svc.async_tap(tap_x, center_y, screen_type or "front_center")
+        elif dev.type == "fpk_agent":
+            raise RuntimeError(
+                f"image_tap: FPK 클러스터({real_id})는 화면 조작을 지원하지 않습니다 "
+                "— 이미지 비교(image_compare) 스텝만 사용 가능합니다."
+            )
         elif dev.type in ("icas_agent", "mib_agent"):
             svc = (self.dm.get_mib_service(real_id) if dev.type == "mib_agent"
                    else self.dm.get_icas_service(real_id))

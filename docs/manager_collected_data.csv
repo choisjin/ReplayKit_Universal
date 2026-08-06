@@ -1,0 +1,75 @@
+﻿채널,전송경로,분류,타입,페이로드필드,설명,소스
+A,WS {manager}/ws/client (register),PC식별,TEXT PK,client_id,머신 UID(Windows MachineGuid / Linux machine-id). 재부팅 불변 관제 식별키,backend/app/services/monitor_client.py:268
+A,WS {manager}/ws/client (register),PC식별,TEXT,name,PC 호스트명 platform.node(),backend/app/services/monitor_client.py:271
+A,WS {manager}/ws/client (register),PC식별,TEXT,version,"ReplayKit 버전(현재 ""0.1.0"" 하드코딩 — 실제 배포버전 아님)",backend/app/services/monitor_client.py:272
+B,WS status_update,상태,TEXT FK,client_id,머신 UID,backend/app/services/monitor_client.py:389
+B,WS status_update,상태,TEXT,name,PC 호스트명,backend/app/services/monitor_client.py:390
+B,WS status_update,상태,TEXT,version,버전 문자열,backend/app/services/monitor_client.py:391
+B,WS status_update,상태,TIMESTAMP,timestamp,전송 시각(UTC ISO8601),backend/app/services/monitor_client.py:392
+B,WS status_update,상태,TEXT,activity,playing / recording / in_use / idle (우선순위: 재생>녹화>창포커스>대기),backend/app/main.py:273
+B,WS status_update,상태,TEXT,ui.mode,URL hash 게이트 normal/test/admin/stats — 사용자가 어떤 모드로 쓰는지,backend/app/main.py:202
+B,WS status_update,상태,TEXT,ui.page,현재 보고 있는 탭(activeKey) — 프론트가 5초마다 보고,backend/app/main.py:203
+B,WS status_update,상태,TIMESTAMP,(파생),activity 전이 구간 이력(가동률·사용시간 통계용),backend/app/services/monitor_client.py:398
+B,WS status_update,로그인사용자,TEXT PK,user.user_id,Jira 계정 ID,backend/app/services/login_service.py:31
+B,WS status_update,로그인사용자,TEXT,user.name,사용자 표시 이름,backend/app/services/login_service.py:31
+B,WS status_update,로그인사용자,TEXT,user.title,직급/직책,backend/app/services/login_service.py:31
+B,WS status_update,로그인사용자,TEXT,user.team,부서/팀,backend/app/services/login_service.py:31
+B,WS status_update,로그인사용자,TEXT,user.project,디바이스 카탈로그 프로젝트(HKMC/VW 등),backend/app/services/login_service.py:31
+B,WS status_update,로그인사용자,TEXT,user.model,카탈로그 모델(ccIC27/MIB 등),backend/app/services/login_service.py:31
+B,WS status_update,로그인사용자,-,user(null 포함),어느 PC 를 누가 언제 썼는지. user 키는 항상 포함(로그아웃=null),backend/app/main.py:375
+B,WS status_update,디바이스,TEXT PK,devices[].device_id,등록 디바이스 ID(예: Europe_New_1),backend/app/main.py:315
+B,WS status_update,디바이스,TEXT,devices[].name,ADB 가 보고한 모델명(예: AIVI2_N_FULL),backend/app/main.py:317
+B,WS status_update,디바이스,TEXT,devices[].device_model,등록 시 선택한 카탈로그 모델,backend/app/main.py:318
+B,WS status_update,디바이스,TEXT,devices[].module,연결 모듈명(CMD/SHELL/OCR/TH/SCAR/Frame_Check 등),backend/app/main.py:322
+B,WS status_update,디바이스,TEXT,devices[].category,primary / auxiliary,backend/app/main.py:323
+B,WS status_update,디바이스,TEXT,devices[].type,연결 타입(adb/ssh/serial/can 등),backend/app/main.py:324
+B,WS status_update,디바이스,TEXT,devices[].status,connected / disconnected / reconnecting (정규화값),backend/app/main.py:325
+B,WS status_update,디바이스,TEXT,devices[].raw_status,진단용 원시값(device/offline/unauthorized 등),backend/app/main.py:326
+B,WS status_update,디바이스,BOOLEAN,devices[].test_only,#test 모드 전용 실험 모듈 여부,backend/app/main.py:328
+B,WS status_update,재생상태,TEXT,playback.scenario_name,재생 중 시나리오 이름,backend/app/main.py:344
+B,WS status_update,재생상태,INTEGER,playback.current_cycle,현재 사이클,backend/app/main.py:345
+B,WS status_update,재생상태,INTEGER,playback.total_cycles,전체 사이클 수,backend/app/main.py:346
+B,WS status_update,재생상태,INTEGER,playback.current_step,현재 스텝,backend/app/main.py:347
+B,WS status_update,재생상태,INTEGER,playback.total_steps,전체 스텝 수,backend/app/main.py:348
+B,WS status_update,재생상태,TEXT,playback.status,running / paused,backend/app/main.py:349
+B,WS status_update,재생상태,INTEGER,playback.passed,성공 스텝 수,backend/app/main.py:350
+B,WS status_update,재생상태,INTEGER,playback.failed,실패 스텝 수,backend/app/main.py:351
+B,WS status_update,재생상태,INTEGER,playback.warning,경고 스텝 수,backend/app/main.py:352
+B,WS status_update,재생상태,INTEGER,playback.error,오류 스텝 수,backend/app/main.py:353
+B,WS status_update,시나리오,TEXT PK,scenarios[],해당 PC 에 저장된 전체 시나리오 파일명 배열(매 전송마다 전량),backend/app/main.py:358
+B,WS status_update,사용통계,TIMESTAMP,usage_stats.generated_at,기동 후 1회 계산한 스냅샷 시각(갱신 판정 키),backend/app/main.py:213
+B,WS status_update,사용통계,INTEGER,usage_stats.scenario_count,시나리오 총 개수,backend/app/main.py:214
+B,WS status_update,사용통계,INTEGER,usage_stats.total_steps,전체 스텝 수,backend/app/main.py:215
+B,WS status_update,사용통계,INTEGER,usage_stats.available_module_count,사용 가능 모듈 수,backend/app/main.py:232
+B,WS status_update,사용통계,INTEGER,usage_stats.available_function_count,사용 가능 함수 수,backend/app/main.py:233
+B,WS status_update,사용통계,INTEGER,usage_stats.used_module_count,실사용 모듈 수,backend/app/main.py:234
+B,WS status_update,사용통계,INTEGER,usage_stats.used_function_count,실사용 함수 수,backend/app/main.py:235
+B,WS status_update,사용통계,TEXT/INT/INT,usage_stats.step_types[],스텝 타입별 사용 횟수와 사용 시나리오 수,backend/app/main.py:216
+B,WS status_update,사용통계,TEXT/INT/INT/INT,usage_stats.modules[],모듈별 사용 횟수·시나리오 수·함수 수,backend/app/main.py:220
+B,WS status_update,사용통계,TEXT/TEXT/INT/INT,usage_stats.modules[].functions[],함수별 사용 횟수와 사용 시나리오 수,backend/app/main.py:224
+B,WS status_update,사용통계,TEXT,usage_stats.unused_functions[],카탈로그 교차대조로 나온 미사용 함수 목록,backend/app/main.py:231
+C,HTTP GET {manager}/api/user-search,유저검색,TEXT,keyword,사용자가 입력한 검색어(이름/아이디/이메일/조직명),backend/app/services/login_service.py:217
+C,HTTP GET {manager}/api/user-search,유저검색,INTEGER,max_results,최대 결과 수(기본 500),backend/app/services/login_service.py:217
+D,HTTP POST {manager}/api/bug-reports (multipart meta),버그리포트,TEXT,meta.title,버그 제목(사용자 입력),frontend/src/components/BugReportModal.tsx:185
+D,HTTP POST {manager}/api/bug-reports,버그리포트,TEXT,meta.description,상세 설명(사용자 입력),frontend/src/components/BugReportModal.tsx:186
+D,HTTP POST {manager}/api/bug-reports,버그리포트,TEXT,meta.reporter,제보자(로그인 사용자로 프리필),frontend/src/components/BugReportModal.tsx:187
+D,HTTP POST {manager}/api/bug-reports,버그리포트,TEXT,meta.version,version.txt 실제 배포 버전,frontend/src/components/BugReportModal.tsx:188
+D,HTTP POST {manager}/api/bug-reports,버그리포트,TEXT,meta.boot_id,백엔드 부팅 식별자,frontend/src/components/BugReportModal.tsx:189
+D,HTTP POST {manager}/api/bug-reports,버그리포트,TEXT,meta.platform,platform.platform() OS 정보,frontend/src/components/BugReportModal.tsx:190
+D,HTTP POST {manager}/api/bug-reports,버그리포트,TEXT,meta.hostname,socket.gethostname() PC 이름,frontend/src/components/BugReportModal.tsx:191
+D,HTTP POST {manager}/api/bug-reports,버그리포트,TIMESTAMP,meta.created_at,클라이언트 로컬 생성 시각,frontend/src/components/BugReportModal.tsx:192
+D,HTTP POST {manager}/api/bug-reports,버그리포트,TEXT,meta.user_name,로그인 사용자 이름,frontend/src/components/BugReportModal.tsx:194
+D,HTTP POST {manager}/api/bug-reports,버그리포트,TEXT,meta.user_team,부서,frontend/src/components/BugReportModal.tsx:195
+D,HTTP POST {manager}/api/bug-reports,버그리포트,TEXT,meta.project,프로젝트,frontend/src/components/BugReportModal.tsx:196
+D,HTTP POST {manager}/api/bug-reports,버그리포트,TEXT,meta.user_model,모델,frontend/src/components/BugReportModal.tsx:197
+D,HTTP POST {manager}/api/bug-reports (multipart file),버그리포트,TEXT/INT,file,bugreport_YYYYmmdd_HHMMSS.zip 번들,frontend/src/components/BugReportModal.tsx:202
+D,ZIP 내부,버그리포트,JSON,report.json,title/description/reporter + client{user_agent,backend/app/routers/bugreport.py:431
+D,ZIP 내부,버그리포트,JSON,step_tests/records.json,선택 구간 스텝 테스트 이력 레코드,backend/app/routers/bugreport.py:375
+D,ZIP 내부,버그리포트,PNG,step_tests/shots,스텝 테스트 디바이스 화면 캡처 이미지,backend/app/routers/bugreport.py:384
+D,ZIP 내부,버그리포트,JSON,results/range_steps.json,선택 구간 재생 결과 스텝 레코드,backend/app/routers/bugreport.py:400
+D,ZIP 내부,버그리포트,PNG,results/screenshots,재생 결과 스크린샷(구간당 최대 30장/30MB),backend/app/routers/bugreport.py:351
+D,ZIP 내부,버그리포트,TEXT,logs/backend_slice_N.log,구간 시간창 backend.log 슬라이스(구간당 최대 10MB),backend/app/routers/bugreport.py:421
+D,ZIP 내부,버그리포트,TEXT,logs/backend.log,구간 미선택 시 backend.log tail(최대 5MB),backend/app/routers/bugreport.py:425
+E,HTTP GET {manager}/api/announcements,수신전용,-,-,공지/가이드 조회 — 전송 데이터 없음,frontend/src/context/AnnouncementsContext.tsx:41
+E,WS {manager}/ws/announcements,수신전용,-,-,공지 실시간 갱신 — 전송 데이터 없음,frontend/src/context/AnnouncementsContext.tsx:52
+E,HTTP GET {manager}/api/login-config,수신전용,-,-,검색 URL/가능 여부 조회 — 전송 데이터 없음,backend/app/services/login_service.py:142

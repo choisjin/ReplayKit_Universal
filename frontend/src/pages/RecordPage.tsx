@@ -1155,7 +1155,10 @@ export default function RecordPage() {
   const isScreenConnectWide = isScreenAdb && screenDevice?.info?.device_model === 'Connect Wide';
   const isScreenBmw = screenDevice?.type === 'bmw_agent';
   // 카메라류(vision_camera/webcam)는 관찰 전용 — 조작(탭/스와이프/키) 금지
-  const isScreenReadonly = screenDevice?.type === 'vision_camera' || screenDevice?.type === 'webcam';
+  // 화면 조작 불가(관찰/캡처 전용) 디바이스 — 미러 클릭으로 탭/스와이프 스텝이 기록되지 않게 한다.
+  // FPK 클러스터는 ksend/입력 경로가 없어 캡처·이미지비교만 가능(백엔드도 조작 요청을 거부).
+  const isScreenReadonly = screenDevice?.type === 'vision_camera' || screenDevice?.type === 'webcam'
+    || screenDevice?.type === 'fpk_agent';
   const adbDisplays: { id: number; name: string; sf_id?: string; width?: number; height?: number }[] = screenDevice?.info?.displays || [];
   const hasMultiDisplay = (isScreenAdb || isScreenBmw) && adbDisplays.length > 1;
   // 멀티 디스플레이: 선택된 디스플레이 해상도 사용
@@ -6076,18 +6079,21 @@ export default function RecordPage() {
                     </span>
                   </div>
                   <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Tooltip title={recording ? t('record.imageTapTooltip') : t('record.imageTapDisabled')}>
-                      <Button
-                        size="small"
-                        type="default"
-                        icon={<CameraOutlined />}
-                        disabled={!recording || imageTapBusy}
-                        loading={imageTapBusy}
-                        onClick={() => openImageTapModal(screenshotDeviceId || undefined)}
-                      >
-                        {t('record.imageTapButton')}
-                      </Button>
-                    </Tooltip>
+                    {/* 이미지 탭 — 매칭 후 실제 탭이 필요하므로 조작 불가 디바이스에는 숨김 */}
+                    {!isScreenReadonly && (
+                      <Tooltip title={recording ? t('record.imageTapTooltip') : t('record.imageTapDisabled')}>
+                        <Button
+                          size="small"
+                          type="default"
+                          icon={<CameraOutlined />}
+                          disabled={!recording || imageTapBusy}
+                          loading={imageTapBusy}
+                          onClick={() => openImageTapModal(screenshotDeviceId || undefined)}
+                        >
+                          {t('record.imageTapButton')}
+                        </Button>
+                      </Tooltip>
+                    )}
                     {/* 이미지 롱터치 — long press 를 지원하는 디바이스 타입에만 노출 */}
                     {['adb', 'hkmc_agent', 'isap_agent', 'hkmc5th_wide_agent', 'icas_agent', 'mib_agent', 'bmw_agent', 'wincontrol'].includes(screenDevice?.type || '') && (
                       <Tooltip title={recording ? t('record.imageLongPressTooltip') : t('record.imageTapDisabled')}>
