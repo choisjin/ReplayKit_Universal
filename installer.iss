@@ -2,7 +2,7 @@
 ; Compile: Open in Inno Setup Compiler, press Ctrl+F9
 
 #define MyAppName "ReplayKit"
-#define MyAppVersion "1.1.8"
+#define MyAppVersion "1.1.9"
 #define MyAppPublisher "ReplayKit"
 
 ; dist/ReplayKit path (build_dist.py output)
