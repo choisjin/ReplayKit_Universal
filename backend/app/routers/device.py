@@ -49,6 +49,9 @@ _DEFAULT_SCAN_SETTINGS = {
         "isap":           {"enabled": False, "module": "",             "category": "primary",   "ports": [20000], "ips": []},
         "icas":           {"enabled": True,  "module": "",             "category": "primary",   "port": 22, "ips": []},
         "mib":            {"enabled": True,  "module": "",             "category": "primary",   "port": 22, "ips": []},
+        # FPK(VW 클러스터): SSH 22 기반. 장비는 IPv6로만 SSH가 열려 있는 경우가 있어
+        # 스캔은 IPv4 화이트리스트로 후보를 잡고, 연결 시 디바이스의 IPv6를 자동 조회해 사용한다.
+        "fpk":            {"enabled": True,  "module": "",             "category": "primary",   "port": 22, "ips": []},
         "dlt":            {"enabled": True,  "module": "DLTLogging",   "category": "auxiliary", "ports": [3490], "ips": []},
         "bench":          {"enabled": True,  "module": "WoohyunBench", "category": "auxiliary", "host": "192.168.1.101", "port": 25000},
         "vision_camera":  {"enabled": False, "module": "VisionCamera", "category": "primary"},
@@ -88,7 +91,7 @@ def _load_scan_settings() -> dict:
                     builtin[key] = dict(default_entry)
             # IP 화이트리스트 필드 마이그레이션: 서브넷 스윕(sweep) 대상 항목에만 ips 키 보충.
             #   host+port 단일 프로브(smartbench/bench/scar 등)는 대상 아님.
-            _SWEEP_KEYS = ("hkmc", "isap", "icas", "mib", "dlt", "ssh")
+            _SWEEP_KEYS = ("hkmc", "isap", "icas", "mib", "fpk", "dlt", "ssh")
             for key in _SWEEP_KEYS:
                 entry = builtin.get(key)
                 if isinstance(entry, dict) and "ips" not in entry:
@@ -541,6 +544,15 @@ async def scan_ports():
         except (TypeError, ValueError):
             mib_port = 22
         tasks["mib_hosts"] = asyncio.ensure_future(dm.scan_icas(mib_port, ips=_ips_of(mib_entry)))
+    if _enabled("fpk"):
+        # FPK도 SSH 22 기반이라 같은 scan 함수 재사용. 화이트리스트에 등록한 IPv4로 후보를 잡고,
+        # 실제 연결 주소(IPv6)는 등록 후 connect 단계에서 디바이스로부터 자동 조회한다.
+        fpk_entry = builtin.get("fpk", {}) if isinstance(builtin.get("fpk"), dict) else {}
+        try:
+            fpk_port = int(fpk_entry.get("port", 22))
+        except (TypeError, ValueError):
+            fpk_port = 22
+        tasks["fpk_hosts"] = asyncio.ensure_future(dm.scan_icas(fpk_port, ips=_ips_of(fpk_entry)))
 
     # 커스텀 TCP/UDP 포트 스캔
     custom_tasks: list[tuple[str, asyncio.Task]] = []
@@ -574,6 +586,7 @@ async def scan_ports():
         "isap_hosts": [],
         "icas_hosts": [],
         "mib_hosts": [],
+        "fpk_hosts": [],
         "dlt_devices": [],
         "smartbench_devices": [],
         "scar_devices": [],
@@ -859,6 +872,7 @@ async def connect_device(req: ConnectRequest):
                 resolution=ef.get("resolution", "1280x480") or "1280x480",
                 fb_device=ef.get("fb_device", "/dev/fb0") or "/dev/fb0",
                 pixel_order=str(ef.get("pixel_order", "BGRX") or "BGRX"),
+                ipv6_address=str(ef.get("ipv6_address", "") or ""),
             )
             try:
                 connect_msg = await dm.connect_device_by_id(dev.id)

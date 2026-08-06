@@ -359,6 +359,7 @@ export default function DevicePage() {
   const [scannedIsap, setScannedIsap] = useState<{ ip: string; port: number }[]>([]);
   const [scannedIcas, setScannedIcas] = useState<{ ip: string; port: number }[]>([]);
   const [scannedMib, setScannedMib] = useState<{ ip: string; port: number }[]>([]);
+  const [scannedFpk, setScannedFpk] = useState<{ ip: string; port: number }[]>([]);
   const [scannedBench, setScannedBench] = useState<{ ip: string; port: number; verified?: boolean }[]>([]);
   const [scannedVision, setScannedVision] = useState<{ id: string; mac: string; model: string; serial: string; vendor: string; tl_type: string; ip: string; subnet?: string; gateway?: string }[]>([]);
   const [scannedWebcams, setScannedWebcams] = useState<{ index: number; label: string; width: number; height: number; already_registered?: boolean; in_use_by_recording?: boolean }[]>([]);
@@ -419,6 +420,9 @@ export default function DevicePage() {
   const FPK_DEFAULT_RESOLUTION = '1280x480';
   const [fpkResolution, setFpkResolution] = useState<string>(FPK_DEFAULT_RESOLUTION);
   const [fpkFbDevice, setFpkFbDevice] = useState<string>('/dev/fb0');
+  // 실제 SSH 대상 IPv6. 스캔은 IPv4 화이트리스트로 후보를 잡지만 장비가 IPv6로만
+  // 열려 있을 수 있어, 비워두면 연결 시 디바이스에서 자동 조회해 저장한다.
+  const [fpkIpv6, setFpkIpv6] = useState<string>('');
   // MIB 패널 프로파일 — 해상도가 같아도 터치 디지타이저 보정이 다르다.
   // 예: 12.9"와 13.1"는 둘 다 1920x1080 이지만 12.9"는 Y÷2(대칭), 13.1"는 Y×1(비대칭).
   // 연결 시 프로파일을 골라 resolution + touch_x_scale/touch_y_scale 를 함께 적용한다.
@@ -607,7 +611,7 @@ export default function DevicePage() {
 
   // key → category 해석 (값 없으면 기본 정책 적용)
   const _defaultCategoryForKey = (key: string): ScanCategory => {
-    const primaryKeys = new Set(['adb', 'hkmc', 'isap', 'icas', 'mib', 'bmw', 'vision_camera', 'webcam']);
+    const primaryKeys = new Set(['adb', 'hkmc', 'isap', 'icas', 'mib', 'fpk', 'bmw', 'vision_camera', 'webcam']);
     return primaryKeys.has(key) ? 'primary' : 'auxiliary';
   };
   const scanItemCategory = (key: string): ScanCategory =>
@@ -747,6 +751,7 @@ export default function DevicePage() {
       setScannedIsap(res.data.isap_hosts || []);
       setScannedIcas(res.data.icas_hosts || []);
       setScannedMib(res.data.mib_hosts || []);
+      setScannedFpk(res.data.fpk_hosts || []);
       setScannedBench(res.data.bench_devices || []);
       setScannedVision(res.data.vision_cameras || []);
       setScannedWebcams(res.data.webcams || []);
@@ -894,6 +899,7 @@ export default function DevicePage() {
         extra.password = sshPass || '';
         extra.resolution = (fpkResolution || FPK_DEFAULT_RESOLUTION).trim();
         extra.fb_device = (fpkFbDevice || '/dev/fb0').trim();
+        if (fpkIpv6.trim()) extra.ipv6_address = fpkIpv6.trim();
       }
       // BMW RSE Agent: ADB serial 기반 (address=serial). 캡처 백엔드 + 해상도 fallback 전달.
       if (devType === 'bmw_agent') {
@@ -1103,7 +1109,7 @@ export default function DevicePage() {
   // 다른 주 디바이스 핸들러와 동일하게 프로젝트·모델 선택을 강제한다.
   // SSH 자격증명은 입력값 또는 root/(공백) 기본값.
   const handleAddSshAgent = async (
-    devType: 'icas_agent' | 'mib_agent',
+    devType: 'icas_agent' | 'mib_agent' | 'fpk_agent',
     ip: string,
     port: number,
   ) => {
@@ -1114,7 +1120,13 @@ export default function DevicePage() {
         username: (sshUser && sshUser.trim()) || 'root',
         password: sshPass || '',
       };
-      if (devType === 'mib_agent') {
+      if (devType === 'fpk_agent') {
+        // 스캔에서 잡히는 건 IPv4지만 실제 SSH는 IPv6로만 열려 있을 수 있다.
+        // 폼에 IPv6를 적어뒀으면 그대로 쓰고, 비어 있으면 연결 시 디바이스에서 자동 조회한다.
+        extra.resolution = (fpkResolution || FPK_DEFAULT_RESOLUTION).trim();
+        extra.fb_device = (fpkFbDevice || '/dev/fb0').trim();
+        if (fpkIpv6.trim()) extra.ipv6_address = fpkIpv6.trim();
+      } else if (devType === 'mib_agent') {
         extra.resolution = (mibResolution || MIB_DEFAULT_RESOLUTION).trim();
       } else {
         // ICAS Agent — 모델별 기본 해상도 (ICAS3 CN: 2240x1260, 기존 ICAS EU: 1560x700)
@@ -2404,6 +2416,48 @@ export default function DevicePage() {
                       });
                     }
 
+                    if (scanItemCategory('fpk') === modalCategory && scannedFpk.length > 0) {
+                      scanTabs.push({
+                        key: 'fpk',
+                        label: <span>FPK Agent <Tag style={{ marginLeft: 3 }}>{scannedFpk.length}</Tag></span>,
+                        children: (
+                          <>
+                            <div style={{ marginBottom: 6, fontSize: 11, color: '#888' }}>
+                              스캔은 IPv4로 후보를 잡습니다. 실제 SSH가 IPv6로만 열려 있으면 연결 시
+                              디바이스에서 IPv6를 자동 조회해 그 주소로 전환합니다. 아래에 직접 지정도 가능합니다.
+                            </div>
+                            <Space wrap style={{ marginBottom: 6 }}>
+                              <span style={{ fontSize: 11, color: '#888' }}>IPv6(선택):</span>
+                              <Input
+                                placeholder="fd53:7cb8:383:5::14 (비우면 자동 조회)"
+                                value={fpkIpv6}
+                                onChange={(e) => setFpkIpv6(e.target.value)}
+                                style={{ width: 260 }}
+                              />
+                            </Space>
+                            <List
+                              size="small"
+                              dataSource={scannedFpk}
+                              pagination={scannedFpk.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
+                              renderItem={(h) => {
+                                const existing = findExisting(x => x.type === 'fpk_agent' && x.address === h.ip);
+                                return (
+                                  <List.Item actions={[
+                                    renderScanAction(existing, t('common.connect'), () => handleAddSshAgent('fpk_agent', h.ip, h.port), {
+                                      disabled: primaryProjectModelMissing,
+                                      title: primaryProjectModelMissing ? '프로젝트·모델을 먼저 선택하세요' : undefined,
+                                    })
+                                  ]}>
+                                    <Tag color="cyan">FPK</Tag> <Tag color="blue">{h.ip}</Tag> <span style={{ color: '#888' }}>SSH: {h.port}</span>
+                                  </List.Item>
+                                );
+                              }}
+                            />
+                          </>
+                        ),
+                      });
+                    }
+
                     if (scanItemCategory('bench') === modalCategory && scannedBench.length > 0) {
                       scanTabs.push({
                         key: 'bench',
@@ -3271,6 +3325,15 @@ export default function DevicePage() {
                           onPressEnter={handleConnect}
                         />
                         <Space wrap>
+                          <span style={{ fontSize: 11, color: '#888' }}>SSH IPv6(선택):</span>
+                          <Input
+                            placeholder="fd53:7cb8:383:5::14 (비우면 자동 조회)"
+                            value={fpkIpv6}
+                            onChange={(e) => setFpkIpv6(e.target.value)}
+                            style={{ width: 280 }}
+                          />
+                        </Space>
+                        <Space wrap>
                           <span style={{ fontSize: 11, color: '#888' }}>SSH Port:</span>
                           <InputNumber
                             value={hkmcPort}
@@ -3687,6 +3750,7 @@ export default function DevicePage() {
             { key: 'isap',           label: 'iSAP Agent',     proto: 'TCP',      editablePorts: false },
             { key: 'icas',           label: 'ICAS Agent',     proto: 'SSH',      editablePorts: false },
             { key: 'mib',            label: 'MIB Agent',      proto: 'SSH',      editablePorts: false },
+            { key: 'fpk',            label: 'FPK Agent',      proto: 'SSH',      editablePorts: false },
             { key: 'dlt',            label: 'DLT',            proto: 'TCP',      editablePorts: false },
             { key: 'bench',          label: 'WoohyunBench',   proto: 'UDP',      editablePorts: false },
             { key: 'vision_camera',  label: 'Vision Camera',  proto: 'GigE',     editablePorts: false },
@@ -3699,7 +3763,7 @@ export default function DevicePage() {
             { key: 'radmoon',        label: 'RAD_Moon (TH)',  proto: 'USB',      editablePorts: false },
           ];
           // 서브넷 스윕 대상 — 이 항목들만 IP 화이트리스트 편집 가능(비우면 192.168.* 서브넷 스캔)
-          const SWEEP_KEYS = new Set(['hkmc', 'isap', 'icas', 'mib', 'dlt', 'ssh']);
+          const SWEEP_KEYS = new Set(['hkmc', 'isap', 'icas', 'mib', 'fpk', 'dlt', 'ssh']);
           type BuiltinItem = typeof builtinItems[number];
           type CustomItem = { label: string; type: string; port: number; module?: string; enabled?: boolean; ips?: string[]; category?: ScanCategory; __idx: number; __kind: 'custom' };
           type BuiltinRow = BuiltinItem & { __kind: 'builtin' };
@@ -3732,7 +3796,7 @@ export default function DevicePage() {
           const renderBuiltinRow = (item: BuiltinItem) => {
             const v = scanBuiltin[item.key] || { enabled: true, module: '' };
             const portsStr = v.ports && v.ports.length > 0 ? v.ports.join(',') : '';
-            const portLabel = (item.key === 'ssh' || item.key === 'icas' || item.key === 'mib')
+            const portLabel = (item.key === 'ssh' || item.key === 'icas' || item.key === 'mib' || item.key === 'fpk')
               ? String(v.port ?? 22)
               : (portsStr || '-');
             return (
@@ -3790,7 +3854,7 @@ export default function DevicePage() {
                         onChange={p => setScanBuiltin({ ...scanBuiltin, [item.key]: { ...v, port: p ?? (item.key === 'bench' ? 25000 : item.key === 'scar' ? 8081 : 8000) } })}
                       />
                     </Space.Compact>
-                  ) : (item.key === 'ssh' || item.key === 'icas' || item.key === 'mib') ? (
+                  ) : (item.key === 'ssh' || item.key === 'icas' || item.key === 'mib' || item.key === 'fpk') ? (
                     <InputNumber
                       size="small"
                       disabled

@@ -156,9 +156,16 @@ class FPKAgentService(LiveStreamMixin):
                  fb_device: str = "/dev/fb0",
                  zlib_level: int = 1,
                  pixel_order: str = "BGRX",
-                 on_resolution_changed: Optional[Callable[[str], None]] = None):
+                 ipv6_address: str = "",
+                 on_resolution_changed: Optional[Callable[[str], None]] = None,
+                 on_ipv6_detected: Optional[Callable[[str], None]] = None):
         self.host = host
         self.port = int(port)
+        # 실제 SSH 대상. 스캔은 IPv4(화이트리스트)로 후보를 잡지만 이 장비는 IPv6로만
+        # SSH가 열려 있는 경우가 있어, 알려진/자동 감지된 IPv6를 우선 사용한다.
+        self.ipv6_address = (ipv6_address or "").strip()
+        self.connect_host = self.ipv6_address or host
+        self._on_ipv6_detected = on_ipv6_detected
         self.device_id = device_id or f"FPK_{host}"
         self.username = username or "root"
         self.password = password or ""
@@ -236,15 +243,56 @@ class FPKAgentService(LiveStreamMixin):
     # ------------------------------------------------------------------
     # SSH
     # ------------------------------------------------------------------
-    def _new_ssh(self):
-        """새 paramiko SSHClient 생성 및 연결 (라이브 스트림 전용 연결 등)."""
+    def _new_ssh(self, host: str = ""):
+        """새 paramiko SSHClient 생성 및 연결 (라이브 스트림 전용 연결 등).
+
+        host 미지정이면 확정된 connect_host(IPv6 우선)로 접속한다. paramiko는 IPv6
+        리터럴을 그대로 받는다(대괄호 없이) — getaddrinfo가 처리.
+        """
         import paramiko
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(self.host, username=self.username, port=self.port,
+        ssh.connect(host or self.connect_host, username=self.username, port=self.port,
                     password=self.password, timeout=10,
                     allow_agent=False, look_for_keys=False)
         return ssh
+
+    @staticmethod
+    def _detect_device_ipv6(ssh) -> str:
+        """디바이스가 가진 **글로벌 IPv6** 주소를 조회한다 (없으면 빈 문자열).
+
+        `/proc/net/if_inet6` 는 BusyBox에도 항상 있어(`ip`/`ifconfig` 유무와 무관) 가장 안전하다.
+        형식: <32자리 hex 주소> <ifindex> <prefixlen> <scope> <flags> <devname>
+        scope 00 = global. VW 진단망(fd53:*)이 있으면 최우선 선택.
+        """
+        import ipaddress
+        try:
+            _in, out, _err = ssh.exec_command("cat /proc/net/if_inet6", timeout=10)
+            text = out.read().decode("utf-8", "replace")
+        except Exception as e:
+            logger.debug("FPK IPv6 probe failed: %r", e)
+            return ""
+        fallback = ""
+        for line in text.splitlines():
+            parts = line.split()
+            if len(parts) < 6:
+                continue
+            hexaddr, _idx, _plen, scope, _flags, dev = parts[:6]
+            if len(hexaddr) != 32 or scope != "00" or dev == "lo":
+                continue
+            try:
+                addr = ipaddress.IPv6Address(
+                    ":".join(hexaddr[i:i + 4] for i in range(0, 32, 4)))
+            except ValueError:
+                continue
+            if addr.is_loopback or addr.is_link_local:
+                continue
+            compressed = addr.compressed
+            if compressed.startswith("fd53:"):
+                return compressed  # VW 진단망 — 최우선
+            if not fallback:
+                fallback = compressed
+        return fallback
 
     def _is_ssh_alive(self, ssh) -> bool:
         try:
@@ -265,6 +313,11 @@ class FPKAgentService(LiveStreamMixin):
                     pass
                 self._ssh_client = None
             ssh = self._new_ssh()
+            return self._adopt_ssh(ssh)
+
+    def _adopt_ssh(self, ssh):
+        """공유 SSH로 채택 + keepalive 설정."""
+        with self._ssh_lock:
             try:
                 tr = ssh.get_transport()
                 if tr is not None:
@@ -278,13 +331,70 @@ class FPKAgentService(LiveStreamMixin):
     # 연결 / 해제
     # ------------------------------------------------------------------
     def connect(self, timeout: float = 10.0) -> bool:
-        """SSH 접속 + python3/프레임버퍼 가용성 검증 + 실제 해상도 반영."""
-        try:
-            ssh = self._get_shared_ssh()
-        except Exception as e:
-            logger.warning("FPK SSH connect failed (%s:%s): %r", self.host, self.port, e)
+        """SSH 접속 + python3/프레임버퍼 가용성 검증 + 실제 해상도 반영.
+
+        주소 해석: 스캔은 IPv4 화이트리스트로 후보를 잡지만 이 장비는 IPv6로만 SSH가
+        열려 있을 수 있다. 따라서
+          1) 알려진 IPv6 → 2) 등록 주소(보통 IPv4) 순으로 접속을 시도하고,
+          3) 접속에 성공하면 디바이스의 글로벌 IPv6(fd53:* 우선)를 조회해 저장하고
+             현재 접속 주소와 다르면 그 IPv6로 전환한다.
+        """
+        ssh = None
+        candidates: list[str] = []
+        for h in (self.ipv6_address, self.host):
+            h = (h or "").strip()
+            if h and h not in candidates:
+                candidates.append(h)
+        last_err: Optional[Exception] = None
+        for host in candidates:
+            try:
+                with self._ssh_lock:
+                    if self._ssh_client is not None:
+                        try:
+                            self._ssh_client.close()
+                        except Exception:
+                            pass
+                        self._ssh_client = None
+                ssh = self._adopt_ssh(self._new_ssh(host))
+                self.connect_host = host
+                break
+            except Exception as e:
+                last_err = e
+                logger.debug("FPK SSH connect failed on %s:%s — %r", host, self.port, e)
+        if ssh is None:
+            logger.warning("FPK SSH connect failed (%s:%s, tried %s): %r",
+                           self.host, self.port, candidates, last_err)
             self._connected = False
             return False
+
+        # 디바이스가 알려주는 글로벌 IPv6로 승격 — 다음 연결부터는 이 주소를 먼저 쓴다.
+        try:
+            detected = self._detect_device_ipv6(ssh)
+        except Exception:
+            detected = ""
+        if detected and detected != self.ipv6_address:
+            self.ipv6_address = detected
+            logger.info("FPK IPv6 detected: %s → %s", self.device_id, detected)
+            if self._on_ipv6_detected:
+                try:
+                    self._on_ipv6_detected(detected)
+                except Exception as e:
+                    logger.warning("FPK IPv6 callback failed: %s", e)
+        if detected and detected != self.connect_host:
+            # 현재 IPv4로 붙어 있어도 IPv6로 갈아탄다(실패하면 기존 연결 유지).
+            try:
+                new_ssh = self._new_ssh(detected)
+                try:
+                    ssh.close()
+                except Exception:
+                    pass
+                ssh = self._adopt_ssh(new_ssh)
+                logger.info("FPK switched SSH host: %s → %s (%s)",
+                            self.connect_host, detected, self.device_id)
+                self.connect_host = detected
+            except Exception as e:
+                logger.info("FPK IPv6 switch failed (%s), keeping %s: %r",
+                            detected, self.connect_host, e)
 
         try:
             geo = self._probe_fb(ssh)
@@ -310,7 +420,7 @@ class FPKAgentService(LiveStreamMixin):
         self._maybe_autoupdate_resolution(geo.get("xres", 0), geo.get("yres", 0))
         self._connected = True
         logger.info("FPK connected: %s (%s:%s) fb=%s %dx%d bpp=%d stride=%d id=%s zlevel=%d",
-                    self.device_id, self.host, self.port, self.fb_device,
+                    self.device_id, self.connect_host, self.port, self.fb_device,
                     geo.get("xres", 0), geo.get("yres", 0), geo.get("bpp", 0),
                     geo.get("stride", 0), geo.get("fb_id", ""), self.zlib_level)
         return True
@@ -501,6 +611,8 @@ class FPKAgentService(LiveStreamMixin):
         return {
             "type": "fpk_agent",
             "host": self.host,
+            "connect_host": self.connect_host,
+            "ipv6_address": self.ipv6_address,
             "port": self.port,
             "device_id": self.device_id,
             "connected": self._connected,

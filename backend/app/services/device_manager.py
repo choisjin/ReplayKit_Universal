@@ -1494,7 +1494,8 @@ class DeviceManager:
                                    username: str = "root", password: str = "",
                                    resolution: str = "1280x480",
                                    fb_device: str = "/dev/fb0",
-                                   pixel_order: str = "BGRX") -> ManagedDevice:
+                                   pixel_order: str = "BGRX",
+                                   ipv6_address: str = "") -> ManagedDevice:
         """FPK Agent 디바이스 등록만 (연결은 connect_device_by_id로 별도 수행).
 
         VW FPK 클러스터용 — SSH + /dev/fb0 직접 읽기 기반의 **캡처 전용** 디바이스.
@@ -1518,10 +1519,13 @@ class DeviceManager:
             "pixel_order": (pixel_order or "BGRX").upper(),
             "input_supported": False,
         }
+        # 실제 SSH 대상 IPv6. 비워두면 연결 시 디바이스에서 자동 조회해 채운다.
+        if ipv6_address:
+            info["ipv6_address"] = ipv6_address.strip()
         if device_model:
             info["device_model"] = device_model
 
-        # 재등록이 자동 감지된 해상도를 지우지 않도록 기존 info 위에 폼 값만 덮어쓴다.
+        # 재등록이 자동 감지된 해상도/IPv6를 지우지 않도록 기존 info 위에 폼 값만 덮어쓴다.
         existing = self._devices.get(final_id)
         if existing is not None and existing.type == "fpk_agent":
             merged = dict(existing.info)
@@ -1529,6 +1533,8 @@ class DeviceManager:
             if existing.info.get("resolution_str"):
                 merged["resolution"] = existing.info["resolution"]
                 merged["resolution_str"] = existing.info["resolution_str"]
+            if not ipv6_address and existing.info.get("ipv6_address"):
+                merged["ipv6_address"] = existing.info["ipv6_address"]
             info = merged
             if not name:
                 display_name = existing.name
@@ -3272,13 +3278,29 @@ class DeviceManager:
                 except Exception as e:
                     logger.warning("FPK auto-detect persist failed: %s", e)
 
+            def _on_fpk_ipv6_detected(addr: str, _did: str = target_dev_id) -> None:
+                """디바이스에서 조회한 글로벌 IPv6를 저장 — 다음 연결부터 이 주소를 먼저 시도."""
+                d = self._devices.get(_did)
+                if d is None or d.type != "fpk_agent":
+                    return
+                if d.info.get("ipv6_address") == addr:
+                    return
+                d.info["ipv6_address"] = addr
+                logger.info("FPK IPv6 resolved: %s (%s) → %s", _did, d.address, addr)
+                try:
+                    self._save_auxiliary_devices()
+                except Exception as e:
+                    logger.warning("FPK IPv6 persist failed: %s", e)
+
             try:
                 svc = FPKAgentService(
                     dev.address, port=port, device_id=dev.id,
                     username=username, password=password, resolution=res_str,
                     fb_device=dev.info.get("fb_device", "/dev/fb0") or "/dev/fb0",
                     pixel_order=dev.info.get("pixel_order", "BGRX") or "BGRX",
+                    ipv6_address=str(dev.info.get("ipv6_address", "") or ""),
                     on_resolution_changed=_on_fpk_resolution_changed,
+                    on_ipv6_detected=_on_fpk_ipv6_detected,
                 )
                 ok = await svc.async_connect()
                 if ok:
@@ -3295,7 +3317,8 @@ class DeviceManager:
                     dev.info["resolution_str"] = f"{svc.res_x}x{svc.res_y}"
                     dev.info["fb_info"] = info.get("fb_info", {})
                     dev.info["input_supported"] = False
-                    return f"FPK connected: {dev.id} ({dev.address}:{port})"
+                    dev.info["connect_host"] = svc.connect_host
+                    return f"FPK connected: {dev.id} ({svc.connect_host}:{port})"
                 else:
                     dev.status = "disconnected"
                     return f"FPK connect failed: {dev.id}"
