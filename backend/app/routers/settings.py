@@ -22,7 +22,13 @@ _SETTINGS_FILE = Path(__file__).resolve().parent.parent.parent / "settings.json"
 
 # 관제(매니저) 서버 기본 주소 — 미설정 PC 는 이 서버로 재생상태/함수통계를 보고한다.
 # 빈 값으로 저장돼 있어도 _load() 가 이 값으로 폴백하므로 배포된 PC 전체에 기본 적용된다.
-_DEFAULT_MONITOR_URL = "http://10.176.144.70:9000"
+_DEFAULT_MONITOR_URL = "http://10.176.144.50:9000"
+
+# 이전 관제 서버 주소들 — 이미 배포된 PC 의 settings.json 에 예전 IP 가 "명시적으로" 저장돼
+# 있으면 위 폴백이 걸리지 않으므로, 아래 목록과 일치하면 현재 기본값으로 자동 이관한다.
+_LEGACY_MONITOR_URLS = {
+    "http://10.176.144.70:9000",
+}
 
 _DEFAULTS = {
     "theme": "light",
@@ -58,6 +64,8 @@ def _load() -> dict:
     # 예전 빈 문자열("")이 저장돼 있어도 기본 관제 서버로 자동 연결되게 한다.
     # (특정 PC 를 다른 서버로 보내려면 #admin 에서 다른 URL 을 입력하면 됨)
     if not merged.get("monitor_server_url"):
+        merged["monitor_server_url"] = _DEFAULT_MONITOR_URL
+    elif str(merged["monitor_server_url"]).strip().rstrip("/") in _LEGACY_MONITOR_URLS:
         merged["monitor_server_url"] = _DEFAULT_MONITOR_URL
     return merged
 

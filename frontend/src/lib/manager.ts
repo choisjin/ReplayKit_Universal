@@ -2,7 +2,7 @@ import { useSettings } from '../context/SettingsContext';
 
 // 매니저(ReplayKit Manager, 관리 서버) 기본 주소.
 // 설정(admin_server_url)이 비어 있을 때만 이 값으로 폴백한다.
-const DEFAULT_MANAGER_URL = 'http://10.176.144.70:9000';
+const DEFAULT_MANAGER_URL = 'http://10.176.144.50:9000';
 
 export type Lang = 'ko' | 'en';
 
