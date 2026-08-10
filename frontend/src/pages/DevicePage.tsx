@@ -432,7 +432,7 @@ export default function DevicePage() {
     { key: '10.4',    label: '10.4" — 1560x878',               resolution: '1560x878',  txs: null, tys: null },
     { key: '12.9',    label: '12.9" — 1920x1080 (대칭, Y÷2)',  resolution: '1920x1080', txs: 0.5,  tys: 0.5  },
     { key: '13.1-sk', label: '13.1" — 1920x1080 (SK, Y×1)',    resolution: '1920x1080', txs: 0.5,  tys: 1.0  },
-    { key: '15.0',    label: '15.0" — 2240x1260',              resolution: '2240x1260', txs: null, tys: null },
+    { key: '15.0',    label: '15.0" — 2240x1260 (X÷3, Y÷2)',   resolution: '2240x1260', txs: null, tys: null },
     { key: '8.0',     label: '8.0" — 800x480 (mqb)',           resolution: '800x480',   txs: null, tys: null },
     { key: '9.2',     label: '9.2" — 1280x640 (mqb)',          resolution: '1280x640',  txs: null, tys: null },
     { key: '14.6',    label: '14.6" — 1080x1920 (Ford)',       resolution: '1080x1920', txs: null, tys: null },

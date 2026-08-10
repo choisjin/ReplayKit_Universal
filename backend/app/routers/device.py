@@ -1767,7 +1767,8 @@ async def update_device(req: UpdateDeviceRequest):
                 except Exception as e:
                     logger.warning("Failed to update live MIB touch offsets: %s", e)
         # MIB 터치 디지타이저 스케일 라이브 반영 (touch_x_scale/touch_y_scale). reconnect 없이 캘리브레이션.
-        # 패널 고유값(해상도 공식 미도출). 예: 13.1" 1920x1080 → touch_y_scale=0.25 (Y 2배 늘어남 보정).
+        # 패널 고유값(해상도 공식 미도출). 예: 같은 1920x1080이라도 12.9"는 Y÷2(touch_y_scale=0.5),
+        # 13.1" SK는 Y×1(1.0). 빈값/null이면 백엔드 기본 공식(_touch_scales)이 적용된다.
         if dev.type == "mib_agent" and (
             "touch_x_scale" in req.extra_fields or "touch_y_scale" in req.extra_fields
         ):

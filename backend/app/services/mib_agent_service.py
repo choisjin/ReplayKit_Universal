@@ -385,6 +385,8 @@ class MIBAgentService:
             self._res_y = int(ry)
         except Exception:
             self._res_x, self._res_y = 1560, 700
+        # 참조 구현 공식(레퍼런스 문서용). 실제 터치 스케일은 _touch_scales()가 결정한다
+        # — Y는 이 공식과 달라 인치 등급으로 분기하므로 여기 값을 터치에 쓰지 말 것.
         self._x_mult = int(self._res_x / 1023) + 1
         self._y_mult = int(self._res_y / 1023) + 1
 
@@ -1326,18 +1328,30 @@ class MIBAgentService:
     # ------------------------------------------------------------------
     # Touch (press/drag/release) — ref RemoteController.excutecmdTouch*
     # ------------------------------------------------------------------
-    def _touch_frame(self, x: int, y: int, end_byte: int) -> str:
-        # ★ 축 비대칭 모델 (13.1" VW_EU + MQB 디버그로그 실측 확정, 2026-07).
-        # 터치는 src/fake-resolution(2240×1260)과 무관하게 **디스플레이(dst=self._res) 좌표 기반**.
-        # 인코딩상 px=다바이트(큰 범위)·py=10비트(0~1023)라 X/Y가 다르게 처리된다:
-        #   - X: xs = 1/mult_x,  mult_x = int(dst_x/1023)+1.  디바이스가 digitizer_x를 ×mult_x로 복원.
-        #        실측: digitizer_x 107→활성230, 240→활성497 = ×2.0(정수). 1920→mult2→xs0.5.
-        #   - Y: ys = 1.0.  디바이스가 py를 디스플레이 y로 1:1 사용. 실측: digitizer_y 205→205, 332→333.
-        # 검증: MQB(800×480)→mult_x=int(800/1023)+1=1→xs1.0·ys1.0(실기 정상 일치).
-        # (구 src 기반 xs=src_x/(dst_x×mult)=0.389는 오답이었음 — 13.1"는 dst 기반 0.5가 정답.)
+    def _touch_scales(self) -> tuple[float, float, int, int]:
+        """현재 dst 해상도 기준 터치 디지타이저 스케일 (xs, ys, mult_x, mult_y).
+
+        ★ 축 비대칭 모델 (13.1" VW_EU + MQB 디버그로그 실측 확정, 2026-07).
+        터치는 src/fake-resolution과 무관하게 **디스플레이(dst=self._res) 좌표 기반**.
+        인코딩상 px=다바이트(큰 범위)·py=10비트(0~1023)라 X/Y가 다르게 처리된다:
+          - X: mult_x = int(dst_x/1023)+1, xs = 1/mult_x. 디바이스가 digitizer_x를 ×mult_x로 복원.
+               실측: digitizer_x 107→활성230, 240→활성497 = ×2.0(정수). 1920→mult2→xs0.5.
+          - Y: 패널 펌웨어가 인치 등급으로 분기 — 해상도 공식(int/1023+1)으로는 도출 불가.
+               ≤1080(MQB 480, 13.1" 1080): mult_y=1 (실측 digitizer_y 205→205, 332→333).
+               >1080(15" 2240×1260):       mult_y=2 (실측: 화면 y=1188을 치려면 594를 보내야 함).
+               ICAS3 touch_event.sh도 동일 — 15"급 X/3·Y/2, 10"급 X/2·Y/1.
+               같은 1920×1080에도 Y×1(13.1" SK)/Y÷2(12.9") 패널이 공존하므로, 예외 패널은
+               디바이스 info(touch_x_scale/touch_y_scale) 절대 스케일 override로 처리한다.
+        (구 src 기반 xs=src_x/(dst_x×mult)=0.389는 오답이었음 — 13.1"는 dst 기반 0.5가 정답.)
+        """
         mult_x = max(1, int(self._res_x / 1023) + 1)
+        mult_y = 2 if self._res_y > 1080 else 1
         xs = self._touch_x_scale if self._touch_x_scale is not None else (1.0 / mult_x)
-        ys = self._touch_y_scale if self._touch_y_scale is not None else 1.0
+        ys = self._touch_y_scale if self._touch_y_scale is not None else (1.0 / mult_y)
+        return xs, ys, mult_x, mult_y
+
+    def _touch_frame(self, x: int, y: int, end_byte: int) -> str:
+        xs, ys, _mx, _my = self._touch_scales()
         dx = int(round(int(x) * xs)) + self._touch_x_offset
         dy = int(round(int(y) * ys)) + self._touch_y_offset
         # X 클램프 = 화면×scale. Y(py)는 base-255·y_layer 2비트라 1019 초과 시
@@ -1369,11 +1383,10 @@ class MIBAgentService:
     def set_touch_scale(self, x_scale=None, y_scale=None) -> None:
         """터치 디지타이저 절대 스케일 override (디바이스별 라이브 캘리브레이션용).
 
-        None/빈값/0이하 = 기본(축별 1/max(2,mult), 보통 0.5) 사용.
-        일부 패널은 디지타이저 좌표공간이 화면의 1/2이 아니다. 예: 13.1" 1920x1080은
-        Y 디지타이저가 화면의 ~1/4이라 기본 ÷2(화면×0.5)로 보내면 터치가 Y로 2배 늘어남
-        → y_scale=0.25 로 보정. 해상도 공식으로는 도출 불가한 패널 펌웨어 고유값이라
-        디바이스 info(touch_x_scale/touch_y_scale)에 저장해 디바이스별로만 적용한다.
+        None/빈값/0이하 = 기본(_touch_scales(): X=1/mult_x, Y=1/mult_y) 사용.
+        같은 해상도라도 패널마다 디지타이저 분주가 다르다. 예: 1920x1080에 Y×1(13.1" SK)과
+        Y÷2(12.9")가 공존 → 후자는 y_scale=0.5. 해상도 공식으로 도출 불가한 패널 펌웨어
+        고유값이라 디바이스 info(touch_x_scale/touch_y_scale)에 저장해 디바이스별로만 적용한다.
         """
         def _f(v):
             if v is None or v == "":
@@ -1413,15 +1426,13 @@ class MIBAgentService:
             self.sweep_touch_dst(x, y)
             return
         # 좌표 매핑 지상 검증용 디버그 — 입력(미러/dst 좌표) → 계산된 digitizer 출력.
-        _mx = max(1, int(self._res_x / 1023) + 1)
-        _xs = self._touch_x_scale if self._touch_x_scale is not None else (1.0 / _mx)
-        _ys = self._touch_y_scale if self._touch_y_scale is not None else 1.0
+        _xs, _ys, _mx, _my = self._touch_scales()
         _ax = min(max(0, int(round(x * _xs)) + self._touch_x_offset), max(1, int(self._res_x * _xs)))
         _ay = min(max(0, int(round(y * _ys)) + self._touch_y_offset), _MAX_ENCODABLE_DIGITIZER_Y, max(1, int(self._res_y * _ys)))
         logger.info(
-            "MIB tap MAP: in=(%d,%d) dst=%dx%d mult_x=%d scale=(%.5f,%.5f) "
+            "MIB tap MAP: in=(%d,%d) dst=%dx%d mult=(%d,%d) scale=(%.5f,%.5f) "
             "off=(%d,%d) → digitizer=(%d,%d)",
-            x, y, self._res_x, self._res_y, _mx, _xs, _ys,
+            x, y, self._res_x, self._res_y, _mx, _my, _xs, _ys,
             self._touch_x_offset, self._touch_y_offset, _ax, _ay,
         )
         self._touch_press(x, y)
