@@ -2115,9 +2115,12 @@ class PlaybackService:
                 dev.status = "disconnected"
 
         elif dev.type == "adb":
-            # 먼저 현재 상태 확인
+            # 먼저 현재 상태 확인.
+            # 스텝마다 액션 전·캡처 전 두 번 불리는 경로라 실측 대신 최근 조회를 재사용한다
+            # (백그라운드 재연결 루프가 5초마다 실측으로 갱신 — adb_service.ADB_LIST_CACHE_TTL 주석 참조).
+            # 아래 재연결 재시도 루프는 복구 판정이 걸려 있으므로 반드시 실측을 유지할 것.
             try:
-                adb_devices = await self.adb.list_devices()
+                adb_devices = await self.adb.list_devices_cached()
                 found = next((d for d in adb_devices if d.serial == dev.address), None)
                 if found and found.status == "device":
                     dev.status = "device"

@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -150,6 +151,57 @@ def _run_sync_bytes(cmd: str, timeout: int = 10) -> tuple[bytes, str, int]:
         return (b"", f"Command timed out after {timeout}s: {cmd}", 1)
 
 
+# adb 호출이 이 시간을 넘으면 지연 구간을 분해해 WARNING 으로 남긴다(0 이면 비활성).
+# 증상: 같은 명령이 cmd 에서 250ms 인데 백엔드 안에서는 3.3s — 재생 스텝당 adb 4회라
+# 12초가 그냥 증발한다. 어디서 사라지는지는 세 구간으로 나눠야만 특정된다.
+#   queue : run_in_executor 제출 → 워커 스레드가 실제로 잡기까지 (= 스레드풀 포화)
+#   proc  : 스레드 안에서 subprocess.run 이 걸린 시간 (= adb/프로세스 생성 자체.
+#           백신·EDR 이 python→cmd→adb 체인을 동기 검사하면 여기가 부풀어 오른다)
+#   resume: 스레드 종료 → 이벤트 루프가 코루틴을 재개하기까지 (= 루프 블로킹)
+_ADB_SLOW_MS = int(os.environ.get("REPLAYKIT_ADB_SLOW_MS", "800") or 0)
+
+# `adb devices -l` 결과 재사용 허용 시간(초). 0 이면 캐시 비활성.
+# 재생은 스텝마다 액션 전(check1)·캡처 전(check2) 두 번 연결을 확인하는데, 백그라운드
+# 재연결 루프(main._reconnect_loop)가 이미 5초마다 같은 조회를 실측으로 돌리고 있어
+# 대부분 중복이다. 저사양/스로틀링 PC 에서는 이 호출 하나가 3초까지 늘어나 스텝당 6초를
+# 그냥 버렸다. 캐시가 실제보다 낙관적일 수 있는 창은 최대 이 TTL 이며,
+#   - 5초 주기 백그라운드 루프가 실측으로 갱신하고
+#   - 디바이스 대상 명령이 not found/closed 로 실패하면 즉시 폐기
+# 하므로 끊긴 디바이스는 늦어도 다음 스텝에는 정상적으로 재연결 대기 경로를 탄다.
+ADB_LIST_CACHE_TTL = float(os.environ.get("REPLAYKIT_ADB_LIST_TTL", "5.0") or 0)
+
+# 이 문구가 stderr 에 있으면 트랜스포트가 사라진 것 — 디바이스 목록 캐시를 폐기한다.
+_TRANSPORT_GONE_MARKERS = ("not found", "device offline", "error: closed", "no devices")
+
+
+async def _run_in_executor_timed(runner, cmd: str, timeout: int):
+    """``run_in_executor(None, runner, cmd, timeout)`` + 지연 구간 분해 로깅."""
+    loop = asyncio.get_event_loop()
+    t_submit = time.monotonic()
+    marks: dict[str, float] = {}
+
+    def _wrapped():
+        marks["start"] = time.monotonic()
+        try:
+            return runner(cmd, timeout)
+        finally:
+            marks["end"] = time.monotonic()
+
+    result = await loop.run_in_executor(None, _wrapped)
+    if _ADB_SLOW_MS <= 0:
+        return result
+    t_done = time.monotonic()
+    total_ms = (t_done - t_submit) * 1000
+    if total_ms >= _ADB_SLOW_MS:
+        t_start = marks.get("start", t_submit)
+        t_end = marks.get("end", t_done)
+        logger.warning(
+            "ADB slow: total=%.2fs queue=%.2fs proc=%.2fs resume=%.2fs | %s",
+            total_ms / 1000, t_start - t_submit, t_end - t_start, t_done - t_end, cmd,
+        )
+    return result
+
+
 class ADBDevice:
     """Represents a single connected ADB device."""
 
@@ -171,6 +223,8 @@ class ADBService:
 
     def __init__(self):
         self._active_serial: Optional[str] = None
+        # `adb devices -l` 최근 결과 (monotonic ts, devices) — list_devices(max_age=) 전용.
+        self._devices_cache: Optional[tuple[float, list["ADBDevice"]]] = None
         self._touch_device_cache: dict[str, tuple[str, int, int]] = {}  # serial → (dev_path, max_x, max_y)
         self._display_size_cache: dict[str, tuple[int, int]] = {}  # serial → (width, height)
         self._sendevent_mode: dict[str, str] = {}  # serial → "direct" | "su" | "none"
@@ -204,8 +258,17 @@ class ADBService:
     # Device management
     # ------------------------------------------------------------------
 
-    async def list_devices(self) -> list[ADBDevice]:
-        """List connected ADB devices."""
+    async def list_devices(self, max_age: Optional[float] = None) -> list[ADBDevice]:
+        """List connected ADB devices.
+
+        max_age: 지정하면 그 초 이내의 직전 결과를 재사용한다(중복 조회 제거).
+                 None(기본)이면 항상 실측하고 캐시를 갱신한다 — 재연결 성공 판정처럼
+                 신선도가 중요한 호출부는 기본값을 그대로 쓸 것.
+        """
+        if max_age is not None and self._devices_cache is not None:
+            ts, cached = self._devices_cache
+            if time.monotonic() - ts <= max_age:
+                return cached
         output = await self._run("devices -l")
         devices: list[ADBDevice] = []
         for line in output.strip().splitlines()[1:]:
@@ -220,21 +283,33 @@ class ADBService:
             model_match = re.search(r"model:(\S+)", line)
             model = model_match.group(1) if model_match else ""
             devices.append(ADBDevice(serial=serial, status=status, model=model))
+        self._devices_cache = (time.monotonic(), devices)
         return devices
+
+    async def list_devices_cached(self) -> list[ADBDevice]:
+        """"최근에 살아있는 걸 봤다" 확인용 목록 조회 — ADB_LIST_CACHE_TTL 내 결과 재사용."""
+        return await self.list_devices(max_age=ADB_LIST_CACHE_TTL)
+
+    def invalidate_devices_cache(self) -> None:
+        """디바이스 구성이 바뀌었을 수 있을 때 캐시 폐기 — 다음 조회는 반드시 실측."""
+        self._devices_cache = None
 
     async def restart_server(self) -> None:
         """Kill and restart the ADB server to recover stuck devices."""
         logger.info("Restarting ADB server (kill-server && start-server)")
+        self.invalidate_devices_cache()
         await self._run("kill-server")
         await self._run("start-server")
         logger.info("ADB server restarted")
 
     async def connect_device(self, address: str) -> str:
         """Connect to a device via 'adb connect <address>'."""
+        self.invalidate_devices_cache()
         return await self._run(f"connect {address}")
 
     async def disconnect_device(self, address: str) -> str:
         """Disconnect a device via 'adb disconnect <address>'."""
+        self.invalidate_devices_cache()
         return await self._run(f"disconnect {address}")
 
     async def get_active_device(self) -> Optional[str]:
@@ -883,7 +958,7 @@ class ADBService:
         loop = asyncio.get_event_loop()
         # 먼저 exec-out 시도 (빠름)
         cmd = f'{ADB_Q} -s {s} exec-out {sc} > "{save_path}"'
-        stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync, cmd))
+        stdout, stderr, rc = await _run_in_executor_timed(_run_sync, cmd, 10)
         # 깨진 PNG 확인 → 파일 경유 폴백
         try:
             with open(save_path, "rb") as f:
@@ -918,7 +993,7 @@ class ADBService:
         # 먼저 exec-out (빠름) 시도
         cmd = f"{ADB_Q} -s {s} exec-out {sc}"
         loop = asyncio.get_event_loop()
-        stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync_bytes, cmd))
+        stdout, stderr, rc = await _run_in_executor_timed(_run_sync_bytes, cmd, 10)
 
         # exec-out 실패 또는 깨진 PNG → 파일 경유 폴백 (멀티 디스플레이에서 안정적)
         if rc != 0 or (stdout and len(stdout) > 0 and stdout[:4] != b'\x89PNG'):
@@ -958,8 +1033,7 @@ class ADBService:
     async def _run(self, args: str) -> str:
         cmd = f"{ADB_Q} {args}"
         logger.debug("ADB cmd: %s", cmd)
-        loop = asyncio.get_event_loop()
-        stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync, cmd))
+        stdout, stderr, rc = await _run_in_executor_timed(_run_sync, cmd, 10)
         _warn_if_server_restarted(f"args={args!r}", stderr)
         if rc != 0:
             # stderr가 ADB 도움말 dump면 매우 길어지므로 첫 줄만. 명령도 함께 출력해
@@ -1022,10 +1096,13 @@ class ADBService:
             args = self._wrap_shell_cmd(args, container)
         cmd = f"{ADB_Q} -s {serial} {args}"
         logger.debug("ADB cmd: %s", cmd)
-        loop = asyncio.get_event_loop()
-        stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync, cmd, timeout))
+        stdout, stderr, rc = await _run_in_executor_timed(_run_sync, cmd, timeout)
         _warn_if_server_restarted(f"device {serial}, args={args!r}", stderr)
         if rc != 0:
+            # 트랜스포트가 사라진 실패면 목록 캐시를 폐기 — 다음 연결 확인이 낙관적
+            # 캐시를 재사용해 끊긴 디바이스를 살아있다고 오판하지 않게 한다.
+            if stderr and any(m in stderr.lower() for m in _TRANSPORT_GONE_MARKERS):
+                self.invalidate_devices_cache()
             err_short = (stderr.split("\n", 1)[0] if stderr else "").strip()
             logger.error(
                 "ADB error (device %s, args=%r): %s",
