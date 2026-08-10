@@ -974,16 +974,40 @@ def get_module_functions(module_name: str) -> list[dict]:
             },
             {
                 "name": "ClickText",
-                "description": "현재 화면에서 텍스트를 찾아 클릭합니다. 찾지 못하면 FAIL 반환.",
-                "description_en": "Finds text on the current screen and clicks it. Returns FAIL if not found.",
+                "description": (
+                    "현재 화면에서 텍스트를 찾아 클릭합니다. 쉼표로 여러 개 지정하면 "
+                    "지정한 순서대로 하나씩 찾아 클릭합니다 (예: '0,1,0,2' → 키패드로 0102 입력). "
+                    "하나라도 찾지 못하면 그 지점에서 중단하고 FAIL 반환."
+                ),
+                "description_en": (
+                    "Finds text on the current screen and clicks it. With comma-separated multiple "
+                    "texts, clicks them one by one in the given order (e.g. '0,1,0,2' types 0102 on a "
+                    "keypad). Stops and returns FAIL at the first text that cannot be found."
+                ),
                 "params": [
-                    {"name": "text", "required": True, "description": "클릭할 텍스트"},
+                    {"name": "text", "required": True,
+                     "description": "클릭할 텍스트 (쉼표로 여러 개 지정 시 순서대로 클릭, 예: '0,1,0,2')"},
                     {"name": "mode", "required": False, "default": "'Full Screen'",
                      "description": "검색 범위: 'Full Screen' 또는 'Region'"},
                     {"name": "region", "required": False, "default": "'0,0,0,0'",
                      "description": "영역 'x,y,width,height' (Region 모드, 쉼표 구분)"},
                     {"name": "threshold", "required": False, "default": "'0.8'",
                      "description": "유사도 임계값 (0.0~1.0, 기본 0.8)"},
+                    {"name": "interval", "required": False, "default": "'0.3'",
+                     "description": "여러 개 클릭 시 탭 간 대기 시간(초). 너무 짧으면 키가 씹힐 수 있음.",
+                     "description_en": "Wait between taps in seconds when clicking multiple texts. Too short may drop key presses."},
+                    {"name": "recapture", "required": False, "default": "'false'",
+                     "description": (
+                         "여러 개 클릭 시 매번 화면을 다시 캡처하고 OCR을 다시 실행할지 여부. "
+                         "기본 false(캡처 1회 재사용 — 키패드처럼 눌러도 배치가 그대로인 화면용). "
+                         "클릭이 화면을 바꾸는 흐름이면 true로 설정 (대상 수만큼 느려짐)."
+                     ),
+                     "description_en": (
+                         "Whether to re-capture the screen and re-run OCR before each click when "
+                         "clicking multiple texts. Default false (reuses a single capture — for screens "
+                         "like keypads whose layout does not change). Set true when clicks change the "
+                         "screen (slower, proportional to the number of targets)."
+                     )},
                     _language_param,
                     _text_score_param,
                 ],

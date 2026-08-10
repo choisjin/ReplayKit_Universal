@@ -2532,25 +2532,69 @@ class PlaybackService:
             return f"FAIL: {joined} 텍스트를 찾을 수 없음" + "\n" + detail + block
 
         elif func_name == "ClickText":
-            target = str(func_args.get("text", ""))
+            # text는 쉼표 구분으로 여러 개 지정 가능 — 지정한 순서대로 하나씩 찾아 클릭한다.
+            # (키패드로 전화번호를 누르는 것처럼 같은 화면에서 연속 입력하는 용도)
+            raw_text = str(func_args.get("text", ""))
+            targets = [t.strip() for t in raw_text.split(",") if t.strip()]
+            if not targets:
+                return "FAIL: text 파라미터가 비어 있습니다"
             threshold = float(func_args.get("threshold", "0.8") or 0.8)
             mode = str(func_args.get("mode", "Full Screen"))
-
-            items, ox, oy, scope = await _ocr_once(mode)
-            score, center, matched = best_match(items, target)
-            block = _detected_block(items, ox, oy, scope)
-            if center is None or score < threshold:
-                return (f"FAIL: '{target}' 텍스트를 찾을 수 없음 "
-                        f"(최고 유사도 {score:.2f} < threshold {threshold:.2f})" + block)
-            # Region 모드면 크롭 좌표를 원본 이미지 좌표로 환산
-            x, y = center[0] + ox, center[1] + oy
+            # 탭 간 간격 — 키패드처럼 연속 입력을 받는 화면은 너무 빠르면 키가 씹힌다.
+            try:
+                interval = max(0.0, float(func_args.get("interval", "0.3") or 0.3))
+            except (TypeError, ValueError):
+                interval = 0.3
+            # recapture: 클릭 때마다 화면을 다시 캡처하고 OCR을 다시 돌린다.
+            # 기본은 1회 캡처 재사용 — 키패드처럼 눌러도 배치가 그대로인 화면에서
+            # OCR을 대상 수만큼 반복하는 비용을 피하기 위함. 클릭이 화면을 바꾸는
+            # 흐름(메뉴 이동 등)이면 true로 두어야 좌표가 어긋나지 않는다.
+            recapture = str(func_args.get("recapture", "") or "").strip().lower() in (
+                "1", "true", "yes", "on",
+            )
             # HKMC 일체형 표시 보정 — image_tap과 동일. OCR은 front_center(AVN) 캡처의
             # 로컬 좌표를 찾으므로 실제 터치 좌표계(+x_offset)로 환산해야 한다.
             # 기본형/비-HKMC는 params에 x_offset이 없어 0 → 무영향.
             x_offset = int((step.params or {}).get("x_offset", 0) or 0)
-            await self._tap_ocr_device(dev_info, x + x_offset, y)
-            return (f"PASS: '{target}' 클릭 완료 (x={x + x_offset}, y={y}) "
-                    f"— 매칭 \"{matched}\" 유사도 {score:.2f}" + block)
+
+            items, ox, oy, scope = await _ocr_once(mode)
+            # (target, x, y, matched, score) — 실패 메시지에 어디까지 눌렀는지 남기기 위해 누적
+            clicked: list[tuple[str, int, int, str, float]] = []
+            for idx, target in enumerate(targets):
+                if recapture and idx > 0:
+                    shot = await self._screencap_bytes(dev_info)
+                    if shot is None:
+                        done = ", ".join(f"'{t}'" for t, _x, _y, _m, _s in clicked)
+                        return (f"FAIL: '{target}' 클릭 전 재캡처 실패 "
+                                f"({len(clicked)}/{len(targets)} 완료: {done})")
+                    img_bytes = shot  # _ocr_once가 클로저로 참조 — 다음 OCR은 새 화면 기준
+                    items, ox, oy, scope = await _ocr_once(mode)
+
+                score, center, matched = best_match(items, target)
+                if center is None or score < threshold:
+                    block = _detected_block(items, ox, oy, scope)
+                    done = ", ".join(f"'{t}'" for t, _x, _y, _m, _s in clicked)
+                    progress = f" ({len(clicked)}/{len(targets)} 완료: {done})" if clicked else ""
+                    return (f"FAIL: '{target}' 텍스트를 찾을 수 없음 "
+                            f"(최고 유사도 {score:.2f} < threshold {threshold:.2f})"
+                            f"{progress}" + block)
+
+                # Region 모드면 크롭 좌표를 원본 이미지 좌표로 환산
+                x, y = center[0] + ox + x_offset, center[1] + oy
+                await self._tap_ocr_device(dev_info, x, y)
+                clicked.append((target, x, y, matched, score))
+                if interval and idx < len(targets) - 1:
+                    await asyncio.sleep(interval)
+
+            block = _detected_block(items, ox, oy, scope)
+            if len(clicked) == 1:
+                t, x, y, m, s = clicked[0]
+                return (f"PASS: '{t}' 클릭 완료 (x={x}, y={y}) "
+                        f"— 매칭 \"{m}\" 유사도 {s:.2f}" + block)
+            lines = [f"PASS: {len(clicked)}개 순차 클릭 완료"]
+            for i, (t, x, y, m, s) in enumerate(clicked, 1):
+                lines.append(f"  [{i}] '{t}' → (x={x}, y={y}) 매칭 \"{m}\" 유사도 {s:.2f}")
+            return "\n".join(lines) + block
 
         elif func_name == "ExtractAllText":
             # 디버깅/시나리오 작성용 — 화면(또는 영역)의 모든 텍스트를 결과로 반환.
