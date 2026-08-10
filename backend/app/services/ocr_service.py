@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -106,6 +107,39 @@ def _bytes_to_array(image_bytes: bytes):
     return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
 
+def _default_text_score() -> Optional[float]:
+    """환경변수 OCR_TEXT_SCORE 로 전역 기본 임계값 지정. 미설정이면 None(엔진 기본 0.5)."""
+    raw = (os.environ.get("OCR_TEXT_SCORE") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except ValueError:
+        logger.warning("OCR: OCR_TEXT_SCORE 값이 숫자가 아니라 무시 (%r)", raw)
+        return None
+
+
+def _call_engine(engine, img, text_score: Optional[float]):
+    """OCR 엔진 호출. text_score 를 낮추면 신뢰도가 낮은 인식 결과도 살아남는다.
+
+    RapidOCR 은 인식 신뢰도가 text_score(기본 0.5) 미만인 항목을 결과에서 통째로 빼기
+    때문에, 획이 겹치거나 작아 신뢰도가 낮게 나오는 글자(키패드의 9, 0 등)가 '검출조차
+    안 된 것'처럼 보인다. 검출(det) 모델은 언어와 무관하게 공용이므로, 언어를 바꿨을 때
+    결과가 달라진다면 원인은 검출이 아니라 이 인식 임계값이다.
+
+    호출 인자 지원 여부가 버전마다 달라 TypeError 시 기본 호출로 폴백한다.
+    """
+    if text_score is None:
+        return engine(img)
+    try:
+        return engine(img, text_score=text_score)
+    except TypeError:
+        logger.warning(
+            "OCR: 설치된 rapidocr 버전이 text_score 호출 인자를 지원하지 않음 — 엔진 기본값(0.5)으로 실행"
+        )
+        return engine(img)
+
+
 def _fuzzy_score(candidate: str, target: str) -> float:
     """대소문자 무시 부분 일치 점수 (0.0~1.0)."""
     try:
@@ -128,8 +162,17 @@ class OcrItem:
         return (int(sum(xs) / 4), int(sum(ys) / 4))
 
 
-def run_ocr(image_bytes: bytes, language: Optional[str] = None) -> List[OcrItem]:
-    """이미지에서 OCR 실행. language로 인식 모델 선택 (기본 korean)."""
+def run_ocr(
+    image_bytes: bytes, language: Optional[str] = None,
+    text_score: Optional[float] = None,
+) -> List[OcrItem]:
+    """이미지에서 OCR 실행. language로 인식 모델 선택 (기본 korean).
+
+    text_score: 인식 신뢰도 하한. None이면 OCR_TEXT_SCORE 환경변수, 그것도 없으면
+    엔진 기본값(0.5). 낮출수록 흐릿한 글자가 살아나지만 오인식도 함께 늘어난다.
+    """
+    if text_score is None:
+        text_score = _default_text_score()
     engine = _get_engine(language)
     if engine is None:
         logger.warning("OCR: engine 없음 (rapidocr_onnxruntime 미설치 또는 초기화 실패)")
@@ -138,11 +181,12 @@ def run_ocr(image_bytes: bytes, language: Optional[str] = None) -> List[OcrItem]
     if img is None:
         logger.warning("OCR: 이미지 디코딩 실패 (bytes len=%d)", len(image_bytes) if image_bytes else 0)
         return []
-    logger.info("OCR[%s]: 이미지 크기 %dx%d, channels=%d",
+    logger.info("OCR[%s]: 이미지 크기 %dx%d, channels=%d, text_score=%s",
                 language or DEFAULT_LANGUAGE,
-                img.shape[1], img.shape[0], img.shape[2] if img.ndim == 3 else 1)
+                img.shape[1], img.shape[0], img.shape[2] if img.ndim == 3 else 1,
+                text_score if text_score is not None else "기본(0.5)")
     try:
-        raw = engine(img)
+        raw = _call_engine(engine, img, text_score)
     except Exception as e:
         logger.error("OCR 엔진 오류: %s", e)
         return []
@@ -297,7 +341,7 @@ def extract_region_text(
 
 def extract_region_items(
     image_bytes: bytes, x: int, y: int, width: int, height: int,
-    language: Optional[str] = None,
+    language: Optional[str] = None, text_score: Optional[float] = None,
 ) -> Tuple[List[OcrItem], int, int]:
     """지정 영역 크롭 후 OCR로 모든 텍스트 아이템 추출.
 
@@ -319,5 +363,5 @@ def extract_region_items(
     ok, buf = cv2.imencode(".png", crop)
     if not ok or buf is None:
         return [], 0, 0
-    items = run_ocr(buf.tobytes(), language=language)
+    items = run_ocr(buf.tobytes(), language=language, text_score=text_score)
     return items, x1, y1

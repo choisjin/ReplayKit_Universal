@@ -938,6 +938,22 @@ def get_module_functions(module_name: str) -> list[dict]:
                 "bundled default (Chinese) — install: python scripts/download_ocr_models.py <language>"
             ),
         }
+        # 공통 text_score 파라미터 — 인식 신뢰도 하한. 엔진이 이 값 미만 항목을 결과에서
+        # 통째로 빼기 때문에, 낮은 신뢰도로 읽히는 글자는 '검출조차 안 된 것'처럼 사라진다.
+        _text_score_param = {
+            "name": "text_score", "required": False, "default": "'0.5'",
+            "description": (
+                "인식 신뢰도 하한 (0.0~1.0, 기본 0.5). 이 값 미만으로 읽힌 글자는 결과에서 "
+                "통째로 제외되어 검출되지 않은 것처럼 보인다. 키패드 숫자처럼 특정 글자만 "
+                "안 잡히면 0.2~0.3으로 낮출 것. 낮출수록 오인식도 함께 늘어난다."
+            ),
+            "description_en": (
+                "Minimum recognition confidence (0.0-1.0, default 0.5). Characters read below this "
+                "score are dropped from the result entirely, so they look undetected. If only certain "
+                "characters are missing (e.g. keypad digits), lower it to 0.2-0.3. Lower values also "
+                "increase misreads."
+            ),
+        }
         functions = [
             {
                 "name": "CheckText",
@@ -953,6 +969,7 @@ def get_module_functions(module_name: str) -> list[dict]:
                     {"name": "threshold", "required": False, "default": "'0.8'",
                      "description": "유사도 임계값 (0.0~1.0, 기본 0.8)"},
                     _language_param,
+                    _text_score_param,
                 ],
             },
             {
@@ -968,6 +985,7 @@ def get_module_functions(module_name: str) -> list[dict]:
                     {"name": "threshold", "required": False, "default": "'0.8'",
                      "description": "유사도 임계값 (0.0~1.0, 기본 0.8)"},
                     _language_param,
+                    _text_score_param,
                 ],
             },
             {
@@ -982,6 +1000,7 @@ def get_module_functions(module_name: str) -> list[dict]:
                     {"name": "min_length", "required": False, "default": "'2'",
                      "description": "결과에 포함할 최소 글자 수 (기본 2 — 아이콘 오인식 제거). 1로 설정하면 모든 결과 표시."},
                     _language_param,
+                    _text_score_param,
                 ],
             },
         ]

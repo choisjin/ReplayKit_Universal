@@ -2437,6 +2437,17 @@ class PlaybackService:
         loop = asyncio.get_event_loop()
         # 모든 OCR 함수가 공유하는 language 인자 — 빈 값이면 ocr_service의 기본(korean) 사용
         language = str(func_args.get("language", "") or "").strip() or None
+        # text_score: 인식 신뢰도가 이 값 미만인 항목은 엔진이 결과에서 통째로 제거한다(기본 0.5).
+        # 키패드 숫자처럼 신뢰도가 낮게 잡히는 글자가 '검출조차 안 된 것'처럼 사라질 때 낮춘다.
+        _raw_ts = str(func_args.get("text_score", "") or "").strip()
+        if _raw_ts:
+            try:
+                text_score = max(0.0, min(1.0, float(_raw_ts)))
+            except ValueError:
+                logger.warning("OCR: text_score 값이 숫자가 아니라 무시 (%r)", _raw_ts)
+                text_score = None
+        else:
+            text_score = None
 
         def _parse_region(raw: str) -> tuple[int, int, int, int]:
             """region 문자열 'x,y,w,h' 파싱 — 토큰 부족/변환 실패 시 0으로 채움."""
@@ -2463,10 +2474,10 @@ class PlaybackService:
             if mode == "Region":
                 rx, ry, rw, rh = _parse_region(func_args.get("region", ""))
                 items, ox, oy = await loop.run_in_executor(
-                    None, extract_region_items, img_bytes, rx, ry, rw, rh, language
+                    None, extract_region_items, img_bytes, rx, ry, rw, rh, language, text_score
                 )
                 return items, ox, oy, f"Region({rx},{ry},{rw},{rh})"
-            items = await loop.run_in_executor(None, run_ocr, img_bytes, language)
+            items = await loop.run_in_executor(None, run_ocr, img_bytes, language, text_score)
             return items, 0, 0, "Full Screen"
 
         def _detected_block(items, ox: int, oy: int, scope: str, limit: int = 30) -> str:
@@ -2558,11 +2569,11 @@ class PlaybackService:
             if mode == "Region":
                 rx, ry, rw, rh = _parse_region(func_args.get("region", ""))
                 items, offset_x, offset_y = await loop.run_in_executor(
-                    None, extract_region_items, img_bytes, rx, ry, rw, rh, language
+                    None, extract_region_items, img_bytes, rx, ry, rw, rh, language, text_score
                 )
                 scope = f"Region({rx},{ry},{rw},{rh})"
             else:
-                items = await loop.run_in_executor(None, run_ocr, img_bytes, language)
+                items = await loop.run_in_executor(None, run_ocr, img_bytes, language, text_score)
                 scope = "Full Screen"
 
             total_raw = len(items)
