@@ -1040,7 +1040,7 @@ export default function RecordPage() {
       try {
         const dev = primaryDevices.find(d => d.id === targetId)
           || auxiliaryDevices.find(d => d.id === targetId);
-        const needsScreenType = (dev?.type === 'hkmc_agent' || dev?.type === 'isap_agent' || dev?.type === 'icas_agent' || dev?.type === 'mib_agent' || dev?.type === 'hkmc5th_wide_agent') || ((dev?.type === 'adb' || dev?.type === 'bmw_agent') && (dev.info?.displays?.length ?? 0) > 1);
+        const needsScreenType = (dev?.type === 'hkmc_agent' || dev?.type === 'isap_agent' || dev?.type === 'icas_agent' || dev?.type === 'mib_agent' || dev?.type === 'gm_info_agent' || dev?.type === 'hkmc5th_wide_agent') || ((dev?.type === 'adb' || dev?.type === 'bmw_agent') && (dev.info?.displays?.length ?? 0) > 1);
         const res = await deviceApi.screenshot(targetId, needsScreenType ? screenType : undefined, 'png');
         if (res.data.image) {
           const fmt = res.data.format || 'png';
@@ -1129,7 +1129,9 @@ export default function RecordPage() {
   const screenDevice = primaryDevices.find(d => d.id === screenshotDeviceId);
   const isScreenHkmc = screenDevice?.type === 'hkmc_agent' || screenDevice?.type === 'isap_agent' || screenDevice?.type === 'hkmc5th_wide_agent';
   const isScreenCCRC = isScreenHkmc && screenDevice?.info?.device_model === 'ccRC';
-  const isScreenICAS = screenDevice?.type === 'icas_agent' || screenDevice?.type === 'mib_agent';
+  // GM Info도 단일 HU 화면 + 하드키 패널을 쓰므로 같은 플래그로 묶는다(스텝 타입도 icas_*).
+  const isScreenICAS = screenDevice?.type === 'icas_agent' || screenDevice?.type === 'mib_agent'
+    || screenDevice?.type === 'gm_info_agent';
 
   // CCRC: front_center/cluster 비허용 → 자동으로 rear_right로 교정
   useEffect(() => {
@@ -1340,6 +1342,11 @@ export default function RecordPage() {
         setHkmcKeys(res.data.keys || []);
         setHkmcSubCommands(res.data.sub_commands || {});
       }).catch(() => {});
+    } else if (dev?.type === 'gm_info_agent') {
+      deviceApi.listGmInfoKeys(dev.id).then(res => {
+        setHkmcKeys(res.data.keys || []);
+        setHkmcSubCommands(res.data.sub_commands || {});
+      }).catch(() => {});
     } else {
       setHkmcKeys([]);
     }
@@ -1456,7 +1463,8 @@ export default function RecordPage() {
   // MIB은 ICAS와 동일한 ksend 메커니즘이라 step 타입도 icas_*로 통일 (백엔드가 mib_agent에서 icas_* 호환 처리).
   const resolveAction = useCallback((action: string, targetDevice: string): string => {
     const dev = allDevices.find(d => d.id === targetDevice);
-    if (dev?.type === 'icas_agent' || dev?.type === 'mib_agent') {
+    // GM Info는 프로토콜이 다르지만 서비스 API가 동형이라 백엔드가 icas_* 를 그대로 받는다.
+    if (dev?.type === 'icas_agent' || dev?.type === 'mib_agent' || dev?.type === 'gm_info_agent') {
       if (action === 'tap') return 'icas_touch';
       if (action === 'swipe') return 'icas_swipe';
       if (action === 'long_press') return 'icas_long_press';
@@ -1481,6 +1489,10 @@ export default function RecordPage() {
     const dev = allDevices.find(d => d.id === targetDevice);
     if ((dev?.type === 'icas_agent' || dev?.type === 'mib_agent') && (action === 'icas_touch' || action === 'icas_swipe' || action === 'icas_key' || action === 'icas_long_press' || action === 'repeat_tap')) {
       return { ...params, screen_type: screenType };
+    }
+    // GM Info는 화면이 하나뿐 — screen_type 은 항상 HU 고정.
+    if (dev?.type === 'gm_info_agent' && (action === 'icas_touch' || action === 'icas_swipe' || action === 'icas_key' || action === 'icas_long_press' || action === 'repeat_tap')) {
+      return { ...params, screen_type: 'HU' };
     }
     if ((dev?.type === 'hkmc_agent' || dev?.type === 'isap_agent' || dev?.type === 'hkmc5th_wide_agent') && (action === 'hkmc_touch' || action === 'hkmc_swipe' || action === 'hkmc_key' || action === 'hkmc_long_press' || action === 'repeat_tap')) {
       return { ...params, screen_type: screenType };
@@ -1639,7 +1651,8 @@ export default function RecordPage() {
       || auxiliaryDevices.find(d => d.id === targetDevId);
     if (!dev) return undefined;
     const needsScreenType = dev.type === 'hkmc_agent' || dev.type === 'isap_agent'
-      || dev.type === 'icas_agent' || dev.type === 'mib_agent' || dev.type === 'hkmc5th_wide_agent'
+      || dev.type === 'icas_agent' || dev.type === 'mib_agent' || dev.type === 'gm_info_agent'
+      || dev.type === 'hkmc5th_wide_agent'
       || ((dev.type === 'adb' || dev.type === 'bmw_agent') && (dev.info?.displays?.length ?? 0) > 1);
     return needsScreenType ? screenType : undefined;
   }, [primaryDevices, auxiliaryDevices, screenType]);
@@ -6095,7 +6108,7 @@ export default function RecordPage() {
                       </Tooltip>
                     )}
                     {/* 이미지 롱터치 — long press 를 지원하는 디바이스 타입에만 노출 */}
-                    {['adb', 'hkmc_agent', 'isap_agent', 'hkmc5th_wide_agent', 'icas_agent', 'mib_agent', 'bmw_agent', 'wincontrol'].includes(screenDevice?.type || '') && (
+                    {['adb', 'hkmc_agent', 'isap_agent', 'hkmc5th_wide_agent', 'icas_agent', 'mib_agent', 'gm_info_agent', 'bmw_agent', 'wincontrol'].includes(screenDevice?.type || '') && (
                       <Tooltip title={recording ? t('record.imageLongPressTooltip') : t('record.imageTapDisabled')}>
                         <Button
                           size="small"

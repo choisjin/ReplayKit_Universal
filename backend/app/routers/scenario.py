@@ -433,6 +433,12 @@ async def capture_expected_image(req: CaptureExpectedImageRequest):
             if not fpk:
                 raise HTTPException(status_code=400, detail=f"FPK device {req.device_id} not connected")
             png_bytes = await fpk.async_screencap_bytes(screen_type="HU", fmt="png")
+        elif dev and dev.type == "gm_info_agent":
+            gm = dm.get_gm_info_service(req.device_id)
+            if not gm:
+                raise HTTPException(status_code=400,
+                                    detail=f"GM Info device {req.device_id} not connected")
+            png_bytes = await gm.async_screencap_bytes(screen_type="HU", fmt="png")
         elif dev and dev.type == "bmw_agent":
             bmw = dm.get_bmw_service(req.device_id)
             if not bmw:
@@ -742,7 +748,7 @@ async def record_image_tap(req: ImageTapRequest):
                 status_code=400,
                 detail="FPK 클러스터는 화면 조작을 지원하지 않습니다 — 이미지 비교 전용 디바이스입니다.",
             )
-        elif dev_type in ("icas_agent", "mib_agent"):
+        elif dev_type in ("icas_agent", "mib_agent", "gm_info_agent"):
             await recording_svc._execute_step_action(
                 StepType.ICAS_LONG_PRESS if long_press else StepType.ICAS_TOUCH,
                 {"x": tap_x, "y": center_y, "duration_ms": duration_ms,

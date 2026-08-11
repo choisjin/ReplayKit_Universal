@@ -398,7 +398,7 @@ export default function DevicePage() {
   // PCAN(PEAK/SysMax 호환) 채널 스캔 결과
   type PcanChannel = { channel: string; device_id?: number | null; controller?: number | null; supports_fd: boolean };
   const [scannedPcan, setScannedPcan] = useState<{ ok: boolean; driver_missing: boolean; channels: PcanChannel[]; error?: string | null }>({ ok: false, driver_missing: false, channels: [] });
-  const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'fpk_agent' | 'bmw_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
+  const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'fpk_agent' | 'gm_info_agent' | 'bmw_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
   // BMW RSE Agent 전용 — 캡처 백엔드(adb screencap vs WebOS 컴포지터) + 해상도 fallback
   const [bmwCaptureBackend, setBmwCaptureBackend] = useState<'auto' | 'adb' | 'webos'>('auto');
   const [bmwResolution, setBmwResolution] = useState<string>('1920x1080');
@@ -423,6 +423,9 @@ export default function DevicePage() {
   // 실제 SSH 대상 IPv6. 스캔은 IPv4 화이트리스트로 후보를 잡지만 장비가 IPv6로만
   // 열려 있을 수 있어, 비워두면 연결 시 디바이스에서 자동 조회해 저장한다.
   const [fpkIpv6, setFpkIpv6] = useState<string>('');
+  // GM Info(QNX) — TCP 4445 단일 소켓(터치/하드키/캡처). 해상도는 첫 캡처 PNG로 자동 보정.
+  const GM_INFO_DEFAULT_RESOLUTION = '1280x720';
+  const [gmInfoResolution, setGmInfoResolution] = useState<string>(GM_INFO_DEFAULT_RESOLUTION);
   // MIB 패널 프로파일 — 해상도가 같아도 터치 디지타이저 보정이 다르다.
   // 예: 12.9"와 13.1"는 둘 다 1920x1080 이지만 12.9"는 Y÷2(대칭), 13.1"는 Y×1(비대칭).
   // 연결 시 프로파일을 골라 resolution + touch_x_scale/touch_y_scale 를 함께 적용한다.
@@ -875,8 +878,8 @@ export default function DevicePage() {
           }
         }
       }
-      const tcpPort = (devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent' || devType === 'fpk_agent') ? hkmcPort : undefined;
-      const model = (devType === 'adb' || devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent' || devType === 'fpk_agent' || devType === 'bmw_agent') ? (deviceModel || undefined) : undefined;
+      const tcpPort = (devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent' || devType === 'fpk_agent' || devType === 'gm_info_agent') ? hkmcPort : undefined;
+      const model = (devType === 'adb' || devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent' || devType === 'fpk_agent' || devType === 'gm_info_agent' || devType === 'bmw_agent') ? (deviceModel || undefined) : undefined;
       // ICAS Agent는 SSH 자격증명이 필요 — extra_fields로 전달
       if (devType === 'icas_agent') {
         extra = extra || {};
@@ -900,6 +903,11 @@ export default function DevicePage() {
         extra.resolution = (fpkResolution || FPK_DEFAULT_RESOLUTION).trim();
         extra.fb_device = (fpkFbDevice || '/dev/fb0').trim();
         if (fpkIpv6.trim()) extra.ipv6_address = fpkIpv6.trim();
+      }
+      // GM Info Agent: TCP 단일 소켓 — 주소/포트 외 옵션은 해상도 기본값뿐.
+      if (devType === 'gm_info_agent') {
+        extra = extra || {};
+        extra.resolution = (gmInfoResolution || GM_INFO_DEFAULT_RESOLUTION).trim();
       }
       // BMW RSE Agent: ADB serial 기반 (address=serial). 캡처 백엔드 + 해상도 fallback 전달.
       if (devType === 'bmw_agent') {
@@ -3090,6 +3098,7 @@ export default function DevicePage() {
                         {modalCategory === 'primary' && <Option value="icas_agent">ICAS Agent (SSH)</Option>}
                         {modalCategory === 'primary' && <Option value="mib_agent">MIB Agent (SSH)</Option>}
                         {modalCategory === 'primary' && <Option value="fpk_agent">FPK Agent (SSH, 캡처 전용)</Option>}
+                        {modalCategory === 'primary' && <Option value="gm_info_agent">GM Info Agent (TCP)</Option>}
                         {modalCategory === 'primary' && <Option value="bmw_agent">BMW Agent (ADB)</Option>}
                         {modalCategory === 'primary' && <Option value="vision_camera">Vision Camera</Option>}
                         {modalCategory === 'primary' && <Option value="webcam">{t('device.webcam')}</Option>}
@@ -3365,6 +3374,37 @@ export default function DevicePage() {
                         <div style={{ fontSize: 10, color: '#888' }}>
                           FPK 클러스터는 <b>캡처·이미지 비교 전용</b>입니다 — 터치/스와이프/하드키 등 화면 조작은 지원되지 않습니다.
                           해상도는 연결 시 프레임버퍼 실제 값으로 자동 보정됩니다.
+                        </div>
+                      </>
+                    )}
+
+                    {!selectedModule && connectType === 'gm_info_agent' && (
+                      <>
+                        <Input
+                          placeholder="GM Info IP (예: 10.10.10.2)"
+                          value={connectAddress}
+                          onChange={(e) => setConnectAddress(e.target.value)}
+                          onPressEnter={handleConnect}
+                        />
+                        <Space wrap>
+                          <span style={{ fontSize: 11, color: '#888' }}>TCP Port:</span>
+                          <InputNumber
+                            value={hkmcPort}
+                            onChange={(v) => setHkmcPort(v || 4445)}
+                            min={1} max={65535}
+                            style={{ width: 110 }}
+                          />
+                          <span style={{ fontSize: 11, color: '#888' }}>Resolution:</span>
+                          <Input
+                            placeholder="WxH (기본 1280x720)"
+                            value={gmInfoResolution}
+                            onChange={(e) => setGmInfoResolution(e.target.value)}
+                            style={{ width: 140 }}
+                          />
+                        </Space>
+                        <div style={{ fontSize: 10, color: '#888' }}>
+                          GM Info(QNX) 유닛 — TCP 4445 단일 소켓으로 터치·스와이프·하드키·캡처를 처리합니다.
+                          해상도는 첫 캡처 이미지 크기로 자동 보정됩니다.
                         </div>
                       </>
                     )}

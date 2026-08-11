@@ -1077,6 +1077,15 @@ class PlaybackService:
                         Path(actual_path).write_bytes(img_bytes)
                     else:
                         raise RuntimeError(f"FPK device {ss_device['id']} not connected")
+                elif ss_device["type"] == "gm_info_agent":
+                    gm_svc = self.dm.get_gm_info_service(ss_device["id"])
+                    if gm_svc:
+                        img_bytes = await gm_svc.async_screencap_bytes(
+                            screen_type="HU", fmt="png"
+                        )
+                        Path(actual_path).write_bytes(img_bytes)
+                    else:
+                        raise RuntimeError(f"GM Info device {ss_device['id']} not connected")
                 elif ss_device["type"] == "bmw_agent":
                     bmw_svc = self.dm.get_bmw_service(ss_device["id"])
                     if bmw_svc:
@@ -2088,6 +2097,32 @@ class PlaybackService:
                             return
                 dev.status = "disconnected"
 
+        elif dev.type == "gm_info_agent":
+            gm = self.dm.get_gm_info_service(device_id)
+            if gm and gm.is_connected:
+                return
+            lock = self.dm.get_reconnect_lock(device_id)
+            async with lock:
+                gm = self.dm.get_gm_info_service(device_id)
+                if gm and gm.is_connected:
+                    return
+                for attempt in range(1, max_retries + 1):
+                    if self._should_stop:
+                        return
+                    logger.info("Playback: GM Info reconnect %s attempt %d/%d",
+                                device_id, attempt, max_retries)
+                    try:
+                        msg = await self.dm.connect_device_by_id(device_id)
+                        if "connected" in msg.lower() and "failed" not in msg.lower():
+                            logger.info("Playback: GM Info reconnected %s", device_id)
+                            return
+                    except Exception as e:
+                        logger.debug("Playback: GM Info reconnect %s failed: %s", device_id, e)
+                    if attempt < max_retries:
+                        if await self._interruptible_sleep(retry_interval):
+                            return
+                dev.status = "disconnected"
+
         elif dev.type == "bmw_agent":
             bmw = self.dm.get_bmw_service(device_id)
             if bmw and bmw.is_connected:
@@ -2241,11 +2276,12 @@ class PlaybackService:
         """디바이스가 ICAS 또는 MIB 에이전트 타입인지 확인 (icas_* 스텝 라우팅용).
 
         MIB은 ICAS와 동일한 ksend 메커니즘 + 호환 API라 같은 step type을 사용.
+        GM Info는 프로토콜은 다르지만 서비스 API가 동형(단일 화면 HU)이라 같은 디스패처를 재사용.
         """
         if not device_id:
             return False
         dev = self.dm.get_device(device_id)
-        return dev is not None and dev.type in ("icas_agent", "mib_agent")
+        return dev is not None and dev.type in ("icas_agent", "mib_agent", "gm_info_agent")
 
     def _is_bmw_device(self, device_id: Optional[str]) -> bool:
         """디바이스가 BMW RSE 에이전트 타입인지 확인 (generic tap/swipe 스텝 라우팅용).
@@ -2280,13 +2316,15 @@ class PlaybackService:
             return self.dm.get_icas_service(device_id), "icas"
         if dev.type == "mib_agent":
             return self.dm.get_mib_service(device_id), "icas"
+        if dev.type == "gm_info_agent":
+            return self.dm.get_gm_info_service(device_id), "icas"
         return None, None
 
     # ── OCR 가상 모듈 헬퍼 ─────────────────────────────────────────────────
 
     _OCR_CAPTURE_TYPES = ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent",
-                          "icas_agent", "mib_agent", "fpk_agent", "bmw_agent",
-                          "vision_camera", "webcam")
+                          "icas_agent", "mib_agent", "fpk_agent", "gm_info_agent",
+                          "bmw_agent", "vision_camera", "webcam")
 
     def _find_ocr_device(self, step: Step) -> Optional[dict]:
         """OCR 스텝에서 스크린샷 대상 디바이스 정보 반환.
@@ -2329,7 +2367,7 @@ class PlaybackService:
             blob = f"{(dev.info or {}).get('device_model', '')} {dev.id}".lower()
             if "ccrc" in blob:
                 return "rear_right"
-        if dev.type in ("icas_agent", "mib_agent", "fpk_agent"):
+        if dev.type in ("icas_agent", "mib_agent", "fpk_agent", "gm_info_agent"):
             return "HU"
         return "front_center"
 
@@ -2366,6 +2404,10 @@ class PlaybackService:
                     return await svc.async_screencap_bytes(screen_type=screen_type or "HU", fmt="png")
             elif dev_type == "fpk_agent":
                 svc = self.dm.get_fpk_service(dev_id)
+                if svc:
+                    return await svc.async_screencap_bytes(screen_type="HU", fmt="png")
+            elif dev_type == "gm_info_agent":
+                svc = self.dm.get_gm_info_service(dev_id)
                 if svc:
                     return await svc.async_screencap_bytes(screen_type="HU", fmt="png")
             elif dev_type == "bmw_agent":
@@ -2413,6 +2455,10 @@ class PlaybackService:
             svc = self.dm.get_mib_service(dev_id)
             if svc:
                 await svc.async_tap(x, y, screen_type or "HU")
+        elif dev_type == "gm_info_agent":
+            svc = self.dm.get_gm_info_service(dev_id)
+            if svc:
+                await svc.async_tap(x, y, "HU")
         elif dev_type == "bmw_agent":
             svc = self.dm.get_bmw_service(dev_id)
             if svc:
@@ -2728,6 +2774,8 @@ class PlaybackService:
                     return {"type": "mib_agent", "id": ss_dev.id, "screen_type": screen_type}
                 if ss_dev.type == "fpk_agent":
                     return {"type": "fpk_agent", "id": ss_dev.id, "screen_type": "HU"}
+                if ss_dev.type == "gm_info_agent":
+                    return {"type": "gm_info_agent", "id": ss_dev.id, "screen_type": "HU"}
                 if ss_dev.type == "bmw_agent":
                     screen_type = step.screen_type or step.params.get("screen_type", "0")
                     return {"type": "bmw_agent", "id": ss_dev.id, "screen_type": screen_type}
@@ -2778,6 +2826,8 @@ class PlaybackService:
                 return {"type": "mib_agent", "id": dev.id, "screen_type": screen_type}
             elif dev and dev.type == "fpk_agent":
                 return {"type": "fpk_agent", "id": dev.id, "screen_type": "HU"}
+            elif dev and dev.type == "gm_info_agent":
+                return {"type": "gm_info_agent", "id": dev.id, "screen_type": "HU"}
             elif dev and dev.type == "bmw_agent":
                 screen_type = step.screen_type or step.params.get("screen_type", "0")
                 return {"type": "bmw_agent", "id": dev.id, "screen_type": screen_type}
@@ -3706,6 +3756,11 @@ class PlaybackService:
             if not svc:
                 raise RuntimeError(f"image_tap: FPK device {real_id} not connected")
             png_bytes = await svc.async_screencap_bytes(screen_type="HU", fmt="png")
+        elif dev.type == "gm_info_agent":
+            svc = self.dm.get_gm_info_service(real_id)
+            if not svc:
+                raise RuntimeError(f"image_tap: GM Info device {real_id} not connected")
+            png_bytes = await svc.async_screencap_bytes(screen_type="HU", fmt="png")
         elif dev.type == "bmw_agent":
             svc = self.dm.get_bmw_service(real_id)
             if not svc:
@@ -3815,9 +3870,13 @@ class PlaybackService:
                 f"image_tap: FPK 클러스터({real_id})는 화면 조작을 지원하지 않습니다 "
                 "— 이미지 비교(image_compare) 스텝만 사용 가능합니다."
             )
-        elif dev.type in ("icas_agent", "mib_agent"):
-            svc = (self.dm.get_mib_service(real_id) if dev.type == "mib_agent"
-                   else self.dm.get_icas_service(real_id))
+        elif dev.type in ("icas_agent", "mib_agent", "gm_info_agent"):
+            if dev.type == "mib_agent":
+                svc = self.dm.get_mib_service(real_id)
+            elif dev.type == "gm_info_agent":
+                svc = self.dm.get_gm_info_service(real_id)
+            else:
+                svc = self.dm.get_icas_service(real_id)
             if not svc:
                 raise RuntimeError(f"image_tap: agent {real_id} not connected")
             if long_press:

@@ -63,6 +63,11 @@
         {
           "value": "Info4.0 VCU",
           "enabled": false
+        },
+        {
+          "value": "Info",
+          "enabled": true,
+          "agent": "GM Info Agent"
         }
       ]
     },
@@ -268,6 +273,11 @@
     {
       "name": "FPK Agent",
       "type": "fpk_agent",
+      "enabled": true
+    },
+    {
+      "name": "GM Info Agent",
+      "type": "gm_info_agent",
       "enabled": true
     },
     {

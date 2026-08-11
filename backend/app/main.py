@@ -920,6 +920,7 @@ async def websocket_screen_mirror(websocket: WebSocket):
     is_icas = dev and dev.type == "icas_agent"
     is_mib = dev and dev.type == "mib_agent"
     is_fpk = dev and dev.type == "fpk_agent"
+    is_gm_info = dev and dev.type == "gm_info_agent"
     is_bmw = dev and dev.type == "bmw_agent"
     is_vision_camera = dev and dev.type == "vision_camera"
     is_webcam = dev and dev.type == "webcam"
@@ -931,9 +932,10 @@ async def websocket_screen_mirror(websocket: WebSocket):
          ("icas" if is_icas else
           ("mib" if is_mib else
            ("fpk" if is_fpk else
-            ("vision_camera" if is_vision_camera else
-             ("webcam" if is_webcam else
-              ("wincontrol" if is_wincontrol else "adb"))))))))
+            ("gm_info" if is_gm_info else
+             ("vision_camera" if is_vision_camera else
+              ("webcam" if is_webcam else
+               ("wincontrol" if is_wincontrol else "adb")))))))))
     logger.debug("Screen mirror: device=%s type=%s", target_device_id, dev_type_label)
 
     # scrcpy 제거 — 항상 JPEG screencap 사용
@@ -1218,6 +1220,32 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                             "ConnectionClosedOK", "ConnectionClosedError"):
                                 break
                             logger.warning("FPK capture error: type=%s repr=%r", cls_name, ce)
+                            await asyncio.sleep(0.5)
+                            continue
+                    else:
+                        await asyncio.sleep(0.3)
+                        continue
+                elif is_gm_info:
+                    gm = device_manager.get_gm_info_service(target_device_id)
+                    if gm and gm.is_connected:
+                        # GM Info는 라이브 스트리머가 없다 — 캡처 요청/응답을 반복한다.
+                        # 유닛 부하를 감안해 MIB/ICAS와 같은 적응형 페이싱(입력 있으면
+                        # 2초 burst, 없으면 10초 idle)을 그대로 적용.
+                        try:
+                            jpeg_bytes = await gm.async_screencap_bytes(
+                                screen_type="HU", fmt="jpeg"
+                            )
+                            await websocket.send_bytes(jpeg_bytes)
+                            await _adaptive_ssh_pace(gm)
+                            continue
+                        except WebSocketDisconnect:
+                            break
+                        except Exception as ce:
+                            cls_name = type(ce).__name__
+                            if cls_name in ("ClientDisconnected", "ConnectionClosed",
+                                            "ConnectionClosedOK", "ConnectionClosedError"):
+                                break
+                            logger.warning("GM Info capture error: type=%s repr=%r", cls_name, ce)
                             await asyncio.sleep(0.5)
                             continue
                     else:

@@ -1534,10 +1534,13 @@ class RecordingService:
             svc = None
             if dev and dev.type == "mib_agent":
                 svc = self.dm.get_mib_service(device_id)
+            elif dev and dev.type == "gm_info_agent":
+                # GM Info도 같은 icas_* 스텝을 쓴다 (서비스 API 동형, 단일 화면 HU)
+                svc = self.dm.get_gm_info_service(device_id)
             else:
                 svc = self.dm.get_icas_service(device_id)
             if not svc:
-                raise ValueError(f"ICAS/MIB device {device_id} not connected")
+                raise ValueError(f"ICAS/MIB/GM Info device {device_id} not connected")
             screen_type = params.get("screen_type", "HU")
             if step_type == StepType.ICAS_TOUCH:
                 await svc.async_tap(params["x"], params["y"], screen_type)

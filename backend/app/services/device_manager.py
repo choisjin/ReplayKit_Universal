@@ -22,6 +22,7 @@ from .isap_agent_service import ISAPAgentService
 from .icas_agent_service import ICASAgentService
 from .mib_agent_service import MIBAgentService
 from .fpk_agent_service import FPKAgentService
+from .gm_info_agent_service import GMInfoAgentService
 from .bmw_agent_service import BMWAgentService
 from .ssh_service import SSHConnection
 from .wincontrol_service import WinControlService
@@ -894,6 +895,8 @@ class DeviceManager:
         self._mib_reconnect_attempts: dict[str, int] = {}
         self._fpk_conns: dict[str, FPKAgentService] = {}  # device_id -> FPKAgentService
         self._fpk_reconnect_attempts: dict[str, int] = {}
+        self._gm_info_conns: dict[str, GMInfoAgentService] = {}  # device_id -> GMInfoAgentService
+        self._gm_info_reconnect_attempts: dict[str, int] = {}
         self._bmw_conns: dict[str, BMWAgentService] = {}  # device_id -> BMWAgentService
         self._bmw_reconnect_attempts: dict[str, int] = {}
         self._adb_reconnect_attempts: dict[str, int] = {}  # device_id -> 연속 재연결 실패 횟수
@@ -1115,6 +1118,8 @@ class DeviceManager:
             prefix = "MIB"
         elif dev_type == "fpk_agent":
             prefix = "FPK"
+        elif dev_type == "gm_info_agent":
+            prefix = "GMInfo"
         elif dev_type == "bmw_agent":
             prefix = "BMW"
         elif dev_type == "vision_camera":
@@ -1139,7 +1144,7 @@ class DeviceManager:
         aux = [
             d.to_dict()
             for d in self._devices.values()
-            if d.category == "auxiliary" or d.type in ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent", "icas_agent", "mib_agent", "fpk_agent", "bmw_agent", "vision_camera", "webcam", "ssh")
+            if d.category == "auxiliary" or d.type in ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent", "icas_agent", "mib_agent", "fpk_agent", "gm_info_agent", "bmw_agent", "vision_camera", "webcam", "ssh")
         ]
         try:
             _AUX_DEVICES_FILE.write_text(json.dumps(aux, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1562,6 +1567,67 @@ class DeviceManager:
             return self._fpk_conns.get(dev.id)
         return None
 
+    async def add_gm_info_agent_device(self, host: str, port: int = 4445, device_id: str = "",
+                                       name: str = "", device_model: str = "",
+                                       resolution: str = "1280x720") -> ManagedDevice:
+        """GM Info Agent 디바이스 등록만 (연결은 connect_device_by_id로 별도 수행).
+
+        GM Info(QNX) 유닛 — TCP 4445 단일 소켓으로 터치/하드키/캡처를 모두 처리한다.
+        해상도는 첫 캡처 PNG 크기로 자동 보정되므로 등록값은 초기 렌더링용 기본치.
+        """
+        final_id = device_id or self._generate_device_id("gm_info_agent", device_model=device_model)
+        display_name = name or f"GM Info ({host}:{port})"
+        try:
+            rw_s, rh_s = str(resolution).upper().split("X")
+            res_dict = {"width": int(rw_s), "height": int(rh_s)}
+        except Exception:
+            res_dict = {"width": 1280, "height": 720}
+
+        info: dict = {
+            "port": int(port or 4445),
+            "resolution": res_dict,
+            "resolution_str": str(resolution),
+            "input_supported": True,
+            "swipe_supported": True,
+        }
+        if device_model:
+            info["device_model"] = device_model
+
+        # 재등록이 자동 감지된 해상도/키 오버라이드를 지우지 않도록 기존 info 위에 폼 값만 덮어쓴다.
+        existing = self._devices.get(final_id)
+        if existing is not None and existing.type == "gm_info_agent":
+            merged = dict(existing.info)
+            merged.update(info)
+            if existing.info.get("resolution_str"):
+                merged["resolution"] = existing.info["resolution"]
+                merged["resolution_str"] = existing.info["resolution_str"]
+            info = merged
+            if not name:
+                display_name = existing.name
+
+        dev = ManagedDevice(
+            id=final_id,
+            type="gm_info_agent",
+            category="primary",
+            address=host,
+            status="disconnected",
+            name=display_name,
+            info=info,
+        )
+        self._devices[final_id] = dev
+        self._save_auxiliary_devices()
+        return dev
+
+    def get_gm_info_service(self, device_id: str) -> Optional[GMInfoAgentService]:
+        """Get GMInfoAgentService instance for a device. Returns None if not found."""
+        svc = self._gm_info_conns.get(device_id)
+        if svc:
+            return svc
+        dev = self.get_device(device_id)
+        if dev and dev.type == "gm_info_agent":
+            return self._gm_info_conns.get(dev.id)
+        return None
+
     async def add_bmw_agent_device(self, serial: str, device_id: str = "",
                                    name: str = "", device_model: str = "",
                                    resolution: str = "1920x1080",
@@ -1747,6 +1813,13 @@ class DeviceManager:
             if dev.type == "fpk_agent":
                 fpk = self._fpk_conns.get(dev.id)
                 if fpk and fpk.is_connected:
+                    dev.status = "connected"
+                elif dev.status != "reconnecting":
+                    dev.status = "disconnected"
+                continue
+            if dev.type == "gm_info_agent":
+                gm = self._gm_info_conns.get(dev.id)
+                if gm and gm.is_connected:
                     dev.status = "connected"
                 elif dev.status != "reconnecting":
                     dev.status = "disconnected"
@@ -2576,6 +2649,13 @@ class DeviceManager:
         isap = self._isap_conns.pop(dev.id, None)
         if isap:
             isap.disconnect()
+        # Close GM Info Agent TCP socket if applicable (남으면 유닛 세션이 계속 물려 있음)
+        gm_info = self._gm_info_conns.pop(dev.id, None)
+        if gm_info:
+            try:
+                gm_info.disconnect()
+            except Exception:
+                pass
         # Close VisionCamera connection if applicable
         cam = self._vision_cams.pop(dev.id, None)
         if cam:
@@ -3326,6 +3406,74 @@ class DeviceManager:
                 dev.status = "disconnected"
                 return f"FPK connect failed: {dev.id} — {e}"
 
+        elif dev.type == "gm_info_agent":
+            port = int(dev.info.get("port", 4445) or 4445)
+            res_str = dev.info.get("resolution_str")
+            if not res_str:
+                res_val = dev.info.get("resolution")
+                if isinstance(res_val, dict) and "width" in res_val and "height" in res_val:
+                    res_str = f"{res_val['width']}x{res_val['height']}"
+                elif isinstance(res_val, str):
+                    res_str = res_val
+                else:
+                    res_str = "1280x720"
+            # 첫 캡처 PNG 크기가 등록값과 다르면 dev.info 갱신 + 영구 저장
+            # (프론트 미러의 클릭 좌표 환산이 이 값을 쓴다).
+            target_dev_id = dev.id
+
+            def _on_gm_resolution_changed(wxh: str, _did: str = target_dev_id) -> None:
+                d = self._devices.get(_did)
+                if d is None or d.type != "gm_info_agent":
+                    return
+                try:
+                    rw_s, rh_s = wxh.upper().split("X")
+                    rw, rh = int(rw_s), int(rh_s)
+                except Exception:
+                    return
+                cur = d.info.get("resolution") if isinstance(d.info.get("resolution"), dict) else None
+                if cur and cur.get("width") == rw and cur.get("height") == rh:
+                    return
+                d.info["resolution"] = {"width": rw, "height": rh}
+                d.info["resolution_str"] = f"{rw}x{rh}"
+                if isinstance(d.info.get("screens"), dict):
+                    for k in d.info["screens"]:
+                        d.info["screens"][k] = {"width": rw, "height": rh}
+                logger.info("GM Info auto-detected resolution: %s → %s", _did, f"{rw}x{rh}")
+                try:
+                    self._save_auxiliary_devices()
+                except Exception as e:
+                    logger.warning("GM Info auto-detect persist failed: %s", e)
+
+            try:
+                svc = GMInfoAgentService(
+                    dev.address, port=port, device_id=dev.id,
+                    resolution=res_str,
+                    device_model=dev.info.get("device_model", ""),
+                    key_overrides=dev.info.get("gm_info_keys"),
+                    on_resolution_changed=_on_gm_resolution_changed,
+                )
+                ok = await svc.async_connect()
+                if ok:
+                    self._gm_info_conns[dev.id] = svc
+                    dev.status = "connected"
+                    _mark_connected()
+                    info = svc.get_info()
+                    dev.info["agent_version"] = svc.agent_version
+                    dev.info["screens"] = info["screens"]
+                    dev.info["resolution"] = dev.info["screens"].get(
+                        svc.default_screen, {"width": 1280, "height": 720}
+                    )
+                    dev.info["resolution_str"] = f"{svc.res_x}x{svc.res_y}"
+                    dev.info["input_supported"] = True
+                    dev.info["swipe_supported"] = True
+                    return f"GM Info connected: {dev.id} ({dev.address}:{port})"
+                else:
+                    dev.status = "disconnected"
+                    return f"GM Info connect failed: {dev.id}"
+            except Exception as e:
+                dev.status = "disconnected"
+                return f"GM Info connect failed: {dev.id} — {e}"
+
         elif dev.type == "module":
             module_name = dev.info.get("module", "")
             if not module_name:
@@ -3664,6 +3812,16 @@ class DeviceManager:
             dev.status = "disconnected"
             return f"Disconnected: {dev.id}"
 
+        elif dev.type == "gm_info_agent":
+            svc = self._gm_info_conns.pop(device_id, None)
+            if svc:
+                try:
+                    svc.disconnect()
+                except Exception:
+                    pass
+            dev.status = "disconnected"
+            return f"Disconnected: {dev.id}"
+
         elif dev.type == "bmw_agent":
             svc = self._bmw_conns.pop(device_id, None)
             if svc:
@@ -3734,6 +3892,13 @@ class DeviceManager:
             isap.disconnect()
             logger.info("iSAP connection closed: %s", device_id)
         self._isap_conns.clear()
+        for device_id, gm_info in list(self._gm_info_conns.items()):
+            try:
+                gm_info.disconnect()
+            except Exception:
+                pass
+            logger.info("GM Info connection closed: %s", device_id)
+        self._gm_info_conns.clear()
         for device_id in list(self._ssh_conns.keys()):
             self._close_ssh_conn(device_id)
             logger.info("SSH connection closed: %s", device_id)

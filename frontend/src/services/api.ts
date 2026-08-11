@@ -41,6 +41,10 @@ export const deviceApi = {
     api.get('/device/mib-keys', { params: deviceId ? { device_id: deviceId } : {} }),
   updateMibKeys: (deviceId: string, keys: Record<string, { class?: 'short' | 'long'; key?: number; visible?: boolean }>) =>
     api.post('/device/mib-keys', { device_id: deviceId, keys }),
+  listGmInfoKeys: (deviceId?: string) =>
+    api.get('/device/gm-info-keys', { params: deviceId ? { device_id: deviceId } : {} }),
+  updateGmInfoKeys: (deviceId: string, keys: Record<string, { class?: 'short' | 'long'; key?: number; visible?: boolean }>) =>
+    api.post('/device/gm-info-keys', { device_id: deviceId, keys }),
   // Connect Wide (ADB) 하드키 — 미러 하단 하드키 버튼용
   listConnectWideKeys: (deviceId?: string) =>
     api.get('/device/connectwide-keys', { params: deviceId ? { device_id: deviceId } : {} }),
