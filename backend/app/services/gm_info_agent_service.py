@@ -27,6 +27,11 @@ payload 공통 헤더 `08 f0 01 12 04 08 01 10 09 18 <op> 22 <len> <body>`
   → 여러 action 을 **한 페이로드**에 담아 보낸다. 하드키는 press+release,
     드래그는 Down + MoveTo×N + Up 이 한 번에 나간다.
 
+유닛은 세션 초기화·입력 페이로드마다 ack 를 돌려준다. 이 ack 를 읽지 않고 다음 것을
+보내면 유닛이 커맨드를 흘리므로(핸드셰이크 절반 처리 → 이후 입력 무시), 전송 직후
+`_read_response()` 로 받아낸다. 또 action 의 ms_delay 는 유닛 쪽 큐 지연이라 그 합만큼
+기다려야 스텝 종료 시점이 실제 동작 완료와 일치한다(`_send_input(settle_ms=…)`).
+
 캡처는 op=0x03 고정 페이로드를 보내면 응답 스트림 안에 PNG 가 실려 온다. 레퍼런스는
 소켓 타임아웃(3초)까지 무조건 읽었지만, 여기서는 PNG 시그니처~IEND 를 만나는 즉시
 중단해 미러링 프레임률을 확보한다.
@@ -72,6 +77,10 @@ _TOUCH_UP = 0x05     # Up (release)
 _DRAG_STEPS = 4
 _SLIDE_STEPS = 10
 _SLIDE_PAUSE_MS = 10
+
+# 전송 직후 ack 대기 시간 (레퍼런스 _read_response 의 1.0초).
+# 유닛은 입력/핸드셰이크마다 ack 를 돌려주므로 실제로는 즉시 리턴한다.
+_ACK_TIMEOUT = 1.0
 
 # 하드키 기본 타이밍 (레퍼런스 key_press_by_alias / _ex 기준)
 _SHORT_DURATION_MS = 300
@@ -287,12 +296,19 @@ class GMInfoAgentService:
         return True
 
     def _init_session(self) -> None:
-        """레퍼런스 `_init_session` — 세션 초기화 페이로드 2발."""
+        """레퍼런스 `_init_session` — 세션 초기화 페이로드 2발.
+
+        각 페이로드마다 유닛 응답을 **읽고 나서** 다음 것을 보낸다. 응답을 안 읽고
+        연달아 쏘면 유닛이 핸드셰이크를 절반만 처리해(동작하는 ATS 구현과 어긋남)
+        이후 입력이 통째로 무시되는 일이 있었다.
+        """
         self._send_payload(self._envelope(_OP_INIT_A, b""))
-        time.sleep(0.1)   # 레퍼런스 _send_payload 가 매 전송 뒤 두던 간격
+        self._read_response()
+        time.sleep(0.3)
         self._send_payload(self._envelope(_OP_INIT_B, b""))
-        time.sleep(0.5)
-        self._drain()
+        self._read_response()
+        time.sleep(0.3)
+        self._drain()   # 지연 도착한 잔여 ack 까지 비우고 시작
 
     def disconnect(self) -> None:
         with self._io_lock:
@@ -349,6 +365,31 @@ class GMInfoAgentService:
             self._connected = False
             raise
 
+    def _read_response(self, timeout: float = _ACK_TIMEOUT) -> Optional[bytes]:
+        """전송 직후 유닛 응답(ack) 1회 수신 — 레퍼런스 `_read_response`.
+
+        `_drain` 과 달리 **응답이 올 때까지 기다린다**. 타임아웃/에러는 삼키고 None 을
+        반환한다(ack 없이도 동작하는 커맨드가 있으므로 전송 자체를 실패로 만들지 않는다).
+        """
+        sock = self._socket
+        if sock is None:
+            return None
+        old = sock.gettimeout()
+        try:
+            sock.settimeout(timeout)
+            data = sock.recv(8192)
+            return data or None
+        except socket.timeout:
+            return None
+        except Exception as e:
+            logger.debug("GM Info read ack failed (%s): %r", self.device_id, e)
+            return None
+        finally:
+            try:
+                sock.settimeout(old)
+            except Exception:
+                pass
+
     def _drain(self) -> None:
         """소켓 수신 버퍼 비우기.
 
@@ -387,13 +428,30 @@ class GMInfoAgentService:
                 + b"\x18" + encode_varint(time_ms) + b"\x28\x00")
         return b"\x0a" + encode_varint(len(body)) + body
 
-    def _send_input(self, actions: bytes) -> None:
+    def _send_input(self, actions: bytes, settle_ms: int = 0, read_ack: bool = False) -> None:
+        """입력 페이로드 1발 전송 (+ 선택적 ack 수신 / 유닛 처리 완료 대기).
+
+        settle_ms 는 페이로드에 실린 action ms_delay 의 합 — 유닛은 그 시간에 걸쳐
+        큐를 소화하므로, 그만큼 기다려야 스텝 종료 시점이 실제 동작 완료와 맞는다.
+        (레퍼런스 key_press_by_alias_ex 가 `sleep((duration+pause)/1000)` 로 하던 것.)
+        기다리는 동안 락을 쥔 채로 두어, 진행 중인 제스처 사이로 캡처 요청이 끼어들어
+        응답이 인터리브되는 것을 막는다.
+
+        read_ack 는 **하드키에만** 켠다 — 레퍼런스도 하드키/핸드셰이크만 응답을 읽는다.
+        터치까지 켜면, ack 를 주지 않는 유닛에서 탭 하나당 `_ACK_TIMEOUT` 만큼 멈춰
+        미러링/재생이 통째로 느려진다. 터치가 남긴 ack 는 종전대로 캡처 직전 `_drain()`
+        이 걷어낸다.
+        """
         with self._io_lock:
             self._ensure_socket()
             self._send_payload(self._envelope(_OP_INPUT, actions))
             self.last_input_ts = time.time()
             # 레퍼런스 _send_payload 가 매 전송 후 두던 간격 — 유닛이 이벤트를 흘리지 않게.
             time.sleep(0.1)
+            if read_ack:
+                self._read_response()
+            if settle_ms > 0:
+                time.sleep(settle_ms / 1000.0)
 
     def _touch_action(self, action: int, x: int, y: int, ms_delay: int = 0) -> bytes:
         """터치 action 한 개 (레퍼런스 `_touch_action`)."""
@@ -424,7 +482,7 @@ class GMInfoAgentService:
         """
         dur = max(1, int(duration_ms))
         self._send_input(self._touch_action(_TOUCH_DOWN, x, y, dur)
-                         + self._touch_action(_TOUCH_UP, x, y, 0))
+                         + self._touch_action(_TOUCH_UP, x, y, 0), settle_ms=dur)
         logger.info("[GM LONG_PRESS] (%d,%d) %dms device=%s", int(x), int(y), dur, self.device_id)
 
     def repeat_tap(self, x: int, y: int, count: int = 5,
@@ -460,7 +518,8 @@ class GMInfoAgentService:
                 _TOUCH_MOVE, x1 + (x2 - x1) * s // n, y1 + (y2 - y1) * s // n, pause)
         actions += self._touch_action(_TOUCH_MOVE, x2, y2, pause)
         actions += self._touch_action(_TOUCH_UP, x2, y2, pause)
-        self._send_input(actions)
+        # 유닛이 큐를 소화하는 시간 = Down 지연 + MoveTo/Up 각각의 지연 합.
+        self._send_input(actions, settle_ms=down_delay + pause * n)
         logger.info("[GM SWIPE] (%d,%d)→(%d,%d) steps=%d pause=%dms hold=%dms device=%s",
                     x1, y1, x2, y2, n, pause, down_delay, self.device_id)
 
@@ -522,15 +581,19 @@ class GMInfoAgentService:
         """키코드 직접 전송 (레퍼런스 `key_press_by_alias_ex` 와 동일 구성).
 
         press(state=1, duration) + release(state=0, pause) 두 action 을 한 페이로드로.
+        press 는 duration ms, release 는 duration+pause ms 시점에 발화하므로
+        그 합만큼 기다려야 키 입력이 끝난 뒤 다음 스텝으로 넘어간다.
         """
         code = int(key_code)
+        dur = max(1, int(duration_ms))
+        pause = max(0, int(pause_ms))
 
         def _inner(state: int) -> bytes:
             return b"\x08" + encode_varint(code) + b"\x10" + encode_varint(state)
 
-        actions = (self._action(_ACT_KEY, _inner(1), max(1, int(duration_ms)))
-                   + self._action(_ACT_KEY, _inner(0), max(0, int(pause_ms))))
-        self._send_input(actions)
+        actions = (self._action(_ACT_KEY, _inner(1), dur)
+                   + self._action(_ACT_KEY, _inner(0), pause))
+        self._send_input(actions, settle_ms=dur + pause, read_ack=True)
 
     # ------------------------------------------------------------------
     # 캡처

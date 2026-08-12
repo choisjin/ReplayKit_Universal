@@ -150,6 +150,7 @@
       <a href="#mod-CMD" class="toc-h3">CMD</a>
       <a href="#cat-etc" class="toc-h2">기타</a>
       <a href="#mod-PCAN" class="toc-h3">PCAN</a>
+      <a href="#mod-Acroname" class="toc-h3">Acroname</a>
       <a href="#mod-SHELL" class="toc-h3">SHELL</a>
       <a href="#mod-HKMC6th" class="toc-h3">HKMC6th</a>
       <a href="#mod-Frame_Check" class="toc-h3">Frame_Check</a>
@@ -167,11 +168,12 @@
     </div>
 
     <h2 id="overview">전체 모듈 목록</h2>
-    <p>총 <strong>15개</strong> 모듈, <strong>141개</strong> 함수가 등록되어 있습니다.</p>
+    <p>총 <strong>16개</strong> 모듈, <strong>155개</strong> 함수가 등록되어 있습니다.</p>
     <table>
       <thead><tr><th>모듈</th><th>설명</th><th>함수 수</th></tr></thead>
       <tbody>
         <tr><td><a href="#mod-PCAN"><strong>PCAN</strong></a></td><td>python-can 라이브러리로 PCAN/Vector/Kvaser 등 CAN 인터페이스에 연결해 CAN/CAN FD 메시지를 송신하고 CSV 로그를 저장하는 모듈. 하드웨어 1대를 디바이스 1개로 등록하고, 채널은 각 스텝의 channel 인자로 선택합니다. 연결/해제는 시나리오가 자동 관리합니다.</td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-Acroname"><strong>Acroname</strong></a></td><td>PC 에 USB 로 연결된 Acroname(Brainstem) 프로그래머블 USB 허브·USB-C 스위치의 포트 전원/데이터를 제어하고 포트 전압·전류를 측정하는 모듈. 지원 장비: USBHub2x4(4포트), USBHub3p·USBHub3c(8포트), USBCSwitch(4포트+mux). 포트 번호와 mux 채널은 0부터 셉니다. 허브가 여러 대면 각 스텝의 hub 인자로 고르고, 한 대면 비워두세요. 연결/해제는 시나리오가 자동 관리합니다.</td><td style="text-align:center">14</td></tr>
 <tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>CANat 하드웨어를 통해 CAN 버스 메시지를 송수신하는 모듈</td><td style="text-align:center">10</td></tr>
 <tr><td><a href="#mod-CANoe_RBS"><strong>CANoe_RBS</strong></a></td><td>CANoe 애플리케이션을 COM으로 구동하여 cfg(RBS) 기반 측정 시작/정지, 시그널·시스템/환경 변수 제어, UDS 진단을 수행하는 모듈</td><td style="text-align:center">16</td></tr>
 <tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Vector CAN 하드웨어(python-can VectorBus)로 CAN/CAN FD 메시지 송수신, ASC 로그 저장, ISO-TP(UDS) 진단을 수행하는 모듈 (CANoe 앱 불필요)</td><td style="text-align:center">13</td></tr>
@@ -743,12 +745,12 @@
   • capture 스레드가 정리되어 리소스 누수 방지
   • 다음 StartLogging이 새 세션으로 시작 가능
 파일 저장 단계에서 예외가 발생해도 finally에서 캡처 정리는 무조건 수행됩니다.</td>
-<td style="font-size:12px"><code>save_path</code>: 저장 파일 경로. 빈 값이면 자동 (재생 중: run_dir/logs/serial_*.log, 스텝 테스트: backend/results/Temp_logs/serial_*.log)</td>
+<td style="font-size:12px"><code>save_path</code>: 저장 파일 경로. 빈 값이면 자동 (재생 중: run_dir/logs/serial/c{사이클}_serial_{포트}_*.log, 스텝 테스트: backend/results/Temp_logs/serial_*.log). {cycle}/{timestamp} 변수 사용 가능</td>
 </tr>
 <tr>
 <td><code>SendCommand</code></td>
 <td>시리얼 포트로 문자열 명령어를 전송합니다.</td>
-<td style="font-size:12px"><code>command</code>: 전송할 명령어. 예: &#x27;reboot&#x27;, &#x27;cat /proc/version&#x27;<br><code>encoding</code>: 인코딩 (기본 utf-8)<br><code>append_newline</code>: 개행 문자 자동 추가. true/false (기본 true) [선택지: True / False]</td>
+<td style="font-size:12px"><code>command</code>: 전송할 명령어. 예: &#x27;reboot&#x27;, &#x27;cat /proc/version&#x27;. 재생 중 {cycle}/{timestamp} 변수가 치환됩니다<br><code>encoding</code>: 인코딩 (기본 utf-8)<br><code>append_newline</code>: 개행 문자 자동 추가. true/false (기본 true) [선택지: True / False]</td>
 </tr>
 <tr>
 <td><code>Send_Packet</code></td>
@@ -797,7 +799,7 @@
 <tr>
 <td><code>send_command</code></td>
 <td>SSH로 명령어를 실행하고 완료 후 전체 출력을 반환합니다 (블로킹). 한국어 Windows 출력은 cp949/euc-kr 인코딩으로 자동 처리. 명령을 &#x27;bash -s &lt; 로컬경로&#x27; 형식으로 적으면 해당 로컬(PC) 파일을 stdin으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다.</td>
-<td style="font-size:12px"><code>command</code>: 실행할 명령어. 예: &#x27;ls -al&#x27;, &#x27;cat /etc/version&#x27;. &#x27;bash -s &lt; 로컬경로&#x27; 형태로 적으면 해당 로컬(PC) 파일을 stdin 으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다. 예: &#x27;sudo bash -s &lt; C:\ReplayKit\scripts\Check_Battery.sh&#x27;</td>
+<td style="font-size:12px"><code>command</code>: 실행할 명령어. 예: &#x27;ls -al&#x27;, &#x27;cat /etc/version&#x27;. &#x27;bash -s &lt; 로컬경로&#x27; 형태로 적으면 해당 로컬(PC) 파일을 stdin 으로 자동 주입해 업로드 없이 로컬 스크립트를 원격 실행합니다. 예: &#x27;sudo bash -s &lt; C:\ReplayKit\scripts\Check_Battery.sh&#x27;. 재생 중 {cycle}(현재 반복 회차)/{timestamp}(YYYYMMDD_HHMMSS) 변수가 치환됩니다 — 예: &#x27;slog2info -w all &gt; /var/qnx_slog_{cycle}_{timestamp}.txt &amp;&#x27;</td>
 </tr>
 <tr>
 <td><code>send_command_stream</code></td>
@@ -850,7 +852,7 @@
 <tr>
 <td><code>StopLogging</code></td>
 <td>DLT 캡처 종료. 로그는 이미 파일에 실시간 저장되어 있으며, save_path 지정 시 그 위치로 이동만 합니다. .dlt 원본 파일도 같은 경로(확장자만 .dlt)로 함께 이동됩니다.</td>
-<td style="font-size:12px"><code>save_path</code>: 저장 파일 경로. 빈 값이면 스트리밍 파일 그대로 유지 (재생 중: run_dir/logs/dlt_*.log + dlt_*.dlt, 스텝 테스트: backend/results/Temp_logs/)</td>
+<td style="font-size:12px"><code>save_path</code>: 저장 파일 경로. 빈 값이면 스트리밍 파일 그대로 유지 (재생 중: run_dir/logs/dlt/c{사이클}_dlt_*.log + .dlt, 스텝 테스트: backend/results/Temp_logs/). {cycle}/{timestamp} 변수 사용 가능</td>
 </tr>
 <tr>
 <td><code>WaitLog</code></td>
@@ -896,7 +898,7 @@
 </tr>
 <tr>
 <td><code>StopLogging</code></td>
-<td>logcat 캡처를 종료하고 메모리 버퍼를 파일로 저장합니다. 재생 중이면 {run_dir}/logs/logcat_*.log, 스텝 테스트면 results/Temp_logs/에 저장됩니다.</td>
+<td>logcat 캡처를 종료하고 메모리 버퍼를 파일로 저장합니다. 재생 중이면 {run_dir}/logs/logcat/c{사이클}_logcat_*.log, 스텝 테스트면 results/Temp_logs/에 저장됩니다.</td>
 <td style="font-size:12px"><code>serial</code>: 대상 ADB 디바이스 시리얼. 비우면 스텝의 디바이스에서 자동 결정<br><code>save_path</code>: 저장 경로. 비우면 자동 경로 사용</td>
 </tr>
 <tr>
@@ -993,6 +995,84 @@
 <td><code>check_status</code></td>
 <td>진단: 지정 채널의 버스 상태(정상/에러/버스오프), 열린 채널·주기송신 개수를 보고합니다. 송신이 안 먹힐 때 원인(채널/bitrate vs ID·데이터·웨이크업)을 좁히는 용도.</td>
 <td style="font-size:12px"><code>channel</code>: 대상 채널명 (예: &#x27;PCAN_USBBUS1&#x27;, &#x27;PCAN_USBBUS2&#x27;). 기본 PCAN_USBBUS1.</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-Acroname">Acroname</h3>
+<div class="callout callout-info">Acroname (USB Hub/Switch) — PC 에 USB 로 연결된 Acroname(Brainstem) 프로그래머블 USB 허브·USB-C 스위치의 포트 전원/데이터를 제어하고 포트 전압·전류를 측정하는 모듈. 지원 장비: USBHub2x4(4포트), USBHub3p·USBHub3c(8포트), USBCSwitch(4포트+mux). 포트 번호와 mux 채널은 0부터 셉니다. 허브가 여러 대면 각 스텝의 hub 인자로 고르고, 한 대면 비워두세요. 연결/해제는 시나리오가 자동 관리합니다.</div>
+<table>
+<thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
+<tbody>
+<tr>
+<td><code>port_enable</code></td>
+<td>지정 포트를 활성화합니다 (전원/데이터 ON).</td>
+<td style="font-size:12px"><code>port</code>: 포트 번호 (0부터). 예: &#x27;0&#x27;<br><code>hub</code>: 대상 허브. 시리얼 번호(예: &#x27;0x40F5A1B2&#x27;) 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>port_disable</code></td>
+<td>지정 포트를 비활성화합니다 (전원/데이터 OFF).</td>
+<td style="font-size:12px"><code>port</code>: 포트 번호 (0부터). 예: &#x27;0&#x27;<br><code>hub</code>: 대상 허브. 시리얼 번호 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>port_reset</code></td>
+<td>지정 포트를 껐다가 off_ms 만큼 기다린 뒤 다시 켭니다. USB 재열거(연결 해제→재인식) 테스트용.</td>
+<td style="font-size:12px"><code>port</code>: 포트 번호 (0부터). 예: &#x27;0&#x27;<br><code>off_ms</code>: 꺼둘 시간(밀리초). 기본 1000 (1초).<br><code>hub</code>: 대상 허브. 시리얼 번호 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>all_port_enable</code></td>
+<td>장비의 모든 포트를 활성화합니다.</td>
+<td style="font-size:12px"><code>hub</code>: 대상 허브. 시리얼 번호 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>all_port_disable</code></td>
+<td>장비의 모든 포트를 비활성화합니다.</td>
+<td style="font-size:12px"><code>hub</code>: 대상 허브. 시리얼 번호 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>set_upstream_mode</code></td>
+<td>허브의 업스트림(호스트 쪽) 포트 선택 모드를 설정합니다.</td>
+<td style="font-size:12px"><code>mode</code>: 0 = Port0 고정, 1 = Port1 고정, 2 = Auto(자동 선택) [선택지: 0 / 1 / 2]<br><code>hub</code>: 대상 허브. 시리얼 번호 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>switch_enable</code></td>
+<td>USB-C Switch 전용: 공통 포트와 mux 를 활성화합니다 (허브 모델에서는 실패).</td>
+<td style="font-size:12px"><code>hub</code>: 대상 허브. 시리얼 번호 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>switch_disable</code></td>
+<td>USB-C Switch 전용: mux 와 공통 포트를 비활성화합니다 (허브 모델에서는 실패).</td>
+<td style="font-size:12px"><code>hub</code>: 대상 허브. 시리얼 번호 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>select_channel</code></td>
+<td>USB-C Switch 전용: mux 를 켜고 지정 채널로 전환합니다 (대상 기기를 바꿔 물릴 때).</td>
+<td style="font-size:12px"><code>channel</code>: mux 채널 번호 (0부터). 예: &#x27;1&#x27;<br><code>hub</code>: 대상 허브. 시리얼 번호 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>get_port_voltage</code></td>
+<td>지정 포트의 현재 전압(V)을 읽어 결과 문자열로 반환합니다.</td>
+<td style="font-size:12px"><code>port</code>: 포트 번호 (0부터). 예: &#x27;0&#x27;<br><code>hub</code>: 대상 허브. 시리얼 번호 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>get_port_current</code></td>
+<td>지정 포트의 현재 전류(A)를 읽어 결과 문자열로 반환합니다.</td>
+<td style="font-size:12px"><code>port</code>: 포트 번호 (0부터). 예: &#x27;0&#x27;<br><code>hub</code>: 대상 허브. 시리얼 번호 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>check_port_voltage</code></td>
+<td>지정 포트 전압이 범위 안에 들어올 때까지 확인합니다. 제한시간 안에 들어오면 성공(ok), 못 들어오면 스텝 실패(FAIL).</td>
+<td style="font-size:12px"><code>port</code>: 포트 번호 (0부터). 예: &#x27;0&#x27;<br><code>value_range</code>: 허용 범위(V). 예: &#x27;4.5~5.5&#x27;<br><code>timeout_ms</code>: 확인 제한시간(밀리초). 기본 5000 (5초).<br><code>hub</code>: 대상 허브. 시리얼 번호 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>check_port_current</code></td>
+<td>지정 포트 전류가 범위 안에 들어올 때까지 확인합니다. 기기가 실제로 전류를 끌고 있는지(연결/충전 확인) 검증하는 용도.</td>
+<td style="font-size:12px"><code>port</code>: 포트 번호 (0부터). 예: &#x27;0&#x27;<br><code>value_range</code>: 허용 범위(A). 예: &#x27;0.1~0.5&#x27;<br><code>timeout_ms</code>: 확인 제한시간(밀리초). 기본 5000 (5초).<br><code>hub</code>: 대상 허브. 시리얼 번호 또는 &#x27;#0&#x27; 형태의 인덱스. 허브가 한 대면 비워두세요.</td>
+</tr>
+<tr>
+<td><code>check_status</code></td>
+<td>진단: 연결된 Acroname 장비 목록(모델/시리얼/포트 범위)과 마지막 USB 스캔 결과를 보고합니다. hub 인자에 넣을 시리얼 번호를 확인할 때 사용하세요.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
 </tr>
 </tbody>
 </table>

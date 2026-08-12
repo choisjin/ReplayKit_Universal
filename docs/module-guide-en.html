@@ -150,6 +150,7 @@
       <a href="#mod-CMD" class="toc-h3">CMD</a>
       <a href="#cat-etc" class="toc-h2">Others</a>
       <a href="#mod-PCAN" class="toc-h3">PCAN</a>
+      <a href="#mod-Acroname" class="toc-h3">Acroname</a>
       <a href="#mod-SHELL" class="toc-h3">SHELL</a>
       <a href="#mod-HKMC6th" class="toc-h3">HKMC6th</a>
       <a href="#mod-Frame_Check" class="toc-h3">Frame_Check</a>
@@ -167,11 +168,12 @@
     </div>
 
     <h2 id="overview">All Modules</h2>
-    <p>Total <strong>15</strong> modules, <strong>141</strong> functions registered.</p>
+    <p>Total <strong>16</strong> modules, <strong>155</strong> functions registered.</p>
     <table>
       <thead><tr><th>Module</th><th>Description</th><th>Functions</th></tr></thead>
       <tbody>
         <tr><td><a href="#mod-PCAN"><strong>PCAN</strong></a></td><td>Connects to CAN interfaces such as PCAN/Vector/Kvaser via python-can to send CAN/CAN FD messages and save CSV logs. Register one device per hardware unit and select the channel via each step&#x27;s channel argument. Connection lifecycle is managed automatically by the scenario.</td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-Acroname"><strong>Acroname</strong></a></td><td>Controls port power/data on Acroname (Brainstem) programmable USB hubs and USB-C switches attached to the PC over USB, and measures per-port voltage and current. Supported: USBHub2x4 (4 ports), USBHub3p / USBHub3c (8 ports), USBCSwitch (4 ports + mux). Port numbers and mux channels are 0-based. If several hubs are attached, pick one via each step&#x27;s hub argument; leave it empty when there is only one. Connection lifecycle is managed automatically by the scenario.</td><td style="text-align:center">14</td></tr>
 <tr><td><a href="#mod-CANAT"><strong>CANAT</strong></a></td><td>Sends and receives CAN bus messages via CANat hardware</td><td style="text-align:center">10</td></tr>
 <tr><td><a href="#mod-CANoe_RBS"><strong>CANoe_RBS</strong></a></td><td>Drives the CANoe application via COM to start/stop cfg (RBS)-based measurement, control signals and system/environment variables, and run UDS diagnostics.</td><td style="text-align:center">16</td></tr>
 <tr><td><a href="#mod-CANoe_Ctrl"><strong>CANoe_Ctrl</strong></a></td><td>Sends/receives CAN/CAN FD messages, saves ASC logs, and runs ISO-TP (UDS) diagnostics via Vector CAN hardware (python-can VectorBus). No CANoe application required.</td><td style="text-align:center">13</td></tr>
@@ -743,12 +745,12 @@ Standard usage pattern:
   • Tears down the capture thread to avoid resource leaks
   • Allows the next StartLogging to begin a fresh session
 Even if the file-save step throws, the finally block guarantees the capture is torn down.</td>
-<td style="font-size:12px"><code>save_path</code>: Save file path. Auto if empty (during playback: run_dir/logs/serial_*.log, step test: backend/results/Temp_logs/serial_*.log)</td>
+<td style="font-size:12px"><code>save_path</code>: Save file path. Auto if empty (during playback: run_dir/logs/serial/c{cycle}_serial_{port}_*.log, step test: backend/results/Temp_logs/serial_*.log). Supports {cycle}/{timestamp} variables</td>
 </tr>
 <tr>
 <td><code>SendCommand</code></td>
 <td>Sends a text command via the serial port.</td>
-<td style="font-size:12px"><code>command</code>: Command to send. e.g. &#x27;reboot&#x27;, &#x27;cat /proc/version&#x27;<br><code>encoding</code>: Encoding (default: utf-8)<br><code>append_newline</code>: Auto-append newline. true/false (default: true) [choices: True / False]</td>
+<td style="font-size:12px"><code>command</code>: Command to send. e.g. &#x27;reboot&#x27;, &#x27;cat /proc/version&#x27;. During playback, {cycle}/{timestamp} variables are substituted<br><code>encoding</code>: Encoding (default: utf-8)<br><code>append_newline</code>: Auto-append newline. true/false (default: true) [choices: True / False]</td>
 </tr>
 <tr>
 <td><code>Send_Packet</code></td>
@@ -796,7 +798,7 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <tr>
 <td><code>send_command</code></td>
 <td>Executes a command via SSH and returns the full output on completion (blocking). Korean Windows output is automatically handled via cp949/euc-kr encoding. Writing the command as &#x27;bash -s &lt; &lt;local path&gt;&#x27; auto-injects that local (PC) file as stdin, running a local script remotely without uploading.</td>
-<td style="font-size:12px"><code>command</code>: Command to execute. e.g. &#x27;ls -al&#x27;, &#x27;cat /etc/version&#x27;. Writing it as &#x27;bash -s &lt; &lt;local path&gt;&#x27; auto-injects that local (PC) file as stdin so a local script runs remotely without uploading. e.g. &#x27;sudo bash -s &lt; C:\ReplayKit\scripts\Check_Battery.sh&#x27;</td>
+<td style="font-size:12px"><code>command</code>: Command to execute. e.g. &#x27;ls -al&#x27;, &#x27;cat /etc/version&#x27;. Writing it as &#x27;bash -s &lt; &lt;local path&gt;&#x27; auto-injects that local (PC) file as stdin so a local script runs remotely without uploading. e.g. &#x27;sudo bash -s &lt; C:\ReplayKit\scripts\Check_Battery.sh&#x27;. During playback, {cycle} (current repeat index) and {timestamp} (YYYYMMDD_HHMMSS) are substituted — e.g. &#x27;slog2info -w all &gt; /var/qnx_slog_{cycle}_{timestamp}.txt &amp;&#x27;</td>
 </tr>
 <tr>
 <td><code>send_command_stream</code></td>
@@ -849,7 +851,7 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <tr>
 <td><code>StopLogging</code></td>
 <td>Stops DLT capture. Logs are already saved to file in real time; specifying save_path only moves the file to that location. The raw .dlt file is moved alongside it (same path, .dlt extension).</td>
-<td style="font-size:12px"><code>save_path</code>: Save file path. If empty, keeps the streaming files as-is (during replay: run_dir/logs/dlt_*.log + dlt_*.dlt, step test: backend/results/Temp_logs/)</td>
+<td style="font-size:12px"><code>save_path</code>: Save file path. If empty, keeps the streaming files as-is (during replay: run_dir/logs/dlt/c{cycle}_dlt_*.log + .dlt, step test: backend/results/Temp_logs/). Supports {cycle}/{timestamp} variables</td>
 </tr>
 <tr>
 <td><code>WaitLog</code></td>
@@ -895,7 +897,7 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 </tr>
 <tr>
 <td><code>StopLogging</code></td>
-<td>Stop logcat capture and save the buffer to a file ({run_dir}/logs/logcat_*.log during playback, results/Temp_logs/ for step tests).</td>
+<td>Stop logcat capture and save the buffer to a file ({run_dir}/logs/logcat/c{cycle}_logcat_*.log during playback, results/Temp_logs/ for step tests).</td>
 <td style="font-size:12px"><code>serial</code>: Target ADB device serial. Empty = derived from the step&#x27;s device<br><code>save_path</code>: Save path. Empty = automatic path</td>
 </tr>
 <tr>
@@ -992,6 +994,84 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td><code>check_status</code></td>
 <td>Diagnostics: reports the channel&#x27;s bus state (ok/error/bus-off) and the number of open channels &amp; periodic tasks. Use to narrow down why sends aren&#x27;t working (channel/bitrate vs ID/data/wakeup).</td>
 <td style="font-size:12px"><code>channel</code>: Target channel name (e.g. &#x27;PCAN_USBBUS1&#x27;, &#x27;PCAN_USBBUS2&#x27;). Default PCAN_USBBUS1.</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-Acroname">Acroname</h3>
+<div class="callout callout-info">Acroname (USB Hub/Switch) — Controls port power/data on Acroname (Brainstem) programmable USB hubs and USB-C switches attached to the PC over USB, and measures per-port voltage and current. Supported: USBHub2x4 (4 ports), USBHub3p / USBHub3c (8 ports), USBCSwitch (4 ports + mux). Port numbers and mux channels are 0-based. If several hubs are attached, pick one via each step&#x27;s hub argument; leave it empty when there is only one. Connection lifecycle is managed automatically by the scenario.</div>
+<table>
+<thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
+<tbody>
+<tr>
+<td><code>port_enable</code></td>
+<td>Enables the given port (power/data ON).</td>
+<td style="font-size:12px"><code>port</code>: Port number (0-based). e.g. &#x27;0&#x27;<br><code>hub</code>: Target hub: serial number (e.g. &#x27;0x40F5A1B2&#x27;) or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>port_disable</code></td>
+<td>Disables the given port (power/data OFF).</td>
+<td style="font-size:12px"><code>port</code>: Port number (0-based). e.g. &#x27;0&#x27;<br><code>hub</code>: Target hub: serial number or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>port_reset</code></td>
+<td>Turns the given port off, waits off_ms, then turns it back on — for USB re-enumeration (disconnect/reconnect) testing.</td>
+<td style="font-size:12px"><code>port</code>: Port number (0-based). e.g. &#x27;0&#x27;<br><code>off_ms</code>: How long to stay off, in milliseconds. Default 1000 (1s).<br><code>hub</code>: Target hub: serial number or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>all_port_enable</code></td>
+<td>Enables every port on the device.</td>
+<td style="font-size:12px"><code>hub</code>: Target hub: serial number or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>all_port_disable</code></td>
+<td>Disables every port on the device.</td>
+<td style="font-size:12px"><code>hub</code>: Target hub: serial number or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>set_upstream_mode</code></td>
+<td>Sets the hub&#x27;s upstream (host-side) port selection mode.</td>
+<td style="font-size:12px"><code>mode</code>: 0 = force Port0, 1 = force Port1, 2 = Auto [choices: 0 / 1 / 2]<br><code>hub</code>: Target hub: serial number or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>switch_enable</code></td>
+<td>USB-C Switch only: enables the common port and the mux (fails on hub models).</td>
+<td style="font-size:12px"><code>hub</code>: Target hub: serial number or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>switch_disable</code></td>
+<td>USB-C Switch only: disables the mux and the common port (fails on hub models).</td>
+<td style="font-size:12px"><code>hub</code>: Target hub: serial number or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>select_channel</code></td>
+<td>USB-C Switch only: enables the mux and switches to the given channel (to route a different device).</td>
+<td style="font-size:12px"><code>channel</code>: Mux channel number (0-based). e.g. &#x27;1&#x27;<br><code>hub</code>: Target hub: serial number or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>get_port_voltage</code></td>
+<td>Reads the current voltage (V) of the given port and returns it as the step result.</td>
+<td style="font-size:12px"><code>port</code>: Port number (0-based). e.g. &#x27;0&#x27;<br><code>hub</code>: Target hub: serial number or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>get_port_current</code></td>
+<td>Reads the current draw (A) of the given port and returns it as the step result.</td>
+<td style="font-size:12px"><code>port</code>: Port number (0-based). e.g. &#x27;0&#x27;<br><code>hub</code>: Target hub: serial number or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>check_port_voltage</code></td>
+<td>Waits until the port voltage falls within the given range. Passes (ok) if it does before the timeout, fails the step (FAIL) otherwise.</td>
+<td style="font-size:12px"><code>port</code>: Port number (0-based). e.g. &#x27;0&#x27;<br><code>value_range</code>: Accepted range in volts. e.g. &#x27;4.5~5.5&#x27;<br><code>timeout_ms</code>: Timeout in milliseconds. Default 5000 (5s).<br><code>hub</code>: Target hub: serial number or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>check_port_current</code></td>
+<td>Waits until the port current falls within the given range — used to verify a device is actually drawing current (connected/charging).</td>
+<td style="font-size:12px"><code>port</code>: Port number (0-based). e.g. &#x27;0&#x27;<br><code>value_range</code>: Accepted range in amperes. e.g. &#x27;0.1~0.5&#x27;<br><code>timeout_ms</code>: Timeout in milliseconds. Default 5000 (5s).<br><code>hub</code>: Target hub: serial number or an index like &#x27;#0&#x27;. Leave empty when only one hub is attached.</td>
+</tr>
+<tr>
+<td><code>check_status</code></td>
+<td>Diagnostics: reports the connected Acroname devices (model / serial / port range) and the last USB scan result. Use it to find the serial number for the hub argument.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 </tbody>
 </table>

@@ -55,6 +55,114 @@
       }
     }
   },
+  "Acroname": {
+    "_description": "Acroname (USB Hub/Switch) — Controls port power/data on Acroname (Brainstem) programmable USB hubs and USB-C switches attached to the PC over USB, and measures per-port voltage and current. Supported: USBHub2x4 (4 ports), USBHub3p / USBHub3c (8 ports), USBCSwitch (4 ports + mux). Port numbers and mux channels are 0-based. If several hubs are attached, pick one via each step's hub argument; leave it empty when there is only one. Connection lifecycle is managed automatically by the scenario.",
+    "functions": {
+      "port_enable": {
+        "description": "Enables the given port (power/data ON).",
+        "params": {
+          "port": "Port number (0-based). e.g. '0'",
+          "hub": "Target hub: serial number (e.g. '0x40F5A1B2') or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "port_disable": {
+        "description": "Disables the given port (power/data OFF).",
+        "params": {
+          "port": "Port number (0-based). e.g. '0'",
+          "hub": "Target hub: serial number or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "port_reset": {
+        "description": "Turns the given port off, waits off_ms, then turns it back on — for USB re-enumeration (disconnect/reconnect) testing.",
+        "params": {
+          "port": "Port number (0-based). e.g. '0'",
+          "off_ms": "How long to stay off, in milliseconds. Default 1000 (1s).",
+          "hub": "Target hub: serial number or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "all_port_enable": {
+        "description": "Enables every port on the device.",
+        "params": {
+          "hub": "Target hub: serial number or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "all_port_disable": {
+        "description": "Disables every port on the device.",
+        "params": {
+          "hub": "Target hub: serial number or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "set_upstream_mode": {
+        "description": "Sets the hub's upstream (host-side) port selection mode.",
+        "params": {
+          "mode": {
+            "description": "0 = force Port0, 1 = force Port1, 2 = Auto",
+            "options": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "hub": "Target hub: serial number or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "switch_enable": {
+        "description": "USB-C Switch only: enables the common port and the mux (fails on hub models).",
+        "params": {
+          "hub": "Target hub: serial number or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "switch_disable": {
+        "description": "USB-C Switch only: disables the mux and the common port (fails on hub models).",
+        "params": {
+          "hub": "Target hub: serial number or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "select_channel": {
+        "description": "USB-C Switch only: enables the mux and switches to the given channel (to route a different device).",
+        "params": {
+          "channel": "Mux channel number (0-based). e.g. '1'",
+          "hub": "Target hub: serial number or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "get_port_voltage": {
+        "description": "Reads the current voltage (V) of the given port and returns it as the step result.",
+        "params": {
+          "port": "Port number (0-based). e.g. '0'",
+          "hub": "Target hub: serial number or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "get_port_current": {
+        "description": "Reads the current draw (A) of the given port and returns it as the step result.",
+        "params": {
+          "port": "Port number (0-based). e.g. '0'",
+          "hub": "Target hub: serial number or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "check_port_voltage": {
+        "description": "Waits until the port voltage falls within the given range. Passes (ok) if it does before the timeout, fails the step (FAIL) otherwise.",
+        "params": {
+          "port": "Port number (0-based). e.g. '0'",
+          "value_range": "Accepted range in volts. e.g. '4.5~5.5'",
+          "timeout_ms": "Timeout in milliseconds. Default 5000 (5s).",
+          "hub": "Target hub: serial number or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "check_port_current": {
+        "description": "Waits until the port current falls within the given range — used to verify a device is actually drawing current (connected/charging).",
+        "params": {
+          "port": "Port number (0-based). e.g. '0'",
+          "value_range": "Accepted range in amperes. e.g. '0.1~0.5'",
+          "timeout_ms": "Timeout in milliseconds. Default 5000 (5s).",
+          "hub": "Target hub: serial number or an index like '#0'. Leave empty when only one hub is attached."
+        }
+      },
+      "check_status": {
+        "description": "Diagnostics: reports the connected Acroname devices (model / serial / port range) and the last USB scan result. Use it to find the serial number for the hub argument.",
+        "params": {}
+      }
+    }
+  },
   "CANAT": {
     "_description": "CANat Device — Sends and receives CAN bus messages via CANat hardware",
     "functions": {

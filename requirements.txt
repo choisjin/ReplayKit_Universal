@@ -10,6 +10,10 @@ attrs==25.4.0
 audioread==3.1.0
 av==17.0.0
 bcrypt==5.0.0
+# Acroname 플러그인 (backend/app/plugins/Acroname.py) — Brainstem USB 허브/스위치 제어.
+# 버전 핀 안 함: 벤더가 파이썬 버전별 wheel 을 올리므로 pip 가 맞는 것을 고른다.
+# 미설치여도 앱은 정상 기동한다(플러그인이 지연 import → Connect 만 실패).
+brainstem
 certifi==2026.2.25
 can-isotp==2.0.7
 cffi==2.0.0

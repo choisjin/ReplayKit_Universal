@@ -30,3 +30,5 @@ rapidfuzz>=3.0.0
 py-canoe>=26.0.0
 can-isotp>=2.0
 python-can>=4.6.0
+# Acroname USB 허브/스위치 플러그인 (backend/app/plugins/Acroname.py)
+brainstem

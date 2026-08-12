@@ -471,6 +471,17 @@ def list_available_modules() -> list[dict]:
              {"name": "data_bitrate", "label": "Data Bitrate (FD)", "type": "select", "default": "2000000",
               "options": ["2000000", "5000000", "8000000", "12000000"]},
          ]},
+        # Acroname(Brainstem) USB 허브/스위치 — USB 로 직접 연결. 포트/시리얼 입력이 없고
+        # 라이브러리가 USB 를 스캔해 찾으므로 connect_type="none".
+        # 허브가 여러 대면 스텝의 hub 인자(시리얼 또는 '#인덱스')로 고른다 — 아래 두 필드는
+        # "특정 장비 하나만 열고 싶을 때"의 필터다(비우면 발견된 전부 연결).
+        {"name": "Acroname", "label": "Acroname (USB Hub/Switch)", "connect_type": "none",
+         "connect_fields": [
+             {"name": "serial_number", "label": "시리얼 번호 (비우면 전체 연결, 예: 0x40F5A1B2)",
+              "type": "text", "default": ""},
+             {"name": "index", "label": "장치 인덱스 (시리얼 미지정 시 사용, 비우면 전체)",
+              "type": "text", "default": ""},
+         ]},
         {"name": "CANAT", "label": "CANAT", "connect_type": "serial",
          "connect_fields": [
              {"name": "log_path", "label": "Log Path", "type": "text", "default": ""},
@@ -1138,6 +1149,8 @@ def get_module_functions(module_name: str) -> list[dict]:
         "SerialLogging": {"Connect", "Disconnect", "IsConnected"},
         # PCAN: 연결은 시나리오가 자동 관리 — 스텝엔 송신/로깅 함수만 노출.
         "PCAN": {"Connect", "Disconnect", "IsConnected"},
+        # Acroname: 연결은 디바이스 등록/재생이 자동 관리 — 스텝엔 포트 제어·측정만 노출.
+        "Acroname": {"Connect", "Disconnect", "IsConnected"},
         # POWER: Connect(port, bps)/DisConnect 는 디바이스 연결/해제가 자동 수행
         # (_MODULE_LIFECYCLE). 스텝엔 전원 제어 함수만 노출.
         "POWER": {"Connect", "DisConnect"},
