@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import functools
 import logging
 import os
@@ -172,6 +173,66 @@ ADB_LIST_CACHE_TTL = float(os.environ.get("REPLAYKIT_ADB_LIST_TTL", "5.0") or 0)
 
 # 이 문구가 stderr 에 있으면 트랜스포트가 사라진 것 — 디바이스 목록 캐시를 폐기한다.
 _TRANSPORT_GONE_MARKERS = ("not found", "device offline", "error: closed", "no devices")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 재생 배타 모드 (quiet gate)
+# ──────────────────────────────────────────────────────────────────────────────
+# 목적: 시나리오 재생 중에는 "그 스텝이 지시한 동작"만 디바이스로 나가게 한다.
+# 배경: 재생 중에도 재연결 루프(5s)·/api/device/list refresh(10s, 디바이스당 adb 5회)·
+#       미러 폴링이 계속 adb 프로세스를 띄운다. 이 PC 에서 프로세스 생성이 30초씩
+#       막히는 구간이 관측됐고(step 12: tap 한 번에 31.6s), 동시에 뜬 adb 들이 서로
+#       물려 스텝 시간을 통째로 잡아먹었다.
+#
+# 동작:
+#   - 게이트는 재생 시작 시 켜고 종료 시 끈다(#test 모드에서 보낸 재생만 — 기본 재생은
+#     플래그가 없어 예전 동작 그대로다).
+#   - "백그라운드" 로 태깅된 컨텍스트의 adb 호출은 프로세스를 띄우지 않고 즉시 빈 결과.
+#     태깅은 contextvars 라 태스크/요청 진입점에서 mark_background_context() 한 번이면
+#     그 안에서 await 로 파생된 모든 호출에 전파된다(재생 태스크는 태깅하지 않으므로 영향 없음).
+#   - 이건 안전망이다. 호출부(재연결 루프·/api/device/list·미러 WS)에서 먼저 건너뛰는 게
+#     원칙이고, 빠뜨린 경로가 있으면 여기서 막고 WARNING 으로 드러낸다.
+_QUIET_GATE = False
+_QUIET_BLOCKED = 0
+_ADB_BACKGROUND: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "adb_background", default=False,
+)
+
+
+def set_quiet_gate(on: bool) -> None:
+    """재생 배타 모드 on/off. 재생 시작/종료에서만 호출한다."""
+    global _QUIET_GATE, _QUIET_BLOCKED
+    if bool(on) == _QUIET_GATE:
+        return
+    _QUIET_GATE = bool(on)
+    if _QUIET_GATE:
+        _QUIET_BLOCKED = 0
+        logger.info("ADB quiet gate ON — 재생 중 백그라운드 adb 호출을 차단합니다")
+    else:
+        logger.info("ADB quiet gate OFF — 차단된 백그라운드 호출 %d건", _QUIET_BLOCKED)
+
+
+def is_quiet_gate() -> bool:
+    return _QUIET_GATE
+
+
+def mark_background_context() -> None:
+    """이 컨텍스트(백그라운드 태스크/요청 핸들러)에서 파생되는 adb 호출을 백그라운드로 태깅."""
+    _ADB_BACKGROUND.set(True)
+
+
+def _quiet_blocked(cmd: str) -> bool:
+    """게이트가 켜져 있고 호출자가 백그라운드면 True — 호출부는 즉시 빈 결과를 반환한다."""
+    global _QUIET_BLOCKED
+    if not (_QUIET_GATE and _ADB_BACKGROUND.get()):
+        return False
+    _QUIET_BLOCKED += 1
+    # 첫 3건 + 이후 50건마다 — 어떤 경로가 게이트를 못 지켰는지 식별용(스팸 방지).
+    if _QUIET_BLOCKED <= 3 or _QUIET_BLOCKED % 50 == 0:
+        logger.warning(
+            "ADB quiet gate: 백그라운드 호출 차단(%d번째) | %s", _QUIET_BLOCKED, cmd,
+        )
+    return True
 
 
 async def _run_in_executor_timed(runner, cmd: str, timeout: int):
@@ -1032,6 +1093,8 @@ class ADBService:
 
     async def _run(self, args: str) -> str:
         cmd = f"{ADB_Q} {args}"
+        if _quiet_blocked(cmd):
+            return ""
         logger.debug("ADB cmd: %s", cmd)
         stdout, stderr, rc = await _run_in_executor_timed(_run_sync, cmd, 10)
         _warn_if_server_restarted(f"args={args!r}", stderr)
@@ -1090,6 +1153,9 @@ class ADBService:
         return args
 
     async def _run_device(self, serial: str, args: str, timeout: int = 10) -> str:
+        # 재생 배타 모드: 백그라운드 호출은 프로세스를 띄우지 않는다(GVM 감지보다 먼저).
+        if _quiet_blocked(f"{ADB_Q} -s {serial} {args}"):
+            return ""
         # GVM 컨테이너 감지 (shell/exec-out 명령만 래핑)
         if args.startswith("shell ") or args.startswith("exec-out "):
             container = await self._detect_gvm_container(serial)

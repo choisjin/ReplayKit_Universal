@@ -40,7 +40,12 @@ from pathlib import Path
 from .routers import bugreport as bugreport_router, compositor as compositor_router, device, dlt as dlt_router, param_db as param_db_router, results, scenario, serial_log as serial_log_router, logcat_log as logcat_log_router, settings, user as user_router, webcam, backup as backup_router
 from .dependencies import adb_service, device_manager, playback_service, recording_service, monitor_client
 from .services import login_service
-from .services.adb_service import resolve_sf_display_id, resolve_input_display_id
+from .services.adb_service import (
+    resolve_sf_display_id, resolve_input_display_id,
+    is_quiet_gate as _adb_quiet_gate,
+    set_quiet_gate as _adb_set_quiet_gate,
+    mark_background_context as _adb_mark_background,
+)
 # build_dist.py가 배포 시 __init__.py를 빈 파일로 만들기 때문에 서브모듈 직접 import.
 from .services.capture.ffmpeg_runtime import log_runtime_status as _log_capture_runtime_status
 from .services.capture.scrcpy_server import log_scrcpy_status as _log_scrcpy_status
@@ -126,9 +131,15 @@ logging.getLogger("uvicorn.access").addFilter(_PollingAccessFilter())
 async def _reconnect_loop():
     """백그라운드: 끊어진 디바이스 주기적 재연결 시도 (5초 간격).
     재생 중에는 상태 확인만 수행 (파괴적 명령 스킵).
+    재생 배타 모드(#test)에서는 상태 확인조차 하지 않는다 — 재생 스텝과 adb 프로세스가
+    겹치지 않게 하는 것이 목적이며, 디바이스 생사는 재생이 스텝마다 자체 확인한다.
     """
+    # 이 태스크에서 파생되는 모든 adb 호출을 '백그라운드'로 태깅 (게이트 안전망용).
+    _adb_mark_background()
     while True:
         await asyncio.sleep(5)
+        if _adb_quiet_gate():
+            continue
         try:
             await device_manager.reconnect_disconnected(passive=playback_service.is_running)
         except Exception as e:
@@ -1024,6 +1035,36 @@ async def websocket_screen_mirror(websocket: WebSocket):
             if getattr(svc, "last_input_ts", 0.0) > _ssh_seen_input_ts:
                 return  # 새 입력 → 즉시 다음 캡처로 (다음 호출에서 burst 재시작)
 
+    # ── 재생 배타 모드(#test): 재생 중 미러링 전면 중단 ──
+    # 재생이 시작되면 프레임 생성을 멈추고, 미러가 붙잡고 있던 장기 세션(라이브 스트리머·
+    # adb screencap 스트리머)을 회수한다. WS 는 그대로 유지하므로 재생이 끝나면 아래
+    # 루프가 스스로 재개된다 — 각 분기가 스트림이 죽어 있으면 다시 띄우는 구조라 별도 복구 코드가 필요 없다.
+    quiet_paused = False
+
+    async def _release_mirror_resources() -> None:
+        for getter in ("get_icas_service", "get_mib_service", "get_bmw_service",
+                       "get_fpk_service", "get_gm_info_service"):
+            fn = getattr(device_manager, getter, None)
+            if fn is None:
+                continue
+            try:
+                svc = fn(target_device_id)
+            except Exception:
+                continue
+            stop = getattr(svc, "stop_live_stream", None) if svc else None
+            if stop is None:
+                continue
+            try:
+                if svc.is_live_running():
+                    await asyncio.to_thread(stop)
+            except Exception:
+                pass
+        if dev is not None and dev.type == "adb" and dev.address:
+            try:
+                await adb_service.close_streamer(dev.address)
+            except Exception:
+                pass
+
     try:
         await websocket.send_json({"mode": "jpeg"})
 
@@ -1032,6 +1073,27 @@ async def websocket_screen_mirror(websocket: WebSocket):
             if recv_task.done():
                 logger.info("Screen mirror client disconnected (recv watcher)")
                 break
+            # 재생 배타 모드: 디바이스로 나가는 건 스텝이 지시한 동작뿐이어야 한다.
+            if _adb_quiet_gate():
+                if not quiet_paused:
+                    quiet_paused = True
+                    await _release_mirror_resources()
+                    try:
+                        await websocket.send_json({"mode": "paused", "reason": "playback"})
+                    except Exception:
+                        break
+                    current_ws_mode = "paused"
+                    logger.info("Screen mirror paused for playback: device=%s", target_device_id)
+                await asyncio.sleep(0.5)
+                continue
+            if quiet_paused:
+                quiet_paused = False
+                try:
+                    await websocket.send_json({"mode": "jpeg"})
+                except Exception:
+                    break
+                current_ws_mode = "jpeg"
+                logger.info("Screen mirror resumed after playback: device=%s", target_device_id)
             # 관리 목록에서 디바이스가 삭제됐으면 스트림 종료 — 아니면 not-ready
             # 분기가 존재하지 않는 장치를 상대로 영원히 돈다.
             if dev is not None and device_manager.get_device(target_device_id) is None:
@@ -2220,6 +2282,8 @@ async def _run_play_job(data: dict):
     # (구버전 프론트/오래된 탭이 보내는 정수 id 도 관용 처리 — uid 는 8자리 hex 라
     #  작은 정수 문자열과 절대 겹치지 않으므로 오탐 위험이 없다)
     skip_steps: set[str] = {str(x) for x in data.get("skip_steps", [])}
+    # 재생 배타 모드 — #test 모드 프론트만 보낸다(미전송 = 기존 동작 그대로).
+    quiet_background = bool(data.get("quiet_background"))
     _is_multi_cycle = False
     result_path: Optional[str] = None
     webcam_session: Optional[_WebcamPlaybackSession] = None
@@ -2233,6 +2297,8 @@ async def _run_play_job(data: dict):
         playback_service._pause_event.set()
         clear_event_buffer()
         mark_playback_active(True)
+        if quiet_background:
+            _adb_set_quiet_gate(True)
         mark_runtime_fail_active(True)  # SerialLogging/DLTLogging assert_keyword fail 누적 활성화
         publish_event({"type": "playback_reset", "scenario": scenario_name})
         # 재생 준비 단계별 진행 표시 — 준비 구간(녹화/로드/디바이스확인)은 정상적으로 시간이
@@ -2489,6 +2555,9 @@ async def _run_play_job(data: dict):
         logger.exception("Play job failed")
         terminal_event = {"type": "error", "message": str(e)}
     finally:
+        # 재생 배타 모드 해제 — 미러/재연결 루프가 곧바로 정상 동작으로 복귀한다.
+        # (예외로 빠져나와도 게이트가 남지 않도록 finally 최상단에서 해제)
+        _adb_set_quiet_gate(False)
         # 웹캠 녹화 finalize (blocking할 수 있어 수 초 소요) — 완료 후에야 결과 폴더가 최종 상태
         try:
             await _webcam_session_finalize(webcam_session, result_path)
@@ -2535,6 +2604,8 @@ async def _run_play_group_job(data: dict):
     repeat = data.get("repeat", 1)
     until_time = _parse_until_time(data.get("until_time"))
     device_map_override = data.get("device_map")
+    # 재생 배타 모드 — #test 모드 프론트만 보낸다(미전송 = 기존 동작 그대로).
+    quiet_background = bool(data.get("quiet_background"))
 
     entries: list[dict] = []
     for m in group_members:
@@ -2552,6 +2623,8 @@ async def _run_play_group_job(data: dict):
         playback_service._pause_event.set()
         clear_event_buffer()
         mark_playback_active(True)
+        if quiet_background:
+            _adb_set_quiet_gate(True)
         mark_runtime_fail_active(True)
         publish_event({"type": "playback_reset", "group": True})
         # 재생 준비 단계별 진행 표시 — 그룹은 멤버 시나리오마다 로드/디바이스확인이 필요해
@@ -2915,6 +2988,8 @@ async def _run_play_group_job(data: dict):
         logger.exception("Play group job failed")
         terminal_event = {"type": "error", "message": str(e)}
     finally:
+        # 재생 배타 모드 해제 (_run_play_job 과 동일 — finally 최상단)
+        _adb_set_quiet_gate(False)
         try:
             await _webcam_session_finalize(webcam_session, result_path)
         except Exception as e:

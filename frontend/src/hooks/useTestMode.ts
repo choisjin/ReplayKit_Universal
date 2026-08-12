@@ -16,10 +16,16 @@ export const TEST_ONLY_MODULES = new Set<string>(['Frame_Check']);
  *   const testMode = useTestMode();
  *   if (testMode) { ...실험적 UI... }
  */
+/**
+ * 훅이 아닌 즉시 판정 — 이벤트 핸들러/전송 시점에서 쓴다.
+ * (렌더와 무관하게 "지금 이 순간 #test 인가"만 필요할 때. 훅 배치 제약이 없다)
+ */
+export function isTestMode(): boolean {
+  return typeof window !== 'undefined' && window.location.hash === '#test';
+}
+
 export function useTestMode(): boolean {
-  const [testMode, setTestMode] = useState<boolean>(
-    typeof window !== 'undefined' && window.location.hash === '#test'
-  );
+  const [testMode, setTestMode] = useState<boolean>(isTestMode());
 
   useEffect(() => {
     const onHashChange = () => setTestMode(window.location.hash === '#test');

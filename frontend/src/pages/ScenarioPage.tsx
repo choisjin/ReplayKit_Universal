@@ -21,6 +21,7 @@ import { useWebcamContext } from '../context/WebcamContext';
 import { VideoCameraOutlined } from '@ant-design/icons';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
+import { isTestMode } from '../hooks/useTestMode';
 import { useDLTSessions } from '../hooks/useDLTSessions';
 import { useSerialSessions, useLogcatSessions } from '../hooks/useSerialSessions';
 
@@ -1178,7 +1179,9 @@ export default function ScenarioPage() {
           ws.send(JSON.stringify({ action: 'subscribe' }));
         } else {
           setCurrentStepId(1);
-          ws.send(JSON.stringify({ action: 'play', scenario: name, verify: true, repeat, ...(hasMap ? { device_map: deviceMap } : {}), ...(skipIds.length > 0 ? { skip_steps: skipIds } : {}), ...(untilTime ? { until_time: untilTime } : {}) }));
+          // #test 모드에서만 재생 배타 모드 요청 — 재생 중 백그라운드 adb(재연결/상태갱신)와
+          // 미러링을 전면 중단해 스텝 동작만 디바이스로 나가게 한다. 기본 페이지는 미전송 = 기존 동작.
+          ws.send(JSON.stringify({ action: 'play', scenario: name, verify: true, repeat, ...(hasMap ? { device_map: deviceMap } : {}), ...(skipIds.length > 0 ? { skip_steps: skipIds } : {}), ...(untilTime ? { until_time: untilTime } : {}), ...(isTestMode() ? { quiet_background: true } : {}) }));
         }
       };
       ws.onmessage = (event) => {
@@ -1513,7 +1516,7 @@ export default function ScenarioPage() {
         if (isReconnect) {
           ws.send(JSON.stringify({ action: 'subscribe' }));
         } else {
-          ws.send(JSON.stringify({ action: 'play_group', group_name: gName, scenarios: members, verify: true, repeat, ...(hasMap ? { device_map: deviceMap } : {}), ...(untilTime ? { until_time: untilTime } : {}) }));
+          ws.send(JSON.stringify({ action: 'play_group', group_name: gName, scenarios: members, verify: true, repeat, ...(hasMap ? { device_map: deviceMap } : {}), ...(untilTime ? { until_time: untilTime } : {}), ...(isTestMode() ? { quiet_background: true } : {}) }));
         }
       };
       ws.onmessage = (event) => {

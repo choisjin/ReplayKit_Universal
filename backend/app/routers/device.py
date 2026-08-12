@@ -12,7 +12,10 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 from ..dependencies import adb_service as adb, device_manager as dm
-from ..services.adb_service import resolve_sf_display_id, resolve_input_display_id
+from ..services.adb_service import (
+    resolve_sf_display_id, resolve_input_display_id,
+    is_quiet_gate as _adb_quiet_gate, mark_background_context as _adb_mark_background,
+)
 from ..services.module_service import list_available_modules, get_module_functions, execute_module_function
 # 윈도우 컨트롤 라벨/누락 의존성 메시지 — OS 별 분기 (Linux→LinControl/python-xlib, Win→WinControl/pywin32).
 from ..services.device_manager import _WIN_CTRL_DISPLAY_NAME, _WIN_CTRL_IS_LINUX
@@ -316,6 +319,16 @@ async def list_devices():
     """List all managed devices, split by category."""
     import time
     global _last_full_refresh
+    # 재생 배타 모드(#test): 재생 중에는 UI 표시용 갱신을 아예 돌리지 않는다.
+    # refresh_adb 는 디바이스당 adb 5회(getprop×2/wm size/dumpsys)를 띄워 재생 스텝과
+    # 정면으로 경합한다. 마지막으로 알던 상태를 그대로 반환하고, 진행 상황은 재생 화면이 보여준다.
+    _adb_mark_background()
+    if _adb_quiet_gate():
+        return {
+            "primary": _with_protected_flag(dm.list_primary()),
+            "auxiliary": _with_protected_flag(dm.list_auxiliary()),
+            "refresh_paused": True,
+        }
     now = time.time()
     # ADB refresh는 10초마다 (재연결 루프와 별도로 UI 표시용)
     if now - _last_full_refresh > 10:

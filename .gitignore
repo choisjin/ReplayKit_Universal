@@ -9,7 +9,7 @@ __pycache__/
 # 로그
 logs/
 .launcher.log
-
+Bug/
 # 우현벤치 채널 설정 (런타임 자동 생성 — 배포 환경별 로컬 파일)
 backend/app/plugins/woohyunchannelconfig.txt
 
@@ -97,3 +97,4 @@ References/
 Reference/
 frontend/package-lock.json
 frontend/package-lock.json
+Bug/backend_slice_1.log
