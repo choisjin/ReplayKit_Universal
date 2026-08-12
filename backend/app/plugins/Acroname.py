@@ -149,7 +149,8 @@ class Acroname:
         self.index = str(index).strip()
         self._hubs: list[_Hub] = []
         self._lock = threading.RLock()
-        self._last_discovery: list[str] = []   # 진단용 — 마지막 스캔에서 본 장비 라벨
+        # 진단용 — 마지막 스캔에서 본 장비 라벨. None = 아직 스캔 안 함, [] = 스캔했으나 0대.
+        self._last_discovery: Optional[list[str]] = None
 
     # ── 연결 수명주기 (스텝 UI 에서는 숨김) ─────────────────────────────
     def Connect(self):
@@ -504,7 +505,12 @@ class Acroname:
             if brainstem is None:
                 return f"FAIL: {_NO_BRAINSTEM}"
             if not self._hubs:
-                seen = "; ".join(self._last_discovery) or "(스캔 기록 없음)"
+                if self._last_discovery is None:
+                    seen = "(아직 스캔하지 않음)"
+                elif not self._last_discovery:
+                    seen = "(USB 로 발견된 Acroname 장비 0대 — 케이블/전원 확인)"
+                else:
+                    seen = "; ".join(self._last_discovery)
                 return f"FAIL: 연결된 장비 없음 — 마지막 스캔: {seen}"
             lines = [
                 f"#{i} {h.label} ports=0~{h.n_ports - 1}"
