@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card, Checkbox, Collapse, Col, Descriptions, Image, Input, InputNumber, Modal, Popover, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message, notification } from 'antd';
-import { DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, SettingOutlined, ShrinkOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import { DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileExcelOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, SettingOutlined, ShrinkOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { resultsApi, scenarioApi } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
@@ -265,6 +265,7 @@ export default function ResultsPage() {
   const [exportProgress, setExportProgress] = useState<Record<string, { percent: number; phase: string }>>({});
   // HTML 생성(재생성) 진행 중 여부
   const [htmlGenLoading, setHtmlGenLoading] = useState(false);
+  const [excelLoading, setExcelLoading] = useState(false);
   const [results, setResults] = useState<ResultSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState<ResultDetail | null>(null);
@@ -893,6 +894,39 @@ export default function ResultsPage() {
     } catch { /* ignore */ }
   };
 
+  // HTML 리포트를 새 탭에서 연다 — 서버가 result.html(없으면 생성)로 리다이렉트.
+  // 파일 탐색기에서 result.html 을 더블클릭하면 Linux(snap Firefox)에서는
+  // ~/.local 아래를 읽지 못해 "Access to the file was denied" 가 난다.
+  // 클릭 시점에 동기로 열어야 팝업 차단에 걸리지 않는다(await 후 window.open 금지).
+  const openHtmlReport = (filename: string) => {
+    window.open(resultsApi.reportUrl(filename), '_blank', 'noopener');
+  };
+
+  // Excel(.xlsx) 다운로드 — 서버가 생성해 스트리밍하고, 런 폴더에도 result.xlsx 를 남긴다.
+  const downloadExcel = async (filename: string) => {
+    setExcelLoading(true);
+    try {
+      const res = await resultsApi.exportExcel(filename);
+      const blob = new Blob([res.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const baseName = filename.replace('/result.json', '').replace('.json', '');
+      a.href = url;
+      a.download = `${baseName}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      message.success(t('results.excelComplete', { path: `${baseName}.xlsx` }));
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || e.message || t('results.excelFailed'));
+    } finally {
+      setExcelLoading(false);
+    }
+  };
+
   // 상세 모달 'HTML 생성' — 해당 결과의 result.html을 현재 코드로 재생성
   const regenerateHtml = async (filename: string) => {
     setHtmlGenLoading(true);
@@ -1293,6 +1327,9 @@ export default function ResultsPage() {
           return (
             <Space size={4}>
               <Button size="small" icon={<FolderOpenOutlined />} onClick={() => openFolder(r.filename)} />
+              <Tooltip title={t('results.openHtml')}>
+                <Button size="small" icon={<FileTextOutlined />} onClick={() => openHtmlReport(r.filename)} />
+              </Tooltip>
               <Button size="small" icon={<EyeOutlined />} onClick={() => viewDetail(r.filename)}>{t('common.details')}</Button>
               <ExportProgressButton size="small" progress={exportProgress[r.filename]} onClick={() => exportBundle(r.filename)} />
               <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteResult(r.filename)} />
@@ -1598,6 +1635,9 @@ export default function ResultsPage() {
                       {r.total_repeat > 1 && <Tag color="purple">{r.total_repeat}x</Tag>}
                     </Space>
                     <Button size="small" icon={<FolderOpenOutlined />} onClick={() => openFolder(r.filename)} />
+                    <Tooltip title={t('results.openHtml')}>
+                      <Button size="small" icon={<FileTextOutlined />} onClick={() => openHtmlReport(r.filename)} />
+                    </Tooltip>
                     <Button size="small" icon={<EyeOutlined />} onClick={() => viewDetail(r.filename)}>{t('common.details')}</Button>
                     <ExportProgressButton size="small" progress={exportProgress[r.filename]} onClick={() => exportBundle(r.filename)} />
                   </div>
@@ -1631,6 +1671,19 @@ export default function ResultsPage() {
             </Button>
             <Button
               icon={<FileTextOutlined />}
+              onClick={() => detailFilename && openHtmlReport(detailFilename)}
+            >
+              {t('results.openHtml')}
+            </Button>
+            <Button
+              icon={<FileExcelOutlined />}
+              loading={excelLoading}
+              onClick={() => detailFilename && downloadExcel(detailFilename)}
+            >
+              {t('results.downloadExcel')}
+            </Button>
+            <Button
+              icon={<ReloadOutlined />}
               loading={htmlGenLoading}
               onClick={() => detailFilename && regenerateHtml(detailFilename)}
             >

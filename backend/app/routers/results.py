@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
 logger = logging.getLogger(__name__)
@@ -925,6 +925,14 @@ async def export_result_excel(filename: str):
         b = io.BytesIO()
         wb.save(b)
         b.seek(0)
+        # 런 폴더면 result.xlsx 를 폴더에도 남긴다. 재생 저장 시점에는 이미지 임베드가
+        # 무거워 엑셀을 만들지 않으므로, 결과 폴더에 result.xlsx 가 없다는 문의가 반복됐다.
+        # (같은 바이트를 재사용 — wb.save 를 두 번 하지 않는다)
+        if filepath.name == "result.json" and filepath.parent != RESULTS_DIR:
+            try:
+                (filepath.parent / "result.xlsx").write_bytes(b.getvalue())
+            except Exception as e:
+                logger.warning("result.xlsx 폴더 저장 실패: %s", e)
         return b
 
     try:
@@ -1237,17 +1245,61 @@ def regenerate_result_html(filename: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"결과 JSON 읽기 실패: {e}")
 
-    # 런 폴더면 폴더 내 result.html, 레거시 플랫 파일이면 같은 이름의 .html
-    html_path = (filepath.with_name("result.html")
-                 if filepath.name == "result.json"
-                 else filepath.with_suffix(".html"))
+    html_path = _result_html_path(filepath)
     try:
         html_path.write_text(_build_html_report(data, html_path), encoding="utf-8")
     except Exception as e:
         logger.exception("HTML report regeneration failed: %s", filename)
         raise HTTPException(status_code=500, detail=f"HTML 생성 실패: {e}")
 
-    return {"path": str(html_path), "size": html_path.stat().st_size}
+    return {"path": str(html_path), "size": html_path.stat().st_size,
+            "url": _results_files_url(html_path)}
+
+
+def _results_files_url(path: Path) -> str:
+    """RESULTS_DIR 하위 파일 → 브라우저가 열 수 있는 /results-files/ URL.
+
+    Linux 배포본은 결과가 `~/.local/share/ReplayKit/backend/results/...` (숨김 디렉토리)
+    아래에 있는데, Ubuntu 기본 Firefox 는 snap 이라 `$HOME` 의 dot 디렉토리를 읽지 못한다
+    (file:// 로 열면 "Access to the file was denied"). 리포트는 항상 실행 중인 서버를
+    통해(HTTP) 열도록 URL 을 만들어 준다.
+    """
+    rel = path.resolve().relative_to(RESULTS_DIR.resolve()).as_posix()
+    return "/results-files/" + "/".join(quote(seg) for seg in rel.split("/"))
+
+
+def _result_html_path(filepath: Path) -> Path:
+    """런 폴더면 폴더 내 result.html, 레거시 플랫 파일이면 같은 이름의 .html."""
+    return (filepath.with_name("result.html")
+            if filepath.name == "result.json"
+            else filepath.with_suffix(".html"))
+
+
+@router.get("/report/{filename:path}")
+def open_result_report(filename: str):
+    """result.html 로 리다이렉트 — 없으면 즉시 생성한다.
+
+    프론트가 클릭 시점에 바로 새 탭으로 열 수 있게(비동기 대기 후 window.open 은
+    팝업 차단됨) 리다이렉트로 처리한다.
+    """
+    try:
+        filepath = (RESULTS_DIR / filename).resolve()
+        filepath.relative_to(RESULTS_DIR.resolve())   # 경로 이탈 차단
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not filepath.is_file():
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    html_path = _result_html_path(filepath)
+    if not html_path.is_file() or html_path.stat().st_size == 0:
+        try:
+            data = json.loads(filepath.read_text(encoding="utf-8"))
+            html_path.write_text(_build_html_report(data, html_path), encoding="utf-8")
+        except Exception as e:
+            logger.exception("HTML report generation failed: %s", filename)
+            raise HTTPException(status_code=500, detail=f"HTML 생성 실패: {e}")
+
+    return RedirectResponse(url=_results_files_url(html_path), status_code=307)
 
 
 @router.post("/open-folder")

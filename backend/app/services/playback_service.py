@@ -4001,8 +4001,10 @@ class PlaybackService:
                 steps_iter = _iter_ndjson_steps(ndjson_path) if use_stream else None
                 html_str = _build_html_report(data, html_path, steps_iter=steps_iter)
                 html_path.write_text(html_str, encoding="utf-8")
-            except Exception as e:
-                logger.warning("HTML report generation failed: %s", e)
+            except Exception:
+                # 스택까지 남긴다 — Linux 배포본에서 result.html 만 없는 사례를 로그로
+                # 바로 추적할 수 있어야 한다(경고 한 줄로는 원인 파악 불가).
+                logger.exception("HTML report generation failed: %s", filepath)
 
         await asyncio.to_thread(_write_json_and_html)
         logger.info("Result saved%s: %s", " (interim)" if interim else "", filepath)

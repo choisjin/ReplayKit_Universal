@@ -318,6 +318,11 @@ export const resultsApi = {
   // result.html 재생성 (상세 모달 'HTML 생성' 버튼)
   regenerateHtml: (filename: string) =>
     api.post(`/results/regenerate-html/${filename}`),
+  // HTML 리포트를 새 탭에서 열기 위한 URL — 서버가 result.html 로 리다이렉트한다
+  // (없으면 그 자리에서 생성). Linux 배포본은 결과가 ~/.local 아래라 snap Firefox 가
+  // file:// 로는 열지 못하므로 반드시 이 HTTP 경로로 열어야 한다.
+  reportUrl: (filename: string) =>
+    `/api/results/report/${encodePathSegments(filename)}`,
   openFolder: (filename: string) =>
     api.post('/results/open-folder', { filename }),
   migrateLegacy: () => api.post('/results/migrate-legacy'),
