@@ -151,6 +151,7 @@
       <a href="#cat-etc" class="toc-h2">Others</a>
       <a href="#mod-PCAN" class="toc-h3">PCAN</a>
       <a href="#mod-Acroname" class="toc-h3">Acroname</a>
+      <a href="#mod-AudioMonitor" class="toc-h3">AudioMonitor</a>
       <a href="#mod-SHELL" class="toc-h3">SHELL</a>
       <a href="#mod-HKMC6th" class="toc-h3">HKMC6th</a>
       <a href="#mod-Frame_Check" class="toc-h3">Frame_Check</a>
@@ -168,7 +169,7 @@
     </div>
 
     <h2 id="overview">All Modules</h2>
-    <p>Total <strong>16</strong> modules, <strong>155</strong> functions registered.</p>
+    <p>Total <strong>17</strong> modules, <strong>160</strong> functions registered.</p>
     <table>
       <thead><tr><th>Module</th><th>Description</th><th>Functions</th></tr></thead>
       <tbody>
@@ -193,6 +194,7 @@ Standard usage pattern:
   1) StartLogging()                              ← first step (capture starts; port pre-opened via Device tab Connect)
   2) SendCommand / SendCommand_*_on_keyword ...  ← middle steps
   3) StopLogging()                               ← last step (writes log file + ends capture, port stays open)</td><td style="text-align:center">8</td></tr>
+<tr><td><a href="#mod-AudioMonitor"><strong>AudioMonitor</strong></a></td><td>records from a PC microphone (audio input device) to judge audio drop-outs and to compare against a previously saved reference recording. One device = one microphone; the microphone is chosen when the device is registered, so steps only need a session_name (pass `device` to target another mic). Recordings (wav/txt/waveform png) go to logs/audio/ inside the run folder during playback, or results/Temp_logs/audio/ for step tests, with a _pass/_fail suffix on the folder name. References are stored at the fixed path results/Audio_Reference/ so they can be reused by any later run. Format is 44.1kHz mono 16-bit. Rename devices in Windows Control Panel -&gt; Sound -&gt; Recording -&gt; Properties (e.g. IVI, Cluster) to tell them apart.</td><td style="text-align:center">5</td></tr>
 <tr><td><a href="#mod-SmartBench"><strong>SmartBench</strong></a></td><td>Controls power, buttons, current, and LEDs on Smart Bench equipment via TCP socket</td><td style="text-align:center">15</td></tr>
 <tr><td><a href="#mod-WoohyunBench"><strong>WoohyunBench</strong></a></td><td>Integrated UDP test bench: vehicle power control (IGN/ACC/Battery) + CAN FD signal transmission</td><td style="text-align:center">28</td></tr>
 <tr><td><a href="#mod-CMD"><strong>CMD</strong></a></td><td>Executes Windows command prompt (CMD) commands. Used for running external programs or system commands</td><td style="text-align:center">5</td></tr>
@@ -1071,6 +1073,39 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <tr>
 <td><code>check_status</code></td>
 <td>Diagnostics: reports the connected Acroname devices (model / serial / port range) and the last USB scan result. Use it to find the serial number for the hub argument.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-AudioMonitor">AudioMonitor</h3>
+<div class="callout callout-info">AudioMonitor (Mic) — records from a PC microphone (audio input device) to judge audio drop-outs and to compare against a previously saved reference recording. One device = one microphone; the microphone is chosen when the device is registered, so steps only need a session_name (pass `device` to target another mic). Recordings (wav/txt/waveform png) go to logs/audio/ inside the run folder during playback, or results/Temp_logs/audio/ for step tests, with a _pass/_fail suffix on the folder name. References are stored at the fixed path results/Audio_Reference/ so they can be reused by any later run. Format is 44.1kHz mono 16-bit. Rename devices in Windows Control Panel -&gt; Sound -&gt; Recording -&gt; Properties (e.g. IVI, Cluster) to tell them apart.</div>
+<table>
+<thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
+<tbody>
+<tr>
+<td><code>StartMonitor</code></td>
+<td>Starts background recording and audio-drop monitoring. The verdict is returned by StopMonitor. If the same session_name is already running it is stopped and restarted.</td>
+<td style="font-size:12px"><code>session_name</code>: Session label (also used for the result folder name), e.g. &#x27;SPK_L&#x27;, &#x27;SPK_R&#x27;.<br><code>drop_threshold</code>: Chunks whose average peak is below this value count as a drop. Empty = the default set when the device was registered (500).<br><code>judge_mode</code>: &#x27;pass&#x27; = PASS when the number of sounding chunks &gt;= judge_count (sound is expected). &#x27;fail&#x27; = FAIL when the number of silent chunks &gt;= judge_count (catching drop-outs). [choices: pass / fail]<br><code>judge_count</code>: Chunk count used for the verdict (default 50). One chunk is about 46ms (2048 samples at 44.1kHz).<br><code>duration</code>: Auto-stop after this many seconds. 0 = keep recording until StopMonitor is called.<br><code>device</code>: Only when targeting a different microphone (device index or name). Empty = the mic registered for this device.</td>
+</tr>
+<tr>
+<td><code>StopMonitor</code></td>
+<td>Stops monitoring and returns PASS/FAIL. Saves the wav, the peak log and the waveform image, and appends _pass/_fail to the result folder name. Sessions already stopped by `duration` still return their verdict. A FAIL verdict fails the step.</td>
+<td style="font-size:12px"><code>session_name</code>: Session name used in StartMonitor. May be empty when only one session is running.</td>
+</tr>
+<tr>
+<td><code>SaveReference</code></td>
+<td>Records `duration` seconds and stores it as the comparison reference at results/Audio_Reference/&lt;name&gt;.wav, reusable from any later run. An existing reference with the same name is overwritten.</td>
+<td style="font-size:12px"><code>reference_name</code>: Reference name, e.g. &#x27;REF_SPK_L&#x27;.<br><code>duration</code>: Recording length in seconds (default 10).<br><code>device</code>: Only when targeting a different microphone (device index or name).</td>
+</tr>
+<tr>
+<td><code>CompareWithReference</code></td>
+<td>Compares the recording saved by StopMonitor against a reference. PASS when correlation &gt; 0.5 AND RMS level difference &lt; 5.0dB, otherwise FAIL (fails the step). A comparison image and a report txt are written next to the recording. Call it after StopMonitor.</td>
+<td style="font-size:12px"><code>session_name</code>: Session name of the recording to compare.<br><code>reference_name</code>: Reference name saved by SaveReference.</td>
+</tr>
+<tr>
+<td><code>ListDevices</code></td>
+<td>Lists the PC audio input devices (index, name, channels, sample rate). Useful to look up a device index.</td>
 <td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 </tbody>

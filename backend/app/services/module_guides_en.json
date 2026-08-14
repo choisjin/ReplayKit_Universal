@@ -1885,6 +1885,53 @@
       }
     }
   },
+  "AudioMonitor": {
+    "_description": "AudioMonitor (Mic) — records from a PC microphone (audio input device) to judge audio drop-outs and to compare against a previously saved reference recording. One device = one microphone; the microphone is chosen when the device is registered, so steps only need a session_name (pass `device` to target another mic). Recordings (wav/txt/waveform png) go to logs/audio/ inside the run folder during playback, or results/Temp_logs/audio/ for step tests, with a _pass/_fail suffix on the folder name. References are stored at the fixed path results/Audio_Reference/ so they can be reused by any later run. Format is 44.1kHz mono 16-bit. Rename devices in Windows Control Panel -> Sound -> Recording -> Properties (e.g. IVI, Cluster) to tell them apart.",
+    "functions": {
+      "StartMonitor": {
+        "description": "Starts background recording and audio-drop monitoring. The verdict is returned by StopMonitor. If the same session_name is already running it is stopped and restarted.",
+        "params": {
+          "session_name": "Session label (also used for the result folder name), e.g. 'SPK_L', 'SPK_R'.",
+          "drop_threshold": "Chunks whose average peak is below this value count as a drop. Empty = the default set when the device was registered (500).",
+          "judge_mode": {
+            "description": "'pass' = PASS when the number of sounding chunks >= judge_count (sound is expected). 'fail' = FAIL when the number of silent chunks >= judge_count (catching drop-outs).",
+            "options": [
+              "pass",
+              "fail"
+            ]
+          },
+          "judge_count": "Chunk count used for the verdict (default 50). One chunk is about 46ms (2048 samples at 44.1kHz).",
+          "duration": "Auto-stop after this many seconds. 0 = keep recording until StopMonitor is called.",
+          "device": "Only when targeting a different microphone (device index or name). Empty = the mic registered for this device."
+        }
+      },
+      "StopMonitor": {
+        "description": "Stops monitoring and returns PASS/FAIL. Saves the wav, the peak log and the waveform image, and appends _pass/_fail to the result folder name. Sessions already stopped by `duration` still return their verdict. A FAIL verdict fails the step.",
+        "params": {
+          "session_name": "Session name used in StartMonitor. May be empty when only one session is running."
+        }
+      },
+      "SaveReference": {
+        "description": "Records `duration` seconds and stores it as the comparison reference at results/Audio_Reference/<name>.wav, reusable from any later run. An existing reference with the same name is overwritten.",
+        "params": {
+          "reference_name": "Reference name, e.g. 'REF_SPK_L'.",
+          "duration": "Recording length in seconds (default 10).",
+          "device": "Only when targeting a different microphone (device index or name)."
+        }
+      },
+      "CompareWithReference": {
+        "description": "Compares the recording saved by StopMonitor against a reference. PASS when correlation > 0.5 AND RMS level difference < 5.0dB, otherwise FAIL (fails the step). A comparison image and a report txt are written next to the recording. Call it after StopMonitor.",
+        "params": {
+          "session_name": "Session name of the recording to compare.",
+          "reference_name": "Reference name saved by SaveReference."
+        }
+      },
+      "ListDevices": {
+        "description": "Lists the PC audio input devices (index, name, channels, sample rate). Useful to look up a device index.",
+        "params": {}
+      }
+    }
+  },
   "SmartBench": {
     "_description": "Smart Bench TCP Control — Controls power, buttons, current, and LEDs on Smart Bench equipment via TCP socket",
     "functions": {

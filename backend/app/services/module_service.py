@@ -519,6 +519,18 @@ def list_available_modules() -> list[dict]:
          ]},
         {"name": "SerialLogging", "label": "SerialLogging", "connect_type": "serial",
          "connect_fields": []},
+        # AudioMonitor — PC 에 물린 마이크(오디오 입력) 1개 = 디바이스 1개.
+        # connect_type="audio": 주소/포트가 없는 로컬 장치라 serial/socket 어디에도 안 맞고,
+        # "none" 으로 두면 add_module_device 의 dedup 이 마이크를 1개로 합쳐버린다.
+        # device_index 는 "마이크 스캔"에서 자동으로 채워진다.
+        {"name": "AudioMonitor", "label": "AudioMonitor (Mic)", "connect_type": "audio",
+         "connect_fields": [
+             {"name": "device_index", "label": "장치 번호 (스캔 자동 채움)", "type": "text", "default": ""},
+             {"name": "device_name", "label": "장치 이름 (번호가 바뀌면 이름으로 재탐색)",
+              "type": "text", "default": ""},
+             {"name": "drop_threshold", "label": "기본 무음(drop) 임계값", "type": "number",
+              "default": "500"},
+         ]},
         {"name": "SmartBench", "label": "SmartBench", "connect_type": "socket",
          "connect_fields": [
              {"name": "port", "label": "TCP Port", "type": "number", "default": "5000"},
@@ -1151,6 +1163,8 @@ def get_module_functions(module_name: str) -> list[dict]:
         "PCAN": {"Connect", "Disconnect", "IsConnected"},
         # Acroname: 연결은 디바이스 등록/재생이 자동 관리 — 스텝엔 포트 제어·측정만 노출.
         "Acroname": {"Connect", "Disconnect", "IsConnected"},
+        # AudioMonitor: 마이크 연결은 디바이스 등록이 자동 관리 — 스텝엔 녹음/판정만 노출.
+        "AudioMonitor": {"Connect", "Disconnect", "IsConnected"},
         # POWER: Connect(port, bps)/DisConnect 는 디바이스 연결/해제가 자동 수행
         # (_MODULE_LIFECYCLE). 스텝엔 전원 제어 함수만 노출.
         "POWER": {"Connect", "DisConnect"},
@@ -1396,6 +1410,11 @@ def _instance_key(module_name: str, constructor_kwargs: Optional[dict] = None) -
         host = constructor_kwargs.get("host")
         if host:
             return f"{module_name}@{host}"
+        # 로컬 장치 인덱스 (AudioMonitor 의 마이크 등) — 포트/호스트가 없는 장비도
+        # 여러 대 등록하면 각각 독립 인스턴스여야 한다.
+        device_index = constructor_kwargs.get("device_index")
+        if device_index not in (None, ""):
+            return f"{module_name}@{device_index}"
     return module_name
 
 

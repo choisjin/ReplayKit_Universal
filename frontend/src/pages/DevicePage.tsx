@@ -363,6 +363,8 @@ export default function DevicePage() {
   const [scannedBench, setScannedBench] = useState<{ ip: string; port: number; verified?: boolean }[]>([]);
   const [scannedVision, setScannedVision] = useState<{ id: string; mac: string; model: string; serial: string; vendor: string; tl_type: string; ip: string; subnet?: string; gateway?: string }[]>([]);
   const [scannedWebcams, setScannedWebcams] = useState<{ index: number; label: string; width: number; height: number; already_registered?: boolean; in_use_by_recording?: boolean }[]>([]);
+  // 마이크(오디오 입력) — AudioMonitor 모듈로 자동 등록되는 보조 디바이스
+  const [scannedAudio, setScannedAudio] = useState<{ index: number; name: string; channels: number; rate: number; already_registered?: boolean }[]>([]);
   const [hasScanned, setHasScanned] = useState(false);
   const [scannedDlt, setScannedDlt] = useState<{ ip: string; port: number }[]>([]);
   const [scannedSmartbench, setScannedSmartbench] = useState<{ ip: string; port: number; label: string; module: string }[]>([]);
@@ -597,6 +599,7 @@ export default function DevicePage() {
     bench: { enabled: true, module: 'WoohyunBench', host: BENCH_DEFAULT_HOST, port: BENCH_DEFAULT_PORT, category: 'auxiliary' },
     vision_camera: { enabled: false, module: 'VisionCamera', category: 'primary' },
     webcam: { enabled: true, module: 'WebcamDevice', category: 'primary' },
+    audio: { enabled: true, module: 'AudioMonitor', category: 'auxiliary' },
     ssh: { enabled: true, module: 'SSHManager', port: 22, category: 'auxiliary' },
     smartbench: { enabled: true, module: 'SmartBench', host: '192.167.0.5', port: 8000, category: 'auxiliary' },
     scar: { enabled: true, module: 'SCAR', host: 'localhost', port: 8081, category: 'auxiliary' },
@@ -758,6 +761,7 @@ export default function DevicePage() {
       setScannedBench(res.data.bench_devices || []);
       setScannedVision(res.data.vision_cameras || []);
       setScannedWebcams(res.data.webcams || []);
+      setScannedAudio(res.data.audio_devices || []);
       setScannedDlt(res.data.dlt_devices || []);
       setScannedSmartbench(res.data.smartbench_devices || []);
       setScannedScar(res.data.scar_devices || []);
@@ -854,14 +858,17 @@ export default function DevicePage() {
       return;
     }
 
-    if (moduleConnType !== 'none' && moduleConnType !== 'can' && !connectAddress.trim()) {
+    // audio(마이크)는 주소가 없는 로컬 장치 — none/can 과 같이 주소 입력을 요구하지 않는다.
+    if (moduleConnType !== 'none' && moduleConnType !== 'can' && moduleConnType !== 'audio'
+        && !connectAddress.trim()) {
       message.warning(t('device.addressPlaceholder'));
       return;
     }
     setConnecting(true);
     try {
       let devType: string = connectType;
-      if (selectedModule && (moduleConnType === 'socket' || moduleConnType === 'none' || moduleConnType === 'can')) {
+      if (selectedModule && (moduleConnType === 'socket' || moduleConnType === 'none'
+                             || moduleConnType === 'can' || moduleConnType === 'audio')) {
         devType = 'module';
       }
       // Build extra_fields from connect_fields
@@ -929,7 +936,11 @@ export default function DevicePage() {
         extra.cluster_overlay_display = (clusterOverlayDisplay && clusterOverlayDisplay.trim()) || '';
         extra.cluster_composite_mode = clusterCompositeMode || 'off';
       }
-      const result = await connectDevice(devType, connectAddress.trim(), baudrate, '', modalCategory, selectedModule, moduleConnType, extra, '', tcpPort, model);
+      // audio: 주소 입력이 없으므로 장치 번호를 address 로 써서 디바이스 이름이 'AudioMonitor (0)' 로 잡히게.
+      const effectiveAddress = (moduleConnType === 'audio' && !connectAddress.trim())
+        ? String(extra?.device_index ?? '').trim()
+        : connectAddress.trim();
+      const result = await connectDevice(devType, effectiveAddress, baudrate, '', modalCategory, selectedModule, moduleConnType, extra, '', tcpPort, model);
       message.success(result);
       setConnectAddress('');
       setExtraFieldValues({});
@@ -1029,6 +1040,28 @@ export default function DevicePage() {
     try {
       await connectDevice('module', 'pcan', undefined, 'PCAN', 'auxiliary', 'PCAN', 'can', extra);
       message.success(`PCAN ${t('common.connect')}`);
+      closeAddModal();
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || t('device.connectFailed'));
+    }
+    setConnecting(false);
+  };
+
+  // 마이크 "추가" → 마이크 1개를 AudioMonitor 보조 디바이스 1개로 등록(연결까지 자동).
+  // device_index 로 인스턴스가 분리되므로 여러 마이크를 동시에 등록할 수 있다.
+  const handleAddAudio = async (dev: { index: number; name: string }) => {
+    const modInfo = modules.find(m => m.name === 'AudioMonitor');
+    const extra: Record<string, any> = {};
+    for (const cf of modInfo?.connect_fields || []) extra[cf.name] = cf.default ?? '';
+    extra.device_index = String(dev.index);
+    extra.device_name = dev.name;
+    setConnecting(true);
+    try {
+      const result = await connectDevice(
+        'module', String(dev.index), undefined, `${dev.name}`, 'auxiliary',
+        'AudioMonitor', 'audio', extra,
+      );
+      message.success(result);
       closeAddModal();
     } catch (e: any) {
       message.error(e.response?.data?.detail || t('device.connectFailed'));
@@ -2631,6 +2664,46 @@ export default function DevicePage() {
                       });
                     }
 
+                    if (scanItemCategory('audio') === modalCategory && scannedAudio.length > 0) {
+                      scanTabs.push({
+                        key: 'audio',
+                        label: <span>{t('device.detectedAudio')} <Tag style={{ marginLeft: 3 }}>{scannedAudio.length}</Tag></span>,
+                        children: (
+                          <>
+                            <div style={{ fontSize: 12, color: '#888', padding: '0 0 6px' }}>
+                              {t('device.audioRenameHint')}
+                            </div>
+                            <List
+                              size="small"
+                              dataSource={scannedAudio}
+                              pagination={scannedAudio.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
+                              renderItem={(a) => {
+                                const dup = !!a.already_registered;
+                                return (
+                                  <List.Item actions={[
+                                    <Button size="small" type="primary" loading={connecting} disabled={dup}
+                                            onClick={() => handleAddAudio(a)}>
+                                      {t('common.add')}
+                                    </Button>
+                                  ]}>
+                                    <div>
+                                      <Tag color="magenta">MIC</Tag>
+                                      <strong>{a.name}</strong>
+                                      <Tag style={{ marginLeft: 6 }}>#{a.index}</Tag>
+                                      <span style={{ color: '#999', marginLeft: 6, fontSize: 12 }}>
+                                        {a.channels}ch · {a.rate}Hz
+                                      </span>
+                                      {dup && <Tag color="default" style={{ marginLeft: 6 }}>{t('device.alreadyRegistered')}</Tag>}
+                                    </div>
+                                  </List.Item>
+                                );
+                              }}
+                            />
+                          </>
+                        ),
+                      });
+                    }
+
                     if (scanItemCategory('vector') === modalCategory && (scannedVector.channels.length > 0 || scannedVector.driver_missing)) {
                       // 채널을 물리 하드웨어(serial)별로 묶어 하나로 표기
                       const vecDeviceMap = new Map<number, VectorChannel[]>();
@@ -3082,7 +3155,7 @@ export default function DevicePage() {
                           setExtraFieldValues(seed);
                           const ct = getModuleConnectType(v);
                           if (ct === 'serial') setConnectType('serial');
-                          else if (ct === 'socket' || ct === 'none' || ct === 'can') setConnectType('module');
+                          else if (ct === 'socket' || ct === 'none' || ct === 'can' || ct === 'audio') setConnectType('module');
                           else setConnectType('serial');
                         }}
                         style={{ width: '100%' }}
@@ -3138,6 +3211,17 @@ export default function DevicePage() {
 
                     {moduleConnType === 'can' && (
                       <>
+                        {renderConnectFields(connectFields, extraFieldValues, setExtraFieldValues)}
+                      </>
+                    )}
+
+                    {/* audio(마이크): 주소 없이 장치 번호/이름만 — 보통은 "마이크 스캔"에서
+                        추가하고, 이 수동 폼은 번호를 직접 아는 경우용. */}
+                    {moduleConnType === 'audio' && (
+                      <>
+                        <div style={{ color: '#888', fontSize: 11 }}>
+                          {t('device.audioManualHint')}
+                        </div>
                         {renderConnectFields(connectFields, extraFieldValues, setExtraFieldValues)}
                       </>
                     )}
@@ -3797,6 +3881,7 @@ export default function DevicePage() {
             { key: 'vector',         label: 'Vector-Hardware',proto: 'XL',       editablePorts: false },
             { key: 'pcan',           label: 'PCAN-Hardware',  proto: 'CAN',      editablePorts: false },
             { key: 'webcam',         label: 'Webcam',         proto: 'USB',      editablePorts: false },
+            { key: 'audio',          label: 'Mic (Audio In)', proto: 'USB',      editablePorts: false },
             { key: 'ssh',            label: 'SSH',            proto: 'TCP',      editablePorts: false },
             { key: 'smartbench',     label: 'SmartBench',     proto: 'TCP',      editablePorts: false },
             { key: 'scar',           label: 'SCAR',           proto: 'HTTP',     editablePorts: false },

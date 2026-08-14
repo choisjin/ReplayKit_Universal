@@ -32,3 +32,6 @@ can-isotp>=2.0
 python-can>=4.6.0
 # Acroname USB 허브/스위치 플러그인 (backend/app/plugins/Acroname.py)
 brainstem
+# 마이크 녹음/판정 플러그인 (backend/app/plugins/AudioMonitor.py)
+# 미설치여도 서버는 뜨고 모듈 목록도 보이지만, 마이크 스캔/녹음 스텝이 실패한다.
+PyAudio>=0.2.14

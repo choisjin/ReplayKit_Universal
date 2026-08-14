@@ -61,6 +61,9 @@ _DEFAULT_SCAN_SETTINGS = {
         # PCAN(PEAK/SysMax 호환) CAN FD 하드웨어 채널 열거 — PCAN 모듈 등록용.
         "pcan":           {"enabled": True,  "module": "PCAN",         "category": "auxiliary"},
         "webcam":         {"enabled": True,  "module": "WebcamDevice", "category": "primary"},
+        # 마이크(오디오 입력) 열거 — AudioMonitor 모듈 등록용. 장치 이름은 Windows
+        # 제어판 [소리]→[녹음]→속성 에서 IVI/Cluster 처럼 바꿔두면 식별이 쉽다.
+        "audio":          {"enabled": True,  "module": "AudioMonitor", "category": "auxiliary"},
         "ssh":            {"enabled": True,  "module": "SSHManager",   "category": "auxiliary", "port": 22, "ips": []},
         "smartbench":     {"enabled": True,  "module": "SmartBench",   "category": "auxiliary", "host": "192.167.0.5", "port": 8000},
         # SCAR: Linux 전용. localhost:8081 REST API 와 docker 컨테이너 'scar' 양쪽 모두 프로브.
@@ -285,6 +288,9 @@ def _build_constructor_kwargs(dev) -> dict | None:
     elif connect_type == "vision_camera":
         # VisionCamera: MAC, model, serial, ip, subnetmask
         return {k: v for k, v in dev.info.items() if k not in ("module", "connect_type")}
+    elif connect_type == "audio":
+        # AudioMonitor: device_index / device_name / drop_threshold (로컬 마이크)
+        return {k: v for k, v in dev.info.items() if k not in ("module", "connect_type")}
     elif connect_type == "none":
         # connect_type="none" 모듈 (TH, SCAR 등) — 추가 connect_fields 가 있으면
         # 그대로 생성자 인자로 전달. 그래야 _get_instance 가 Connect()/IsConnected()
@@ -508,6 +514,31 @@ async def scan_ports():
                 cam["in_use_by_recording"] = (recording_index is not None and cam["index"] == recording_index)
             return cams
         tasks["webcams"] = asyncio.ensure_future(_scan_webcams())
+    if _enabled("audio"):
+        # 마이크(오디오 입력) 열거 — PortAudio 호출은 블로킹이라 모듈 스레드풀로 오프로드.
+        async def _scan_audio():
+            from ..services.module_service import _get_module_executor
+            from ..plugins.AudioMonitor import list_input_devices
+            loop = asyncio.get_event_loop()
+            executor = _get_module_executor("AudioMonitor")
+            devices = await loop.run_in_executor(executor, list_input_devices)
+            # 이미 등록된 마이크는 중복 추가 방지 표시 (index 우선, 이름으로도 대조 —
+            # USB 재삽입으로 index 가 밀려도 같은 장치를 다시 추가하지 않게)
+            registered_idx: set[str] = set()
+            registered_names: set[str] = set()
+            for d in dm.list_all():
+                if d.type == "module" and (d.info or {}).get("module") == "AudioMonitor":
+                    registered_idx.add(str((d.info or {}).get("device_index", "")).strip())
+                    name = str((d.info or {}).get("device_name", "")).strip().lower()
+                    if name:
+                        registered_names.add(name)
+            for dev in devices:
+                dev["already_registered"] = (
+                    str(dev["index"]) in registered_idx
+                    or dev["name"].strip().lower() in registered_names
+                )
+            return devices
+        tasks["audio_devices"] = asyncio.ensure_future(_scan_audio())
     if _enabled("dlt"):
         tasks["dlt_devices"] = asyncio.ensure_future(
             dm.scan_dlt(ports=_ports_of("dlt"), ips=_ips_of(builtin.get("dlt", {})))
@@ -598,6 +629,7 @@ async def scan_ports():
         "bench_devices": [],
         "vision_cameras": [],
         "webcams": [],
+        "audio_devices": [],
         "isap_hosts": [],
         "icas_hosts": [],
         "mib_hosts": [],
