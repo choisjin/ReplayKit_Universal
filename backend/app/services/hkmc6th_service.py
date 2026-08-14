@@ -129,12 +129,62 @@ SCREEN_TOUCH_MAP = {
     "rear_right": CCRC_MONITOR_RIGHT,  # 2
 }
 
+# HUD monitor 값 (터치/입력용) — legacy ccic_Agent 기준
+#   FRONT=0, REAR_R=1, REAR_L=2, CLUSTER=3, HUD=4
+# 캡처(bitmask)와는 별개 네임스페이스다. HUD는 물리 터치 패널이 없으므로
+# _touch_screen_bits 에서 계속 차단하고, 이 상수는 규약 기록용으로만 둔다.
+MONITOR_HUD = 0x04
+
+
+def _env_int(name: str, default: int) -> int:
+    """환경변수를 정수로 읽는다 (0x 접두 16진수도 허용). 파싱 실패 시 default."""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw, 0)
+    except ValueError:
+        logger.warning("Invalid %s=%r — using default %d", name, raw, default)
+        return default
+
+
+def _env_wh(name: str, default: tuple[int, int]) -> tuple[int, int]:
+    """환경변수를 "WxH" 해상도로 읽는다. 파싱 실패 시 default."""
+    raw = (os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    try:
+        w_s, h_s = raw.split("x")
+        w, h = int(w_s), int(h_s)
+        if w > 0 and h > 0:
+            return w, h
+    except ValueError:
+        pass
+    logger.warning("Invalid %s=%r — using default %dx%d", name, raw, *default)
+    return default
+
+
+# HUD 캡처용 screen bit.
+# 레퍼런스(IVIHKMC6thPlugin.image_capture_uuid)에 명시된 값은 cluster(1<<0)/
+# front(1<<3)/rear_l(1<<5)/rear_r(1<<7) 4종뿐이고 HUD 비트는 어떤 레퍼런스에도
+# 문서화되어 있지 않다(ccic_Agent는 *터치* monitor=4만 정의). 비트 인덱스가
+# 디스플레이 ID로 보이므로(cluster=0 … front=3) HUD는 1<<1 을 기본으로 두고,
+# 실기 확인 후 환경변수 HKMC_HUD_SCREEN_BIT 로 코드 수정 없이 교정한다.
+#   예) set HKMC_HUD_SCREEN_BIT=4   (1<<2)
+HUD_SCREEN_BIT = _env_int("HKMC_HUD_SCREEN_BIT", 1 << 1)
+
+# HUD 캡처 요청 영역. 에이전트가 HUD 해상도를 보고하지 않으므로(CMD_ATSA_
+# GETSCREENWIDTHHEIGHT 응답은 front/rear_l/rear_r 3종만 포함) 기본값을 쓰고
+# HKMC_HUD_RESOLUTION="WxH" 로 재정의한다.
+HUD_RESOLUTION = _env_wh("HKMC_HUD_RESOLUTION", (1920, 720))
+
 # Screen type mapping for image capture (bitmask)
 SCREEN_CAPTURE_MAP = {
     "cluster": 1,       # 1 << 0
     "front_center": 8,  # 1 << 3
     "rear_left": 32,    # 1 << 5
     "rear_right": 128,  # 1 << 7
+    "hud": HUD_SCREEN_BIT,  # 미검증 — 위 주석/환경변수 참고
 }
 
 # Key definitions — HKMC 6th Connected Wide + hkccic.
@@ -679,6 +729,8 @@ class HKMC6thService:
         self.screen_height_rear_r = 0
         self.screen_width_cluster = 1920
         self.screen_height_cluster = 720
+        # HUD는 에이전트가 크기를 보고하지 않는다(GETSCREENWIDTHHEIGHT 응답에 미포함).
+        self.screen_width_hud, self.screen_height_hud = HUD_RESOLUTION
 
         # Version info
         self.agent_version = ""
@@ -1015,6 +1067,7 @@ class HKMC6thService:
         "rear_left":    (1920, 720),
         "rear_right":   (1920, 720),
         "cluster":      (1920, 720),
+        "hud":          HUD_RESOLUTION,
     }
 
     def get_screen_size(self, screen_type: str = "front_center") -> tuple[int, int]:
@@ -1027,6 +1080,8 @@ class HKMC6thService:
             w, h = self.screen_width_rear_r, self.screen_height_rear_r
         elif screen_type == "cluster":
             w, h = self.screen_width_cluster, self.screen_height_cluster
+        elif screen_type == "hud":
+            w, h = self.screen_width_hud, self.screen_height_hud
         else:
             w, h = self.screen_width_front, self.screen_height_front
         # 0이면 기본값 사용 (최초 1회만 로그)
@@ -1149,6 +1204,17 @@ class HKMC6thService:
             w, h = self.get_screen_size(screen_type)
             screen_bits = SCREEN_CAPTURE_MAP.get(screen_type)
 
+            # HUD 비트는 레퍼런스에 없는 추정값 — 실기에서 무엇으로 나갔는지
+            # 로그로 남겨 잘못된 화면/타임아웃일 때 바로 교정할 수 있게 한다.
+            if screen_type == "hud" and not getattr(self, "_hud_bit_logged", False):
+                self._hud_bit_logged = True
+                logger.info(
+                    "HUD capture: screen_bit=0x%02X size=%dx%d "
+                    "(다른 화면이 잡히거나 타임아웃이면 HKMC_HUD_SCREEN_BIT / "
+                    "HKMC_HUD_RESOLUTION 환경변수로 교정)",
+                    screen_bits or 0, w, h,
+                )
+
             self._img_buffer = b""
             self._img_made = False
             self._img_event.clear()
@@ -1167,6 +1233,12 @@ class HKMC6thService:
                 self._make_send_packet(CMD_GETIMG, 0, 0, img_data)
 
             if not self._img_event.wait(timeout=timeout):
+                if screen_type == "hud":
+                    raise TimeoutError(
+                        f"Screenshot timeout ({timeout}s) for hud "
+                        f"— HUD screen bit 0x{(screen_bits or 0):02X}를 에이전트가 "
+                        "인식하지 못했을 수 있습니다 (HKMC_HUD_SCREEN_BIT로 교정)"
+                    )
                 raise TimeoutError(f"Screenshot timeout ({timeout}s) for {screen_type}")
 
             bmp_bytes = self._img_buffer
@@ -2004,5 +2076,6 @@ class HKMC6thService:
                 "rear_left": {"width": self.screen_width_rear_l, "height": self.screen_height_rear_l},
                 "rear_right": {"width": self.screen_width_rear_r, "height": self.screen_height_rear_r},
                 "cluster": {"width": self.screen_width_cluster, "height": self.screen_height_cluster},
+                "hud": {"width": self.screen_width_hud, "height": self.screen_height_hud},
             },
         }

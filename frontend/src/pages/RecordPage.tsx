@@ -1545,13 +1545,16 @@ export default function RecordPage() {
     const resolvedAction = resolveAction(action, targetDevice);
     const resolvedParams = resolveParams(resolvedAction, params, targetDevice);
 
-    // HKMC 6th: cluster는 터치 미지원 — monitor 바이트가 없어 에이전트가 front_center
-    // 터치로 해석하므로 전송·스텝기록 전에 차단 (iSAP은 cluster monitor 지원하므로 제외)
+    // HKMC 6th: cluster/HUD는 터치 미지원 — monitor 바이트가 없어 에이전트가 front_center
+    // 터치로 해석하므로 전송·스텝기록 전에 차단 (iSAP은 cluster monitor 지원하므로 제외).
+    // HUD는 물리 터치 패널이 없어 캡처(미러링)만 지원한다.
     if (targetDev?.type === 'hkmc_agent'
         && (resolvedAction === 'hkmc_touch' || resolvedAction === 'hkmc_swipe'
             || resolvedAction === 'hkmc_long_press' || resolvedAction === 'repeat_tap')
-        && resolvedParams.screen_type === 'cluster') {
-      message.warning(t('record.hkmcClusterTouchBlocked'));
+        && (resolvedParams.screen_type === 'cluster' || resolvedParams.screen_type === 'hud')) {
+      message.warning(resolvedParams.screen_type === 'hud'
+        ? t('record.hkmcHudTouchBlocked')
+        : t('record.hkmcClusterTouchBlocked'));
       return;
     }
 
@@ -5775,7 +5778,10 @@ export default function RecordPage() {
                       <Option value="rear_left">{t('record.hkmcRearL')}</Option>
                       <Option value="rear_right">{t('record.hkmcRearR')}</Option>
                       {!isScreenCCRC && <Option value="cluster">{t('record.hkmcCluster')}</Option>}
-                      {screenDevice?.type === 'isap_agent' && <Option value="hud">HUD</Option>}
+                      {/* HUD: iSAP은 전용 포트(20004), HKMC 6th는 CMD_GETIMG screen bit로 캡처.
+                          ccRC(후석 전용)에는 HUD가 없다. */}
+                      {!isScreenCCRC && (screenDevice?.type === 'isap_agent' || screenDevice?.type === 'hkmc_agent')
+                        && <Option value="hud">HUD</Option>}
                     </Select>
                     <Select
                       size="small"
