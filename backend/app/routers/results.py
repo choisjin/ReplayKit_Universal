@@ -757,9 +757,19 @@ def _build_excel_workbook(data: dict, filepath: Path = None, progress=None):
     경로 텍스트로 대체한다(대용량 결과의 xlsx 용량 폭증 방지).
     """
     import openpyxl
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
     from openpyxl.drawing.image import Image as XlImage
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
+
+    def _xl_text(v):
+        # openpyxl은 제어문자(예: 시리얼/SSH 출력의 ANSI escape \x1b)가 셀 값에
+        # 있으면 IllegalCharacterError를 던진다 — 제거 후 기록.
+        if v is None:
+            return ""
+        if not isinstance(v, str):
+            v = str(v)
+        return ILLEGAL_CHARACTERS_RE.sub("", v)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -822,12 +832,13 @@ def _build_excel_workbook(data: dict, filepath: Path = None, progress=None):
                 progress(ri - 2, _total_steps)
             except Exception:
                 pass
-        status = sr.get("status", "")
-        timestamp = sr.get("timestamp", data.get("started_at", ""))
-        command = sr.get("command", "")
-        output = sr.get("message", "")
-        delay_ms = sr.get("delay_ms", 0)
-        duration_ms = sr.get("execution_time_ms", 0)
+        # 값이 null 로 저장된 스텝(중단/에러)도 있으므로 None 방어 필수
+        status = sr.get("status") or ""
+        timestamp = sr.get("timestamp") or data.get("started_at") or ""
+        command = _xl_text(sr.get("command"))
+        output = _xl_text(sr.get("message"))
+        delay_ms = sr.get("delay_ms") or 0
+        duration_ms = sr.get("execution_time_ms") or 0
 
         try:
             from datetime import datetime as _dt, timezone as _tz
@@ -848,14 +859,14 @@ def _build_excel_workbook(data: dict, filepath: Path = None, progress=None):
         ws.cell(row=ri, column=3).alignment = center
         ws.cell(row=ri, column=4, value=sr.get("step_id", "")).border = thin_border
         ws.cell(row=ri, column=4).alignment = center
-        ws.cell(row=ri, column=5, value=sr.get("device_id", "")).border = thin_border
+        ws.cell(row=ri, column=5, value=_xl_text(sr.get("device_id"))).border = thin_border
         ws.cell(row=ri, column=5).alignment = center
         ws.cell(row=ri, column=6, value=command).border = thin_border
         ws.cell(row=ri, column=6).alignment = vcenter_wrap
         # Output (모듈 명령 실행 출력값) — 모듈 명령이 아닌 일반 스텝은 빈 값.
         ws.cell(row=ri, column=7, value=output).border = thin_border
         ws.cell(row=ri, column=7).alignment = vcenter_wrap
-        ws.cell(row=ri, column=8, value=sr.get("description", "")).border = thin_border
+        ws.cell(row=ri, column=8, value=_xl_text(sr.get("description"))).border = thin_border
         ws.cell(row=ri, column=8).alignment = vcenter_wrap
         status_cell = ws.cell(row=ri, column=9, value=status.upper())
         status_cell.border = thin_border
@@ -940,6 +951,10 @@ async def export_result_excel(filename: str):
         buf = await asyncio.to_thread(_build)
     except ImportError:
         raise HTTPException(status_code=500, detail="openpyxl not installed")
+    except Exception as e:
+        # 원인 불명 500 방지 — 프론트 에러 메시지와 backend.log 양쪽에 실제 원인을 남긴다
+        logger.exception("Excel export failed: %s", filename)
+        raise HTTPException(status_code=500, detail=f"Excel 생성 실패: {type(e).__name__}: {e}")
 
     export_name = Path(filename.replace(".json", ".xlsx")).name
     return StreamingResponse(

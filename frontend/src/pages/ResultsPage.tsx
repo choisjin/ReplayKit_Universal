@@ -921,7 +921,12 @@ export default function ResultsPage() {
       URL.revokeObjectURL(url);
       message.success(t('results.excelComplete', { path: `${baseName}.xlsx` }));
     } catch (e: any) {
-      message.error(e.response?.data?.detail || e.message || t('results.excelFailed'));
+      // responseType: 'blob' 요청은 에러 본문도 Blob이라 detail이 바로 안 읽힌다 — 디코드해서 표시
+      let detail = e.response?.data?.detail;
+      if (!detail && e.response?.data instanceof Blob) {
+        try { detail = JSON.parse(await e.response.data.text())?.detail; } catch { /* ignore */ }
+      }
+      message.error(detail || e.message || t('results.excelFailed'));
     } finally {
       setExcelLoading(false);
     }
