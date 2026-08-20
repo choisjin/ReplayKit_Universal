@@ -6,8 +6,9 @@ correlation + dB 차 비교)은 원본 그대로이고, 아래만 바꿨다.
 
   - print → logger, 반환값 → ReplayKit 계약("ok: …" / "FAIL: …").
     ("FAIL:" 접두사를 playback_service 가 스텝 실패로 처리한다)
-  - 장치를 **디바이스 등록 시점에 고정**한다. 보조 디바이스 1개 = 마이크 1개이고,
-    스텝에서는 session_name 만 지정하면 된다(다른 마이크를 쓰려면 device 인자로 override).
+  - **session_name** 으로 측정 상황을 구분한다 (예: "usb", "bt"). session_name 은
+    폴더명 및 세션 식별 키가 된다. StartMonitor(session_name="usb") → StopMonitor(session_name="usb").
+    장치는 __init__ 의 device_index/device_name 또는 첫 번째 입력 장치를 자동 사용한다.
   - 저장 경로를 ReplayKit 규약으로: 재생 중이면 {run_dir}/logs/audio/, 스텝 테스트면
     results/Temp_logs/audio/. 기준음(reference)만은 런과 무관하게 재사용해야 하므로
     results/Audio_Reference/ 에 고정 저장한다.
@@ -15,8 +16,8 @@ correlation + dB 차 비교)은 원본 그대로이고, 아래만 바꿨다.
 
 설계
 ----
-- **인스턴스 1개 = 마이크 1개**. module_service._instance_key 가 device_index 를 키에
-  포함하므로 마이크를 여러 개 등록해도 서로 간섭하지 않는다.
+- ReplayKit 은 호출마다 새 인스턴스를 생성하므로, 세션 상태는 클래스 레벨(class-level)의
+  `_sessions`/`_threads` 에 공유한다. 세션 식별은 `session_name` 파라미터로 한다.
 - PyAudio 인스턴스는 프로세스 전역 1개를 공유(refcount). 마이크마다 PyAudio 를 만들면
   PortAudio 호스트 API 가 중복 초기화되어 장치 열거가 흔들린다.
 - 녹음 중이 아닐 때는 스트림을 열어두지 않는다 — 다른 프로그램(통화/녹음 앱)이 같은
@@ -105,17 +106,28 @@ def _pa_get() -> Any:
 
 
 def _pa_release(user_id: int) -> None:
-    """사용자(인스턴스) 등록 해제 후, 남은 사용자가 없으면 PortAudio 종료."""
+    """사용자(인스턴스) 등록 해제 후, 남은 사용자가 없으면 PortAudio 종료.
+
+    terminate() 는 내부적으로 pending 작업이 끝날 때까지 수 초간 블로킹할 수 있으므로
+    백그라운드 스레드에서 실행한다 (이벤트 루프를 막지 않기 위해).
+    """
     global _pa_instance
     with _pa_lock:
         _pa_users.discard(user_id)
         if _pa_users or _pa_instance is None:
             return
-        try:
-            _pa_instance.terminate()
-        except Exception:
-            pass
+        inst = _pa_instance
         _pa_instance = None
+    if inst is not None:
+        threading.Thread(target=_pa_terminate_async, args=(inst,), daemon=True).start()
+
+
+def _pa_terminate_async(inst) -> None:
+    """PortAudio terminate 를 백그라운드에서 실행한다."""
+    try:
+        inst.terminate()
+    except Exception:
+        pass
 
 
 def _has_hangul(text: str) -> bool:
@@ -391,6 +403,17 @@ class AudioMonitor:
         drop_threshold: 스텝에서 생략 시 쓸 기본 무음 임계값
     """
 
+    
+    # ReplayKit 호출 시 매 호출마다 새 인스턴스가 생성되므로,
+    # 세션 맵/스레드 맵을 **클래스 속성(class-level)**으로 공유한다.
+    _sessions: dict[str, dict] = {}
+    _threads: dict[str, threading.Thread] = {}
+    _lock = threading.Lock()
+    # 이번 실행(run)에서 이미 사용된 장치 인덱스 집합.
+    # 여러 AudioMonitor 인스턴스가 device/session_name 을 지정하지 않아도
+    # 서로 다른 마이크를 자동으로 배정받도록 추적한다.
+    _used_devices: set[int] = set()
+
     def __init__(self, device_index: str = "", device_name: str = "",
                  drop_threshold: int = 500, sample_rate: int = DEFAULT_RATE):
         self._device_index = str(device_index).strip()
@@ -400,9 +423,17 @@ class AudioMonitor:
         self._resolved_index: Optional[int] = None
         self._resolved_name = ""
         self._connected = False
-        self._sessions: dict[str, dict] = {}
-        self._threads: dict[str, threading.Thread] = {}
-        self._lock = threading.Lock()
+        # 클래스 레벨 장치 레지스트리: Connect()에서 저장한 장치 정보를 새 인스턴스가 공유.
+        # 키는 id(self)가 아니라 **장치 이름**을 사용한다. ReplayKit은 호출마다 새 인스턴스를
+        # 만들므로 id(self)는 매번 달라지지만, 장치 이름은 안정적이어서 새 인스턴스가
+        # 이 레지스트리에서 자신의 장치를 찾을 수 있다.
+        if not hasattr(type(self), "_device_registry"):
+            type(self)._device_registry: dict[str, tuple[int, str]] = {}
+        logger.info("AudioMonitor __init__: id=%s device_name='%s' device_index='%s' "
+                    "sessions=%s threads=%s registry=%s",
+                    id(self), self._device_name, self._device_index,
+                    list(type(self)._sessions.keys()), list(type(self)._threads.keys()),
+                    list(type(self)._device_registry.keys()))
 
     # ------------------------------------------------------------------
     # 장치 해석
@@ -437,29 +468,189 @@ class AudioMonitor:
             return matches[0]["index"], matches[0]["name"]
         return None, ""
 
-    def _resolve_target(self, device: str = "") -> tuple[Optional[int], str]:
-        """스텝의 device 인자 > 등록된 번호 > 등록된 이름 순으로 대상 장치 결정.
+    def _resolve_target(self, hint: str = "") -> tuple[Optional[int], str]:
+        """대상 오디오 입력 장치를 결정한다.
 
-        번호를 먼저 보되, 그 번호가 사라졌으면(USB 재삽입 등으로 인덱스 변동) 이름으로
-        재탐색한다 — 등록 당시 인덱스에 못 박히지 않게 하기 위함.
+        우선순위: 등록된 device_index > 등록된 device_name > hint(세션명 등) > 클래스 레벨 장치 레지스트리 > 자동 할당 > 첫 번째 입력 장치.
+        Connect()에서 이미 스캔된 device_index/device_name이 __init__에 전달되므로, 여기서 다시 지정할 필요가 없다.
+        ReplayKit은 호출마다 새 인스턴스를 만들지만, 클래스 레벨 device registry는 장치 이름을 키로 하여 공유되므로 새 인스턴스도 자신의 장치를 찾을 수 있다.
+
+        hint 가 비어 있으면 **이미 활성 세션에서 사용 중이 아닌 장치**를 자동으로 선택한다.
+        이렇게 하면 여러 AudioMonitor 인스턴스가 device/session_name 을 지정하지 않아도
+        서로 다른 마이크를 자동으로 할당받는다 (예: AudioMonitor_1 → Cluster, AudioMonitor_2 → IVI).
         """
-        if str(device).strip():
-            return self._find_device(str(device).strip())
+        # 1) 등록된 device_index (__init__에서 Connect() 스캔으로 채워짐) - 최우선
         if self._device_index:
             idx, name = self._find_device(self._device_index)
             if idx is not None:
-                # 이름까지 등록돼 있으면 같은 장치인지 확인 — 다르면 이름 우선.
                 if not self._device_name or self._device_name.lower() in name.lower():
                     return idx, name
+        # 2) 등록된 device_name (__init__에서 Connect() 스캔으로 채워짐)
         if self._device_name:
             return self._find_device(self._device_name)
-        return None, ""
+        # 3) hint (예: session_name="Cluster")를 장치명으로 시도 - 세션명이 장치명과
+        # 일치하면 해당 장치를 우선 사용한다. (여러 장치가 있을 때 세션마다 다른
+        # 장치를 녹음해야 하므로 레지스트리보다 우선한다)
+        if hint:
+            idx, name = self._find_device(hint)
+            if idx is not None:
+                return idx, name
+        # 4) 클래스 레벨 device registry에서 장치 이름으로 조회 (새 인스턴스가 공유)
+        registry = getattr(type(self), "_device_registry", {})
+        if registry:
+            # hint가 장치 이름과 일치하면 그 장치를 사용 (여러 장치가 있을 때 정확한 선택)
+            if hint:
+                for reg_name, (reg_idx, reg_full) in registry.items():
+                    if hint.lower() in reg_name.lower() or hint.lower() in reg_full.lower():
+                        found = self._find_device(reg_name)
+                        if found[0] is not None:
+                            return found[0], found[1]
+        # 5) hint 가 비어 있으면 **이번 실행에서 아직 사용하지 않은 장치를 자동 할당**한다.
+        #    여러 AudioMonitor 인스턴스가 device/session_name 을 지정하지 않아도
+        #    서로 다른 마이크를 자동으로 배정받도록 한다.
+        #    _used_devices 는 클래스 레벨 집합으로, 세션이 종료된 후에도 유지되므로
+        #    AudioMonitor_1 → Cluster, AudioMonitor_2 → IVI 처럼 서로 다른 장치를 보장한다.
+        #    **중요**: Microsoft Sound Mapper - Input(인덱스 0) 같은 기본 장치를
+        #    선택하지 않도록, **Connect() 로 등록된 장치(_device_registry)를 우선** 사용한다.
+        #    _device_registry 에 등록된 장치가 없으면 전체 입력 장치 목록으로 폴백한다.
+        devices = list_input_devices()
+        if not devices:
+            return None, ""
+        # 이미 활성 세션에서 사용 중인 장치 인덱스 집합
+        with self._lock:
+            used_indices = {
+                s.get("device_index")
+                for s in self._sessions.values()
+                if s.get("device_index") is not None
+            }
+        # 이번 실행에서 이미 사용된 장치 인덱스 (클래스 레벨, 세션 종료 후에도 유지)
+        used_indices.update(getattr(type(self), "_used_devices", set()))
+
+        # 5a) Connect() 로 등록된 장치(_device_registry)를 우선 사용한다.
+        #     Microsoft Sound Mapper - Input(인덱스 0) 같은 기본 장치를 건너뛰고
+        #     실제 연결된 USB 마이크(Cluster, IVI 등)만 선택한다.
+        registry = getattr(type(self), "_device_registry", {})
+        if registry:
+            # 레지스트리의 장치 이름을 실제 장치 목록에서 찾아 사용하지 않은 것 중 첫 번째 선택
+            for reg_name, (reg_idx, reg_full) in registry.items():
+                if reg_idx in used_indices:
+                    continue
+                found = self._find_device(reg_name)
+                if found[0] is not None and found[0] not in used_indices:
+                    return found[0], found[1]
+            # 모든 등록 장치가 사용되었으면 첫 번째 등록 장치로 폴백
+            first_reg = next(iter(registry.items()))
+            found = self._find_device(first_reg[0])
+            if found[0] is not None:
+                return found[0], found[1]
+
+        # 5b) 레지스트리가 비어 있으면 전체 입력 장치 목록에서 사용하지 않은 첫 번째 장치 선택
+        for d in devices:
+            if d["index"] not in used_indices:
+                return d["index"], d["name"]
+        # 모든 장치가 사용되었으면 첫 번째 장치로 폴백 (하위 호환)
+        return devices[0]["index"], devices[0]["name"]
+
+    def _session_key(self, device_name: str = "") -> str:
+        """이 인스턴스의 세션 키를 결정한다.
+
+        등록된 device_name > device_index > 클래스 레벨 장치 레지스트리 > 기본값 "audio".
+        ReplayKit은 호출마다 새 인스턴스를 만들지만, 클래스 레벨 device registry는 장치 이름을
+        키로 하여 공유되므로 새 인스턴스도 자신의 장치를 찾을 수 있다.
+
+        device_name 이 주어지면 (StartMonitor 에서 _resolve_target 으로 선택된 장치) 그 장치
+        이름을 세션 키로 사용한다. 이렇게 하면 여러 인스턴스가 device/session_name 을
+        지정하지 않아도 각자 다른 장치를 자동 할당받아 서로 다른 세션 키를 갖게 된다.
+        """
+        if device_name:
+            return _safe_name(device_name)
+        if self._device_name:
+            return self._device_name
+        if self._device_index:
+            return self._device_index
+        # 클래스 레벨 장치 레지스트리에서 첫 번째 장치 이름을 세션 키로 사용 (새 인스턴스가 공유)
+        registry = getattr(type(self), "_device_registry", {})
+        if registry:
+            return list(registry.keys())[0]  # 장치 이름이 키이므로 그대로 사용
+        return "audio"
+
+    def _find_session_name(self) -> Optional[str]:
+        """이 인스턴스의 장치에 해당하는 세션 이름을 찾는다.
+
+        ReplayKit 은 호출마다 새 인스턴스를 만들므로 user_id(id(self)) 는 매번 달라진다.
+        따라서 장치 이름/인덱스로 세션을 매칭한다. __init__ 에 device 정보가 없으면
+        (ctor_kwargs=None 인 경우) 세션 키 자체가 장치 이름과 일치하는지도 확인한다.
+        Connect()에서 이미 스캔된 device_index/device_name이 __init__에 전달되므로, 그 정보로 세션을 찾는다.
+        또한 클래스 레벨 device registry에서 device 정보를 추가로 수집한다 (새 인스턴스가 registry를 공유).
+
+        여러 세션이 존재하고 인스턴스에 device 정보가 없으면 **가장 최근에 시작된 세션**을
+        반환한다. 이는 사용자가 device/session_name 을 지정하지 않고
+        StartMonitor → StopMonitor 를 순차적으로 호출하는 시나리오를 지원한다.
+        """
+        targets = [self._device_name, self._device_index]
+        targets = [t for t in targets if t]
+        # 클래스 레벨 device registry에서 device 정보를 추가로 수집 (새 인스턴스가 공유)
+        registry = getattr(type(self), "_device_registry", {})
+        for reg_name, (reg_idx, reg_full) in registry.items():
+            if reg_name not in targets:
+                targets.append(reg_name)
+            if reg_full not in targets:
+                targets.append(reg_full)
+            if str(reg_idx) not in targets:
+                targets.append(str(reg_idx))
+        candidates: list[tuple[str, float]] = []  # (session_name, created_at)
+        with self._lock:
+            for name, s in self._sessions.items():
+                dev = str(s.get("device", ""))
+                sidx = s.get("device_index")
+                created = float(s.get("created_at", 0) or 0)
+                matched = False
+                # 1) 세션에 저장된 device_index와 인스턴스의 device_index가 일치하면 매칭 (가장 정확)
+                if self._device_index and sidx is not None and str(sidx) == str(self._device_index).strip():
+                    matched = True
+                # 2) 등록된 device_name/device_index 가 세션의 device 문자열에 포함되면 매칭
+                if not matched:
+                    for t in targets:
+                        if t and t.lower() in dev.lower():
+                            matched = True
+                            break
+                # 3) 세션 키 자체가 device 문자열에 포함되면 매칭 (예: 'Cluster' in '[1] Cluster(7- USB Audio Device)')
+                if not matched and name and name.lower() in dev.lower():
+                    matched = True
+                # 4) 세션 키가 장치 이름과 부분 일치하면 매칭 (예: 'Cluster' vs 'Cluster(7- USB Audio Device)')
+                if not matched and name and any(name.lower() in d.lower() for d in targets):
+                    matched = True
+                # 5) 세션 키가 장치 이름과 정확히 일치하면 매칭 (예: session_name="Cluster" vs device_name="Cluster")
+                if not matched and name and any(name.lower() == d.lower() for d in targets):
+                    matched = True
+                # 6) 세션 키가 sanitized 장치 이름과 일치하면 매칭
+                #    (예: session_name="Cluster_7-_USB_Audio_Device" vs device="[1] Cluster(7- USB Audio Device)")
+                if not matched and name:
+                    # sanitized 세션 키에서 원래 장치 이름의 일부를 추출해 비교
+                    # 예: "Cluster_7-_USB_Audio_Device" → "Cluster" 부분이 device 문자열에 있는지
+                    for part in name.split("_"):
+                        if len(part) >= 3 and part.lower() in dev.lower():
+                            matched = True
+                            break
+                if matched:
+                    candidates.append((name, created))
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0][0]
+        # 여러 후보가 있으면 가장 최근에 시작된 세션을 반환
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        return candidates[0][0]
 
     # ------------------------------------------------------------------
     # 연결 lifecycle (스텝 목록에는 노출되지 않음)
     # ------------------------------------------------------------------
     def Connect(self) -> str:
         """마이크 존재/열림 여부를 확인한다 (짧게 열었다 닫는 probe)."""
+        # 새 실행(run)이 시작되면 _used_devices 를 초기화한다.
+        # ReplayKit 은 각 디바이스 등록 시 Connect() 를 호출하므로,
+        # 이 시점에 이전 실행에서 사용된 장치 추적을 리셋한다.
+        getattr(type(self), "_used_devices", set()).clear()
         if pyaudio is None:
             self._connected = False
             return f"ERROR: {_NO_PYAUDIO}"
@@ -486,7 +677,13 @@ class AudioMonitor:
             _pa_users.add(id(self))
         self._resolved_index, self._resolved_name = idx, name
         self._connected = True
-        logger.info("AudioMonitor connected: [%d] %s (%dHz)", idx, name, self._rate)
+        # 클래스 레벨 장치 레지스트리에 저장 (새 인스턴스가 공유).
+        # 키는 id(self)가 아니라 **장치 이름**을 사용한다. ReplayKit은 호출마다 새 인스턴스를
+        # 만들므로 id(self)는 매번 달라지지만, 장치 이름은 안정적이어서 새 인스턴스가
+        # 이 레지스트리에서 자신의 장치를 찾을 수 있다.
+        type(self)._device_registry[name] = (idx, name)
+        logger.info("AudioMonitor connected: [%d] %s (%dHz) registry=%s",
+                    idx, name, self._rate, list(type(self)._device_registry.keys()))
         return f"ok: audio input [{idx}] {name}"
 
     def IsConnected(self) -> bool:
@@ -495,18 +692,19 @@ class AudioMonitor:
     def Disconnect(self) -> str:
         """진행 중인 모든 세션을 정리(저장)하고 장치를 놓는다."""
         stopped = []
-        for name, session in list(self._sessions.items()):
-            # 이미 StopMonitor 된 세션(stream 반납 완료)은 결과 보존용으로 남겨둔다 —
-            # 여기서 다시 부르면 같은 판정이 중복 로깅될 뿐이다.
-            if session.get("stream") is None:
-                continue
+        session_name = self._find_session_name()
+        if session_name is not None:
             try:
-                self.StopMonitor(name)
-                stopped.append(name)
+                self.StopMonitor()
+                stopped.append(session_name)
             except Exception as e:
-                logger.warning("AudioMonitor stop '%s' on disconnect failed: %s", name, e)
+                logger.warning("AudioMonitor stop '%s' on disconnect failed: %s", session_name, e)
         self._connected = False
         _pa_release(id(self))
+        # 모든 세션이 종료되었으므로 _used_devices 를 초기화한다.
+        with self._lock:
+            if not self._sessions:
+                getattr(type(self), "_used_devices", set()).clear()
         return f"ok: disconnected (stopped={stopped})" if stopped else "ok: disconnected"
 
     # ------------------------------------------------------------------
@@ -524,16 +722,17 @@ class AudioMonitor:
                  for d in devices]
         return "ok: " + str(len(devices)) + " input device(s)\n" + "\n".join(lines)
 
-    def StartMonitor(self, session_name: str, drop_threshold: int = 0,
+    def StartMonitor(self, drop_threshold: int = 0,
                      judge_mode: str = "pass", judge_count: int = 50,
-                     duration: float = 0, device: str = "") -> str:
+                     duration: float = 0) -> str:
         """오디오 무음(drop) 모니터링을 시작한다 (백그라운드 녹음).
 
-        같은 session_name 이 이미 돌고 있으면 이전 세션을 정리하고 새로 시작한다.
+        Connect()에서 이미 스캔된 device_index/device_name이 __init__에 전달되므로, 여기서 지정할 필요가 없다.
+        **사용 중이 아닌 장치를 자동으로 선택**한다.
+        이렇게 하면 여러 AudioMonitor 인스턴스가 각자 다른 마이크를 자동으로 배정받는다.
+        세션 이름은 선택된 장치 이름으로 자동 결정한다 (예: "Cluster" → session_name="Cluster").
+        같은 세션이 이미 돌고 있으면 이전 세션을 정리하고 새로 시작한다.
         """
-        session_name = str(session_name or "").strip()
-        if not session_name:
-            return "FAIL: session_name 이 비어 있습니다"
         if pyaudio is None:
             return f"FAIL: {_NO_PYAUDIO}"
 
@@ -545,13 +744,19 @@ class AudioMonitor:
         count = _to_int(judge_count, 50)
         dur = _to_float_or_none(duration)
 
+        # hint 없이 resolve → 자동으로 사용 중이 아닌 장치를 선택한다.
         try:
-            idx, name = self._resolve_target(device)
+            idx, name = self._resolve_target(hint="")
         except Exception as e:
             return f"FAIL: 오디오 장치 열거 실패 — {e}"
         if idx is None:
-            return (f"FAIL: 오디오 장치를 찾을 수 없습니다 "
-                    f"(device='{device or self._device_index or self._device_name}')")
+            return (f"FAIL: 오디오 입력 장치를 찾을 수 없습니다 "
+                    f"(index='{self._device_index}', name='{self._device_name}')")
+        # 선택된 장치 이름으로 세션 이름 자동 생성 (예: "Cluster" → "Cluster")
+        session_name = self._session_key(device_name=name) or "audio"
+        # 이번 실행에서 사용된 장치로 기록 (다음 인스턴스가 다른 장치를 선택하도록)
+        with self._lock:
+            getattr(type(self), "_used_devices", set()).add(idx)
 
         with self._lock:
             if session_name in self._sessions and self._sessions[session_name].get("check"):
@@ -581,9 +786,14 @@ class AudioMonitor:
             "judge_count": count,
             "duration": dur,
             "device": f"[{idx}] {name}",
+            "device_index": idx,
+            "user_id": id(self),
+            "created_at": time.time(),
         }
         with self._lock:
             self._sessions[session_name] = session
+            logger.info("AudioMonitor StartMonitor: id=%s session='%s' stored, total_sessions=%s",
+                        id(self), session_name, list(self._sessions.keys()))
         try:
             th = threading.Thread(target=self._record_loop, args=(session_name, session),
                                   name=f"audio-{session_name}", daemon=True)
@@ -605,45 +815,62 @@ class AudioMonitor:
                 f"threshold={threshold}, judge={mode}:{count}"
                 + (f", duration={dur}s)" if dur else ")"))
 
-    def StopMonitor(self, session_name: str = "") -> str:
+    def StopMonitor(self) -> str:
         """모니터링을 종료하고 PASS/FAIL 판정 결과를 반환한다.
 
+        _find_session_name() 으로 이 인스턴스의 세션을 자동 탐색한다.
+        Connect()에서 이미 스캔된 device_index/device_name이 __init__에 전달되므로, 그 정보로 세션을 찾는다.
         duration 으로 이미 자동 종료된 세션도 결과를 그대로 돌려준다.
-        session_name 을 비우면 진행 중인 세션이 하나일 때 그 세션을 종료한다.
         """
-        session_name = str(session_name or "").strip()
-        if not session_name:
-            with self._lock:
-                names = list(self._sessions.keys())
-            if len(names) == 1:
-                session_name = names[0]
-            elif not names:
-                return "FAIL: 진행 중인 오디오 세션이 없습니다"
-            else:
-                return f"FAIL: session_name 을 지정하세요 (진행 중: {', '.join(names)})"
+        session_name = self._find_session_name()
+        if session_name is None:
+            return "FAIL: 이 인스턴스의 오디오 세션이 없습니다 (StartMonitor 먼저 호출)"
 
         with self._lock:
             session = self._sessions.get(session_name)
             thread = self._threads.get(session_name)
+            logger.info("AudioMonitor StopMonitor: id=%s session='%s' found=%s total_sessions=%s",
+                        id(self), session_name, session is not None, list(self._sessions.keys()))
+        # session_name 으로 못 찾으면 _find_session_name() 으로 자동 탐색 (하위 호환)
+        if session is None:
+            alt = self._find_session_name()
+            if alt is not None:
+                logger.info("AudioMonitor StopMonitor: session='%s' not found, falling back to '%s'",
+                            session_name, alt)
+                session_name = alt
+                with self._lock:
+                    session = self._sessions.get(session_name)
+                    thread = self._threads.get(session_name)
         if session is None:
             return f"FAIL: '{session_name}' 세션이 없습니다 (StartMonitor 먼저 호출)"
 
         session["check"] = False
-        if thread is not None:
-            thread.join(timeout=30)
-            if thread.is_alive():
-                logger.warning("AudioMonitor '%s' record thread did not stop in 30s", session_name)
 
-        stream = session.pop("stream", None)
-        if stream is not None:
-            try:
-                stream.stop_stream()
-                stream.close()
-            except Exception:
-                pass
+        # 스트림을 여기서 닫지 않는다. record thread 가 read() 에서 블로킹 중일 때
+        # main thread 에서 stream.close() 를 호출하면 PortAudio 가 내부적으로
+        # 스트림이 멈출 때까지 대기하므로 수 초간 블로킹될 수 있다.
+        # 대신 check=False 를 설정하고 record thread 가 read() 를 마치고
+        # finally 블록에서 스트림을 닫도록 한다.
+        if thread is not None:
+            thread.join(timeout=1)
+            if thread.is_alive():
+                logger.warning("AudioMonitor '%s' record thread did not stop in 1s", session_name)
+                # 스레드가 아직 살아있으면 잠시 더 기다린다 (read() 가 최대 ~50ms 블로킹)
+                thread.join(timeout=2)
+                if thread.is_alive():
+                    logger.warning("AudioMonitor '%s' record thread still alive after 3s", session_name)
+
+        # 세션을 시작한 인스턴스의 user_id로 PyAudio 방출
+        # (스레드가 아직 살아있으면 PyAudio 를 종료하지 않는다 - 스트림 사용 중일 수 있음)
+        user_id = session.pop("user_id", None)
+        if user_id is not None and not (thread is not None and thread.is_alive()):
+            _pa_release(user_id)
 
         with self._lock:
             self._threads.pop(session_name, None)
+            self._sessions.pop(session_name, None)
+            logger.info("AudioMonitor StopMonitor: id=%s session='%s' stopped, remaining_sessions=%s",
+                        id(self), session_name, list(self._sessions.keys()))
 
         result = str(session.get("result", "error"))
         detail = (f"session={session_name} pass={session.get('pass_count', 0)} "
@@ -659,8 +886,7 @@ class AudioMonitor:
             return f"ok: PASS ({detail})"
         return f"FAIL: 오디오 판정 실패 ({detail})"
 
-    def SaveReference(self, reference_name: str, duration: float = 10,
-                      device: str = "") -> str:
+    def SaveReference(self, reference_name: str, duration: float = 10) -> str:
         """비교 기준(reference) 음원을 duration 초 동안 녹음해 저장한다.
 
         저장 위치는 런과 무관한 고정 폴더(results/Audio_Reference/<이름>.wav) — 이후 어떤
@@ -676,11 +902,11 @@ class AudioMonitor:
             return "FAIL: duration(초)을 0보다 큰 값으로 지정하세요"
 
         try:
-            idx, name = self._resolve_target(device)
+            idx, name = self._resolve_target()
         except Exception as e:
             return f"FAIL: 오디오 장치 열거 실패 — {e}"
         if idx is None:
-            return f"FAIL: 오디오 장치를 찾을 수 없습니다 (device='{device}')"
+            return f"FAIL: 오디오 입력 장치를 찾을 수 없습니다"
 
         try:
             py = _pa_get()
@@ -720,18 +946,31 @@ class AudioMonitor:
                     wav_path, dur, idx, name)
         return f"ok: 기준음 저장 ({reference_name}, {dur:g}s) → {wav_path}"
 
-    def CompareWithReference(self, session_name: str, reference_name: str) -> str:
+    def CompareWithReference(self, reference_name: str) -> str:
         """StopMonitor 로 저장된 녹음을 기준음과 비교해 PASS/FAIL 을 판정한다.
 
+        _find_session_name() 으로 이 인스턴스의 세션을 자동 탐색한다.
         판정: 상관계수 > 0.5 **그리고** RMS dB 차 < 5.0 이면 PASS.
         """
-        session_name = str(session_name or "").strip()
         reference_name = str(reference_name or "").strip()
-        if not session_name or not reference_name:
-            return "FAIL: session_name / reference_name 을 모두 지정하세요"
+        if not reference_name:
+            return "FAIL: reference_name 을 지정하세요"
+
+        session_name = self._find_session_name()
+        if session_name is None:
+            return "FAIL: 이 인스턴스의 녹음 결과가 없습니다 (StopMonitor 먼저 호출)"
 
         with self._lock:
             session = self._sessions.get(session_name)
+        # session_name 으로 못 찾으면 _find_session_name() 으로 자동 탐색 (하위 호환)
+        if not session:
+            alt = self._find_session_name()
+            if alt is not None:
+                logger.info("AudioMonitor CompareWithReference: session='%s' not found, falling back to '%s'",
+                            session_name, alt)
+                session_name = alt
+                with self._lock:
+                    session = self._sessions.get(session_name)
         if not session or not session.get("wav_path"):
             return f"FAIL: '{session_name}' 의 녹음 결과가 없습니다 (StopMonitor 먼저 호출)"
         wav1 = Path(session["wav_path"])
@@ -857,7 +1096,16 @@ class AudioMonitor:
                     if duration is not None and (time.monotonic() - started) >= duration:
                         session["check"] = False
                         break
-                    data = stream.read(DEFAULT_CHUNK, exception_on_overflow=False)
+                    # 스트림이 닫혔는지 먼저 확인 (StopMonitor 가 닫으면 즉시 종료)
+                    if not session.get("check"):
+                        break
+                    try:
+                        data = stream.read(DEFAULT_CHUNK, exception_on_overflow=False)
+                    except Exception:
+                        # StopMonitor 가 스트림을 닫았으면 정상 종료
+                        if not session.get("check"):
+                            break
+                        raise
                     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                     if np is not None:
                         peak = float(np.mean(np.abs(np.frombuffer(data, dtype=np.int16))) * 2)
@@ -876,9 +1124,14 @@ class AudioMonitor:
                     f.write(f"{tag}: {stamp} {int(peak):05d} "
                             f"{'#' * int(50 * peak / 2 ** 16)}\n")
         except Exception as e:
-            session["error"] = f"오디오 읽기 실패: {e}"
-            session["result"] = "error"
-            logger.warning("AudioMonitor '%s' read error: %s", session_name, e)
+            # StopMonitor 에서 스트림을 닫았으면 read() 에러는 예상된 동작이다.
+            # 이때는 error로 처리하지 않고 정상 종료로 간주한다.
+            if session.get("check"):
+                session["error"] = f"오디오 읽기 실패: {e}"
+                session["result"] = "error"
+                logger.warning("AudioMonitor '%s' read error: %s", session_name, e)
+            else:
+                logger.info("AudioMonitor '%s' stream closed by StopMonitor (expected)", session_name)
 
         audio_bytes = b"".join(frames)
         wav_path = work_dir / f"{_safe_name(session_name)}.wav"
@@ -943,3 +1196,13 @@ class AudioMonitor:
         logger.info("AudioMonitor '%s' done: result=%s pass=%d drop=%d max=%d dir=%s",
                     session_name, str(session.get("result")).upper(), pass_count,
                     drop_count, int(maxpeak), final_dir)
+
+        # 스트림을 여기서 닫는다 (StopMonitor 가 닫지 않으므로 record thread 가 닫는다)
+        stream = session.get("stream")
+        if stream is not None:
+            try:
+                stream.stop_stream()
+                stream.close()
+            except Exception:
+                pass
+            session["stream"] = None
