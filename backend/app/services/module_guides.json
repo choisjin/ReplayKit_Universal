@@ -1889,7 +1889,7 @@
     "_description": "AudioMonitor (Mic) — PC 에 연결된 마이크(오디오 입력 장치)로 소리를 녹음해 무음(drop) 구간을 판정하고, 미리 저장해 둔 기준음(reference)과 비교하는 모듈. 디바이스 1개 = 마이크 1개이며, 장치는 자동으로 선택된다(등록된 device_index/device_name 우선, 없으면 아직 사용하지 않은 마이크를 자동 배정 — 마이크 2개면 AudioMonitor_1→첫째, AudioMonitor_2→둘째). 세션 이름도 선택된 장치 이름으로 자동 생성되므로 스텝에서 지정할 것이 없다. 녹음 결과(wav/txt/파형 png)는 재생 중이면 결과 폴더의 logs/audio/ 에, 스텝 테스트면 results/Temp_logs/audio/ 에 저장되고 폴더 이름 끝에 _pass/_fail 이 붙는다. 기준음만은 results/Audio_Reference/ 에 고정 저장되어 이후 어떤 재생에서도 재사용된다. 녹음 포맷은 44.1kHz·모노·16-bit. 장치 이름은 Windows 제어판 [소리]→[녹음]→속성 에서 IVI, Cluster 등으로 바꿔두면 구분이 쉽다.",
     "functions": {
       "StartMonitor": {
-        "description": "마이크 녹음과 무음(drop) 판정을 백그라운드로 시작한다. 판정 결과는 StopMonitor 에서 확인한다. 장치는 자동 선택되고(등록된 마이크 우선, 없으면 아직 사용하지 않은 마이크) 세션 이름은 장치 이름으로 자동 생성된다. 같은 장치의 세션이 이미 돌고 있으면 이전 세션을 정리하고 새로 시작한다.",
+        "description": "마이크 녹음과 무음(drop) 판정을 백그라운드로 시작한다. 판정 결과는 StopMonitor 에서 확인한다. 장치는 자동 선택되고(등록된 마이크 우선, 없으면 아직 사용하지 않은 마이크) 세션 이름은 장치 이름으로 자동 생성된다. device/session_name 으로 특정 마이크·세션 이름을 직접 지정할 수도 있다. 같은 장치의 세션이 이미 돌고 있으면 이전 세션을 정리하고 새로 시작한다.",
         "params": {
           "drop_threshold": "이 값보다 작은 청크를 '무음(drop)'으로 센다. 비우면 디바이스 등록 시 설정한 기본값(500). 조용한 환경에서 소리가 나면 보통 수천 단위까지 올라간다.",
           "judge_mode": {
@@ -1900,12 +1900,16 @@
             ]
           },
           "judge_count": "판정 기준 청크 수 (기본 50). 청크 1개는 약 46ms(2048샘플/44.1kHz).",
-          "duration": "자동 종료 시간(초). 0 이면 StopMonitor 를 호출할 때까지 계속 녹음한다."
+          "duration": "자동 종료 시간(초). 0 이면 StopMonitor 를 호출할 때까지 계속 녹음한다.",
+          "device": "사용할 마이크 이름/번호 (예: 'Cluster', 'IVI', '1'). 비우면 자동 선택.",
+          "session_name": "세션 식별 이름. 비우면 선택된 장치 이름으로 자동 결정."
         }
       },
       "StopMonitor": {
-        "description": "모니터링을 끝내고 PASS/FAIL 을 판정한다. 이 디바이스(마이크)의 세션을 자동으로 찾아 종료하므로 지정할 것이 없다. wav·peak 로그·파형 이미지를 저장하고 결과 폴더 이름에 _pass/_fail 을 붙인다. duration 으로 이미 자동 종료된 세션도 결과를 그대로 돌려준다. 판정이 FAIL 이면 스텝도 실패 처리된다.",
-        "params": {}
+        "description": "모니터링을 끝내고 PASS/FAIL 을 판정한다. 이 디바이스(마이크)의 세션을 자동으로 찾아 종료하므로 보통 지정할 것이 없다. wav·peak 로그·파형 이미지를 저장하고 결과 폴더 이름에 _pass/_fail 을 붙인다. duration 으로 이미 자동 종료된 세션도 결과를 그대로 돌려준다. 판정이 FAIL 이면 스텝도 실패 처리된다.",
+        "params": {
+          "session_name": "종료할 세션 이름 (StartMonitor 의 session_name/장치 이름). 비우면 자동 탐색."
+        }
       },
       "SaveReference": {
         "description": "비교 기준이 될 음원을 duration 초 동안 녹음해 저장한다. 장치는 자동 선택된다. results/Audio_Reference/<이름>.wav 로 고정 저장되어 이후 어떤 재생에서도 CompareWithReference 로 쓸 수 있다. 같은 이름이면 덮어쓴다.",
@@ -1915,9 +1919,10 @@
         }
       },
       "CompareWithReference": {
-        "description": "StopMonitor 로 저장된 녹음을 기준음과 비교해 판정한다. 이 디바이스(마이크)의 최근 녹음을 자동으로 찾는다. 상관계수 > 0.5 이고 RMS 음량 차 < 5.0dB 이면 PASS, 아니면 FAIL(스텝 실패). 비교 파형 이미지와 리포트 txt 를 녹음 폴더에 남긴다. 반드시 StopMonitor 이후에 호출해야 한다.",
+        "description": "가장 최근에 저장된 녹음을 기준음과 비교해 판정한다. NCC(정규화 교차상관) 기반: 무음 트리밍 → cross-correlation 시간 정렬 → 겹치는 구간의 NCC 유사도(-1~1) 계산, NCC >= threshold 이면 PASS. 볼륨 차이·녹음 시작 시점 차이·샘플레이트 차이에 강건하다. 겹치는 구간이 기준음의 50% 미만이면 비교 불가로 FAIL. 비교 파형 이미지와 리포트 txt(NCC/offset/overlap)를 녹음 폴더에 남긴다. 반드시 StopMonitor 이후에 호출해야 한다.",
         "params": {
-          "reference_name": "SaveReference 로 저장한 기준음 이름"
+          "reference_name": "SaveReference 로 저장한 기준음 이름",
+          "threshold": "NCC 유사도 기준값 (0~1, 기본 0.85). 같은 장비·환경 녹음이면 0.85, 배경 노이즈가 있으면 0.75~0.80 으로 낮춘다. 범위를 벗어나면 기본값으로 대체."
         }
       },
       "ListDevices": {

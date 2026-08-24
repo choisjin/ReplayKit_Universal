@@ -13,10 +13,41 @@ from isotp import Address, NotifierBasedCanStack, AddressingMode, BlockingSendFa
 
 broadcastmanager.USE_WINDOWS_EVENTS = False  # For Periodic msg
 
-# 벡터(CANoe_Ctrl) 연결은 항상 이 비트레이트로 고정 오픈한다.
-# nominal 500kbps / data 2Mbps CAN FD. (다른 옵션은 현재 미사용)
-FIXED_NOM_BITRATE = 500_000
-FIXED_DATA_BITRATE = 2_000_000
+# 벡터(CANoe_Ctrl) 연결의 기본 비트레이트. 사용자가 연결 시 콤보박스로
+# bitrate/data_bitrate 를 선택할 수 있으며, 미지정 시 이 기본값을 사용한다.
+DEFAULT_NOM_BITRATE = 500_000
+DEFAULT_DATA_BITRATE = 2_000_000
+
+# CAN FD 타이밍 프로필 — Vector 하드웨어에 정확한 tseg/sjw 값을 전달한다.
+# from_sample_point 로 계산하면 Vector 드라이버가 내부 f_clock(40MHz)로 변환하면서
+# tseg 값이 달라져(예: 500k/2M → tseg1Dbr=15, tseg2Dbr=4) 사용자가 원하는
+# 정확한 타이밍(FD_M: tseg1Dbr=14, tseg2Dbr=5 / FD_E: tseg1Dbr=13, tseg2Dbr=6)과
+# 어긋난다. 프로필을 선택하면 이 정확한 값을 그대로 VectorBus 에 전달한다.
+# f_clock=80MHz 기준 brp 계산:
+#   FD_M nom: 80M/(500k*80) = 2, data: 80M/(1M*20) = 4
+#   FD_E nom: 80M/(500k*10) = 16, data: 80M/(2M*20) = 2
+CANOE_TIMING_PROFILES = {
+    "FD_M": {
+        "label": "FD_M (500k/1M)",
+        "bitrate": 500_000,
+        "data_bitrate": 1_000_000,
+        "timing": dict(
+            f_clock=80_000_000,
+            nom_brp=2, nom_tseg1=63, nom_tseg2=16, nom_sjw=16,
+            data_brp=4, data_tseg1=14, data_tseg2=5, data_sjw=4,
+        ),
+    },
+    "FD_E": {
+        "label": "FD_E (500k/2M)",
+        "bitrate": 500_000,
+        "data_bitrate": 2_000_000,
+        "timing": dict(
+            f_clock=80_000_000,
+            nom_brp=16, nom_tseg1=7, nom_tseg2=2, nom_sjw=2,
+            data_brp=2, data_tseg1=13, data_tseg2=6, data_sjw=1,
+        ),
+    },
+}
 
 
 def _coerce_value(v):
@@ -212,6 +243,9 @@ class E2E_PeriodicTask:
 
 class CANoe_Ctrl:
     def __init__(self, device_info):
+        # CAN FD 타이밍은 각 채널(행)마다 개별적으로 설정한다.
+        # Vector 장비 한 대가 여러 채널을 가지므로, 채널별 bitrate/data_bitrate 를
+        # device_info 의 각 행에서 읽어 사용한다. 값이 없으면 기본값(500k/2M)을 사용한다.
         self.bus = []
         self.e2e_tasks = {}  # E2E 주기 태스크 관리 딕셔너리
         self.periodic_tasks = {}  # 일반 주기 태스크 관리 딕셔너리
@@ -231,16 +265,49 @@ class CANoe_Ctrl:
             else:
                 open_kwargs = dict(channel=row['channel'], app_name=row.get('app_name', 'CANoe'))
 
-            # 벡터 연결은 무조건 CAN FD, nominal 500kbps / data 2Mbps 고정으로 연다.
-            # (현재 다른 비트레이트 옵션은 미사용 — device_info 의 bitrate/data_bitrate/is_fd 값은 무시)
-            # data_bitrate 미지정 시 nominal 로 폴백돼 FD 데이터 페이즈가 어긋나던 문제
-            # (DUT 미-ACK → Vector TX 큐 XL_ERR_QUEUE_IS_FULL → 주기 송신 스레드 사망) 원천 차단.
+            # 채널별 타이밍 설정: 각 행(row)의 bitrate/data_bitrate 를 사용한다.
+            # 값이 없거나 비어있으면 기본값(DEFAULT_NOM_BITRATE/DEFAULT_DATA_BITRATE)을 사용한다.
+            row_nom = row.get('bitrate')
+            row_dat = row.get('data_bitrate')
+            try:
+                row_nom_bitrate = int(str(row_nom).strip()) if row_nom not in (None, '') else DEFAULT_NOM_BITRATE
+            except (ValueError, TypeError):
+                row_nom_bitrate = DEFAULT_NOM_BITRATE
+            try:
+                row_data_bitrate = int(str(row_dat).strip()) if row_dat not in (None, '') else DEFAULT_DATA_BITRATE
+            except (ValueError, TypeError):
+                row_data_bitrate = DEFAULT_DATA_BITRATE
+
+            # Advanced CAN Timing: 사용자가 채널별로 sjw/tseg 값을 지정한 경우 정확한 값 사용.
+            # 모든 6개 값(sjwAbr/sjwDbr/tseg1Abr/tseg1Dbr/tseg2Abr/tseg2Dbr)이 있으면
+            # BitTimingFd 에 정확한 tseg/sjw/brp 를 전달한다. 없으면 from_sample_point(80%) 로 자동 계산.
             from can import BitTimingFd
-            _timing = BitTimingFd.from_sample_point(
-                f_clock=80_000_000,
-                nom_bitrate=FIXED_NOM_BITRATE, nom_sample_point=80.0,
-                data_bitrate=FIXED_DATA_BITRATE, data_sample_point=80.0,
-            )
+            _adv_keys = ('sjwAbr', 'sjwDbr', 'tseg1Abr', 'tseg1Dbr', 'tseg2Abr', 'tseg2Dbr')
+            _adv_vals = {}
+            for _k in _adv_keys:
+                _v = row.get(_k)
+                try:
+                    _adv_vals[_k] = int(str(_v).strip()) if _v not in (None, '') else None
+                except (ValueError, TypeError):
+                    _adv_vals[_k] = None
+            if all(_adv_vals.get(k) is not None for k in _adv_keys):
+                # brp = f_clock / (bitrate * (1 + tseg1 + tseg2))
+                _nom_brp = int(round(80_000_000 / (row_nom_bitrate * (1 + _adv_vals['tseg1Abr'] + _adv_vals['tseg2Abr']))))
+                _data_brp = int(round(80_000_000 / (row_data_bitrate * (1 + _adv_vals['tseg1Dbr'] + _adv_vals['tseg2Dbr']))))
+                _timing = BitTimingFd(
+                    f_clock=80_000_000,
+                    nom_brp=_nom_brp, nom_tseg1=_adv_vals['tseg1Abr'], nom_tseg2=_adv_vals['tseg2Abr'], nom_sjw=_adv_vals['sjwAbr'],
+                    data_brp=_data_brp, data_tseg1=_adv_vals['tseg1Dbr'], data_tseg2=_adv_vals['tseg2Dbr'], data_sjw=_adv_vals['sjwDbr'],
+                )
+            else:
+                # 벡터 연결은 CAN FD 로 연다. nominal/data bitrate 는 채널별 설정값을 사용한다.
+                # data_bitrate 미지정 시 nominal 로 폴백돼 FD 데이터 페이즈가 어긋나던 문제
+                # (DUT 미-ACK → Vector TX 큐 XL_ERR_QUEUE_IS_FULL → 주기 송신 스레드 사망) 원천 차단.
+                _timing = BitTimingFd.from_sample_point(
+                    f_clock=80_000_000,
+                    nom_bitrate=row_nom_bitrate, nom_sample_point=80.0,
+                    data_bitrate=row_data_bitrate, data_sample_point=80.0,
+                )
             self.bus.append(VectorBus(**open_kwargs, timing=_timing,
                                       rx_queue_size=2 ** 16, receive_own_messages=True))
         self.CANoe_logger = None

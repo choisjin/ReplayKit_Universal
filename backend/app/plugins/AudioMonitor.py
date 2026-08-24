@@ -81,9 +81,10 @@ DEFAULT_RATE = 44100
 DEFAULT_CHUNK = 2 ** 11
 CHANNELS = 1
 
-# 비교 판정 임계 (원본 동일): 상관계수 > 0.5 그리고 dB 차 < 5.0 이면 PASS
-COMPARE_MIN_CORRELATION = 0.5
-COMPARE_MAX_DB_DIFF = 5.0
+# 비교 판정 임계 (audiocomparetest 참고): NCC 유사도 >= threshold 이면 PASS
+# 기본 threshold 0.85 (같은 장비·환경에서 녹음 권장값)
+COMPARE_DEFAULT_THRESHOLD = 0.85
+COMPARE_MIN_OVERLAP_RATIO = 0.5
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -364,6 +365,116 @@ def _read_wav(path: Path):
     if n_ch == 2:
         samples = samples[0::2]
     return samples, rate
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# NCC 기반 비교 헬퍼 (audiocomparetest/AudioCompareTest.py 참고, scipy 없이 numpy 만 사용)
+# ──────────────────────────────────────────────────────────────────────────
+def _resample_poly(x: np.ndarray, up: int, down: int) -> np.ndarray:
+    """다항식 리샘플링 (scipy.signal.resample_poly 의 간단한 대체).
+
+    up/down 비율로 선형 보간 기반 리샘플링을 수행한다. 정확도는 scipy 보다
+    낮지만 샘플레이트 차이 보정에는 충분하다.
+    """
+    if np is None:
+        return x
+    if up == down:
+        return x
+    n = len(x)
+    if n < 2:
+        return x
+    # 원본 인덱스 (0 ~ n-1) 를 새 길이에 매핑
+    new_len = int(round(n * up / down))
+    if new_len < 1:
+        return x[:1]
+    old_idx = np.linspace(0, n - 1, num=new_len)
+    i0 = np.floor(old_idx).astype(np.int64)
+    i1 = np.minimum(i0 + 1, n - 1)
+    frac = (old_idx - i0).astype(np.float64)
+    return x[i0] * (1.0 - frac) + x[i1] * frac
+
+
+def _trim_silence_ncc(signal: np.ndarray, sr: int,
+                      threshold_db: float = -40.0, frame_ms: int = 10) -> np.ndarray:
+    """앞뒤 무음 구간을 제거 (AudioCompareTest._trim_silence 와 동일)."""
+    if np is None:
+        return signal
+    frame_len = int(sr * frame_ms / 1000)
+    if frame_len < 1 or len(signal) < frame_len:
+        return signal
+    threshold_amp = 10 ** (threshold_db / 20)
+    n_frames = len(signal) // frame_len
+    frames = signal[: n_frames * frame_len].reshape(n_frames, frame_len)
+    rms = np.sqrt(np.mean(frames ** 2, axis=1))
+    voiced = np.where(rms > threshold_amp)[0]
+    if len(voiced) == 0:
+        return signal
+    start = voiced[0] * frame_len
+    end = (voiced[-1] + 1) * frame_len
+    return signal[start:end]
+
+
+def _overlap_indices_ncc(len_ref: int, len_rec: int, lag: int) -> tuple[int, int, int, int]:
+    """lag 에 따른 겹치는 구간의 (ref_start, ref_end, rec_start, rec_end)."""
+    if lag >= 0:
+        s_ref = lag
+        s_rec = 0
+    else:
+        s_ref = 0
+        s_rec = -lag
+    overlap = min(len_ref - s_ref, len_rec - s_rec)
+    return s_ref, s_ref + overlap, s_rec, s_rec + overlap
+
+
+def _find_best_offset_ncc(ref: np.ndarray, rec: np.ndarray) -> int:
+    """ref 기준으로 rec 가 몇 샘플 밀렸는지 반환 (cross-correlation).
+
+    큰 파일 성능을 위해 다운샘플 후 coarse 탐색 → 원본에서 fine 탐색.
+    """
+    if np is None:
+        return 0
+    if len(ref) < 2 or len(rec) < 2:
+        return 0
+    # ── coarse pass (다운샘플) ──
+    COARSE_SR = 8000
+    factor = max(1, min(len(ref), len(rec)) // (COARSE_SR * 120))
+    ref_ds = ref[::factor]
+    rec_ds = rec[::factor]
+    if len(ref_ds) < 2 or len(rec_ds) < 2:
+        return 0
+    # numpy 기반 cross-correlation (full mode)
+    corr = np.correlate(ref_ds, rec_ds, mode="full")
+    coarse_lag = int(np.argmax(corr)) - (len(rec_ds) - 1)
+    coarse_lag *= factor
+
+    # ── fine pass (coarse 주변 ±factor 범위) ──
+    search = factor * 2
+    best_lag = coarse_lag
+    best_val = -np.inf
+    for delta in range(-search, search + 1):
+        lag = coarse_lag + delta
+        s_ref, e_ref, s_rec, e_rec = _overlap_indices_ncc(len(ref), len(rec), lag)
+        if e_ref - s_ref < 1:
+            continue
+        a = ref[s_ref:e_ref]
+        b = rec[s_rec:e_rec]
+        val = float(np.dot(a, b))
+        if val > best_val:
+            best_val = val
+            best_lag = lag
+    return best_lag
+
+
+def _ncc(a: np.ndarray, b: np.ndarray) -> float:
+    """Normalized Cross-Correlation: -1 ~ 1 (DC 제거 + 크기 정규화)."""
+    if np is None:
+        return 0.0
+    a = a - a.mean()
+    b = b - b.mean()
+    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+    if denom < 1e-12:
+        return 0.0
+    return float(np.dot(a, b) / denom)
 
 
 def _to_bool(v: Any, default: bool = False) -> bool:
@@ -724,9 +835,11 @@ class AudioMonitor:
 
     def StartMonitor(self, drop_threshold: int = 0,
                      judge_mode: str = "pass", judge_count: int = 50,
-                     duration: float = 0) -> str:
+                     duration: float = 0, device: str = "", session_name: str = "") -> str:
         """오디오 무음(drop) 모니터링을 시작한다 (백그라운드 녹음).
 
+        device: 선택 장치명/번호 (예: "Cluster", "IVI", "1"). 비어 있으면 자동 선택.
+        session_name: 세션 식별 키. 비어 있으면 선택된 장치 이름으로 자동 결정.
         Connect()에서 이미 스캔된 device_index/device_name이 __init__에 전달되므로, 여기서 지정할 필요가 없다.
         **사용 중이 아닌 장치를 자동으로 선택**한다.
         이렇게 하면 여러 AudioMonitor 인스턴스가 각자 다른 마이크를 자동으로 배정받는다.
@@ -744,16 +857,20 @@ class AudioMonitor:
         count = _to_int(judge_count, 50)
         dur = _to_float_or_none(duration)
 
-        # hint 없이 resolve → 자동으로 사용 중이 아닌 장치를 선택한다.
+        # device/session_name 이 주어지면 그 이름으로 장치를 지정, 없으면 자동 선택.
+        hint = str(device or session_name or "").strip() if (device or session_name) else ""
         try:
-            idx, name = self._resolve_target(hint="")
+            idx, name = self._resolve_target(hint=hint)
         except Exception as e:
             return f"FAIL: 오디오 장치 열거 실패 — {e}"
         if idx is None:
             return (f"FAIL: 오디오 입력 장치를 찾을 수 없습니다 "
                     f"(index='{self._device_index}', name='{self._device_name}')")
-        # 선택된 장치 이름으로 세션 이름 자동 생성 (예: "Cluster" → "Cluster")
-        session_name = self._session_key(device_name=name) or "audio"
+        # session_name 이 주어지면 그대로, 없으면 선택된 장치 이름으로 자동 생성 (예: "Cluster" → "Cluster")
+        if session_name and str(session_name).strip():
+            session_name = str(session_name).strip()
+        else:
+            session_name = self._session_key(device_name=name) or "audio"
         # 이번 실행에서 사용된 장치로 기록 (다음 인스턴스가 다른 장치를 선택하도록)
         with self._lock:
             getattr(type(self), "_used_devices", set()).add(idx)
@@ -815,34 +932,44 @@ class AudioMonitor:
                 f"threshold={threshold}, judge={mode}:{count}"
                 + (f", duration={dur}s)" if dur else ")"))
 
-    def StopMonitor(self) -> str:
+    def StopMonitor(self, session_name: str = "") -> str:
         """모니터링을 종료하고 PASS/FAIL 판정 결과를 반환한다.
 
+        session_name: 종료할 세션 이름 (예: "Cluster"). 비어 있으면 자동 탐색.
         _find_session_name() 으로 이 인스턴스의 세션을 자동 탐색한다.
         Connect()에서 이미 스캔된 device_index/device_name이 __init__에 전달되므로, 그 정보로 세션을 찾는다.
         duration 으로 이미 자동 종료된 세션도 결과를 그대로 돌려준다.
         """
-        session_name = self._find_session_name()
-        if session_name is None:
-            return "FAIL: 이 인스턴스의 오디오 세션이 없습니다 (StartMonitor 먼저 호출)"
-
-        with self._lock:
-            session = self._sessions.get(session_name)
-            thread = self._threads.get(session_name)
-            logger.info("AudioMonitor StopMonitor: id=%s session='%s' found=%s total_sessions=%s",
-                        id(self), session_name, session is not None, list(self._sessions.keys()))
-        # session_name 으로 못 찾으면 _find_session_name() 으로 자동 탐색 (하위 호환)
-        if session is None:
-            alt = self._find_session_name()
-            if alt is not None:
-                logger.info("AudioMonitor StopMonitor: session='%s' not found, falling back to '%s'",
-                            session_name, alt)
-                session_name = alt
-                with self._lock:
-                    session = self._sessions.get(session_name)
-                    thread = self._threads.get(session_name)
-        if session is None:
-            return f"FAIL: '{session_name}' 세션이 없습니다 (StartMonitor 먼저 호출)"
+        # 1) 명시적 session_name 이 주어지면 그 키로 직접 조회
+        if session_name and str(session_name).strip():
+            session_name = str(session_name).strip()
+            with self._lock:
+                session = self._sessions.get(session_name)
+                thread = self._threads.get(session_name)
+            if session is None:
+                # 명시적 키로 못 찾으면 자동 탐색으로 폴백
+                alt = self._find_session_name()
+                if alt is not None:
+                    logger.info("AudioMonitor StopMonitor: session='%s' not found, falling back to '%s'",
+                                session_name, alt)
+                    session_name = alt
+                    with self._lock:
+                        session = self._sessions.get(session_name)
+                        thread = self._threads.get(session_name)
+            if session is None:
+                return f"FAIL: '{session_name}' 세션이 없습니다 (StartMonitor 먼저 호출)"
+        else:
+            # 2) session_name 이 없으면 자동 탐색
+            session_name = self._find_session_name()
+            if session_name is None:
+                return "FAIL: 이 인스턴스의 오디오 세션이 없습니다 (StartMonitor 먼저 호출)"
+            with self._lock:
+                session = self._sessions.get(session_name)
+                thread = self._threads.get(session_name)
+                logger.info("AudioMonitor StopMonitor: id=%s session='%s' found=%s total_sessions=%s",
+                            id(self), session_name, session is not None, list(self._sessions.keys()))
+            if session is None:
+                return f"FAIL: '{session_name}' 세션이 없습니다 (StartMonitor 먼저 호출)"
 
         session["check"] = False
 
@@ -946,34 +1073,62 @@ class AudioMonitor:
                     wav_path, dur, idx, name)
         return f"ok: 기준음 저장 ({reference_name}, {dur:g}s) → {wav_path}"
 
-    def CompareWithReference(self, reference_name: str) -> str:
-        """StopMonitor 로 저장된 녹음을 기준음과 비교해 PASS/FAIL 을 판정한다.
+    def _find_latest_recording(self) -> Optional[Path]:
+        """오디오 결과 폴더에서 가장 최근에 저장된 .wav 파일을 찾는다.
 
-        _find_session_name() 으로 이 인스턴스의 세션을 자동 탐색한다.
-        판정: 상관계수 > 0.5 **그리고** RMS dB 차 < 5.0 이면 PASS.
+        StopMonitor 가 _record_loop 를 통해 저장한 녹음 파일을 세션 상태 없이
+        직접 찾기 위한 헬퍼. 재생 중이면 {run_dir}/logs/audio/, 아니면
+        results/Temp_logs/audio/ 아래의 세션 폴더에서 가장 최근 .wav 를 반환한다.
+        """
+        base_dir, _ = _audio_base_dir()
+        if not base_dir.exists():
+            return None
+        candidates: list[Path] = []
+        for p in base_dir.rglob("*.wav"):
+            # 기준음(reference) 폴더는 별도 위치이므로 여기엔 없지만, 혹시 모르니 제외
+            if "Audio_Reference" in str(p):
+                continue
+            candidates.append(p)
+        if not candidates:
+            return None
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return candidates[0]
+
+    def CompareWithReference(self, reference_name: str, threshold: float = 0.85) -> str:
+        """가장 최근에 저장된 녹음을 기준음과 비교해 PASS/FAIL 을 판정한다.
+
+        세션 상태에 의존하지 않고, StopMonitor 가 저장한 가장 최근 .wav 파일을
+        직접 찾아 비교한다. 판정 방식은 audiocomparetest/AudioCompareTest.py 를
+        따른다 (NCC 기반):
+
+          1. WAV 로드 → 모노 변환 → float 정규화
+          2. 샘플레이트가 다르면 높은 쪽에 맞춰 리샘플링
+          3. 앞뒤 무음 구간 트리밍
+          4. Cross-correlation 으로 최적 정렬 오프셋 탐색
+          5. 정렬된 겹치는 구간에 대해 NCC(Normalized Cross-Correlation) 계산
+          6. NCC >= threshold → PASS, NCC < threshold → FAIL
+             (겹치는 구간이 ref 길이의 50% 미만이면 비교 불가로 FAIL)
+
+        threshold: NCC 유사도 기준값 (0~1). 기본 0.85 (같은 장비·환경 권장).
         """
         reference_name = str(reference_name or "").strip()
         if not reference_name:
             return "FAIL: reference_name 을 지정하세요"
 
-        session_name = self._find_session_name()
-        if session_name is None:
-            return "FAIL: 이 인스턴스의 녹음 결과가 없습니다 (StopMonitor 먼저 호출)"
+        # threshold 파라미터 파싱 (0~1 범위)
+        try:
+            thr = float(threshold)
+        except (TypeError, ValueError):
+            thr = COMPARE_DEFAULT_THRESHOLD
+        if not (0.0 < thr <= 1.0):
+            logger.warning("AudioMonitor compare: invalid threshold=%r — using default %.2f",
+                           threshold, COMPARE_DEFAULT_THRESHOLD)
+            thr = COMPARE_DEFAULT_THRESHOLD
 
-        with self._lock:
-            session = self._sessions.get(session_name)
-        # session_name 으로 못 찾으면 _find_session_name() 으로 자동 탐색 (하위 호환)
-        if not session:
-            alt = self._find_session_name()
-            if alt is not None:
-                logger.info("AudioMonitor CompareWithReference: session='%s' not found, falling back to '%s'",
-                            session_name, alt)
-                session_name = alt
-                with self._lock:
-                    session = self._sessions.get(session_name)
-        if not session or not session.get("wav_path"):
-            return f"FAIL: '{session_name}' 의 녹음 결과가 없습니다 (StopMonitor 먼저 호출)"
-        wav1 = Path(session["wav_path"])
+        wav1 = self._find_latest_recording()
+        if wav1 is None:
+            return "FAIL: 녹음 결과가 없습니다 (StopMonitor 먼저 호출)"
+        session_name = wav1.parent.name
         if not wav1.exists():
             return f"FAIL: 녹음 파일을 찾을 수 없습니다 — {wav1}"
         wav2 = _reference_dir() / f"{_safe_name(reference_name)}.wav"
@@ -987,34 +1142,78 @@ class AudioMonitor:
             return "FAIL: WAV 읽기 실패 (16-bit PCM 이어야 합니다)"
 
         if np is not None:
-            a1 = np.asarray(s1, dtype=np.float64)
-            a2 = np.asarray(s2, dtype=np.float64)
-            peak1, peak2 = float(np.mean(np.abs(a1)) * 2), float(np.mean(np.abs(a2)) * 2)
+            # ── 1) float 정규화 (int16 → float64, -1~1) ──
+            a1 = np.asarray(s1, dtype=np.float64) / 32768.0
+            a2 = np.asarray(s2, dtype=np.float64) / 32768.0
+            peak1 = float(np.mean(np.abs(a1)) * 2)
+            peak2 = float(np.mean(np.abs(a2)) * 2)
             rms1 = float(np.sqrt(np.mean(a1 ** 2)))
             rms2 = float(np.sqrt(np.mean(a2 ** 2)))
-            n = min(len(a1), len(a2))
-            correlation = 0.0
-            if n > 1:
-                x, y = a1[:n] / 32768.0, a2[:n] / 32768.0
-                if float(np.std(x)) > 0 and float(np.std(y)) > 0:
-                    correlation = float(np.corrcoef(x, y)[0, 1])
+
+            # ── 2) 샘플레이트 통일 (높은 쪽에 맞춤) ──
+            sr_ref, sr_rec = rate1 or self._rate, rate2 or self._rate
+            if sr_ref != sr_rec:
+                target_sr = max(sr_ref, sr_rec)
+                if sr_ref < target_sr:
+                    g = math.gcd(target_sr, sr_ref)
+                    a1 = _resample_poly(a1, target_sr // g, sr_ref // g)
+                else:
+                    g = math.gcd(target_sr, sr_rec)
+                    a2 = _resample_poly(a2, target_sr // g, sr_rec // g)
+                sr = target_sr
+            else:
+                sr = sr_ref
+
+            # ── 3) 무음 구간 트리밍 (앞뒤 무음 제거로 정렬 정확도 향상) ──
+            t1 = _trim_silence_ncc(a1, sr)
+            t2 = _trim_silence_ncc(a2, sr)
+
+            # ── 4) 최적 오프셋 탐색 (cross-correlation) ──
+            lag = _find_best_offset_ncc(t1, t2)
+
+            # ── 5) 겹치는 구간 추출 ──
+            s_ref, e_ref, s_rec, e_rec = _overlap_indices_ncc(len(t1), len(t2), lag)
+            overlap_len = e_ref - s_ref
+            overlap_ratio = overlap_len / len(t1) if len(t1) > 0 else 0.0
+            overlap_sec = overlap_len / sr
+
+            # ── 6) 겹침이 너무 짧으면 불일치 ──
+            if overlap_ratio < COMPARE_MIN_OVERLAP_RATIO:
+                similarity = 0.0
+                passed = False
+                logger.info("AudioMonitor compare: overlap too short "
+                            "(overlap=%.1f%%, 기준=%.1f%%)", overlap_ratio * 100,
+                            COMPARE_MIN_OVERLAP_RATIO * 100)
+            else:
+                # ── 7) NCC 계산 ──
+                seg_ref = t1[s_ref:e_ref]
+                seg_rec = t2[s_rec:e_rec]
+                similarity = _ncc(seg_ref, seg_rec)
+                passed = similarity >= thr
+                logger.info("AudioMonitor compare: NCC=%.4f (기준 >= %.2f) lag=%d samples "
+                            "overlap=%.2fs (%.1f%%)",
+                            similarity, thr, lag, overlap_sec, overlap_ratio * 100)
         else:
+            # numpy 없이는 NCC 계산 불가 — 보수적으로 FAIL 처리
             peak1 = sum(abs(s) for s in s1) / len(s1) * 2
             peak2 = sum(abs(s) for s in s2) / len(s2) * 2
             rms1 = math.sqrt(sum(s * s for s in s1) / len(s1))
             rms2 = math.sqrt(sum(s * s for s in s2) / len(s2))
-            correlation = 0.0  # numpy 없이는 상관계수 계산을 생략 (판정은 FAIL 쪽으로 보수적)
+            similarity = 0.0
+            lag = 0
+            sr = rate1 or self._rate
+            overlap_sec = 0.0
+            overlap_ratio = 0.0
+            passed = False
 
-        db1 = 20.0 * math.log10(rms1 / 32768.0) if rms1 > 0 else -120.0
-        db2 = 20.0 * math.log10(rms2 / 32768.0) if rms2 > 0 else -120.0
-        db_diff = abs(db1 - db2)
-        passed = correlation > COMPARE_MIN_CORRELATION and db_diff < COMPARE_MAX_DB_DIFF
+        db1 = 20.0 * math.log10(rms1) if rms1 > 0 else -120.0
+        db2 = 20.0 * math.log10(rms2) if rms2 > 0 else -120.0
 
         out_dir = wav1.parent
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         stem = f"{ts}_compare_{_safe_name(session_name)}_{_safe_name(reference_name)}"
         # cv2.putText 는 ASCII 만 그린다 — 화살표/한글을 쓰면 '???' 로 찍힌다.
-        header = (f"corr={correlation:.4f}  dB_diff={db_diff:.2f}  "
+        header = (f"NCC={similarity:.4f}  threshold={thr:.2f}  "
                   f"-> {'PASS' if passed else 'FAIL'}")
         img_path = out_dir / f"{stem}.png"
         if np is not None:
@@ -1030,23 +1229,24 @@ class AudioMonitor:
                 "====================\n"
                 f"{session_name} : peak={peak1:.0f} rms_dB={db1:.1f} wav={wav1}\n"
                 f"Reference({reference_name}) : peak={peak2:.0f} rms_dB={db2:.1f} wav={wav2}\n"
-                f"correlation = {correlation:.4f} (기준 > {COMPARE_MIN_CORRELATION})\n"
-                f"dB diff = {db_diff:.2f} (기준 < {COMPARE_MAX_DB_DIFF})\n"
+                f"NCC similarity = {similarity:.4f} (기준 >= {thr:.2f})\n"
+                f"offset = {lag:+d} samples ({lag / sr:+.4f}s)\n"
+                f"overlap = {overlap_sec:.2f}s (ref 대비 {overlap_ratio:.1%})\n"
                 f"result = {'PASS' if passed else 'FAIL'}\n",
                 encoding="utf-8")
         except Exception as e:
             logger.warning("compare report save failed: %s", e)
 
-        detail = (f"corr={correlation:.4f} dB_diff={db_diff:.2f} "
+        detail = (f"NCC={similarity:.4f} threshold={thr:.2f} "
                   f"session={session_name} ref={reference_name} img={img_path}")
         logger.info("AudioMonitor compare: %s → %s", detail, "PASS" if passed else "FAIL")
         if passed:
             return f"ok: PASS ({detail})"
         reasons = []
-        if correlation <= COMPARE_MIN_CORRELATION:
-            reasons.append(f"상관계수 낮음({correlation:.4f})")
-        if db_diff >= COMPARE_MAX_DB_DIFF:
-            reasons.append(f"음량 차 큼({db_diff:.2f}dB)")
+        if overlap_ratio < COMPARE_MIN_OVERLAP_RATIO:
+            reasons.append(f"겹치는 구간 부족({overlap_ratio:.1%})")
+        else:
+            reasons.append(f"유사도 낮음({similarity:.4f} < {thr:.2f})")
         return f"FAIL: 기준음과 불일치 — {', '.join(reasons)} ({detail})"
 
     # ------------------------------------------------------------------

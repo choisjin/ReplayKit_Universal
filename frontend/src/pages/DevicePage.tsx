@@ -395,6 +395,8 @@ export default function DevicePage() {
   type VectorChannel = { name: string; channel_index: number; hw_channel: number; serial: number; hw_type: string; transceiver: string; is_on_bus: boolean; supports_fd: boolean };
   const [vectorScanLoading, setVectorScanLoading] = useState<Record<string, boolean>>({});
   const [vectorChannels, setVectorChannels] = useState<Record<string, VectorChannel[]>>({});
+  // CANoe Advanced CAN Timing 패널: 열려 있는 행 키(`${fieldName}:${idx}`) — 한 번에 하나만
+  const [canAdvancedOpen, setCanAdvancedOpen] = useState<string | null>(null);
   // 일반 보조디바이스 스캔에 통합된 Vector 채널 결과
   const [scannedVector, setScannedVector] = useState<{ ok: boolean; driver_missing: boolean; channels: VectorChannel[]; error?: string | null }>({ ok: false, driver_missing: false, channels: [] });
   // PCAN(PEAK/SysMax 호환) 채널 스캔 결과
@@ -1673,6 +1675,30 @@ export default function DevicePage() {
       }
     };
 
+    // CANoe Advanced CAN Timing — 채널별 기본 sjw/tseg 값 (Vector 프리셋 실측 기준)
+    const getTimingDefaults = (idx: number): Record<string, number> => {
+      if (idx === 0) {
+        return { sjwAbr: 8, sjwDbr: 4, tseg1Abr: 31, tseg1Dbr: 15, tseg2Abr: 8, tseg2Dbr: 4 };
+      }
+      return { sjwAbr: 16, sjwDbr: 4, tseg1Abr: 63, tseg1Dbr: 15, tseg2Abr: 16, tseg2Dbr: 4 };
+    };
+
+    // Advanced 패널 토글 — 처음 열 때 비어 있는 타이밍 값을 채널별 기본값으로 채운다
+    const toggleAdvanced = (idx: number) => {
+      const rowKey = `${f.name}:${idx}`;
+      if (canAdvancedOpen === rowKey) { setCanAdvancedOpen(null); return; }
+      const defaults = getTimingDefaults(idx);
+      const item = items[idx] || {};
+      const missing = Object.keys(defaults).filter(k => item[k] == null || item[k] === '');
+      if (missing.length > 0) {
+        const next = items.map((it, i) => i === idx
+          ? { ...it, ...Object.fromEntries(missing.map(k => [k, defaults[k]])) }
+          : it);
+        update(next);
+      }
+      setCanAdvancedOpen(rowKey);
+    };
+
     // 스캔된 채널을 새 행으로 추가 (channel_index 로 물리 채널 직접 지정)
     const addChannelFromScan = (ch: VectorChannel) => {
       if (items.some(it => Number(it.channel_index) === ch.channel_index)) {
@@ -1810,6 +1836,15 @@ export default function DevicePage() {
                     자동 추천
                   </Button>
                 )}
+                <Button
+                  size="small"
+                  icon={<SettingOutlined />}
+                  type={canAdvancedOpen === rowKey ? 'primary' : 'default'}
+                  onClick={() => toggleAdvanced(idx)}
+                  title="채널별 CAN Timing(sjw/tseg) 세부 설정"
+                >
+                  Advanced
+                </Button>
               </>
             )}
             <Button
@@ -1820,6 +1855,33 @@ export default function DevicePage() {
               title="이 행 제거"
             />
           </div>
+          {f.row_test === 'canoe_channel' && canAdvancedOpen === rowKey && (
+            <div style={{ marginTop: 4, padding: 6, background: '#fafafa', border: '1px solid #eee', borderRadius: 3 }}>
+              <div style={{ fontSize: 10, color: '#888', marginBottom: 4 }}>
+                Advanced CAN Timing — 6개 값이 모두 있으면 정확한 tseg/sjw 로 연결, 하나라도 비우면 sample point 80% 자동 계산
+              </div>
+              {[
+                { label: 'Nominal', keys: ['sjwAbr', 'tseg1Abr', 'tseg2Abr'] },
+                { label: 'Data', keys: ['sjwDbr', 'tseg1Dbr', 'tseg2Dbr'] },
+              ].map(grp => (
+                <div key={grp.label} style={{ display: 'grid', gridTemplateColumns: '60px repeat(3, 1fr)', gap: 6, alignItems: 'end', marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, color: '#888', paddingBottom: 4 }}>{grp.label}</span>
+                  {grp.keys.map(k => (
+                    <div key={k} style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 10, color: '#888' }}>{k}</div>
+                      <InputNumber
+                        size="small"
+                        style={{ width: '100%' }}
+                        min={1}
+                        value={item[k] != null && item[k] !== '' ? Number(item[k]) : undefined}
+                        onChange={(v) => updateItem(idx, k, v)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
           {f.row_test === 'canoe_channel' && testResult && (
             <div style={{
               fontSize: 11,

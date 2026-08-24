@@ -451,13 +451,21 @@ def list_available_modules() -> list[dict]:
          "connect_fields": []},
         {"name": "CANoe_Ctrl", "label": "CANoe_Ctrl (Vector HW)", "connect_type": "none",
          "connect_fields": [
-             # 연결은 항상 CAN FD 500k/2M 고정 오픈이라 bitrate/data_bitrate/is_fd/app_name 편집 항목은
-             # 제거했다. 채널은 "Vector 장치 스캔"으로 감지된 물리 채널(channel_index)을 자동 추가한다
+             # CAN FD 타이밍: 채널마다 baudrate 가 다를 수 있으므로, 아래 "채널 구성"의
+             # 각 행(채널)에서 개별적으로 bitrate/data_bitrate 를 설정한다.
+             # Vector 장비 한 대가 여러 채널을 가지므로, 채널별 설정이 필수다.
+             # 채널은 "Vector 장치 스캔"으로 감지된 물리 채널(channel_index)을 자동 추가한다
              # — 앱채널(CAN 1/2) vs 하드웨어채널(3/4) 넘버링 혼동을 원천 제거.
              {"name": "device_info", "label": "채널 구성 (Vector 스캔으로 자동 추가)", "type": "object_list",
               "row_test": "canoe_channel",
               "default_items": [],
-              "item_fields": []},
+              "item_fields": [
+                  # 각 채널 행마다 개별 타이밍 설정. 기본값은 500k/2M (FD_E).
+                  {"name": "bitrate", "label": "Bitrate", "type": "select", "default": "500000",
+                   "options": ["33330", "83330", "100000", "125000", "250000", "500000", "1000000"]},
+                  {"name": "data_bitrate", "label": "Data Bitrate", "type": "select", "default": "2000000",
+                   "options": ["1000000", "1500000", "2000000", "4000000", "5000000"]},
+              ]},
          ]},
         {"name": "PCAN", "label": "PCAN (python-can)", "connect_type": "can",
          # 채널은 디바이스가 아니라 각 스텝의 channel 인자로 선택 — 여기선 인터페이스 공통 설정만.
