@@ -37,6 +37,9 @@ interface ConnectField {
   options_endpoint?: string;
   // object_list 전용: 각 row에 테스트 버튼 노출 (예: 'canoe_channel' → CAN 채널 통신 테스트)
   row_test?: string;
+  // 다른 필드 값이 일치할 때만 표시 (예: SCAR 슬롯 인터페이스 → net_mode=multiverse 일 때만).
+  // 숨겨진 동안에도 값은 extra_fields 에 그대로 남는다(모드 전환 후 복귀 시 유지).
+  show_when?: Record<string, string>;
   // select 전용: 숫자 옵션을 표시할 때 이 값을 더해 라벨링 (저장값은 원본 유지).
   // 예: display_offset=1 → 값 "0"을 "1"로 표시 (Vector Hardware Config 의 1-based 표기와 일치).
   display_offset?: number;
@@ -104,6 +107,19 @@ function SortableDeviceRow({ device, children }: { device: ManagedDevice; childr
       {children}
     </div>
   );
+}
+
+// SCAR multiverse: DTOOL/OBS_TOOL/PIU_Mst 3슬롯이 모두 배정되고 서로 달라야 정상 연결 가능.
+// 위반 시 메시지 반환(없으면 null) — 등록/수정 저장 전에 알려서 백엔드 Setup FAIL 을 미리 막는다.
+const SCAR_MV_SLOTS: [string, string][] = [['iface_dtool', 'DTOOL'], ['iface_obs_tool', 'OBS_TOOL'], ['iface_piu_mst', 'PIU_Mst']];
+function scarMultiverseIssue(values: Record<string, any>): string | null {
+  if (String(values.net_mode ?? 'multiverse') !== 'multiverse') return null;
+  const vals = SCAR_MV_SLOTS.map(([k]) => String(values[k] ?? '').trim());
+  const missing = SCAR_MV_SLOTS.filter((_, i) => !vals[i]).map(([, l]) => l);
+  if (missing.length) return `multiverse 인터페이스 미배정: ${missing.join(', ')} — RAD_Moon 3대가 인식되어야 하며 각 슬롯에 서로 다른 인터페이스를 지정하세요`;
+  const dups = [...new Set(vals.filter((v, i) => vals.indexOf(v) !== i))];
+  if (dups.length) return `multiverse 인터페이스 중복: ${dups.join(', ')} — DTOOL/OBS_TOOL/PIU_Mst 는 서로 달라야 합니다`;
+  return null;
 }
 
 // connect_fields 의 options_endpoint 를 live 조회해 드롭다운으로 보여주되,
@@ -866,6 +882,10 @@ export default function DevicePage() {
       message.warning(t('device.addressPlaceholder'));
       return;
     }
+    if (selectedModule === 'SCAR') {
+      const issue = scarMultiverseIssue(extraFieldValues);
+      if (issue) { message.warning(issue); return; }
+    }
     setConnecting(true);
     try {
       let devType: string = connectType;
@@ -1267,6 +1287,10 @@ export default function DevicePage() {
 
   const handleSaveEdit = async () => {
     if (!editDevice) return;
+    if (editModule === 'SCAR') {
+      const issue = scarMultiverseIssue({ ...(editDevice.info || {}), ...editExtraFields });
+      if (issue) { message.warning(issue); return; }
+    }
     setEditSaving(true);
     try {
       const updates: Record<string, any> = {};
@@ -1972,7 +1996,15 @@ export default function DevicePage() {
 
   // Render dynamic connect_fields inputs — hidden=true 인 필드는 폼에서 제외 (extra_fields 에는 default 가 들어감).
   const renderConnectFields = (fields: ConnectField[], values: Record<string, any>, onChange: (vals: Record<string, any>) => void) => {
-    return fields.filter(f => !f.hidden).map(f => (
+    const visible = (f: ConnectField) => {
+      if (f.hidden) return false;
+      if (!f.show_when) return true;
+      return Object.entries(f.show_when).every(([k, v]) => {
+        const cur = values[k] ?? fields.find(x => x.name === k)?.default ?? '';
+        return String(cur) === String(v);
+      });
+    };
+    return fields.filter(visible).map(f => (
       <div key={f.name} style={{ marginBottom: 3 }}>
         <span style={{ fontSize: 11, color: '#888', marginRight: 6 }}>{f.label}:</span>
         {f.type === 'object_list' ? (
@@ -2947,6 +2979,11 @@ export default function DevicePage() {
                                 defaults.container = h.container;
                                 defaults.control_base = `http://${h.ip}:3000`;  // 제어 REST(버전/토글)는 3000 — 버전 드롭다운 조회 대상
                                 if (firstIface) defaults.iface = firstIface;  // 인터넷 어댑터 제외한 안전 후보만 자동 채움
+                                // multiverse 슬롯(DTOOL/OBS_TOOL/PIU_Mst) — 스캔된 RAD_Moon 인터페이스를 순서대로 프리필.
+                                // 실제 배정은 사용자가 폼 드롭다운에서 확인/수정 (장비 바뀌면 수정 모달에서 재선택).
+                                if (safeIfaces[0]) defaults.iface_dtool = safeIfaces[0];
+                                if (safeIfaces[1]) defaults.iface_obs_tool = safeIfaces[1];
+                                if (safeIfaces[2]) defaults.iface_piu_mst = safeIfaces[2];
                                 setConnectType('module');
                                 setSelectedModule('SCAR');
                                 setConnectAddress(h.ip);
@@ -2972,6 +3009,11 @@ export default function DevicePage() {
                                     {inetSet.size > 0 && (
                                       <Tag color="red" style={{ marginLeft: 6 }}>
                                         ⚠ 인터넷 어댑터(선택 금지): {[...inetSet].join(',')}
+                                      </Tag>
+                                    )}
+                                    {safeIfaces.length < 3 && (
+                                      <Tag color="orange" style={{ marginLeft: 6 }}>
+                                        ⚠ multiverse 는 RAD_Moon 3대 필요 (현재 {safeIfaces.length}개 인식)
                                       </Tag>
                                     )}
                                   </div>

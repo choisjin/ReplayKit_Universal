@@ -391,6 +391,24 @@ async def scar_ui_versions(control_base: str = "http://localhost:3000"):
     return await asyncio.get_event_loop().run_in_executor(None, _fetch)
 
 
+@router.get("/scar/interfaces")
+async def scar_net_interfaces():
+    """SCAR multiverse 슬롯(DTOOL/OBS_TOOL/PIU_Mst) 드롭다운용 — 호스트 네트워크 인터페이스 목록.
+
+    SCAR 스캔과 같은 후보 산출(_scan_net_interfaces_sync)에서 인터넷(default route) 어댑터를
+    제외해 반환. Linux 가 아니면 빈 목록(ok=False) → 프론트는 자유 입력으로 폴백.
+    """
+    import asyncio
+    import sys as _sys
+    if not _sys.platform.startswith("linux"):
+        return {"ok": False, "options": [], "error": "Linux only"}
+    from ..services.device_manager import _scan_net_interfaces_sync, _default_route_ifaces_sync
+    loop = asyncio.get_event_loop()
+    ifaces = await loop.run_in_executor(None, _scan_net_interfaces_sync)
+    inet = await loop.run_in_executor(None, _default_route_ifaces_sync)
+    return {"ok": True, "options": [i for i in ifaces if i not in inet], "internet_ifaces": sorted(inet)}
+
+
 @router.get("/catalog")
 async def get_device_catalog():
     """프로젝트/모델 콤보 + 모듈 표시여부 카탈로그 조회."""

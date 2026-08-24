@@ -43,6 +43,15 @@ DEFAULT_STUB_ECUS = {
 }
 
 
+# multiverse 모드 net_config 슬롯 — 슬롯별로 RAD_Moon 인터페이스를 하나씩 배정한다.
+#   DTOOL / OBS_TOOL : netns 없이(arp on) 물리 인터페이스만 배정 (OBS_TOOL 은 cuttlefish=false)
+#   PIU_Mst          : veth 브리지(PIU_Mst) + 네임스페이스 생성 → [5] verify 대상
+MULTIVERSE_SLOTS = ("DTOOL", "OBS_TOOL", "PIU_Mst")
+
+# standalone 은 IVC 네임스페이스가 항상 필요 — 폼/구등록 값에 빠져 있어도 강제 추가.
+STANDALONE_REQUIRED_ECUS = ("IVC",)
+
+
 def build_config(
     ends: str,
     iface: str,
@@ -52,11 +61,16 @@ def build_config(
     ufw: str = "off",
     log_folder: str = "/tmp",
     cuttlefish: bool = True,
+    multiverse_ifaces: Optional[dict] = None,
 ) -> dict:
     """가이드의 multiverse.json / standalone.json 동등 dict 생성.
 
-    multiverse: vcans=0, net_config 항목에 interface/arp/stub_ecus(+cuttlefish).
+    multiverse: vcans=0, net_config 는 슬롯(DTOOL/OBS_TOOL/PIU_Mst)별 3개 항목.
+      multiverse_ifaces={"DTOOL": iface, "OBS_TOOL": iface, "PIU_Mst": iface} 로 슬롯마다
+      RAD_Moon 인터페이스를 배정. 값이 빈 슬롯은 항목을 생략한다(PIU_Mst 는 iface 로 폴백).
+      multiverse_ifaces 자체가 없으면(구등록 호환) 종전대로 iface 단일 항목 + stub_ecus.
     standalone: ip / stub_groups / conf_type=veth / cuttlefish=true 추가, vcans 없음.
+      stub_ecus 에 IVC 가 없으면 자동 추가(STANDALONE_REQUIRED_ECUS).
 
     cuttlefish=True 면 net_config 에 "cuttlefish": true 를 넣어 netns.sh 가 cvd-ebr 브리지를
     cuttlefish 용으로 구성/보존하게 한다. 이게 빠진 multiverse 는 clean 이 cvd-ebr 를 flush 한
@@ -68,6 +82,9 @@ def build_config(
     ecus = stub_ecus if stub_ecus else list(DEFAULT_STUB_ECUS[mode])
 
     if mode == "standalone":
+        for req in STANDALONE_REQUIRED_ECUS:
+            if req not in ecus:
+                ecus = [*ecus, req]
         # interface 다음에 ip 가 오도록 순서 재구성 (가이드 예시 가독성 유지)
         net_entry = {
             "interface": iface,
@@ -85,22 +102,66 @@ def build_config(
             "net_config": [net_entry],
         }
     else:  # multiverse
-        net_entry = {
-            "interface": iface,
-            "arp": "on",
-            "stub_ecus": ecus,
-        }
-        # cvd-ebr(TH/cuttlefish) 보존 — standalone 과 동일하게 cuttlefish 구성을 둔다.
-        if cuttlefish:
-            net_entry["cuttlefish"] = True
+        entries: list[dict] = []
+        if multiverse_ifaces is not None:
+            slots = {k: (v or "").strip() for k, v in (multiverse_ifaces or {}).items()}
+            if not slots.get("PIU_Mst"):
+                slots["PIU_Mst"] = iface  # 주 인터페이스 폴백
+            if slots.get("DTOOL"):
+                entries.append({
+                    "interface": slots["DTOOL"],
+                    "arp": "on",
+                    "netns": False,
+                    "stub_ecus": ["DTOOL"],
+                })
+            if slots.get("OBS_TOOL"):
+                entries.append({
+                    "interface": slots["OBS_TOOL"],
+                    "arp": "on",
+                    "netns": False,
+                    "stub_ecus": ["OBS_TOOL"],
+                    "cuttlefish": False,
+                })
+            if slots.get("PIU_Mst"):
+                piu = {
+                    "interface": slots["PIU_Mst"],
+                    "arp": "on",
+                    "conf_type": "veth",
+                    "bridge_name": "PIU_Mst",
+                    "stub_ecus": ["PIU_Mst"],
+                }
+                # cvd-ebr(TH/cuttlefish) 보존 — 네임스페이스를 만드는 PIU_Mst 항목에만 둔다.
+                if cuttlefish:
+                    piu["cuttlefish"] = True
+                entries.append(piu)
+        else:
+            # 구등록 호환: 단일 인터페이스 + stub_ecus
+            net_entry = {
+                "interface": iface,
+                "arp": "on",
+                "stub_ecus": ecus,
+            }
+            if cuttlefish:
+                net_entry["cuttlefish"] = True
+            entries.append(net_entry)
         config = {
             "ends": ends,
             "ufw": ufw,
             "vcans": 0,
             "log_folder": log_folder,
-            "net_config": [net_entry],
+            "net_config": entries,
         }
     return config
+
+
+def multiverse_verify_ecus(config: dict) -> list[str]:
+    """[5] verify 대상 — net_config 중 netns 를 만드는 항목(netns!=False)의 stub_ecus."""
+    out: list[str] = []
+    for e in config.get("net_config") or []:
+        if e.get("netns") is False:
+            continue
+        out.extend(e.get("stub_ecus") or [])
+    return out
 
 
 class SCARNetns:
@@ -190,6 +251,33 @@ class SCARNetns:
             [f"./{self.script_name}", "-c", config_path],
             timeout=NETNS_APPLY_TIMEOUT_S,
         )
+
+    # ── [3b] host verify ─────────────────────────────────
+    def verify_host(self, expect_ns: Optional[list[str]] = None) -> tuple[int, str]:
+        """호스트 `ip netns` — apply 직후 네임스페이스 생성 확인 (예: 'PIU_Mstns (id: 0)').
+
+        expect_ns 의 각 항목에 대해 '<name>ns' 가 출력에 있으면 OK. 없으면 'ns' 토큰 하나면 OK.
+        /var/run/netns 목록 조회라 sudo 불필요.
+        """
+        try:
+            res = subprocess.run(["ip", "netns"], capture_output=True, text=True,
+                                 timeout=NETNS_VERIFY_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            return 1, "timeout: ip netns"
+        except FileNotFoundError:
+            return 1, "ip not found"
+        out = ((res.stdout or "") + (res.stderr or "")).strip()
+        if res.returncode != 0:
+            return res.returncode, f"ip netns failed: {out}"
+        if not out:
+            return 1, "no network namespaces present (ip netns empty)"
+        if expect_ns:
+            missing = [e for e in expect_ns if f"{e}ns" not in out]
+            if missing:
+                return 1, f"missing namespaces for {missing}\n{out[-600:]}"
+        elif "ns" not in out:
+            return 1, f"no 'ns' namespace in output\n{out[-600:]}"
+        return 0, out[-600:]
 
     # ── [4] verify ───────────────────────────────────────
     def verify(self, container: str, expect_ns: Optional[list[str]] = None) -> tuple[int, str]:

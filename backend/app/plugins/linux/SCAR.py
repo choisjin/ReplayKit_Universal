@@ -68,7 +68,7 @@ from typing import Optional
 from .common.scar_api import SCARApi
 from .common.scar_docker import SCARDocker, SCAR_LAUNCH_LOG
 from .common.scar_health import SCARHealth
-from .common.scar_netns import SCARNetns, build_config, DEFAULT_STUB_ECUS
+from .common.scar_netns import SCARNetns, build_config, DEFAULT_STUB_ECUS, MULTIVERSE_SLOTS, multiverse_verify_ecus
 
 
 logger = logging.getLogger(__name__)
@@ -120,6 +120,10 @@ class SCAR:
         cuttlefish = True,                       # net_config 에 cuttlefish=true (cvd-ebr/TH 보존)
         iface: str = "",                         # 네트워크 인터페이스 (스캔 자동 채움)
         stub_ecus: str = "",                     # 공백 아닌 콤마 구분 (빈 칸 = 모드 기본값)
+        # multiverse 슬롯별 RAD_Moon 인터페이스 (스캔 드롭다운). 비면 PIU_Mst 는 iface 로 폴백.
+        iface_dtool: str = "",
+        iface_obs_tool: str = "",
+        iface_piu_mst: str = "",
         standalone_ip: str = "192.168.1.10",     # standalone 모드 전용 IP
         ufw: str = "off",
         log_folder: str = "/tmp",
@@ -177,6 +181,14 @@ class SCAR:
         self.cuttlefish = _as_bool(cuttlefish)
         self.iface = iface
         self.stub_ecus = stub_ecus
+        self.multiverse_ifaces = {
+            "DTOOL": (iface_dtool or "").strip(),
+            "OBS_TOOL": (iface_obs_tool or "").strip(),
+            "PIU_Mst": (iface_piu_mst or "").strip(),
+        }
+        # multiverse 에서 주 인터페이스(iface: clean -i / ethernet 폴백)가 비면 PIU_Mst 슬롯으로 대체.
+        if self.net_mode == "multiverse" and not self.iface and self.multiverse_ifaces["PIU_Mst"]:
+            self.iface = self.multiverse_ifaces["PIU_Mst"]
         self.standalone_ip = standalone_ip
         self.ufw = ufw
         self.log_folder = log_folder
@@ -298,6 +310,26 @@ class SCAR:
             return self._mark_fail("iface not configured (스캔으로 인터페이스 선택)", log)
         if not self._iface_exists(self.iface):
             return self._mark_fail(f"interface '{self.iface}' not in /sys/class/net/", log)
+        if self.net_mode == "multiverse":
+            # multiverse 는 RAD_Moon 3대가 각각 DTOOL/OBS_TOOL/PIU_Mst — 3슬롯 모두 배정 + 서로 다른
+            # 인터페이스여야 정상 연결 가능. 하나라도 빠지거나 겹치면 여기서 FAIL 로 알린다.
+            missing = [k for k in MULTIVERSE_SLOTS if not self.multiverse_ifaces.get(k)]
+            if missing:
+                return self._mark_fail(
+                    f"multiverse 인터페이스 미배정: {', '.join(missing)} — RAD_Moon 3대가 모두 인식되어야 하며 "
+                    f"DTOOL/OBS_TOOL/PIU_Mst 각각에 인터페이스를 지정하세요 (수정 모달에서 선택)", log)
+            vals = [self.multiverse_ifaces[k] for k in MULTIVERSE_SLOTS]
+            dups = sorted({v for v in vals if vals.count(v) > 1})
+            if dups:
+                return self._mark_fail(
+                    f"multiverse 인터페이스 중복: {', '.join(dups)} — DTOOL/OBS_TOOL/PIU_Mst 는 서로 다른 "
+                    f"인터페이스여야 합니다", log)
+            for slot in MULTIVERSE_SLOTS:
+                sif = self.multiverse_ifaces[slot]
+                if not self._iface_exists(sif):
+                    return self._mark_fail(
+                        f"{slot} interface '{sif}' not in /sys/class/net/ (RAD_Moon 재스캔 후 수정)", log)
+            log.append("[pre] multiverse 슬롯: " + ", ".join(f"{k}={self.multiverse_ifaces[k]}" for k in MULTIVERSE_SLOTS))
 
         # ── [0] 최초 연결 시 컨테이너 정리 후 연결 ─────────────────────
         # 이 ReplayKit 세션에서 SCAR 를 처음 연결할 때(프로세스당 1회), 이전 세션에서 남은
@@ -321,10 +353,14 @@ class SCAR:
         # ── [1] clean ────────────────────────────────────
         if self.netns_clean:
             self._report("netns 정리 중")
-            rc, msg = self._netns.clean(self.iface)
-            log.append(f"[1] netns clean:\n{self._indent(msg)}")
-            if rc != 0:
-                return self._mark_fail("netns clean", log)
+            # multiverse: 슬롯별 인터페이스 3개를 각각 타겟으로 clean (예: --setup=hil -i enxb038... --clean)
+            clean_targets = ([self.multiverse_ifaces[k] for k in MULTIVERSE_SLOTS]
+                             if self.net_mode == "multiverse" else [self.iface])
+            for ci in clean_targets:
+                rc, msg = self._netns.clean(ci)
+                log.append(f"[1] netns clean -i {ci}:\n{self._indent(msg)}")
+                if rc != 0:
+                    return self._mark_fail(f"netns clean (-i {ci})", log)
         else:
             log.append("[1] netns clean: skipped (netns_clean=False)")
 
@@ -335,7 +371,6 @@ class SCAR:
         #   → start_services 의 ecu 를 netns 에 그대로 병합하면 "Invalid ECU" 로 apply 실패.
         #   매핑 규칙이 단순치 않아 자동 병합하지 않는다. stub_ecus 는 netns 이름으로 직접 지정.
         ecus = _split_csv(self.stub_ecus)
-        resolved_ecus = ecus or list(DEFAULT_STUB_ECUS.get(self.net_mode, []))  # 검증용 실제 적용 ecus
         config = build_config(
             ends=self.ends,
             iface=self.iface,
@@ -345,7 +380,13 @@ class SCAR:
             ufw=self.ufw,
             log_folder=self.log_folder,
             cuttlefish=self.cuttlefish,
+            # multiverse: 슬롯(DTOOL/OBS_TOOL/PIU_Mst)별 인터페이스 3항목. 하나도 없으면 구방식(iface 단일).
+            multiverse_ifaces=(self.multiverse_ifaces
+                               if self.net_mode == "multiverse" and any(self.multiverse_ifaces.values())
+                               else None),
         )
+        # 검증용 실제 적용 ecus — netns 를 만드는 항목(netns!=False)만
+        resolved_ecus = multiverse_verify_ecus(config)
         cfg_path, cfg_msg = self._netns.write_config(config, self.net_mode)
         if cfg_path is None:
             return self._mark_fail(f"config write: {cfg_msg}", log)
@@ -357,6 +398,13 @@ class SCAR:
         log.append(f"[3] netns apply:\n{self._indent(msg)}")
         if rc != 0:
             return self._mark_fail("netns apply", log)
+        # 정상연결 판정: 호스트 `ip netns` 에 netns 대상 ECU 의 '<ecu>ns'(multiverse: PIU_Mstns) 가 있어야 한다.
+        rc, msg = self._netns.verify_host(expect_ns=resolved_ecus or None)
+        log.append(f"[3b] host ip netns:\n{self._indent(msg)}")
+        if rc != 0:
+            return self._mark_fail(
+                f"host ip netns 검증 실패 — {', '.join(f'{e}ns' for e in resolved_ecus)} 미생성 "
+                f"(netns apply 출력 확인)", log)
 
         # ── [4] UI 기동 (컨테이너 미기동 또는 8081 UI 미응답 시) ─────────
         # 두 경우를 구분해야 한다:

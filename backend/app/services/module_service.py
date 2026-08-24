@@ -634,6 +634,15 @@ def list_available_modules() -> list[dict]:
               "type": "text", "default": "", "hidden": True},
              {"name": "net_mode", "label": "구성 모드", "type": "select", "default": "multiverse",
               "options": ["multiverse", "standalone"]},
+             # ── multiverse 슬롯별 RAD_Moon 인터페이스 (multiverse.json net_config 3항목) ──
+             #   드롭다운은 /api/device/scar/interfaces(호스트 /sys/class/net, 인터넷 어댑터 제외)에서
+             #   live 조회. RAD_Moon 장비가 바뀌면 수정 모달에서 다시 선택. show_when 으로 multiverse 에서만 표시.
+             {"name": "iface_dtool", "label": "DTOOL 인터페이스 (RAD_Moon)", "type": "select", "default": "",
+              "options_endpoint": "/api/device/scar/interfaces", "show_when": {"net_mode": "multiverse"}},
+             {"name": "iface_obs_tool", "label": "OBS_TOOL 인터페이스 (RAD_Moon)", "type": "select", "default": "",
+              "options_endpoint": "/api/device/scar/interfaces", "show_when": {"net_mode": "multiverse"}},
+             {"name": "iface_piu_mst", "label": "PIU_Mst 인터페이스 (RAD_Moon, veth 브리지)", "type": "select", "default": "",
+              "options_endpoint": "/api/device/scar/interfaces", "show_when": {"net_mode": "multiverse"}},
              # cvd-ebr(TH/cuttlefish) 보존 — net_config 에 cuttlefish=true. multiverse 도 적용해야
              #   netns clean 이 cvd-ebr 를 flush 한 뒤 cuttlefish 용으로 복원, TH adb 가 안 끊긴다.
              {"name": "cuttlefish", "label": "cuttlefish(cvd-ebr) 보존", "type": "select",
@@ -646,7 +655,7 @@ def list_available_modules() -> list[dict]:
              #   기본값은 start_services 기본(PCU_PROXY_FrontEnd_PIU_Mst 서비스)에 맞춘 base ECU 셋.
              {"name": "stub_ecus",
               "label": "stub_ecus (netns ECU, 콤마 구분). /start의 _PIU_Mst 접미사 빼고 base 이름 사용",
-              "type": "text", "default": "PIU_Mst, PCU_PROXY_FrontEnd", "hidden": True},
+              "type": "text", "default": "PIU_Mst, PCU_PROXY_FrontEnd, IVC", "hidden": True},
              {"name": "sudo_password", "label": "sudo 비밀번호 (passwordless 미설정 시 필수)",
               "type": "password", "default": ""},
              # ── 재기동 스크립트 (scar.sh) ──
