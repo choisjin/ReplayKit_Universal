@@ -68,6 +68,7 @@ def build_config(
     multiverse: vcans=0, net_config 는 슬롯(DTOOL/OBS_TOOL/PIU_Mst)별 3개 항목.
       multiverse_ifaces={"DTOOL": iface, "OBS_TOOL": iface, "PIU_Mst": iface} 로 슬롯마다
       RAD_Moon 인터페이스를 배정. 값이 빈 슬롯은 항목을 생략한다(PIU_Mst 는 iface 로 폴백).
+      이 모드에서는 cuttlefish 인자를 쓰지 않는다 (사용자 지정 JSON 과 동일하게 — OBS_TOOL 만 false).
       multiverse_ifaces 자체가 없으면(구등록 호환) 종전대로 iface 단일 항목 + stub_ecus.
     standalone: ip / stub_groups / conf_type=veth / cuttlefish=true 추가, vcans 없음.
       stub_ecus 에 IVC 가 없으면 자동 추가(STANDALONE_REQUIRED_ECUS).
@@ -130,9 +131,9 @@ def build_config(
                     "bridge_name": "PIU_Mst",
                     "stub_ecus": ["PIU_Mst"],
                 }
-                # cvd-ebr(TH/cuttlefish) 보존 — 네임스페이스를 만드는 PIU_Mst 항목에만 둔다.
-                if cuttlefish:
-                    piu["cuttlefish"] = True
+                # 사용자 지정 multiverse.json 그대로 (2026-08-25): PIU_Mst 항목에 cuttlefish 키를 넣지 않는다.
+                # ⚠️ 같은 PC 에서 TH(cuttlefish)를 함께 쓰면 netns clean 이 cvd-ebr 를 flush 한 뒤
+                #    복원하지 않아 TH adb 가 끊길 수 있다 — 그 경우 TH 재연결 필요 (standalone/구방식은 종전대로 보존).
                 entries.append(piu)
         else:
             # 구등록 호환: 단일 인터페이스 + stub_ecus
