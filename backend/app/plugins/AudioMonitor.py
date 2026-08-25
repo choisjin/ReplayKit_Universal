@@ -82,8 +82,9 @@ DEFAULT_CHUNK = 2 ** 11
 CHANNELS = 1
 
 # 비교 판정 임계 (audiocomparetest 참고): NCC 유사도 >= threshold 이면 PASS
-# 기본 threshold 0.85 (같은 장비·환경에서 녹음 권장값)
-COMPARE_DEFAULT_THRESHOLD = 0.85
+# threshold 는 0~100 퍼센트 scale (100 = NCC 1.0 = 완전 일치).
+# 기본 90 (같은 장비·환경에서 녹음 권장값). 스텝 인자가 범위를 벗어나면 이 값으로 대체.
+COMPARE_DEFAULT_THRESHOLD = 90.0
 COMPARE_MIN_OVERLAP_RATIO = 0.5
 
 
@@ -430,27 +431,85 @@ def _find_best_offset_ncc(ref: np.ndarray, rec: np.ndarray) -> int:
     """ref 기준으로 rec 가 몇 샘플 밀렸는지 반환 (cross-correlation).
 
     큰 파일 성능을 위해 다운샘플 후 coarse 탐색 → 원본에서 fine 탐색.
+
+    성능 개선 (v2):
+      - coarse pass: np.correlate(O(n²)) → FFT 기반 cross-correlation(O(n log n)).
+      - 다운샘플링 공식 수정: 10초 분량(441k 샘플)에서도 실제로 다운샘플링이
+        동작하도록 target 샘플 수 기반으로 factor 를 계산한다.
+        (기존 공식은 COARSE_SR*120=960k 이상이어야 factor>1 이 되어
+        21초 이하 녹음에서는 다운샘플링이 전혀 되지 않았음)
+      - fine pass: coarse 결과 주변 ±4*factor 범위만 np.dot 으로 정밀 탐색.
+      - (ReplayKit 보정) coarse 는 단순 데시메이션 대신 블록 RMS 엔벨로프 사용.
     """
     if np is None:
         return 0
     if len(ref) < 2 or len(rec) < 2:
         return 0
-    # ── coarse pass (다운샘플) ──
-    COARSE_SR = 8000
-    factor = max(1, min(len(ref), len(rec)) // (COARSE_SR * 120))
-    ref_ds = ref[::factor]
-    rec_ds = rec[::factor]
+
+    # ── coarse pass (블록 RMS 엔벨로프 + FFT cross-correlation) ──
+    # 목표: 신호를 ~8000 블록 이하로 줄여 FFT 를 빠르게 수행한다.
+    # ⚠️ ref[::factor] 같은 단순 데시메이션은 쓰지 않는다: 저역통과 없이 솎아내면
+    #    lag 가 factor 의 배수가 아닐 때 두 신호의 상관이 사라지고(광대역 신호),
+    #    순음은 앨리어싱되어 coarse 결과가 수천 샘플씩 틀린다(합성신호 실측).
+    #    블록 RMS 엔벨로프는 오디오의 에너지 변화 패턴으로 정렬하므로 이 문제가 없다.
+    COARSE_TARGET_SAMPLES = 8000
+    n_min = min(len(ref), len(rec))
+    factor = max(1, n_min // COARSE_TARGET_SAMPLES)
+
+    def _block_rms(x: np.ndarray) -> np.ndarray:
+        if factor == 1:
+            return x.astype(np.float64)
+        n_blk = len(x) // factor
+        if n_blk < 1:
+            return x.astype(np.float64)
+        blocks = x[: n_blk * factor].reshape(n_blk, factor)
+        return np.sqrt(np.mean(blocks ** 2, axis=1))
+
+    ref_ds = _block_rms(ref)
+    rec_ds = _block_rms(rec)
     if len(ref_ds) < 2 or len(rec_ds) < 2:
         return 0
-    # numpy 기반 cross-correlation (full mode)
-    corr = np.correlate(ref_ds, rec_ds, mode="full")
-    coarse_lag = int(np.argmax(corr)) - (len(rec_ds) - 1)
-    coarse_lag *= factor
+    # DC 제거 — 엔벨로프는 항상 양수라 평균을 빼지 않으면 겹침이 큰 lag 쪽으로 편향된다.
+    ref_ds = ref_ds - ref_ds.mean()
+    rec_ds = rec_ds - rec_ds.mean()
 
-    # ── fine pass (coarse 주변 ±factor 범위) ──
-    search = factor * 2
-    best_lag = coarse_lag
+    # FFT 기반 cross-correlation: O(n log n)
+    # np.correlate(mode="full") 은 O(n²) 이므로 긴 신호에서 수 분이 걸린다.
+    corr_len = len(ref_ds) + len(rec_ds) - 1
+    fft_size = 1 << int(np.ceil(np.log2(corr_len)))  # 2의 거듭제곱
+    fx = np.fft.rfft(ref_ds, fft_size)
+    fy = np.fft.rfft(rec_ds, fft_size)
+    corr = np.fft.irfft(fx * np.conj(fy), fft_size)
+
+    # argmax 를 full cross-correlation 인덱스로 변환
+    # corr[0..len(ref_ds)-1] = lag 0..(len(ref_ds)-1)
+    # corr[fft_size-len(rec_ds)+1..fft_size-1] = 음의 lag
+    # → valid 범위만 확인하기 위해 roll 대신 인덱스 매핑 사용
+    max_positive = min(len(ref_ds), corr_len)
+    max_negative = min(len(rec_ds) - 1, corr_len - max_positive)
+
+    best_idx = 0
     best_val = -np.inf
+    # 양의 lag (ref 가 rec 보다 뒤에 시작)
+    pos_part = corr[:max_positive]
+    pi = int(np.argmax(pos_part))
+    if pos_part[pi] > best_val:
+        best_val = float(pos_part[pi])
+        best_idx = pi
+    # 음의 lag (rec 가 ref 보다 뒤에 시작)
+    if max_negative > 0:
+        neg_part = corr[fft_size - max_negative:]
+        ni = int(np.argmax(neg_part))
+        if neg_part[ni] > best_val:
+            best_val = float(neg_part[ni])
+            best_idx = -(max_negative - ni)
+
+    coarse_lag = best_idx * factor
+
+    # ── fine pass (coarse 주변 ±4*factor 범위에서 정밀 탐색) ──
+    search = factor * 4
+    best_lag = coarse_lag
+    best_val_fine = -np.inf
     for delta in range(-search, search + 1):
         lag = coarse_lag + delta
         s_ref, e_ref, s_rec, e_rec = _overlap_indices_ncc(len(ref), len(rec), lag)
@@ -459,8 +518,8 @@ def _find_best_offset_ncc(ref: np.ndarray, rec: np.ndarray) -> int:
         a = ref[s_ref:e_ref]
         b = rec[s_rec:e_rec]
         val = float(np.dot(a, b))
-        if val > best_val:
-            best_val = val
+        if val > best_val_fine:
+            best_val_fine = val
             best_lag = lag
     return best_lag
 
@@ -524,6 +583,11 @@ class AudioMonitor:
     # 여러 AudioMonitor 인스턴스가 device/session_name 을 지정하지 않아도
     # 서로 다른 마이크를 자동으로 배정받도록 추적한다.
     _used_devices: set[int] = set()
+    # 원래 설정(config) → 해석된 장치 이름 매핑 목록.
+    # StartMonitor 가 설정된 장치가 사용 중이어서 다른 장치로 자동 전환한 경우,
+    # StopMonitor 가 올바른 세션을 찾을 수 있도록 기록한다.
+    # 같은 config 로 여러 인스턴스가 등록될 수 있으므로 리스트로 관리한다.
+    _resolved_device_list: list[tuple[str, str]] = []
 
     def __init__(self, device_index: str = "", device_name: str = "",
                  drop_threshold: int = 500, sample_rate: int = DEFAULT_RATE):
@@ -579,7 +643,35 @@ class AudioMonitor:
             return matches[0]["index"], matches[0]["name"]
         return None, ""
 
-    def _resolve_target(self, hint: str = "") -> tuple[Optional[int], str]:
+    def _is_device_in_use(self, idx: int) -> bool:
+        """해당 장치 인덱스가 이미 활성 세션에서 사용 중인지 확인한다."""
+        with self._lock:
+            for s in self._sessions.values():
+                if s.get("device_index") == idx and s.get("check"):
+                    return True
+        return False
+
+    def _is_same_config_in_use(self, idx: int) -> bool:
+        """해당 장치를 사용 중인 세션이 이 인스턴스와 같은 config 를 가졌는지 확인한다.
+
+        여러 AudioMonitor 인스턴스가 같은 device_index/device_name 을 지정한 경우,
+        첫 번째 인스턴스가 해당 장치를 사용 중이면 두 번째 인스턴스는 자동 할당으로
+        다른 장치를 배정받아야 한다. 이 메서드는 그 판단을 위해 사용된다.
+        """
+        with self._lock:
+            for s in self._sessions.values():
+                if s.get("device_index") == idx and s.get("check"):
+                    cfg_idx = s.get("config_device_index")
+                    cfg_name = s.get("config_device_name")
+                    if (cfg_idx and self._device_index and
+                            str(cfg_idx).strip() == str(self._device_index).strip()):
+                        return True
+                    if (cfg_name and self._device_name and
+                            str(cfg_name).strip().lower() == str(self._device_name).strip().lower()):
+                        return True
+        return False
+
+    def _resolve_target(self, hint: str = "", force: bool = False) -> tuple[Optional[int], str]:
         """대상 오디오 입력 장치를 결정한다.
 
         우선순위: 등록된 device_index > 등록된 device_name > hint(세션명 등) > 클래스 레벨 장치 레지스트리 > 자동 할당 > 첫 번째 입력 장치.
@@ -589,16 +681,26 @@ class AudioMonitor:
         hint 가 비어 있으면 **이미 활성 세션에서 사용 중이 아닌 장치**를 자동으로 선택한다.
         이렇게 하면 여러 AudioMonitor 인스턴스가 device/session_name 을 지정하지 않아도
         서로 다른 마이크를 자동으로 할당받는다 (예: AudioMonitor_1 → Cluster, AudioMonitor_2 → IVI).
+
+        force=True 이면 **사용자가 지정한 장치(device_index/device_name)를 강제로 사용한다**.
+        이는 호출자가 이미 multi-instance 상황을 처리했음을 의미하며,
+        해당 장치가 다른 세션에서 사용 중이더라도 무시한다.
         """
         # 1) 등록된 device_index (__init__에서 Connect() 스캔으로 채워짐) - 최우선
+        # 단, force=False 이고 해당 장치가 이미 활성 세션에서 사용 중이면 자동 할당으로 폴백한다.
+        # 여러 AudioMonitor 인스턴스가 같은 device_index 로 등록되어 있어도
+        # 서로 다른 장치를 자동으로 배정받도록 한다.
         if self._device_index:
             idx, name = self._find_device(self._device_index)
             if idx is not None:
                 if not self._device_name or self._device_name.lower() in name.lower():
-                    return idx, name
+                    if force or not self._is_device_in_use(idx):
+                        return idx, name
         # 2) 등록된 device_name (__init__에서 Connect() 스캔으로 채워짐)
         if self._device_name:
-            return self._find_device(self._device_name)
+            idx, name = self._find_device(self._device_name)
+            if idx is not None and (force or not self._is_device_in_use(idx)):
+                return idx, name
         # 3) hint (예: session_name="Cluster")를 장치명으로 시도 - 세션명이 장치명과
         # 일치하면 해당 장치를 우선 사용한다. (여러 장치가 있을 때 세션마다 다른
         # 장치를 녹음해야 하므로 레지스트리보다 우선한다)
@@ -640,24 +742,39 @@ class AudioMonitor:
         # 5a) Connect() 로 등록된 장치(_device_registry)를 우선 사용한다.
         #     Microsoft Sound Mapper - Input(인덱스 0) 같은 기본 장치를 건너뛰고
         #     실제 연결된 USB 마이크(Cluster, IVI 등)만 선택한다.
+        #     **등록 순서대로** 선택한다: 첫 번째로 Connect() 된 장치가 첫 번째
+        #     StartMonitor 호출에 할당된다. AudioMonitor_1 → Cluster(먼저 등록),
+        #     AudioMonitor_2 → IVI(나중 등록) 순서를 보장한다.
         registry = getattr(type(self), "_device_registry", {})
         if registry:
-            # 레지스트리의 장치 이름을 실제 장치 목록에서 찾아 사용하지 않은 것 중 첫 번째 선택
+            # 레지스트리의 장치 이름을 실제 장치 목록에서 찾아 사용하지 않은 것 중
+            # **등록 순서대로** 선택한다.
             for reg_name, (reg_idx, reg_full) in registry.items():
                 if reg_idx in used_indices:
                     continue
                 found = self._find_device(reg_name)
                 if found[0] is not None and found[0] not in used_indices:
                     return found[0], found[1]
-            # 모든 등록 장치가 사용되었으면 첫 번째 등록 장치로 폴백
+            # 모든 등록 장치가 사용되었으면 전체 입력 장치 목록에서 사용하지 않은 장치를 찾는다.
+            # (registry 에 없는 장치도 선택할 수 있도록 한다)
+            for d in devices:
+                if d["index"] not in used_indices and not self._is_device_in_use(d["index"]):
+                    if "sound mapper" in d["name"].lower() or "사운드 매퍼" in d["name"]:
+                        continue
+                    return d["index"], d["name"]
+            # 모든 장치가 사용되었으면 첫 번째 등록 장치로 폴백
+            # 단, 해당 장치가 이미 활성 세션에서 사용 중이면 전체 목록에서 사용하지 않은 장치를 찾는다.
             first_reg = next(iter(registry.items()))
             found = self._find_device(first_reg[0])
-            if found[0] is not None:
+            if found[0] is not None and not self._is_device_in_use(found[0]):
                 return found[0], found[1]
 
         # 5b) 레지스트리가 비어 있으면 전체 입력 장치 목록에서 사용하지 않은 첫 번째 장치 선택
+        #     Microsoft Sound Mapper - Input(인덱스 0) 같은 기본 장치는 건너뛴다.
         for d in devices:
-            if d["index"] not in used_indices:
+            if d["index"] not in used_indices and not self._is_device_in_use(d["index"]):
+                if "sound mapper" in d["name"].lower() or "사운드 매퍼" in d["name"]:
+                    continue
                 return d["index"], d["name"]
         # 모든 장치가 사용되었으면 첫 번째 장치로 폴백 (하위 호환)
         return devices[0]["index"], devices[0]["name"]
@@ -697,10 +814,91 @@ class AudioMonitor:
         여러 세션이 존재하고 인스턴스에 device 정보가 없으면 **가장 최근에 시작된 세션**을
         반환한다. 이는 사용자가 device/session_name 을 지정하지 않고
         StartMonitor → StopMonitor 를 순차적으로 호출하는 시나리오를 지원한다.
+
+        **중요**: 인스턴스에 device_index/device_name 이 있으면 **그 장치의 세션만** 매칭한다.
+        registry 의 다른 장치 정보를 targets 에 추가하면 여러 장치를 섞어 쓸 때
+        다른 장치의 세션까지 매칭되어 잘못된 세션을 종료하는 문제가 발생한다.
         """
-        targets = [self._device_name, self._device_index]
-        targets = [t for t in targets if t]
-        # 클래스 레벨 device registry에서 device 정보를 추가로 수집 (새 인스턴스가 공유)
+        # 인스턴스 자체의 device 정보 (가장 정확한 매칭 기준)
+        # 해석된 장치(StartMonitor/Connect 에서 설정)를 우선 사용하고, 없으면 설정값으로 폴백한다.
+        # StartMonitor 가 설정된 장치가 사용 중이어서 다른 장치로 자동 전환한 경우,
+        # _resolved_device_list 에서 이 인스턴스의 설정에 해당하는 해석된 장치를 찾는다.
+        resolved_name = self._resolved_name
+        has_resolved = bool(resolved_name)  # own_targets 에 해석된 장치 이름이 포함되어 있는지 여부
+        if not resolved_name:
+            cfg_key = f"{self._device_index}:{self._device_name}"
+            resolved_list = getattr(type(self), "_resolved_device_list", [])
+            for ck, rn in resolved_list:
+                if ck == cfg_key:
+                    resolved_name = rn
+                    has_resolved = True
+                    break
+        own_targets = [resolved_name or self._device_name, self._resolved_index or self._device_index]
+        own_targets = [t for t in own_targets if t]
+
+        # 인스턴스에 device 정보가 있으면 그 장치의 세션만 매칭한다.
+        if own_targets:
+            candidates: list[tuple[str, float]] = []
+            with self._lock:
+                for name, s in self._sessions.items():
+                    dev = str(s.get("device", ""))
+                    sidx = s.get("device_index")
+                    created = float(s.get("created_at", 0) or 0)
+                    matched = False
+                    if has_resolved:
+                        # 해석된 장치 이름이 있으면 **이름으로만** 매칭한다.
+                        # 여러 인스턴스가 같은 config(device_index/name)를 가져도
+                        # StartMonitor 가 서로 다른 장치로 자동 전환했을 수 있으므로,
+                        # config 값으로 매칭하면 여러 세션이 동시에 매칭되어
+                        # 잘못된 세션을 종료하는 문제가 발생한다.
+                        # 따라서 해석된 장치 이름(own_targets[0])이 세션의 device 문자열에
+                        # 포함되는 세션만 후보로 삼는다.
+                        t = own_targets[0] if own_targets else self._device_name
+                        if t and t.lower() in dev.lower():
+                            matched = True
+                        if not matched and name and (name.lower() in t.lower() or t.lower() in name.lower()):
+                            matched = True
+                    else:
+                        # 해석된 장치 이름이 없으면 index/name/config 로 매칭한다.
+                        # 1) 세션에 저장된 device_index와 인스턴스의 device_index가 일치하면 매칭 (가장 정확)
+                        if (self._resolved_index or self._device_index) and sidx is not None and str(sidx) == str(self._resolved_index or self._device_index).strip():
+                            matched = True
+                        # 2) 인스턴스의 device_name/device_index 가 세션의 device 문자열에 포함되면 매칭
+                        if not matched:
+                            for t in own_targets:
+                                if t and t.lower() in dev.lower():
+                                    matched = True
+                                    break
+                        # 3) 세션 키 자체가 인스턴스의 device 문자열에 포함되면 매칭
+                        if not matched and name and any(name.lower() in t.lower() for t in own_targets):
+                            matched = True
+                        # 4) 세션 키가 인스턴스의 device 문자열과 부분 일치하면 매칭
+                        if not matched and name and any(t.lower() in name.lower() for t in own_targets):
+                            matched = True
+                        # 5) 폴백: 세션에 저장된 원래 설정값(config_device_index/name)이 인스턴스의 설정값과 일치하면 매칭
+                        # StartMonitor 가 설정된 장치가 사용 중이어서 다른 장치로 자동 전환한 경우에도
+                        # StopMonitor 가 올바른 세션을 찾을 수 있도록 한다.
+                        if not matched:
+                            cfg_idx = s.get("config_device_index")
+                            cfg_name = s.get("config_device_name")
+                            if cfg_idx and self._device_index and str(cfg_idx).strip() == str(self._device_index).strip():
+                                matched = True
+                            if not matched and cfg_name and self._device_name and str(cfg_name).strip().lower() == str(self._device_name).strip().lower():
+                                matched = True
+                    if matched:
+                        candidates.append((name, created))
+            if candidates:
+                if len(candidates) == 1:
+                    return candidates[0][0]
+                # 여러 후보가 있으면 가장 최근에 시작된 세션을 반환
+                candidates.sort(key=lambda x: x[1], reverse=True)
+                return candidates[0][0]
+            # 인스턴스의 device 정보로 매칭되는 세션이 없으면 None 반환
+            return None
+
+        # 인스턴스에 device 정보가 없으면 registry + 세션 키로 매칭
+        targets = []
+        # 클래스 레벨 device registry에서 device 정보를 수집 (새 인스턴스가 공유)
         registry = getattr(type(self), "_device_registry", {})
         for reg_name, (reg_idx, reg_full) in registry.items():
             if reg_name not in targets:
@@ -713,32 +911,21 @@ class AudioMonitor:
         with self._lock:
             for name, s in self._sessions.items():
                 dev = str(s.get("device", ""))
-                sidx = s.get("device_index")
                 created = float(s.get("created_at", 0) or 0)
                 matched = False
-                # 1) 세션에 저장된 device_index와 인스턴스의 device_index가 일치하면 매칭 (가장 정확)
-                if self._device_index and sidx is not None and str(sidx) == str(self._device_index).strip():
-                    matched = True
-                # 2) 등록된 device_name/device_index 가 세션의 device 문자열에 포함되면 매칭
-                if not matched:
-                    for t in targets:
-                        if t and t.lower() in dev.lower():
-                            matched = True
-                            break
-                # 3) 세션 키 자체가 device 문자열에 포함되면 매칭 (예: 'Cluster' in '[1] Cluster(7- USB Audio Device)')
+                # 1) registry 의 device_name/device_index 가 세션의 device 문자열에 포함되면 매칭
+                for t in targets:
+                    if t and t.lower() in dev.lower():
+                        matched = True
+                        break
+                # 2) 세션 키 자체가 device 문자열에 포함되면 매칭 (예: 'Cluster' in '[1] Cluster(7- USB Audio Device)')
                 if not matched and name and name.lower() in dev.lower():
                     matched = True
-                # 4) 세션 키가 장치 이름과 부분 일치하면 매칭 (예: 'Cluster' vs 'Cluster(7- USB Audio Device)')
+                # 3) 세션 키가 registry 의 장치 이름과 부분 일치하면 매칭
                 if not matched and name and any(name.lower() in d.lower() for d in targets):
                     matched = True
-                # 5) 세션 키가 장치 이름과 정확히 일치하면 매칭 (예: session_name="Cluster" vs device_name="Cluster")
-                if not matched and name and any(name.lower() == d.lower() for d in targets):
-                    matched = True
-                # 6) 세션 키가 sanitized 장치 이름과 일치하면 매칭
-                #    (예: session_name="Cluster_7-_USB_Audio_Device" vs device="[1] Cluster(7- USB Audio Device)")
+                # 4) 세션 키가 sanitized 장치 이름과 일치하면 매칭
                 if not matched and name:
-                    # sanitized 세션 키에서 원래 장치 이름의 일부를 추출해 비교
-                    # 예: "Cluster_7-_USB_Audio_Device" → "Cluster" 부분이 device 문자열에 있는지
                     for part in name.split("_"):
                         if len(part) >= 3 and part.lower() in dev.lower():
                             matched = True
@@ -761,7 +948,12 @@ class AudioMonitor:
         # 새 실행(run)이 시작되면 _used_devices 를 초기화한다.
         # ReplayKit 은 각 디바이스 등록 시 Connect() 를 호출하므로,
         # 이 시점에 이전 실행에서 사용된 장치 추적을 리셋한다.
+        # _used_devices 는 **StartMonitor 가 실제로 사용한 장치**만 추적한다.
+        # (registry 장치를 미리 추가하면 StartMonitor 에서 registry 장치가 전부
+        # "사용중"으로 차단되어 엉뚱한 장치가 선택된다)
         getattr(type(self), "_used_devices", set()).clear()
+        # 해석된 장치 매핑도 초기화한다.
+        getattr(type(self), "_resolved_device_list", []).clear()
         if pyaudio is None:
             self._connected = False
             return f"ERROR: {_NO_PYAUDIO}"
@@ -816,6 +1008,7 @@ class AudioMonitor:
         with self._lock:
             if not self._sessions:
                 getattr(type(self), "_used_devices", set()).clear()
+                getattr(type(self), "_resolved_device_list", []).clear()
         return f"ok: disconnected (stopped={stopped})" if stopped else "ok: disconnected"
 
     # ------------------------------------------------------------------
@@ -835,11 +1028,9 @@ class AudioMonitor:
 
     def StartMonitor(self, drop_threshold: int = 0,
                      judge_mode: str = "pass", judge_count: int = 50,
-                     duration: float = 0, device: str = "", session_name: str = "") -> str:
+                     duration: float = 0) -> str:
         """오디오 무음(drop) 모니터링을 시작한다 (백그라운드 녹음).
 
-        device: 선택 장치명/번호 (예: "Cluster", "IVI", "1"). 비어 있으면 자동 선택.
-        session_name: 세션 식별 키. 비어 있으면 선택된 장치 이름으로 자동 결정.
         Connect()에서 이미 스캔된 device_index/device_name이 __init__에 전달되므로, 여기서 지정할 필요가 없다.
         **사용 중이 아닌 장치를 자동으로 선택**한다.
         이렇게 하면 여러 AudioMonitor 인스턴스가 각자 다른 마이크를 자동으로 배정받는다.
@@ -857,20 +1048,41 @@ class AudioMonitor:
         count = _to_int(judge_count, 50)
         dur = _to_float_or_none(duration)
 
-        # device/session_name 이 주어지면 그 이름으로 장치를 지정, 없으면 자동 선택.
-        hint = str(device or session_name or "").strip() if (device or session_name) else ""
+        # hint 없이 resolve → 자동으로 사용 중이 아닌 장치를 선택한다.
+        # 사용자가 device_index/device_name 을 명시적으로 지정한 경우에는 해당 장치를 사용한다.
+        # 단, 같은 config 로 이미 다른 세션이 해당 장치를 사용 중이면(여러 AudioMonitor 인스턴스가
+        # 같은 config 를 공유하는 경우) 자동 할당으로 폴백하여 서로 다른 장치를 배정받는다.
+        has_explicit_config = bool(self._device_index or self._device_name)
+        force_target = False
+        if has_explicit_config:
+            same_config_in_use = False
+            if self._device_index:
+                idx0, _ = self._find_device(self._device_index)
+                if idx0 is not None:
+                    same_config_in_use = self._is_same_config_in_use(idx0)
+            if not same_config_in_use and self._device_name:
+                idx0, _ = self._find_device(self._device_name)
+                if idx0 is not None:
+                    same_config_in_use = self._is_same_config_in_use(idx0)
+            if not same_config_in_use:
+                force_target = True
         try:
-            idx, name = self._resolve_target(hint=hint)
+            idx, name = self._resolve_target(hint="", force=force_target)
         except Exception as e:
             return f"FAIL: 오디오 장치 열거 실패 — {e}"
         if idx is None:
             return (f"FAIL: 오디오 입력 장치를 찾을 수 없습니다 "
                     f"(index='{self._device_index}', name='{self._device_name}')")
-        # session_name 이 주어지면 그대로, 없으면 선택된 장치 이름으로 자동 생성 (예: "Cluster" → "Cluster")
-        if session_name and str(session_name).strip():
-            session_name = str(session_name).strip()
-        else:
-            session_name = self._session_key(device_name=name) or "audio"
+        # 해석된 장치 정보를 저장 (StopMonitor/_find_session_name 에서 사용)
+        self._resolved_index, self._resolved_name = idx, name
+        # 원래 설정(config) → 해석된 장치 이름 매핑을 기록한다.
+        # StopMonitor 가 새 인스턴스로 호출될 때 이 매핑을 참조하여 올바른 세션을 찾는다.
+        # 같은 config 로 여러 인스턴스가 등록될 수 있으므로 리스트에 추가한다.
+        cfg_key = f"{self._device_index}:{self._device_name}"
+        if cfg_key != ":":
+            type(self)._resolved_device_list.append((cfg_key, name))
+        # 선택된 장치 이름으로 세션 이름 자동 생성 (예: "Cluster" → "Cluster")
+        session_name = self._session_key(device_name=name) or "audio"
         # 이번 실행에서 사용된 장치로 기록 (다음 인스턴스가 다른 장치를 선택하도록)
         with self._lock:
             getattr(type(self), "_used_devices", set()).add(idx)
@@ -906,6 +1118,8 @@ class AudioMonitor:
             "device_index": idx,
             "user_id": id(self),
             "created_at": time.time(),
+            "config_device_index": self._device_index,
+            "config_device_name": self._device_name,
         }
         with self._lock:
             self._sessions[session_name] = session
@@ -932,44 +1146,34 @@ class AudioMonitor:
                 f"threshold={threshold}, judge={mode}:{count}"
                 + (f", duration={dur}s)" if dur else ")"))
 
-    def StopMonitor(self, session_name: str = "") -> str:
+    def StopMonitor(self) -> str:
         """모니터링을 종료하고 PASS/FAIL 판정 결과를 반환한다.
 
-        session_name: 종료할 세션 이름 (예: "Cluster"). 비어 있으면 자동 탐색.
         _find_session_name() 으로 이 인스턴스의 세션을 자동 탐색한다.
         Connect()에서 이미 스캔된 device_index/device_name이 __init__에 전달되므로, 그 정보로 세션을 찾는다.
         duration 으로 이미 자동 종료된 세션도 결과를 그대로 돌려준다.
         """
-        # 1) 명시적 session_name 이 주어지면 그 키로 직접 조회
-        if session_name and str(session_name).strip():
-            session_name = str(session_name).strip()
-            with self._lock:
-                session = self._sessions.get(session_name)
-                thread = self._threads.get(session_name)
-            if session is None:
-                # 명시적 키로 못 찾으면 자동 탐색으로 폴백
-                alt = self._find_session_name()
-                if alt is not None:
-                    logger.info("AudioMonitor StopMonitor: session='%s' not found, falling back to '%s'",
-                                session_name, alt)
-                    session_name = alt
-                    with self._lock:
-                        session = self._sessions.get(session_name)
-                        thread = self._threads.get(session_name)
-            if session is None:
-                return f"FAIL: '{session_name}' 세션이 없습니다 (StartMonitor 먼저 호출)"
-        else:
-            # 2) session_name 이 없으면 자동 탐색
-            session_name = self._find_session_name()
-            if session_name is None:
-                return "FAIL: 이 인스턴스의 오디오 세션이 없습니다 (StartMonitor 먼저 호출)"
-            with self._lock:
-                session = self._sessions.get(session_name)
-                thread = self._threads.get(session_name)
-                logger.info("AudioMonitor StopMonitor: id=%s session='%s' found=%s total_sessions=%s",
-                            id(self), session_name, session is not None, list(self._sessions.keys()))
-            if session is None:
-                return f"FAIL: '{session_name}' 세션이 없습니다 (StartMonitor 먼저 호출)"
+        session_name = self._find_session_name()
+        if session_name is None:
+            return "FAIL: 이 인스턴스의 오디오 세션이 없습니다 (StartMonitor 먼저 호출)"
+
+        with self._lock:
+            session = self._sessions.get(session_name)
+            thread = self._threads.get(session_name)
+            logger.info("AudioMonitor StopMonitor: id=%s session='%s' found=%s total_sessions=%s",
+                        id(self), session_name, session is not None, list(self._sessions.keys()))
+        # session_name 으로 못 찾으면 _find_session_name() 으로 자동 탐색 (하위 호환)
+        if session is None:
+            alt = self._find_session_name()
+            if alt is not None:
+                logger.info("AudioMonitor StopMonitor: session='%s' not found, falling back to '%s'",
+                            session_name, alt)
+                session_name = alt
+                with self._lock:
+                    session = self._sessions.get(session_name)
+                    thread = self._threads.get(session_name)
+        if session is None:
+            return f"FAIL: '{session_name}' 세션이 없습니다 (StartMonitor 먼저 호출)"
 
         session["check"] = False
 
@@ -996,6 +1200,15 @@ class AudioMonitor:
         with self._lock:
             self._threads.pop(session_name, None)
             self._sessions.pop(session_name, None)
+            # 이 인스턴스의 설정에 해당하는 해석된 장치 매핑을 소비한다.
+            # 같은 config 로 여러 인스턴스가 있을 때 각 인스턴스가 서로 다른
+            # 해석된 장치를 받도록, 첫 번째 일치 항목을 제거한다.
+            cfg_key = f"{self._device_index}:{self._device_name}"
+            resolved_list = getattr(type(self), "_resolved_device_list", [])
+            for i, (ck, rn) in enumerate(resolved_list):
+                if ck == cfg_key:
+                    resolved_list.pop(i)
+                    break
             logger.info("AudioMonitor StopMonitor: id=%s session='%s' stopped, remaining_sessions=%s",
                         id(self), session_name, list(self._sessions.keys()))
 
@@ -1017,7 +1230,7 @@ class AudioMonitor:
         """비교 기준(reference) 음원을 duration 초 동안 녹음해 저장한다.
 
         저장 위치는 런과 무관한 고정 폴더(results/Audio_Reference/<이름>.wav) — 이후 어떤
-        재생에서도 CompareWithReference 로 참조할 수 있다.
+        재생에서도 RecordAndCompareWithReference 로 참조할 수 있다.
         """
         reference_name = str(reference_name or "").strip()
         if not reference_name:
@@ -1029,11 +1242,16 @@ class AudioMonitor:
             return "FAIL: duration(초)을 0보다 큰 값으로 지정하세요"
 
         try:
-            idx, name = self._resolve_target()
+            # reference 저장은 사용자가 지정한 장치를 강제로 사용한다.
+            # StartMonitor 가 해당 장치를 사용 중이어도 reference 는 지정 장치에서
+            # 녹음해야 하므로 force=True 로 호출한다.
+            idx, name = self._resolve_target(force=True)
         except Exception as e:
             return f"FAIL: 오디오 장치 열거 실패 — {e}"
         if idx is None:
             return f"FAIL: 오디오 입력 장치를 찾을 수 없습니다"
+        # 해석된 장치 정보를 저장 (StopMonitor/_find_session_name 에서 사용)
+        self._resolved_index, self._resolved_name = idx, name
 
         try:
             py = _pa_get()
@@ -1073,33 +1291,15 @@ class AudioMonitor:
                     wav_path, dur, idx, name)
         return f"ok: 기준음 저장 ({reference_name}, {dur:g}s) → {wav_path}"
 
-    def _find_latest_recording(self) -> Optional[Path]:
-        """오디오 결과 폴더에서 가장 최근에 저장된 .wav 파일을 찾는다.
+    def RecordAndCompareWithReference(self, reference_name: str,
+                                      duration: float = 10,
+                                      threshold: float = 90) -> str:
+        """지정한 duration(초) 동안 녹음한 뒤, 기준음과 비교해 PASS/FAIL 을 판정한다.
 
-        StopMonitor 가 _record_loop 를 통해 저장한 녹음 파일을 세션 상태 없이
-        직접 찾기 위한 헬퍼. 재생 중이면 {run_dir}/logs/audio/, 아니면
-        results/Temp_logs/audio/ 아래의 세션 폴더에서 가장 최근 .wav 를 반환한다.
-        """
-        base_dir, _ = _audio_base_dir()
-        if not base_dir.exists():
-            return None
-        candidates: list[Path] = []
-        for p in base_dir.rglob("*.wav"):
-            # 기준음(reference) 폴더는 별도 위치이므로 여기엔 없지만, 혹시 모르니 제외
-            if "Audio_Reference" in str(p):
-                continue
-            candidates.append(p)
-        if not candidates:
-            return None
-        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        return candidates[0]
+        StartMonitor 와 동일한 방식으로 장치를 선택하여 duration 초 동안 녹음을 진행하고,
+        녹음이 완료되면 기준음(reference)과 NCC 기반 비교를 수행한다.
 
-    def CompareWithReference(self, reference_name: str, threshold: float = 0.85) -> str:
-        """가장 최근에 저장된 녹음을 기준음과 비교해 PASS/FAIL 을 판정한다.
-
-        세션 상태에 의존하지 않고, StopMonitor 가 저장한 가장 최근 .wav 파일을
-        직접 찾아 비교한다. 판정 방식은 audiocomparetest/AudioCompareTest.py 를
-        따른다 (NCC 기반):
+        판정 방식은 audiocomparetest/AudioCompareTest.py 를 따른다 (NCC 기반):
 
           1. WAV 로드 → 모노 변환 → float 정규화
           2. 샘플레이트가 다르면 높은 쪽에 맞춰 리샘플링
@@ -1109,28 +1309,116 @@ class AudioMonitor:
           6. NCC >= threshold → PASS, NCC < threshold → FAIL
              (겹치는 구간이 ref 길이의 50% 미만이면 비교 불가로 FAIL)
 
-        threshold: NCC 유사도 기준값 (0~1). 기본 0.85 (같은 장비·환경 권장).
+        threshold: NCC 유사도 기준값 (0~100%, 100 = NCC 1.0 = 완전 일치). 기본 90.
+                   예: threshold=50 → NCC 0.5, threshold=90 → NCC 0.9.
+        duration: 녹음할 시간(초). 기본 10초.
         """
         reference_name = str(reference_name or "").strip()
         if not reference_name:
             return "FAIL: reference_name 을 지정하세요"
+        if pyaudio is None:
+            return f"FAIL: {_NO_PYAUDIO}"
 
-        # threshold 파라미터 파싱 (0~1 범위)
+        # ── duration 파라미터 검증 ──
+        rec_dur = _to_float_or_none(duration)
+        if rec_dur is None:
+            return "FAIL: duration(초)을 0보다 큰 값으로 지정하세요"
+
+        # ── threshold 파라미터 파싱 (0~100%, 100 = NCC 1.0) ──
         try:
-            thr = float(threshold)
+            thr_pct = float(threshold)
         except (TypeError, ValueError):
-            thr = COMPARE_DEFAULT_THRESHOLD
-        if not (0.0 < thr <= 1.0):
-            logger.warning("AudioMonitor compare: invalid threshold=%r — using default %.2f",
+            thr_pct = COMPARE_DEFAULT_THRESHOLD
+        if not (0.0 < thr_pct <= 100.0):
+            logger.warning("AudioMonitor compare: invalid threshold=%r — using default %.1f",
                            threshold, COMPARE_DEFAULT_THRESHOLD)
-            thr = COMPARE_DEFAULT_THRESHOLD
+            thr_pct = COMPARE_DEFAULT_THRESHOLD
+        thr = thr_pct / 100.0
 
-        wav1 = self._find_latest_recording()
-        if wav1 is None:
-            return "FAIL: 녹음 결과가 없습니다 (StopMonitor 먼저 호출)"
-        session_name = wav1.parent.name
-        if not wav1.exists():
-            return f"FAIL: 녹음 파일을 찾을 수 없습니다 — {wav1}"
+        # ── 장치 선택 (StartMonitor 와 동일한 방식) ──
+        # reference_name 을 hint 로 전달하여 장치 이름과 매칭한다.
+        # 예: reference_name="Cluster" → _resolve_target(hint="Cluster") →
+        # _find_device("Cluster") → "Cluster(8- USB Audio Device)" 부분 일치 → 선택.
+        # ctor=None 으로 device 정보가 없는 새 인스턴스에서도 올바른 장치를 찾는다.
+        has_explicit_config = bool(self._device_index or self._device_name)
+        force_target = False
+        if has_explicit_config:
+            same_config_in_use = False
+            if self._device_index:
+                idx0, _ = self._find_device(self._device_index)
+                if idx0 is not None:
+                    same_config_in_use = self._is_same_config_in_use(idx0)
+            if not same_config_in_use and self._device_name:
+                idx0, _ = self._find_device(self._device_name)
+                if idx0 is not None:
+                    same_config_in_use = self._is_same_config_in_use(idx0)
+            if not same_config_in_use:
+                force_target = True
+        try:
+            idx, name = self._resolve_target(hint=reference_name, force=force_target)
+        except Exception as e:
+            return f"FAIL: 오디오 장치 열거 실패 — {e}"
+        if idx is None:
+            return (f"FAIL: 오디오 입력 장치를 찾을 수 없습니다 "
+                    f"(index='{self._device_index}', name='{self._device_name}')")
+        # 해석된 장치 정보를 저장
+        self._resolved_index, self._resolved_name = idx, name
+
+        # ── duration 만큼 녹음 진행 ──
+        try:
+            py = _pa_get()
+            stream = py.open(format=pyaudio.paInt16, channels=CHANNELS, rate=self._rate,
+                             input=True, input_device_index=idx,
+                             frames_per_buffer=DEFAULT_CHUNK)
+        except Exception as e:
+            return f"FAIL: {_open_error(idx, name, e)}"
+        with _pa_lock:
+            _pa_users.add(id(self))
+
+        frames: list[bytes] = []
+        started = time.monotonic()
+        try:
+            while time.monotonic() - started < rec_dur:
+                frames.append(stream.read(DEFAULT_CHUNK, exception_on_overflow=False))
+        except Exception as e:
+            return f"FAIL: 녹음 실패 — {e}"
+        finally:
+            try:
+                stream.stop_stream()
+                stream.close()
+            except Exception:
+                pass
+
+        if not frames:
+            return "FAIL: 녹음된 데이터가 없습니다"
+
+        # ── 녹음 결과 WAV 저장 ──
+        session_name = self._session_key(device_name=name) or "audio"
+        base_dir, cyc = _audio_base_dir()
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        work_dir = base_dir / f"{cyc}{_safe_name(session_name)}_{ts}_compare"
+        try:
+            work_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            return f"FAIL: 결과 폴더 생성 실패: {e}"
+
+        audio_bytes = b"".join(frames)
+        wav1 = work_dir / f"{_safe_name(session_name)}.wav"
+        try:
+            self._write_wav(wav1, audio_bytes)
+        except Exception as e:
+            return f"FAIL: WAV 저장 실패 — {e}"
+
+        # 녹음 파형 이미지 저장
+        if np is not None and audio_bytes:
+            _save_waveform(np.frombuffer(audio_bytes, dtype=np.int16), self._rate, 0,
+                           f"Recording: {session_name} ({rec_dur:g}s)",
+                           wav1.with_name(wav1.stem + "_waveform.png"))
+
+        logger.info("AudioMonitor RecordAndCompare: recorded %.1fs from [%d] %s → %s",
+                    rec_dur, idx, name, wav1)
+
+        # ── 기준음(reference) 로드 ──
         wav2 = _reference_dir() / f"{_safe_name(reference_name)}.wav"
         if not wav2.exists():
             return (f"FAIL: 기준음 '{reference_name}' 이 없습니다 "
@@ -1190,9 +1478,9 @@ class AudioMonitor:
                 seg_rec = t2[s_rec:e_rec]
                 similarity = _ncc(seg_ref, seg_rec)
                 passed = similarity >= thr
-                logger.info("AudioMonitor compare: NCC=%.4f (기준 >= %.2f) lag=%d samples "
+                logger.info("AudioMonitor compare: similarity=%.1f%% (기준 >= %.1f%%) lag=%d samples "
                             "overlap=%.2fs (%.1f%%)",
-                            similarity, thr, lag, overlap_sec, overlap_ratio * 100)
+                            similarity * 100.0, thr_pct, lag, overlap_sec, overlap_ratio * 100)
         else:
             # numpy 없이는 NCC 계산 불가 — 보수적으로 FAIL 처리
             peak1 = sum(abs(s) for s in s1) / len(s1) * 2
@@ -1209,11 +1497,14 @@ class AudioMonitor:
         db1 = 20.0 * math.log10(rms1) if rms1 > 0 else -120.0
         db2 = 20.0 * math.log10(rms2) if rms2 > 0 else -120.0
 
+        # 표시용 퍼센트 변환 (NCC 0~1 → 0~100%). similarity 와 threshold 를 같은 단위로 보여
+        # 판정("98.6% >= 90.0%")과 표시가 일치하도록 한다.
+        sim_pct = similarity * 100.0
+
         out_dir = wav1.parent
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         stem = f"{ts}_compare_{_safe_name(session_name)}_{_safe_name(reference_name)}"
         # cv2.putText 는 ASCII 만 그린다 — 화살표/한글을 쓰면 '???' 로 찍힌다.
-        header = (f"NCC={similarity:.4f}  threshold={thr:.2f}  "
+        header = (f"similarity={sim_pct:.1f}%  threshold={thr_pct:.1f}%  "
                   f"-> {'PASS' if passed else 'FAIL'}")
         img_path = out_dir / f"{stem}.png"
         if np is not None:
@@ -1229,7 +1520,7 @@ class AudioMonitor:
                 "====================\n"
                 f"{session_name} : peak={peak1:.0f} rms_dB={db1:.1f} wav={wav1}\n"
                 f"Reference({reference_name}) : peak={peak2:.0f} rms_dB={db2:.1f} wav={wav2}\n"
-                f"NCC similarity = {similarity:.4f} (기준 >= {thr:.2f})\n"
+                f"similarity = {sim_pct:.1f}% (기준 >= {thr_pct:.1f}%, NCC={similarity:.4f})\n"
                 f"offset = {lag:+d} samples ({lag / sr:+.4f}s)\n"
                 f"overlap = {overlap_sec:.2f}s (ref 대비 {overlap_ratio:.1%})\n"
                 f"result = {'PASS' if passed else 'FAIL'}\n",
@@ -1237,7 +1528,7 @@ class AudioMonitor:
         except Exception as e:
             logger.warning("compare report save failed: %s", e)
 
-        detail = (f"NCC={similarity:.4f} threshold={thr:.2f} "
+        detail = (f"similarity={sim_pct:.1f}% threshold={thr_pct:.1f}% "
                   f"session={session_name} ref={reference_name} img={img_path}")
         logger.info("AudioMonitor compare: %s → %s", detail, "PASS" if passed else "FAIL")
         if passed:
@@ -1246,7 +1537,7 @@ class AudioMonitor:
         if overlap_ratio < COMPARE_MIN_OVERLAP_RATIO:
             reasons.append(f"겹치는 구간 부족({overlap_ratio:.1%})")
         else:
-            reasons.append(f"유사도 낮음({similarity:.4f} < {thr:.2f})")
+            reasons.append(f"유사도 낮음({sim_pct:.1f}% < {thr_pct:.1f}%)")
         return f"FAIL: 기준음과 불일치 — {', '.join(reasons)} ({detail})"
 
     # ------------------------------------------------------------------

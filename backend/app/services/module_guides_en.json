@@ -1889,7 +1889,7 @@
     "_description": "AudioMonitor (Mic) — records from a PC microphone (audio input device) to judge audio drop-outs and to compare against a previously saved reference recording. One device = one microphone; the microphone is selected automatically (registered device_index/device_name first, otherwise an unused mic is auto-assigned — with two mics, AudioMonitor_1 gets the first and AudioMonitor_2 the second). The session name is derived from the selected device name, so steps need no identifiers. Recordings (wav/txt/waveform png) go to logs/audio/ inside the run folder during playback, or results/Temp_logs/audio/ for step tests, with a _pass/_fail suffix on the folder name. References are stored at the fixed path results/Audio_Reference/ so they can be reused by any later run. Format is 44.1kHz mono 16-bit. Rename devices in Windows Control Panel -> Sound -> Recording -> Properties (e.g. IVI, Cluster) to tell them apart.",
     "functions": {
       "StartMonitor": {
-        "description": "Starts background recording and audio-drop monitoring. The verdict is returned by StopMonitor. The microphone is selected automatically (registered mic first, otherwise an unused one) and the session name is derived from the device name. Use device/session_name to pick a specific microphone or session name explicitly. If a session for the same device is already running it is stopped and restarted.",
+        "description": "Starts background recording and audio-drop monitoring. The verdict is returned by StopMonitor. The microphone is selected automatically (registered mic first, otherwise an unused one) and the session name is derived from the device name. If several devices are registered with the same microphone, the second and later ones are automatically assigned a different, unused microphone. If a session for the same device is already running it is stopped and restarted.",
         "params": {
           "drop_threshold": "Chunks whose average peak is below this value count as a drop. Empty = the default set when the device was registered (500).",
           "judge_mode": {
@@ -1900,16 +1900,12 @@
             ]
           },
           "judge_count": "Chunk count used for the verdict (default 50). One chunk is about 46ms (2048 samples at 44.1kHz).",
-          "duration": "Auto-stop after this many seconds. 0 = keep recording until StopMonitor is called.",
-          "device": "Microphone name/index to use (e.g. 'Cluster', 'IVI', '1'). Empty = auto-select.",
-          "session_name": "Session identifier. Empty = derived from the selected device name."
+          "duration": "Auto-stop after this many seconds. 0 = keep recording until StopMonitor is called."
         }
       },
       "StopMonitor": {
-        "description": "Stops monitoring and returns PASS/FAIL. The session for this device (microphone) is found automatically, so usually nothing needs to be specified. Saves the wav, the peak log and the waveform image, and appends _pass/_fail to the result folder name. Sessions already stopped by `duration` still return their verdict. A FAIL verdict fails the step.",
-        "params": {
-          "session_name": "Session name to stop (session_name/device name from StartMonitor). Empty = auto-detect."
-        }
+        "description": "Stops monitoring and returns PASS/FAIL. The session for this device (microphone) is found automatically, so nothing needs to be specified. Saves the wav, the peak log and the waveform image, and appends _pass/_fail to the result folder name. Sessions already stopped by `duration` still return their verdict. A FAIL verdict fails the step.",
+        "params": {}
       },
       "SaveReference": {
         "description": "Records `duration` seconds and stores it as the comparison reference at results/Audio_Reference/<name>.wav, reusable from any later run. The microphone is selected automatically. An existing reference with the same name is overwritten.",
@@ -1918,11 +1914,12 @@
           "duration": "Recording length in seconds (default 10)."
         }
       },
-      "CompareWithReference": {
-        "description": "Compares the most recent saved recording against a reference using NCC (Normalized Cross-Correlation): silence trimming, cross-correlation time alignment, then NCC similarity (-1..1) over the overlapping region. PASS when NCC >= threshold. Robust to volume differences, recording start offsets and sample-rate differences. FAIL when the overlap is shorter than 50% of the reference. A comparison image and a report txt (NCC/offset/overlap) are written next to the recording. Call it after StopMonitor.",
+      "RecordAndCompareWithReference": {
+        "description": "Records for `duration` seconds and then compares the recording against a reference (recording + comparison in one step, no StartMonitor/StopMonitor needed). The microphone is selected the same way as StartMonitor; if reference_name matches a microphone name (Cluster, IVI, ...) that microphone is preferred. NCC (Normalized Cross-Correlation) based: silence trimming, cross-correlation time alignment, then similarity (0-100%) over the overlapping region. PASS when similarity >= threshold. Robust to volume differences, recording start offsets and sample-rate differences. FAIL when the overlap is shorter than 50% of the reference. The recording wav, waveform image, comparison image and report txt are written to the result folder (..._compare).",
         "params": {
           "reference_name": "Reference name saved by SaveReference.",
-          "threshold": "NCC similarity threshold (0-1, default 0.85). Use 0.85 for same-device/same-environment recordings, 0.75-0.80 with background noise. Out-of-range values fall back to the default."
+          "duration": "Recording length in seconds (default 10). Match it to the reference length.",
+          "threshold": "Similarity threshold (0-100%, default 90). 100 = identical. Use 85-90 for same-device/same-environment recordings, 75-80 with background noise. Out-of-range values fall back to the default."
         }
       },
       "ListDevices": {
