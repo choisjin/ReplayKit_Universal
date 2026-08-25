@@ -1297,6 +1297,41 @@ class MIBAgentService:
         # 각 cmd 사이 간격은 shell_run의 post_sleep_s로 들어감 — interval_s 우선
         self._shell_run(cmds, post_sleep_s=max(0.02, interval_s))
 
+    @staticmethod
+    def _remote_sleep(sec: float) -> str:
+        """시료 shell 에서 도는 대기 명령. BusyBox 는 usleep 이 정확하고, 없으면 sleep 폴백."""
+        us = max(1, int(round(sec * 1_000_000)))
+        return f"( usleep {us} 2>/dev/null || sleep {sec:.3f} )"
+
+    def _ksend_atomic(self, data_list: list[str], gaps_s: list[float]) -> None:
+        """ksend 여러 개를 **한 shell 라인**으로 원자 전송 — 프레임 사이 대기는 시료 시계.
+
+        tap 의 press→release 를 별도 라인 + PC sleep 으로 보내면 실제 dwell 이 SSH 지터와
+        시료 shell 의 라인 처리 속도에 좌우돼, aging 으로 느려진 시료에서 단일 탭이
+        long-press(~0.5s) 로 오인식됐다(2026-08-18 VW EU 42번). 한 줄로 묶으면 SSH 지연은
+        "탭이 언제 시작되나"에만 걸리고 dwell 은 고정된다. release 유실(영구 press)도 사라진다.
+        gaps_s[i] = data_list[i] 와 data_list[i+1] 사이 대기(초). MIB_KSEND_VERBOSE 면 종전 순차 경로.
+        """
+        self.last_input_ts = time.monotonic()
+        verbose = os.environ.get("MIB_KSEND_VERBOSE", "").strip() in ("1", "true", "yes")
+        if verbose:
+            for i, data in enumerate(data_list):
+                self._ksend(data)
+                if i < len(gaps_s) and gaps_s[i] > 0:
+                    time.sleep(gaps_s[i])
+            return
+        parts: list[str] = []
+        for i, data in enumerate(data_list):
+            parts.append(f'/lge/app_ro/bin/ksend -s {self.src_addr} -d {self.dst_addr} -b "{data}"')
+            if i < len(data_list) - 1:
+                gap = gaps_s[i] if i < len(gaps_s) else 0.0
+                if gap > 0:
+                    parts.append(self._remote_sleep(gap))
+        total_gap = sum(g for g in gaps_s[:max(0, len(data_list) - 1)] if g > 0)
+        # 라인 송신 후 drain 전 대기 = 시료가 체인을 끝내는 시간(총 대기 + 여유) — 다음 입력이
+        # 같은 shell 에 겹쳐 들어가지 않게
+        self._shell_run([" ; ".join(parts)], post_sleep_s=total_gap + 0.02)
+
     def _ksend_exec_verbose(self, cmd: str) -> None:
         """진단 모드: exec_command로 ksend 실행하고 stderr/exit 결과를 로깅.
 
@@ -1414,8 +1449,11 @@ class MIBAgentService:
         self._ksend(self._touch_frame(x, y, 0xFF))
 
     def tap(self, x: int, y: int, screen_type: str = "HU",
-            dp: float = 0.2, dr: float = 0.0) -> None:
-        """단일 탭. press → (dp초 대기) → release.
+            dp: float = 0.1, dr: float = 0.0) -> None:
+        """단일 탭. press → (dp초 대기) → release — **한 shell 라인**으로 원자 전송(_ksend_atomic).
+
+        dp 기본 0.2→0.1 (2026-08-25): long-press 임계(~0.5s)에 대한 여유 확보.
+        시나리오에서 dp 를 명시한 스텝은 그 값을 그대로 쓴다.
 
         진단: MIB_TOUCH_DST_SWEEP=1 이면 1회 탭이 후보 dst(1-63)를 차례로 훑는
         sweep으로 동작한다. 비표준 ksend variant에서 터치 입력 핸들러의 KIPC id를
@@ -1435,10 +1473,10 @@ class MIBAgentService:
             x, y, self._res_x, self._res_y, _mx, _my, _xs, _ys,
             self._touch_x_offset, self._touch_y_offset, _ax, _ay,
         )
-        self._touch_press(x, y)
-        if dp > 0:
-            time.sleep(dp)
-        self._touch_release(x, y)
+        self._ksend_atomic(
+            [self._touch_frame(x, y, 0xFD), self._touch_frame(x, y, 0xFF)],
+            [max(0.0, float(dp))],
+        )
         if dr > 0:
             time.sleep(dr)
 
@@ -1480,9 +1518,11 @@ class MIBAgentService:
 
     def long_press(self, x: int, y: int, duration_ms: int = 3000,
                    screen_type: str = "HU") -> None:
-        self._touch_press(x, y)
-        time.sleep(duration_ms / 1000.0)
-        self._touch_release(x, y)
+        # tap 과 같은 원자 전송 — 긴 dwell 도 시료 시계로 고정 (SSH 지터 무관)
+        self._ksend_atomic(
+            [self._touch_frame(x, y, 0xFD), self._touch_frame(x, y, 0xFF)],
+            [max(0.0, duration_ms / 1000.0)],
+        )
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int,
               screen_type: str = "HU", duration_ms: int = 300,
