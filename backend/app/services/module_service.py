@@ -699,8 +699,10 @@ def list_available_modules() -> list[dict]:
              #   이게 안 들어가면 서버 benchConfig 에 capabilities/benchcontrol 키가 안 생겨
              #   토글이 scar-server.js 에서 '.length of undefined' 로 죽고(500), 8081 은 최초 화면에 멈춤.
              #   표시이름 → 서버 id 변환(소문자+공백→'_')은 SCAR._compute_cap_id 가 처리.
-             {"name": "capabilities", "label": "Bench Capabilities (중복 선택)", "type": "multiselect",
-              "default": "Multiverse, Without PCU HW",
+             # 2026-08-25: 기본 **비움** — 8081 첫 화면에서 사용자가 직접 선택. 값을 넣으면 연결 시 자동 주입되는데,
+             #   SCAR UI 는 서버에 caps 가 있으면 화면 선택을 무시하므로 그 경우 화면 체크는 의미가 없다.
+             {"name": "capabilities", "label": "Bench Capabilities (비우면 8081 화면에서 직접 선택 — 권장)", "type": "multiselect",
+              "default": "",
               "options": ["RelayCard", "Multiverse", "Without PCU HW", "Without PCU HW but CF PCU",
                           "With PCU HW", "PCU DTOOL", "CAN Multiverse"]},
              # ethernet_interfaces: SomeIP 모니터링/NETWORK_INTERFACES 용. 8081 auto-advance 3조건 중 하나
@@ -733,6 +735,10 @@ def list_available_modules() -> list[dict]:
               "default": "True", "options": ["True", "False"], "hidden": True},
              # 연결 직후 브라우저로 8081 열기 (2026-08-25) — 이후 단계는 사용자가 화면에서 직접
              {"name": "open_ui_on_connect", "label": "연결 후 SCAR UI(8081) 브라우저로 열기", "type": "select",
+              "default": "True", "options": ["True", "False"]},
+             # 브라우저 열기 전 UI 설정 초기화 (= 8081 'Erase Config') — 옛 benchconfig 가 남아 Toolbox 팝업이
+             #   잘못 필터되는 문제 방지. 첫 화면(Bench Capabilities)부터 다시 진행하게 된다.
+             {"name": "reset_ui_config_on_connect", "label": "연결 시 UI 설정 초기화 (Erase Config 등가)", "type": "select",
               "default": "True", "options": ["True", "False"]},
              {"name": "bench_state", "label": "토글 상태", "type": "select", "default": "switched",
               "options": ["switched", "unswitched"], "hidden": True},

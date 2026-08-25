@@ -60,6 +60,7 @@
   - StopService(service, ecu, uuid)  -> POST /stop  (서비스 정지)
   - SendControl(path, data)          -> 임의 3000 제어 POST (8081 게이트 없음, SendApi 대체)
   - OpenUi(url="")                   -> 브라우저로 SCAR UI(8081) 열기 (xdg-open)
+  - ResetUiConfig()                  -> GET /config/reset (UI 'Erase Config' 등가)
 """
 
 from __future__ import annotations
@@ -146,6 +147,7 @@ class SCAR:
         control_base: str = "http://localhost:3000",  # scar-server.js 제어 API
         post_connect = True,                     # Connect 끝에 capabilities 자동 셋업 (+브라우저 8081 열기)
         open_ui_on_connect = True,               # 연결 직후 http://localhost:8081 을 브라우저로 연다 (xdg-open)
+        reset_ui_config_on_connect = True,       # 브라우저 열기 전 GET /config/reset (UI 'Erase Config' 등가) — 옛 benchconfig 제거
         capabilities: str = "",                  # Bench Capabilities (CSV, 예: "Multiverse,Without PCU HW") — 최초 셋업
         ethernet_interfaces: str = "",           # SomeIP 모니터링/NETWORK_INTERFACES 용 (CSV, 빈 칸=iface 로 대체)
         ui_version: str = "",                    # UI 에서 선택할 ENDS 버전 (빈 칸 = 건너뜀)
@@ -208,6 +210,7 @@ class SCAR:
         # 연결 직후 UI 자동화
         self.post_connect = _as_bool(post_connect)
         self.open_ui_on_connect = _as_bool(open_ui_on_connect)
+        self.reset_ui_config_on_connect = _as_bool(reset_ui_config_on_connect)
         self.capabilities = _csv_str(capabilities)   # multiselect(list) 또는 CSV 문자열 허용
         self.ethernet_interfaces = _csv_str(ethernet_interfaces)
         self.ui_version = (ui_version or "").strip()
@@ -259,8 +262,8 @@ class SCAR:
             # 제어 백엔드(3000) 자체가 안 떠서 '전부' skip 된 경우는 connected 로 래치하지 않는다 —
             # 래치되면 인스턴스가 캐시에 살아남아 이후 재연결이 아무것도 재시도하지 않는
             # 영구 반설정(half-configured) 상태가 된다 (2026-06-11 cold-boot>폴링상한 사례).
-            if self.post_connect and self._setup_done and (self.capabilities or self.open_ui_on_connect):
-                self._report("UI 준비 중 (capabilities 셋업 → 8081 열기)")
+            if self.post_connect and self._setup_done and (self.capabilities or self.open_ui_on_connect or self.reset_ui_config_on_connect):
+                self._report("UI 준비 중 (config reset → 8081 열기)")
                 pc = self._post_connect()
                 msg = f"{msg}\n{pc}"
                 if "제어 백엔드(3000) 미응답" in pc:
@@ -1089,22 +1092,38 @@ class SCAR:
         return out
 
     def _post_connect(self) -> str:
-        """Connect 직후 자동: 제어 백엔드 준비 → Bench Capabilities → 브라우저로 8081 열기.
+        """Connect 직후 자동: 제어 백엔드 준비 → (config reset) → (capabilities) → 브라우저로 8081 열기.
 
-        'Select Ethernet Interfaces' 이후(인터페이스/버전/서비스/토글)는 사용자가 8081 화면에서
-        직접 진행한다 (2026-08-25). Capabilities 만은 자동 — 이게 없으면 서버 benchConfig 에
-        benchcontrol 키가 안 생겨 8081 최초 화면('Select Bench Capabilities')에 멈추고 토글이 죽는다.
+        2026-08-25: 8081 첫 화면(Bench Capabilities)부터 **사용자가 직접** 진행하는 게 기본.
+        ⚠️ SCAR UI(index.html)는 접속 시 서버에 capabilities 가 이미 있으면 화면에서 체크한 값을
+           버리고 서버 값을 쓴다(`if(!res.capabilities) 업로드 else 서버값`). 그래서 백엔드가 caps 를
+           먼저 밀어 넣으면 수기 선택이 무시되고, benchconfig.json 은 컨테이너에 영속이라 옛 값이
+           남아 Toolbox 팝업이 잘못 필터된다(android_tool/common 만 보임). 'Erase Config' 후 재선택하면
+           정상인 것이 그 증거. → 기본은 `/config/reset`(= Erase Config) 으로 깨끗이 비우고 브라우저만 연다.
+           capabilities 폼 값이 비어 있지 않을 때만 자동 주입(그 경우 UI 의 첫 화면 선택은 무시됨을 감수).
         """
         log = [f"[post-connect] UI 준비 (control={self._control.base_url})"]
         if not self._control_ready():
-            log.append("  FAIL: 제어 백엔드(3000) 미응답 — capabilities 셋업 건너뜀")
+            log.append("  FAIL: 제어 백엔드(3000) 미응답 — config reset/capabilities 건너뜀")
             return "\n".join(log)
+        if self.reset_ui_config_on_connect:
+            log.append("  [reset]   " + self.ResetUiConfig())
         if self.capabilities:
-            log.append("  [caps]    " + self.SetCapabilities())
+            log.append("  [caps]    " + self.SetCapabilities(force=True))
         if self.open_ui_on_connect:
             log.append("  [browser] " + self.OpenUi())
-        log.append("  → 이후 단계(Select Ethernet Interfaces / UI 버전 / 서비스 / Bench 토글)는 8081 화면에서 직접 진행하세요")
+        log.append("  → 8081 화면에서 Bench Capabilities → Ethernet Interfaces → Toolbox → 버전/서비스/토글을 직접 진행하세요")
         return "\n".join(log)
+
+    def ResetUiConfig(self) -> str:
+        """GET /config/reset — UI 의 'Erase Config' 버튼과 동일. benchconfig(capabilities/ethernet/
+        benchcontrol)와 버튼 *.status 를 지워 8081 이 첫 화면(Bench Capabilities)부터 시작하게 한다."""
+        resp = self._control.get(self._control.base_url + "/config/reset")
+        if resp is None:
+            return "FAIL: control API(3000) GET /config/reset 실패"
+        if resp.status_code >= 400:
+            return f"FAIL: /config/reset status={resp.status_code} {resp.text[:200]}"
+        return "ok: benchconfig 초기화 (Erase Config 등가)"
 
     def OpenUi(self, url: str = "") -> str:
         """SCAR UI(8081)를 이 PC 의 기본 브라우저로 연다 — Linux xdg-open (백엔드가 벤치 PC 에서 돈다).
