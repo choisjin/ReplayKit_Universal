@@ -838,10 +838,16 @@ class SCAR:
         ids = [self._compute_cap_id(c) for c in _split_csv(raw)]
         if not ids:
             return "FAIL: no valid capability ids"
-        if not force:
-            existing = self._fetch_capabilities()
-            if existing:
+        # benchconfig.json 은 컨테이너 안에 **영속**된다(scar-server.js 가 기동 시 읽음) — 이전
+        # 세션이 남긴 capabilities 가 '이미 설정됨'으로 통과되면 8081 Toolbox 팝업이 그 옛 값으로
+        # 필터돼 항목이 빠져 보인다(2026-08-25: android_tool/common 만 보임 → 'without_pcu_hw'
+        # 누락 상태가 남아 있던 케이스, erase config 후 재선택하면 정상). 그래서 '있으면 skip' 이
+        # 아니라 **원하는 집합과 다르면 덮어쓴다**. 같으면 skip.
+        existing = self._fetch_capabilities()
+        if not force and existing:
+            if set(map(str, existing)) == set(ids):
                 return f"skip: capabilities already set ({existing})"
+            logger.info("SCAR capabilities differ on server %s → replacing with %s", existing, ids)
         resp = self._control.post(
             self._control.base_url + "/config",
             data={"capabilities": ids},
@@ -850,7 +856,9 @@ class SCAR:
             return "FAIL: control API(3000) POST /config (capabilities) failed"
         if resp.status_code != 200:
             return f"FAIL: /config capabilities status={resp.status_code} {resp.text[:256]}"
-        return f"ok: capabilities={ids} selected"
+        after = self._fetch_capabilities()
+        note = f" (server 이전값 {existing} 교체)" if existing else ""
+        return f"ok: capabilities={ids} selected{note} → server={after}"
 
     def _fetch_ethernet(self):
         """현재 서버에 설정된 ethernet_interfaces 리스트. 미설정/실패 시 None."""
