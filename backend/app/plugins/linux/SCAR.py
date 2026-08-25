@@ -26,6 +26,11 @@
   ── 연결 직후 UI 자동화 (설치 가이드 "3~4" UI 단계) ──
   post_connect=True 면 Connect() 끝에서 UI 제어 백엔드(port 3000)로:
     [0] POST /config {capabilities:[...]} (capabilities) -> Bench Capabilities 최초 셋업
+    [1] 브라우저로 http://localhost:8081 열기 (open_ui_on_connect, xdg-open)
+  **여기까지만 자동** (2026-08-25 사용자): 'Select Ethernet Interfaces' 부터(인터페이스 선택 /
+  UI 버전(ENDS) / 서비스 start / Bench 토글)는 사용자가 8081 화면에서 직접 진행한다.
+  SetEthernet/SelectVersion/StartService/SetBench 는 시나리오 스텝으로는 여전히 쓸 수 있다.
+  (구 자동화 단계 참고)
     [0b]POST /config {interfaces_ethernet:[...]}      -> SomeIP 모니터링 인터페이스(8081 auto-advance 조건)
     [1] POST /config {ends:<ui_version>}            -> UI 버전(ENDS) 선택
     [2] POST /start {service, ecu} (start_services)  -> 토글 의존 SOME/IP 서비스 기동
@@ -54,6 +59,7 @@
   - StartService(service, ecu)       -> POST /start (SOME/IP 서버 기동, 3000 직접)
   - StopService(service, ecu, uuid)  -> POST /stop  (서비스 정지)
   - SendControl(path, data)          -> 임의 3000 제어 POST (8081 게이트 없음, SendApi 대체)
+  - OpenUi(url="")                   -> 브라우저로 SCAR UI(8081) 열기 (xdg-open)
 """
 
 from __future__ import annotations
@@ -138,7 +144,8 @@ class SCAR:
         # 주의: UI 정적 프론트는 8081(api_base), 실제 제어 REST 는 3000(control_base).
         #       버전 선택(/config {ends})·bench 토글(/bencontrol/buttons/<id>)은 3000 으로 간다.
         control_base: str = "http://localhost:3000",  # scar-server.js 제어 API
-        post_connect = True,                     # Connect 끝에 capabilities+버전선택+bench토글 자동 실행
+        post_connect = True,                     # Connect 끝에 capabilities 자동 셋업 (+브라우저 8081 열기)
+        open_ui_on_connect = True,               # 연결 직후 http://localhost:8081 을 브라우저로 연다 (xdg-open)
         capabilities: str = "",                  # Bench Capabilities (CSV, 예: "Multiverse,Without PCU HW") — 최초 셋업
         ethernet_interfaces: str = "",           # SomeIP 모니터링/NETWORK_INTERFACES 용 (CSV, 빈 칸=iface 로 대체)
         ui_version: str = "",                    # UI 에서 선택할 ENDS 버전 (빈 칸 = 건너뜀)
@@ -200,6 +207,7 @@ class SCAR:
         self.stop_container_on_disconnect = _as_bool(stop_container_on_disconnect)
         # 연결 직후 UI 자동화
         self.post_connect = _as_bool(post_connect)
+        self.open_ui_on_connect = _as_bool(open_ui_on_connect)
         self.capabilities = _csv_str(capabilities)   # multiselect(list) 또는 CSV 문자열 허용
         self.ethernet_interfaces = _csv_str(ethernet_interfaces)
         self.ui_version = (ui_version or "").strip()
@@ -251,8 +259,8 @@ class SCAR:
             # 제어 백엔드(3000) 자체가 안 떠서 '전부' skip 된 경우는 connected 로 래치하지 않는다 —
             # 래치되면 인스턴스가 캐시에 살아남아 이후 재연결이 아무것도 재시도하지 않는
             # 영구 반설정(half-configured) 상태가 된다 (2026-06-11 cold-boot>폴링상한 사례).
-            if self.post_connect and self._setup_done and (self.capabilities or self.ethernet_interfaces or self.ui_version or self.ends or self.start_services or self.bench_toggle):
-                self._report("UI 자동화 중 (capabilities/버전/서비스/토글)")
+            if self.post_connect and self._setup_done and (self.capabilities or self.open_ui_on_connect):
+                self._report("UI 준비 중 (capabilities 셋업 → 8081 열기)")
                 pc = self._post_connect()
                 msg = f"{msg}\n{pc}"
                 if "제어 백엔드(3000) 미응답" in pc:
@@ -1073,32 +1081,43 @@ class SCAR:
         return out
 
     def _post_connect(self) -> str:
-        """Connect 직후 자동: 제어 백엔드 준비 → 버전 선택 → 서비스 start → bench 토글.
+        """Connect 직후 자동: 제어 백엔드 준비 → Bench Capabilities → 브라우저로 8081 열기.
 
-        토글(Wake up/Sleep minimal CDC/SA)은 의존 서비스(예: InfrastructureGotoSleep)가 떠 있어야
-        '유지'되므로(update_powerseq_status.sh 가 미기동 시 강제 OFF), 서비스 start 를 토글보다 먼저 한다.
+        'Select Ethernet Interfaces' 이후(인터페이스/버전/서비스/토글)는 사용자가 8081 화면에서
+        직접 진행한다 (2026-08-25). Capabilities 만은 자동 — 이게 없으면 서버 benchConfig 에
+        benchcontrol 키가 안 생겨 8081 최초 화면('Select Bench Capabilities')에 멈추고 토글이 죽는다.
         """
-        log = [f"[post-connect] UI 자동화 (control={self._control.base_url})"]
+        log = [f"[post-connect] UI 준비 (control={self._control.base_url})"]
         if not self._control_ready():
-            log.append("  FAIL: 제어 백엔드(3000) 미응답 — capabilities/버전/서비스/토글 건너뜀")
+            log.append("  FAIL: 제어 백엔드(3000) 미응답 — capabilities 셋업 건너뜀")
             return "\n".join(log)
-        # Bench Capabilities: 최초 셋업(8081 'Select Bench Capabilities'). 버전/토글보다 먼저 —
-        # 이게 없으면 benchcontrol 키가 안 생겨 토글이 서버에서 .length undefined 로 죽는다.
         if self.capabilities:
             log.append("  [caps]    " + self.SetCapabilities())
-        # ethernet_interfaces: 8081 auto-advance 3조건 중 하나. 명시값 없으면 iface 로 대체.
-        if self.ethernet_interfaces or self.iface:
-            log.append("  [eth]     " + self.SetEthernet())
-        # UI 버전: 명시 ui_version 우선, 없으면 상단 ENDS 버전(self.ends)에서 도출.
-        ui_ver = self.ui_version or self._resolve_ui_version()
-        if ui_ver:
-            log.append(f"  [version] (ends={self.ends!r}→{ui_ver}) " + self.SelectVersion(ui_ver))
-        for svc in self.start_services:
-            log.append(f"  [service] {svc['service']}@{svc['ecu']}: "
-                       + self.StartService(svc["service"], svc["ecu"]))
-        if self.bench_toggle:
-            log.append("  [bench]   " + self.SetBench(self.bench_toggle, on=True))
+        if self.open_ui_on_connect:
+            log.append("  [browser] " + self.OpenUi())
+        log.append("  → 이후 단계(Select Ethernet Interfaces / UI 버전 / 서비스 / Bench 토글)는 8081 화면에서 직접 진행하세요")
         return "\n".join(log)
+
+    def OpenUi(self, url: str = "") -> str:
+        """SCAR UI(8081)를 이 PC 의 기본 브라우저로 연다 — Linux xdg-open (백엔드가 벤치 PC 에서 돈다).
+
+        setsid + DEVNULL 로 떼어 내 브라우저 수명이 백엔드에 묶이지 않게. 실패해도 연결엔 영향 없음.
+        """
+        import subprocess
+        import shutil
+        target = (url or self._api.base_url).strip()
+        opener = shutil.which("xdg-open")
+        if not opener:
+            return f"skip: xdg-open 없음 — 브라우저에서 {target} 을 직접 여세요"
+        try:
+            subprocess.Popen(
+                [opener, target],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"FAIL: {e} — 브라우저에서 {target} 을 직접 여세요"
+        return f"opened {target}"
 
     def Info(self) -> str:
         """현재 인스턴스 설정 요약 (디버그/검증용). sudo 비밀번호는 마스킹."""

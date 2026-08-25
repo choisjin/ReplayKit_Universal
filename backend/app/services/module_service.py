@@ -706,8 +706,10 @@ def list_available_modules() -> list[dict]:
              # ethernet_interfaces: SomeIP 모니터링/NETWORK_INTERFACES 용. 8081 auto-advance 3조건 중 하나
              #   (ethernet_interfaces && benchcontrol && capabilities). 비우면 SCAR 가 iface(스캔값)로 대체.
              #   유효값은 벤치의 GET :3000/setup/list/interfaces(=ls /sys/class/net, cvd/lo/docker 제외).
+             # 2026-08-25: 'Select Ethernet Interfaces' 부터는 사용자가 8081 화면에서 직접 — 폼에서 숨김
+             #   (SetEthernet 시나리오 스텝용 기본값만 유지)
              {"name": "ethernet_interfaces", "label": "Ethernet 인터페이스 (SomeIP, 콤마 구분 / 비우면 iface 사용)",
-              "type": "text", "default": ""},
+              "type": "text", "default": "", "hidden": True},
              # 토글 전에 자동 start 할 SOME/IP 서비스 (UI 의 'Simulated ECU target' + 'Service to
              #   simulate/register' → Start 와 동일). bench 토글은 InfrastructureGotoSleep 등이 떠
              #   있어야 유지되므로 토글보다 먼저 순서대로 start. 해당 ECU 는 stub_ecus 에도 포함돼야 함.
@@ -727,8 +729,11 @@ def list_available_modules() -> list[dict]:
               "type": "text", "default": "Wake up/Sleep minimal CDC/SA", "hidden": True},
              {"name": "control_base", "label": "SCAR UI 제어 API (port 3000)", "type": "text",
               "default": "http://localhost:3000", "hidden": True},
-             {"name": "post_connect", "label": "연결 직후 버전선택+토글 자동 실행", "type": "select",
+             {"name": "post_connect", "label": "연결 직후 Capabilities 자동 셋업", "type": "select",
               "default": "True", "options": ["True", "False"], "hidden": True},
+             # 연결 직후 브라우저로 8081 열기 (2026-08-25) — 이후 단계는 사용자가 화면에서 직접
+             {"name": "open_ui_on_connect", "label": "연결 후 SCAR UI(8081) 브라우저로 열기", "type": "select",
+              "default": "True", "options": ["True", "False"]},
              {"name": "bench_state", "label": "토글 상태", "type": "select", "default": "switched",
               "options": ["switched", "unswitched"], "hidden": True},
              {"name": "auto_register", "label": "미등록 토글 자동 등록", "type": "select",
