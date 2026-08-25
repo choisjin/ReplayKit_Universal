@@ -695,16 +695,8 @@ def list_available_modules() -> list[dict]:
              #   UI 정적 프론트는 8081, 실제 제어 REST 는 3000. 버전선택/토글은 3000 으로 간다.
              #   UI 버전(ENDS)은 별도 필드 없이 상단 'ENDS 버전'(ends)에서 도출(_resolve_ui_version):
              #   netns ENDS(FaceStep1_2025_R10) → /list/ends 매칭 → UI ENDS(2025_r10).
-             # ── Bench Capabilities (8081 'Select Bench Capabilities' 최초 셋업) ──
-             #   이게 안 들어가면 서버 benchConfig 에 capabilities/benchcontrol 키가 안 생겨
-             #   토글이 scar-server.js 에서 '.length of undefined' 로 죽고(500), 8081 은 최초 화면에 멈춤.
-             #   표시이름 → 서버 id 변환(소문자+공백→'_')은 SCAR._compute_cap_id 가 처리.
-             # 2026-08-25: 기본 **비움** — 8081 첫 화면에서 사용자가 직접 선택. 값을 넣으면 연결 시 자동 주입되는데,
-             #   SCAR UI 는 서버에 caps 가 있으면 화면 선택을 무시하므로 그 경우 화면 체크는 의미가 없다.
-             {"name": "capabilities", "label": "Bench Capabilities (비우면 8081 화면에서 직접 선택 — 권장)", "type": "multiselect",
-              "default": "",
-              "options": ["RelayCard", "Multiverse", "Without PCU HW", "Without PCU HW but CF PCU",
-                          "With PCU HW", "PCU DTOOL", "CAN Multiverse"]},
+             # Bench Capabilities 자동 주입 필드는 삭제 (2026-08-25 사용자) — 8081 첫 화면에서 수동 선택.
+             #   (SCAR UI 가 서버에 caps 가 있으면 화면 선택을 무시해 Toolbox 팝업 항목이 빠지던 문제)
              # ethernet_interfaces: SomeIP 모니터링/NETWORK_INTERFACES 용. 8081 auto-advance 3조건 중 하나
              #   (ethernet_interfaces && benchcontrol && capabilities). 비우면 SCAR 가 iface(스캔값)로 대체.
              #   유효값은 벤치의 GET :3000/setup/list/interfaces(=ls /sys/class/net, cvd/lo/docker 제외).
@@ -731,7 +723,7 @@ def list_available_modules() -> list[dict]:
               "type": "text", "default": "Wake up/Sleep minimal CDC/SA", "hidden": True},
              {"name": "control_base", "label": "SCAR UI 제어 API (port 3000)", "type": "text",
               "default": "http://localhost:3000", "hidden": True},
-             {"name": "post_connect", "label": "연결 직후 Capabilities 자동 셋업", "type": "select",
+             {"name": "post_connect", "label": "연결 직후 UI 준비(config reset+8081 열기)", "type": "select",
               "default": "True", "options": ["True", "False"], "hidden": True},
              # 연결 직후 브라우저로 8081 열기 (2026-08-25) — 이후 단계는 사용자가 화면에서 직접
              {"name": "open_ui_on_connect", "label": "연결 후 SCAR UI(8081) 브라우저로 열기", "type": "select",

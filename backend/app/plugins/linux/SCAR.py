@@ -25,18 +25,20 @@
 
   ── 연결 직후 UI 자동화 (설치 가이드 "3~4" UI 단계) ──
   post_connect=True 면 Connect() 끝에서 UI 제어 백엔드(port 3000)로:
-    [0] POST /config {capabilities:[...]} (capabilities) -> Bench Capabilities 최초 셋업
+    [0] GET /config/reset (reset_ui_config_on_connect) -> UI 'Erase Config' 등가, 옛 benchconfig 제거
     [1] 브라우저로 http://localhost:8081 열기 (open_ui_on_connect, xdg-open)
-  **여기까지만 자동** (2026-08-25 사용자): 'Select Ethernet Interfaces' 부터(인터페이스 선택 /
-  UI 버전(ENDS) / 서비스 start / Bench 토글)는 사용자가 8081 화면에서 직접 진행한다.
+  **여기까지만 자동** (2026-08-25 사용자): Bench Capabilities 부터 끝(Ethernet / UI 버전(ENDS) /
+  서비스 start / Bench 토글)까지 전부 사용자가 8081 화면에서 직접 진행한다.
+  Capabilities 자동 주입은 삭제 — SCAR UI 가 서버에 caps 가 있으면 화면 선택을 무시해
+  수기 체크가 안 먹히는 문제(Toolbox 팝업 항목 누락)가 있었다.
   SetEthernet/SelectVersion/StartService/SetBench 는 시나리오 스텝으로는 여전히 쓸 수 있다.
   (구 자동화 단계 참고)
     [0b]POST /config {interfaces_ethernet:[...]}      -> SomeIP 모니터링 인터페이스(8081 auto-advance 조건)
     [1] POST /config {ends:<ui_version>}            -> UI 버전(ENDS) 선택
     [2] POST /start {service, ecu} (start_services)  -> 토글 의존 SOME/IP 서비스 기동
     [3] POST /bencontrol/buttons/<id> {state}       -> Bench IO 토글 ON
-  순서 주의: capabilities 가 먼저여야 benchConfig 에 benchcontrol 키가 생겨 토글이 가능하다
-  (미셋업 시 8081 은 'Select Bench Capabilities' 최초 화면, 토글은 서버에서 .length undefined 로 죽음).
+  순서 주의: (시나리오 스텝으로 토글할 때) 8081 첫 화면의 Bench Capabilities 가 끝나 있어야
+  benchConfig 에 benchcontrol 키가 생겨 토글이 가능하다 (미셋업 시 서버에서 .length undefined 로 죽음).
   토글은 의존 서비스(InfrastructureGotoSleep 등)가 떠 있어야 유지되므로 서비스를 먼저.
   서비스 start 는 그 ECU 가 netns(stub_ecus)에 있어야 성공("NETNS is not configured" 방지).
   주의: UI 정적 프론트는 8081(api_base), 실제 제어 REST 는 3000(control_base).
@@ -50,7 +52,6 @@
   - Reconnect()                      -> scar.sh 백그라운드 spawn + 20s 대기
   - Setup()                          -> netns VLAN 구성 (수동 재실행 가능)
   - NetnsStatus()                    -> docker exec scar ip netns 출력
-  - SetCapabilities(caps, force)     -> POST /config {capabilities} (Bench Capabilities 최초 셋업)
   - SetEthernet(interfaces, force)   -> POST /config {interfaces_ethernet} (SomeIP 인터페이스)
   - ListUiVersions()                 -> GET /list/ends (선택 가능 버전)
   - SelectVersion(version)           -> POST /config {ends} (UI 버전 선택)
@@ -145,10 +146,9 @@ class SCAR:
         # 주의: UI 정적 프론트는 8081(api_base), 실제 제어 REST 는 3000(control_base).
         #       버전 선택(/config {ends})·bench 토글(/bencontrol/buttons/<id>)은 3000 으로 간다.
         control_base: str = "http://localhost:3000",  # scar-server.js 제어 API
-        post_connect = True,                     # Connect 끝에 capabilities 자동 셋업 (+브라우저 8081 열기)
+        post_connect = True,                     # Connect 끝에 UI 준비 (config reset + 브라우저 8081 열기)
         open_ui_on_connect = True,               # 연결 직후 http://localhost:8081 을 브라우저로 연다 (xdg-open)
         reset_ui_config_on_connect = True,       # 브라우저 열기 전 GET /config/reset (UI 'Erase Config' 등가) — 옛 benchconfig 제거
-        capabilities: str = "",                  # Bench Capabilities (CSV, 예: "Multiverse,Without PCU HW") — 최초 셋업
         ethernet_interfaces: str = "",           # SomeIP 모니터링/NETWORK_INTERFACES 용 (CSV, 빈 칸=iface 로 대체)
         ui_version: str = "",                    # UI 에서 선택할 ENDS 버전 (빈 칸 = 건너뜀)
         start_services = None,                   # 토글 전 자동 start: [{ecu, service}, ...] 또는 JSON
@@ -211,7 +211,6 @@ class SCAR:
         self.post_connect = _as_bool(post_connect)
         self.open_ui_on_connect = _as_bool(open_ui_on_connect)
         self.reset_ui_config_on_connect = _as_bool(reset_ui_config_on_connect)
-        self.capabilities = _csv_str(capabilities)   # multiselect(list) 또는 CSV 문자열 허용
         self.ethernet_interfaces = _csv_str(ethernet_interfaces)
         self.ui_version = (ui_version or "").strip()
         self.start_services = self._parse_services(start_services)
@@ -262,7 +261,7 @@ class SCAR:
             # 제어 백엔드(3000) 자체가 안 떠서 '전부' skip 된 경우는 connected 로 래치하지 않는다 —
             # 래치되면 인스턴스가 캐시에 살아남아 이후 재연결이 아무것도 재시도하지 않는
             # 영구 반설정(half-configured) 상태가 된다 (2026-06-11 cold-boot>폴링상한 사례).
-            if self.post_connect and self._setup_done and (self.capabilities or self.open_ui_on_connect or self.reset_ui_config_on_connect):
+            if self.post_connect and self._setup_done and (self.open_ui_on_connect or self.reset_ui_config_on_connect):
                 self._report("UI 준비 중 (config reset → 8081 열기)")
                 pc = self._post_connect()
                 msg = f"{msg}\n{pc}"
@@ -809,60 +808,6 @@ class SCAR:
                 return v
         return norm
 
-    @staticmethod
-    def _compute_cap_id(name: str) -> str:
-        """capability 표시이름 → 서버 id. UI check_capabilities.compute_id 와 동일.
-
-        규칙: 소문자화 + 연속 공백 → '_'. 이미 id 형태('without_pcu_hw')면 그대로 통과.
-          'Without PCU HW' → 'without_pcu_hw',  'Multiverse' → 'multiverse'
-        """
-        return re.sub(r"\s+", "_", str(name).strip().lower())
-
-    def _fetch_capabilities(self):
-        """현재 서버에 설정된 capabilities 리스트. 미설정/실패 시 None."""
-        data = self._fetch_infos()
-        if data is None:
-            return None
-        caps = data.get("capabilities")
-        return caps if isinstance(caps, list) and caps else None
-
-    def SetCapabilities(self, caps: str = "", force: bool = False) -> str:
-        """POST /config {capabilities:[...]} — Bench Capabilities 최초 셋업.
-
-        8081 'Select Bench Capabilities' 최초 화면 등가. 이 단계가 빠지면 서버 benchConfig 에
-        capabilities/benchcontrol 키가 생기지 않아, 토글이 scar-server.js 에서
-        'Cannot read property length of undefined' 로 죽는다(/bencontrol/buttons → 500).
-        caps: CSV/리스트 표시이름·ID (예: 'Multiverse,Without PCU HW'). 미지정 시 생성자 capabilities.
-        force=False 면 이미 설정돼 있으면 건너뜀(UI 의 `if(!res.capabilities)` 와 동일).
-        """
-        raw = _csv_str(caps) or self.capabilities
-        if not raw:
-            return "FAIL: no capabilities given (capabilities 비어있음)"
-        ids = [self._compute_cap_id(c) for c in _split_csv(raw)]
-        if not ids:
-            return "FAIL: no valid capability ids"
-        # benchconfig.json 은 컨테이너 안에 **영속**된다(scar-server.js 가 기동 시 읽음) — 이전
-        # 세션이 남긴 capabilities 가 '이미 설정됨'으로 통과되면 8081 Toolbox 팝업이 그 옛 값으로
-        # 필터돼 항목이 빠져 보인다(2026-08-25: android_tool/common 만 보임 → 'without_pcu_hw'
-        # 누락 상태가 남아 있던 케이스, erase config 후 재선택하면 정상). 그래서 '있으면 skip' 이
-        # 아니라 **원하는 집합과 다르면 덮어쓴다**. 같으면 skip.
-        existing = self._fetch_capabilities()
-        if not force and existing:
-            if set(map(str, existing)) == set(ids):
-                return f"skip: capabilities already set ({existing})"
-            logger.info("SCAR capabilities differ on server %s → replacing with %s", existing, ids)
-        resp = self._control.post(
-            self._control.base_url + "/config",
-            data={"capabilities": ids},
-        )
-        if resp is None:
-            return "FAIL: control API(3000) POST /config (capabilities) failed"
-        if resp.status_code != 200:
-            return f"FAIL: /config capabilities status={resp.status_code} {resp.text[:256]}"
-        after = self._fetch_capabilities()
-        note = f" (server 이전값 {existing} 교체)" if existing else ""
-        return f"ok: capabilities={ids} selected{note} → server={after}"
-
     def _fetch_ethernet(self):
         """현재 서버에 설정된 ethernet_interfaces 리스트. 미설정/실패 시 None."""
         data = self._fetch_infos()
@@ -1092,24 +1037,22 @@ class SCAR:
         return out
 
     def _post_connect(self) -> str:
-        """Connect 직후 자동: 제어 백엔드 준비 → (config reset) → (capabilities) → 브라우저로 8081 열기.
+        """Connect 직후 자동: 제어 백엔드 준비 → (config reset) → 브라우저로 8081 열기.
 
         2026-08-25: 8081 첫 화면(Bench Capabilities)부터 **사용자가 직접** 진행하는 게 기본.
         ⚠️ SCAR UI(index.html)는 접속 시 서버에 capabilities 가 이미 있으면 화면에서 체크한 값을
            버리고 서버 값을 쓴다(`if(!res.capabilities) 업로드 else 서버값`). 그래서 백엔드가 caps 를
            먼저 밀어 넣으면 수기 선택이 무시되고, benchconfig.json 은 컨테이너에 영속이라 옛 값이
            남아 Toolbox 팝업이 잘못 필터된다(android_tool/common 만 보임). 'Erase Config' 후 재선택하면
-           정상인 것이 그 증거. → 기본은 `/config/reset`(= Erase Config) 으로 깨끗이 비우고 브라우저만 연다.
-           capabilities 폼 값이 비어 있지 않을 때만 자동 주입(그 경우 UI 의 첫 화면 선택은 무시됨을 감수).
+           정상인 것이 그 증거. → `/config/reset`(= Erase Config) 으로 깨끗이 비우고 브라우저만 연다.
+           Capabilities 자동 주입 기능은 삭제(2026-08-25 사용자) — 전부 화면에서 수동.
         """
         log = [f"[post-connect] UI 준비 (control={self._control.base_url})"]
         if not self._control_ready():
-            log.append("  FAIL: 제어 백엔드(3000) 미응답 — config reset/capabilities 건너뜀")
+            log.append("  FAIL: 제어 백엔드(3000) 미응답 — config reset 건너뜀")
             return "\n".join(log)
         if self.reset_ui_config_on_connect:
             log.append("  [reset]   " + self.ResetUiConfig())
-        if self.capabilities:
-            log.append("  [caps]    " + self.SetCapabilities(force=True))
         if self.open_ui_on_connect:
             log.append("  [browser] " + self.OpenUi())
         log.append("  → 8081 화면에서 Bench Capabilities → Ethernet Interfaces → Toolbox → 버전/서비스/토글을 직접 진행하세요")
@@ -1154,7 +1097,6 @@ class SCAR:
             f"api_base      = {self._api.base_url}",
             f"control_base  = {self._control.base_url}",
             f"post_connect  = {self.post_connect}",
-            f"capabilities  = {self.capabilities or '(unset → skip)'}",
             f"ethernet_ifs  = {self.ethernet_interfaces or '(unset → iface 대체)'}",
             f"ui_version    = {self.ui_version or '(unset → skip)'}",
             f"start_services= {[s['service'] + '@' + s['ecu'] for s in self.start_services] or '(none)'}",
