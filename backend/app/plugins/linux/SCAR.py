@@ -409,11 +409,15 @@ class SCAR:
         if rc != 0:
             return self._mark_fail("netns apply", log)
         # 정상연결 판정: 호스트 `ip netns` 에 netns 대상 ECU 의 '<ecu>ns'(multiverse: PIU_Mstns) 가 있어야 한다.
-        rc, msg = self._netns.verify_host(expect_ns=resolved_ecus or None)
+        # standalone 은 [5] 와 동일하게 lenient — netns.sh 가 이름을 축약하므로(PCU_PROXY_FrontEnd→PCU_PFEns)
+        # 엄격 매칭하면 정상 생성돼도 오탐으로 연결이 거부된다 (2026-08-28 실기 재현). 축약 별칭은
+        # scar_netns.NETNS_NAME_ALIASES 로도 흡수하지만, 미지의 축약에 대비해 standalone 은 expect 없이 검증.
+        expect_host = resolved_ecus if self.net_mode == "multiverse" else None
+        rc, msg = self._netns.verify_host(expect_ns=expect_host or None)
         log.append(f"[3b] host ip netns:\n{self._indent(msg)}")
         if rc != 0:
             return self._mark_fail(
-                f"host ip netns 검증 실패 — {', '.join(f'{e}ns' for e in resolved_ecus)} 미생성 "
+                f"host ip netns 검증 실패 — {', '.join(f'{e}ns' for e in (expect_host or [])) or 'namespace'} 미생성 "
                 f"(netns apply 출력 확인)", log)
 
         # ── [4] UI 기동 (컨테이너 미기동 또는 8081 UI 미응답 시) ─────────

@@ -51,6 +51,22 @@ MULTIVERSE_SLOTS = ("DTOOL", "OBS_TOOL", "PIU_Mst")
 # standalone 은 IVC 네임스페이스가 항상 필요 — 폼/구등록 값에 빠져 있어도 강제 추가.
 STANDALONE_REQUIRED_ECUS = ("IVC",)
 
+# netns.sh 가 만드는 네임스페이스 이름은 stub_ecu 이름을 축약할 수 있다 (실측: standalone 에서
+#   PCU_PROXY_FrontEnd → 'PCU_PFEns'). 검증 시 원이름/축약명 둘 중 하나만 있어도 OK 로 본다.
+NETNS_NAME_ALIASES: dict[str, tuple[str, ...]] = {
+    "PCU_PROXY_FrontEnd": ("PCU_PFE",),
+}
+
+
+def _ns_candidates(ecu: str) -> tuple[str, ...]:
+    """ecu 에 대응하는 '<name>ns' 후보 문자열들."""
+    names = (ecu, *NETNS_NAME_ALIASES.get(ecu, ()))
+    return tuple(f"{n}ns" for n in names)
+
+
+def _missing_ns(expect_ns: list[str], out: str) -> list[str]:
+    return [e for e in expect_ns if not any(c in out for c in _ns_candidates(e))]
+
 
 def build_config(
     ends: str,
@@ -257,8 +273,8 @@ class SCARNetns:
     def verify_host(self, expect_ns: Optional[list[str]] = None) -> tuple[int, str]:
         """호스트 `ip netns` — apply 직후 네임스페이스 생성 확인 (예: 'PIU_Mstns (id: 0)').
 
-        expect_ns 의 각 항목에 대해 '<name>ns' 가 출력에 있으면 OK. 없으면 'ns' 토큰 하나면 OK.
-        /var/run/netns 목록 조회라 sudo 불필요.
+        expect_ns 의 각 항목에 대해 '<name>ns'(또는 NETNS_NAME_ALIASES 축약명) 가 출력에 있으면 OK.
+        expect_ns 없으면 'ns' 토큰 하나면 OK. /var/run/netns 목록 조회라 sudo 불필요.
         """
         try:
             res = subprocess.run(["ip", "netns"], capture_output=True, text=True,
@@ -273,7 +289,7 @@ class SCARNetns:
         if not out:
             return 1, "no network namespaces present (ip netns empty)"
         if expect_ns:
-            missing = [e for e in expect_ns if f"{e}ns" not in out]
+            missing = _missing_ns(expect_ns, out)
             if missing:
                 return 1, f"missing namespaces for {missing}\n{out[-600:]}"
         elif "ns" not in out:
@@ -303,7 +319,7 @@ class SCARNetns:
         if not out:
             return 1, "no network namespaces present (ip netns empty)"
         if expect_ns:
-            missing = [e for e in expect_ns if f"{e}ns" not in out]
+            missing = _missing_ns(expect_ns, out)
             if missing:
                 return 1, f"missing namespaces for {missing}\n{out[-600:]}"
         elif "ns" not in out:
