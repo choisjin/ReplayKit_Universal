@@ -6159,7 +6159,8 @@ export default function RecordPage() {
                   // visible=false 키는 숨김. 그룹별로 details로 묶어 표시.
                   // 그룹 순서: HKMC + iSAP + ICAS 통합 순서
                   // rear-only 그룹(RRC/CCRC)은 항상 맨 아래로
-                  const GROUP_ORDER = ['MKBD', 'CCP', 'SWRC', 'SWRC2', 'MIRROR', 'OVERHEAD', 'TRIP', 'GRIP', 'OPTICAL', 'RHEOSTAT', 'ICAS', 'RRC', 'CCRC'];
+                  // RRCFRONT = RRC(0x90)로 전석을 제어하는 iSAP 키 (rear 게이트 제외 위해 그룹 분리)
+                  const GROUP_ORDER = ['MKBD', 'CCP', 'SWRC', 'SWRC2', 'MIRROR', 'OVERHEAD', 'TRIP', 'GRIP', 'OPTICAL', 'DRIVE', 'RHEOSTAT', 'RRCFRONT', 'ICAS', 'RRC', 'CCRC'];
                   const visibleKeys = hkmcKeys.filter(k => k.visible !== false);
                   const byGroup: Record<string, HkmcKeyInfo[]> = {};
                   visibleKeys.forEach(k => {

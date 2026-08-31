@@ -2080,11 +2080,12 @@ async def list_isap_keys(device_id: Optional[str] = None):
     keys = []
     for name, info in ISAP_KEYS.items():
         ov = overrides.get(name, {})
-        group = name.split("_")[0]  # MKBD, CCP, SWRC, RRC, MIRROR, OVERHEAD, TRIP, GRIP, OPTICAL, RHEOSTAT
+        group = name.split("_")[0]  # MKBD, CCP, SWRC, RRC, RRCFRONT, MIRROR, OVERHEAD, TRIP, GRIP, OPTICAL, DRIVE, RHEOSTAT
         cmd = ov.get("cmd", info["cmd"])
         key = ov.get("key", info["key"])
         is_dial = ov.get("dial", info.get("dial", False))
-        visible = ov.get("visible", True)
+        # 스펙 기본 visible 존중 (방향 없는 베이스 노브 키는 기본 숨김 — _CW/_CCW 사용)
+        visible = ov.get("visible", info.get("visible", True))
         keys.append({
             "name": name,
             "group": group,

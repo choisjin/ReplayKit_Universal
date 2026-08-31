@@ -116,12 +116,13 @@ SCREEN_PORT_MAP: dict[str, int] = {
 }
 
 
-# Key tables from spec (Connected_Wide_iSAP_Agent.docx).
+# Key tables from spec (Connected_Wide_iSAP_Agent.docx +
+# Reference/isap/iSAP_*.pdf 2.4.12.x 개정판, 2026-08).
 # 각 키의 group은 이름 앞부분(첫 "_" 전)으로 판별된다.
 # - 이 딕셔너리는 global default 이며, 각 디바이스는 info["isap_keys"]로
 #   cmd/key/visible을 개별 오버라이드 할 수 있다 (차종별 키 값 차이 대응).
 ISAP_KEYS: dict[str, dict] = {
-    # MKBD (CMD_HKEY=0x60) — 표 113
+    # MKBD (CMD_MKBD=0x60) — 2.4.12.1
     "MKBD_HOME":        {"cmd": CMD_HKEY, "key": 0x0A},
     "MKBD_MAP":         {"cmd": CMD_HKEY, "key": 0x0B},
     "MKBD_NAV":         {"cmd": CMD_HKEY, "key": 0x0C},
@@ -134,12 +135,21 @@ ISAP_KEYS: dict[str, dict] = {
     "MKBD_TRACK_UP":    {"cmd": CMD_HKEY, "key": 0x15},
     "MKBD_SEEK_DOWN":   {"cmd": CMD_HKEY, "key": 0x16},
     "MKBD_TRACK_DOWN":  {"cmd": CMD_HKEY, "key": 0x17},
-    "MKBD_POWER":       {"cmd": CMD_HKEY, "key": 0x1D},
+    "MKBD_POWER":       {"cmd": CMD_HKEY, "key": 0x1D},  # 개정판 명칭 VOLUME_PUSH(POWER)
     "MKBD_TUNE_PUSH":   {"cmd": CMD_HKEY, "key": 0x1E},
-    "MKBD_VOLUME":      {"cmd": CMD_HKEY, "key": 0x01, "dial": True},
-    "MKBD_TUNE":        {"cmd": CMD_HKEY, "key": 0x04, "dial": True},
+    "MKBD_CLIMATE":     {"cmd": CMD_HKEY, "key": 0x1F},
+    "MKBD_APP":         {"cmd": CMD_HKEY, "key": 0x20},  # Connect Wide
+    "MKBD_POP_UP":      {"cmd": CMD_HKEY, "key": 0x21},  # Connect Wide
+    # 노브 키: 방향 명시형 _CW(시계=우)/_CCW(반시계=좌) 사용 권장.
+    # 방향 없는 베이스 항목은 기존 시나리오 호환용(항상 CW)으로 남기고 기본 숨김.
+    "MKBD_VOLUME":      {"cmd": CMD_HKEY, "key": 0x01, "dial": True, "visible": False},
+    "MKBD_VOLUME_CW":   {"cmd": CMD_HKEY, "key": 0x01, "dial": True, "dir": DIR_CLOCKWISE},
+    "MKBD_VOLUME_CCW":  {"cmd": CMD_HKEY, "key": 0x01, "dial": True, "dir": DIR_COUNTER_CW},
+    "MKBD_TUNE":        {"cmd": CMD_HKEY, "key": 0x04, "dial": True, "visible": False},
+    "MKBD_TUNE_CW":     {"cmd": CMD_HKEY, "key": 0x04, "dial": True, "dir": DIR_CLOCKWISE},
+    "MKBD_TUNE_CCW":    {"cmd": CMD_HKEY, "key": 0x04, "dial": True, "dir": DIR_COUNTER_CW},
 
-    # CCP (CMD_CCP=0x80) — 표 115
+    # CCP (CMD_CCP=0x80) — 2.4.12.3
     "CCP_UP":           {"cmd": CMD_CCP, "key": 0x00},
     "CCP_DOWN":         {"cmd": CMD_CCP, "key": 0x01},
     "CCP_LEFT":         {"cmd": CMD_CCP, "key": 0x03},
@@ -147,14 +157,22 @@ ISAP_KEYS: dict[str, dict] = {
     "CCP_ENTER":        {"cmd": CMD_CCP, "key": 0x08},
     "CCP_BACK":         {"cmd": CMD_CCP, "key": 0x09},
     "CCP_MENU":         {"cmd": CMD_CCP, "key": 0x0A},
+    "CCP_SEARCH":       {"cmd": CMD_CCP, "key": 0x13},
     "CCP_HOME":         {"cmd": CMD_CCP, "key": 0x14},
     "CCP_POWER":        {"cmd": CMD_CCP, "key": 0x19},
     "CCP_TUNE_PUSH":    {"cmd": CMD_CCP, "key": 0x1E},
-    "CCP_JOGDIAL":      {"cmd": CMD_CCP, "key": 0x00, "dial": True},
-    "CCP_VOLUME":       {"cmd": CMD_CCP, "key": 0x01, "dial": True},
-    "CCP_TUNE":         {"cmd": CMD_CCP, "key": 0x04, "dial": True},
+    "CCP_APPS":         {"cmd": CMD_CCP, "key": 0x20},
+    "CCP_JOGDIAL":      {"cmd": CMD_CCP, "key": 0x00, "dial": True, "visible": False},
+    "CCP_JOGDIAL_CW":   {"cmd": CMD_CCP, "key": 0x00, "dial": True, "dir": DIR_CLOCKWISE},
+    "CCP_JOGDIAL_CCW":  {"cmd": CMD_CCP, "key": 0x00, "dial": True, "dir": DIR_COUNTER_CW},
+    "CCP_VOLUME":       {"cmd": CMD_CCP, "key": 0x01, "dial": True, "visible": False},
+    "CCP_VOLUME_CW":    {"cmd": CMD_CCP, "key": 0x01, "dial": True, "dir": DIR_CLOCKWISE},
+    "CCP_VOLUME_CCW":   {"cmd": CMD_CCP, "key": 0x01, "dial": True, "dir": DIR_COUNTER_CW},
+    "CCP_TUNE":         {"cmd": CMD_CCP, "key": 0x04, "dial": True, "visible": False},
+    "CCP_TUNE_CW":      {"cmd": CMD_CCP, "key": 0x04, "dial": True, "dir": DIR_CLOCKWISE},
+    "CCP_TUNE_CCW":     {"cmd": CMD_CCP, "key": 0x04, "dial": True, "dir": DIR_COUNTER_CW},
 
-    # RRC (CMD_RRC=0x90) — 표 118, 2 Monitor용 리어 리모콘
+    # RRC (CMD_RRC=0x90) — 2.4.12.4, 2 Monitor용 리어 리모콘
     "RRC_UP":           {"cmd": CMD_RRC, "key": 0x00},
     "RRC_DOWN":         {"cmd": CMD_RRC, "key": 0x01},
     "RRC_LEFT":         {"cmd": CMD_RRC, "key": 0x03},
@@ -167,11 +185,41 @@ ISAP_KEYS: dict[str, dict] = {
     "RRC_POWER_RIGHT":  {"cmd": CMD_RRC, "key": 0x1B},
     "RRC_VOLUME_LEFT":  {"cmd": CMD_RRC, "key": 0x17},
     "RRC_VOLUME_RIGHT": {"cmd": CMD_RRC, "key": 0x18},
-    "RRC_JOGDIAL":          {"cmd": CMD_RRC, "key": 0x00, "dial": True},
-    "RRC_VOLUME_LEFT_DIAL":  {"cmd": CMD_RRC, "key": 0x02, "dial": True},
-    "RRC_VOLUME_RIGHT_DIAL": {"cmd": CMD_RRC, "key": 0x03, "dial": True},
+    "RRC_JOGDIAL":          {"cmd": CMD_RRC, "key": 0x00, "dial": True, "visible": False},
+    "RRC_JOGDIAL_CW":       {"cmd": CMD_RRC, "key": 0x00, "dial": True, "dir": DIR_CLOCKWISE},
+    "RRC_JOGDIAL_CCW":      {"cmd": CMD_RRC, "key": 0x00, "dial": True, "dir": DIR_COUNTER_CW},
+    "RRC_VOLUME_LEFT_DIAL":  {"cmd": CMD_RRC, "key": 0x02, "dial": True, "visible": False},
+    "RRC_VOLUME_LEFT_DIAL_CW":  {"cmd": CMD_RRC, "key": 0x02, "dial": True, "dir": DIR_CLOCKWISE},
+    "RRC_VOLUME_LEFT_DIAL_CCW": {"cmd": CMD_RRC, "key": 0x02, "dial": True, "dir": DIR_COUNTER_CW},
+    "RRC_VOLUME_RIGHT_DIAL": {"cmd": CMD_RRC, "key": 0x03, "dial": True, "visible": False},
+    "RRC_VOLUME_RIGHT_DIAL_CW":  {"cmd": CMD_RRC, "key": 0x03, "dial": True, "dir": DIR_CLOCKWISE},
+    "RRC_VOLUME_RIGHT_DIAL_CCW": {"cmd": CMD_RRC, "key": 0x03, "dial": True, "dir": DIR_COUNTER_CW},
+    # RRC — ccRC 신규 (2.4.12.4 개정판)
+    "RRC_POWER":         {"cmd": CMD_RRC, "key": 0x19},
+    "RRC_SETUP":         {"cmd": CMD_RRC, "key": 0x20},
+    "RRC_DISP_OFF":      {"cmd": CMD_RRC, "key": 0x21},
+    "RRC_VOLUME_PLUS":   {"cmd": CMD_RRC, "key": 0x22},
+    "RRC_VOLUME_MINUS":  {"cmd": CMD_RRC, "key": 0x23},
+    "RRC_SELECT":        {"cmd": CMD_RRC, "key": 0x24},  # 좌/우선택
+    "RRC_CUSTOM":        {"cmd": CMD_RRC, "key": 0x25},
+    "RRC_PTT":           {"cmd": CMD_RRC, "key": 0x26},
 
-    # SWRC (CMD_SWRC=0x70) — 표 121, 스티어링 휠 리모콘
+    # RRCFRONT — RRC(0x90)로 전석 모니터를 제어하는 키 (2.4.12.4 개정판).
+    # 프론트 UI의 RRC rear-only 게이트를 피하려고 그룹 프리픽스를 분리했다
+    # (그룹은 첫 "_" 앞 토큰: RRCFRONT). ccNC 이후 / Connect S 적용.
+    "RRCFRONT_MUTE":        {"cmd": CMD_RRC, "key": 0x30},  # ccNC 이후
+    "RRCFRONT_MODE":        {"cmd": CMD_RRC, "key": 0x31},  # ccNC 이후
+    "RRCFRONT_SEEK_UP":     {"cmd": CMD_RRC, "key": 0x32},  # ccNC 이후
+    "RRCFRONT_SEEK_DOWN":   {"cmd": CMD_RRC, "key": 0x33},  # ccNC 이후
+    "RRCFRONT_TRACK_UP":    {"cmd": CMD_RRC, "key": 0x34},  # ccNC 이후
+    "RRCFRONT_TRACK_DOWN":  {"cmd": CMD_RRC, "key": 0x35},  # ccNC 이후
+    "RRCFRONT_RADIO":       {"cmd": CMD_RRC, "key": 0x0D},  # Connect S
+    "RRCFRONT_VOLUME_PUSH": {"cmd": CMD_RRC, "key": 0x0E},  # Connect S
+    "RRCFRONT_VOLUME_KNOB": {"cmd": CMD_RRC, "key": 0x36, "dial": True, "visible": False},  # ccNC 이후
+    "RRCFRONT_VOLUME_KNOB_CW":  {"cmd": CMD_RRC, "key": 0x36, "dial": True, "dir": DIR_CLOCKWISE},
+    "RRCFRONT_VOLUME_KNOB_CCW": {"cmd": CMD_RRC, "key": 0x36, "dial": True, "dir": DIR_COUNTER_CW},
+
+    # SWRC (CMD_SWRC=0x70) — 2.4.12.2, 스티어링 휠 리모콘 (MEDIA CONTROL SWITCH)
     "SWRC_PTT":         {"cmd": CMD_SWRC, "key": 0x22},
     "SWRC_MODE":        {"cmd": CMD_SWRC, "key": 0x23},
     "SWRC_MUTE":        {"cmd": CMD_SWRC, "key": 0x24},
@@ -180,23 +228,25 @@ ISAP_KEYS: dict[str, dict] = {
     "SWRC_CUSTOM":      {"cmd": CMD_SWRC, "key": 0x11},
     "SWRC_SEND":        {"cmd": CMD_SWRC, "key": 0x25},
     "SWRC_END":         {"cmd": CMD_SWRC, "key": 0x26},
-    "SWRC_VOLUME":      {"cmd": CMD_SWRC, "key": 0x01, "dial": True},
+    "SWRC_VOLUME":      {"cmd": CMD_SWRC, "key": 0x01, "dial": True, "visible": False},
+    "SWRC_VOLUME_CW":   {"cmd": CMD_SWRC, "key": 0x01, "dial": True, "dir": DIR_CLOCKWISE},
+    "SWRC_VOLUME_CCW":  {"cmd": CMD_SWRC, "key": 0x01, "dial": True, "dir": DIR_COUNTER_CW},
 
-    # MIRROR (CMD_MIRROR=0x92) — 표 123
+    # MIRROR (CMD_MIRROR=0x92) — 2.4.12.5
     "MIRROR_SOS":                   {"cmd": CMD_MIRROR, "key": 0x27},
     "MIRROR_CONCIERGE":              {"cmd": CMD_MIRROR, "key": 0x2A},
     "MIRROR_CONCIERGE_POI":          {"cmd": CMD_MIRROR, "key": 0x2B},
     "MIRROR_VOICE_LOCAL_SEARCH":     {"cmd": CMD_MIRROR, "key": 0x2C},
     "MIRROR_ROADSIDE_ASSISTANT":     {"cmd": CMD_MIRROR, "key": 0x2D},
 
-    # OVERHEAD CONSOLE (CMD_OVERHEADCONSOLE=0x94) — 표 125
+    # OVERHEAD CONSOLE (CMD_OVERHEADCONSOLE=0x94) — 2.4.12.6
     "OVERHEAD_SOS":                 {"cmd": CMD_OVERHEADCONSOLE, "key": 0x27},
     "OVERHEAD_CONCIERGE":           {"cmd": CMD_OVERHEADCONSOLE, "key": 0x2A},
     "OVERHEAD_CONCIERGE_POI":       {"cmd": CMD_OVERHEADCONSOLE, "key": 0x2B},
     "OVERHEAD_VOICE_LOCAL_SEARCH":  {"cmd": CMD_OVERHEADCONSOLE, "key": 0x2C},
     "OVERHEAD_ROADSIDE_ASSISTANT":  {"cmd": CMD_OVERHEADCONSOLE, "key": 0x2D},
 
-    # TRIP SWITCH (CMD_SWRC=0x70, Monitor 필드로 구분) — 표 126
+    # TRIP SWITCH (CMD_SWRC=0x70, Monitor 필드로 구분) — 2.4.12.2
     "TRIP_MENU":         {"cmd": CMD_SWRC, "key": 0x31},
     "TRIP_UP":           {"cmd": CMD_SWRC, "key": 0x32},
     "TRIP_DOWN":         {"cmd": CMD_SWRC, "key": 0x33},
@@ -213,21 +263,28 @@ ISAP_KEYS: dict[str, dict] = {
     "TRIP_ERROR":        {"cmd": CMD_SWRC, "key": 0x3E},
     "TRIP_RESERVED":     {"cmd": CMD_SWRC, "key": 0x3F},
 
-    # GRIP CONTROL SWITCH (CMD_GRIPSW=0x72) — 표 128
+    # GRIP CONTROL SWITCH (CMD_GRIPSW=0x72) — 구 스펙 표 128 (개정판 미포함, 유지)
     "GRIP_RIGHT":        {"cmd": CMD_GRIPSW, "key": 0x41},
     "GRIP_LEFT":         {"cmd": CMD_GRIPSW, "key": 0x42},
     "GRIP_PUSH":         {"cmd": CMD_GRIPSW, "key": 0x43},
 
-    # OPTICAL SWITCH (CMD_OPSW=0x71) — 표 130
-    "OPTICAL_SWIPE_UP":    {"cmd": CMD_OPSW, "key": 0x51},
-    "OPTICAL_SWIPE_DOWN":  {"cmd": CMD_OPSW, "key": 0x52},
-    "OPTICAL_SWIPE_LEFT":  {"cmd": CMD_OPSW, "key": 0x53},
-    "OPTICAL_SWIPE_RIGHT": {"cmd": CMD_OPSW, "key": 0x54},
-    "OPTICAL_TOUCH":       {"cmd": CMD_OPSW, "key": 0x55},
-    "OPTICAL_OK":          {"cmd": CMD_OPSW, "key": 0x56},
+    # OPTICAL SWITCH — 2.4.12.2 개정판에서 SWRC(0x70) 산하로 이동
+    # (구 스펙은 CMD_OPSW=0x71). 샘플 패킷 Monitor=0x03(클러스터).
+    "OPTICAL_SWIPE_UP":    {"cmd": CMD_SWRC, "key": 0x51},
+    "OPTICAL_SWIPE_DOWN":  {"cmd": CMD_SWRC, "key": 0x52},
+    "OPTICAL_SWIPE_LEFT":  {"cmd": CMD_SWRC, "key": 0x53},
+    "OPTICAL_SWIPE_RIGHT": {"cmd": CMD_SWRC, "key": 0x54},
+    "OPTICAL_TOUCH":       {"cmd": CMD_SWRC, "key": 0x55},
+    "OPTICAL_OK":          {"cmd": CMD_SWRC, "key": 0x56},
 
-    # RHEOSTAT SWITCH (CMD_HKEY=0x60 per spec sample; 별도 CMD_RHEOSTAT 언급되나
-    # 실제 패킷 샘플은 0x60을 사용) — 표 131
+    # DRIVE MODE SWITCH (CMD_SWRC=0x70, 스티어링휠 타입) — 2.4.12.2 개정판 신규.
+    # 샘플 패킷 Monitor=0x03(클러스터).
+    "DRIVE_MODE":          {"cmd": CMD_SWRC, "key": 0x61},
+    "DRIVE_OFFLOAD_MODE":  {"cmd": CMD_SWRC, "key": 0x62},
+
+    # RHEOSTAT SWITCH (CMD_HKEY=0x60 per 구 스펙 표 131 샘플) — 개정판 미포함.
+    # 주의: 개정판은 SWRC(0x70) data 0x61/0x62를 DRIVE MODE로 재정의했으나
+    # 이 항목은 cmd가 0x60이라 충돌하지 않음. 기존 시나리오 호환 위해 유지.
     "RHEOSTAT_UP":       {"cmd": CMD_HKEY, "key": 0x61},
     "RHEOSTAT_DOWN":     {"cmd": CMD_HKEY, "key": 0x62},
 }
@@ -964,7 +1021,8 @@ class ISAPAgentService:
         with self._capture_lock:
             time.sleep(0.1)
             if info.get("dial"):
-                dir_val = direction if direction is not None else DIR_CLOCKWISE
+                # 방향 우선순위: 호출 인자 > 키 정의의 dir(_CW/_CCW 변형) > CW 기본
+                dir_val = direction if direction is not None else info.get("dir", DIR_CLOCKWISE)
                 self.send_key(cmd, KNOB_KEY, key_data, screen_type, dir_val)
             elif hold_ms and hold_ms > 0:
                 # 누름 유지(연속/배속): 키-다운(PRESS, 0x42)으로 키를 누른 뒤 hold_ms 동안
