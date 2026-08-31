@@ -2004,7 +2004,7 @@
         "params": {
           "min_current": "Minimum current (A). e.g. 0.5",
           "max_current": "Maximum current (A). e.g. 2.0",
-          "check_delay": "Timeout (ms). e.g. 10000"
+          "check_delay": "Timeout (ms). e.g. 10000. Minimum 3000ms — lower values are auto-raised to 3000ms (one reading takes ~1.5s x 3 consecutive readings). 3500-4000ms+ recommended on slow devices"
         }
       },
       "CheckCurrentMoment": {

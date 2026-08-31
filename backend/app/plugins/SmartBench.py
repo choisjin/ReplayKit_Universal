@@ -226,7 +226,17 @@ class SmartBench:
         """
         pass_count = 0
         values = []
-        timeout_sec = int(check_delay) / 1000.0
+        # "current-1000" 명령은 장비 내부 ~1000ms 샘플링 + 통신 오버헤드로 1회
+        # 측정에 1.0~1.5s 소요 → 연속 3회 측정 정책상 3000ms 미만 타임아웃은
+        # 논리적으로 성립 불가라 최소 3000ms로 강제 상향한다.
+        check_delay_ms = int(check_delay)
+        if check_delay_ms < 3000:
+            logger.warning(
+                "[SmartBench] CheckCurrent check_delay=%dms is below minimum 3000ms; forcing 3000ms",
+                check_delay_ms,
+            )
+            check_delay_ms = 3000
+        timeout_sec = check_delay_ms / 1000.0
         start = time.time()
 
         while time.time() - start < timeout_sec:

@@ -2004,7 +2004,7 @@
         "params": {
           "min_current": "최소 전류 (A). 예: 0.5",
           "max_current": "최대 전류 (A). 예: 2.0",
-          "check_delay": "타임아웃 (ms). 예: 10000"
+          "check_delay": "타임아웃 (ms). 예: 10000. 최소 3000ms — 미만 입력 시 3000ms로 자동 상향(1회 측정 ~1.5s × 연속 3회 정책). 장비 지연 환경은 3500~4000ms 이상 권장"
         }
       },
       "CheckCurrentMoment": {
