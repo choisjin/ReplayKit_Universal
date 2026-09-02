@@ -98,3 +98,6 @@ Reference/
 frontend/package-lock.json
 frontend/package-lock.json
 Bug/backend_slice_1.log
+
+frontend/node_modules/
+.req_hash
