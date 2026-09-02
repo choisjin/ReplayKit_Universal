@@ -290,6 +290,23 @@ ISAP_KEYS: dict[str, dict] = {
 }
 
 
+def _env_flag(name: str, default: bool = True) -> bool:
+    """환경변수를 불리언으로 읽는다 (0/false/no/off = False)."""
+    raw = (os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw not in ("0", "false", "no", "off")
+
+
+# 송신 원문 덤프 대상 — 하드키/노브 계열 (터치·드래그·캡처는 제외해 로그 폭주 방지).
+# ISAP_LOG_BYTES=0 으로 끌 수 있다.
+_LOG_BYTES = _env_flag("ISAP_LOG_BYTES", True)
+_BYTE_LOG_CMDS = frozenset({
+    CMD_HKEY, CMD_SWRC, CMD_OPSW, CMD_GRIPSW,
+    CMD_CCP, CMD_RRC, CMD_MIRROR, CMD_OVERHEADCONSOLE,
+})
+
+
 def _calc_crc16(data: list[int]) -> int:
     """CRC16 with 0xC659 polynomial (공통 IVI agent 프로토콜)."""
     crc = 0xFFFF
@@ -497,7 +514,15 @@ class ISAPAgentService:
         packet.append(END_BIT)
         packet.append(END_BIT)
 
-        logger.debug("[iSAP SEND] cmd=0x%02X sub=0x%02X len=%d", cmd, sub_cmd, packet_len)
+        # 실기 동작 검증용 원문 덤프 — 레퍼런스 플랫폼 로그(bytearray(b'aa...oo'))와
+        # 그대로 비교할 수 있게 같은 표기로 남긴다. 하드키/노브 계열만 INFO 로 올리고
+        # 터치·드래그처럼 초당 수십 프레임이 나가는 커맨드는 DEBUG 로 둔다.
+        if _LOG_BYTES and cmd in _BYTE_LOG_CMDS:
+            raw = bytes(packet)
+            logger.info("[iSAP SEND] cmd=0x%02X sub=0x%02X len=%d %s | %s",
+                        cmd, sub_cmd, packet_len, raw.hex(" "), bytearray(raw))
+        else:
+            logger.debug("[iSAP SEND] cmd=0x%02X sub=0x%02X len=%d", cmd, sub_cmd, packet_len)
         self._send_raw(packet)
 
     # ------------------------------------------------------------------
