@@ -1153,6 +1153,9 @@ export default function RecordPage() {
   // 녹화 중이면 의도치 않은 방향키 스텝이 추가되는 문제가 있었다.
   // 스크린샷은 capture 요청 시 screen_type 을 명시하므로 별도 포커스 조작 불필요.
   const isScreenAdb = screenDevice?.type === 'adb';
+  // iSAP 에이전트는 CMD_LCDTOUCHEXT 의 FINGER_NUMBER/FINGER_INDEX 로 멀티핑거를 지원한다
+  // (표 132/133). ADB 와 동일한 핑거수 선택 UI 를 노출한다.
+  const isScreenIsap = screenDevice?.type === 'isap_agent';
   // Connect Wide 를 ADB 로 연결한 경우 — 미러 하단에 하드키 버튼 노출
   const isScreenConnectWide = isScreenAdb && screenDevice?.info?.device_model === 'Connect Wide';
   const isScreenBmw = screenDevice?.type === 'bmw_agent';
@@ -1479,6 +1482,9 @@ export default function RecordPage() {
       if (action === 'tap') return 'hkmc_touch';
       if (action === 'swipe') return 'hkmc_swipe';
       if (action === 'long_press') return 'hkmc_long_press';
+      // 멀티핑거는 CMD_LCDTOUCHEXT(0xB0)의 FINGER_NUMBER/FINGER_INDEX 필드를 쓰는
+      // iSAP 전용 기능 — 6th/5th wide 에이전트는 백엔드가 거부하므로 매핑하지 않는다.
+      if (action === 'multi_touch' && dev.type === 'isap_agent') return 'hkmc_multi_touch';
       return action;
     }
     return action;
@@ -1494,7 +1500,7 @@ export default function RecordPage() {
     if (dev?.type === 'gm_info_agent' && (action === 'icas_touch' || action === 'icas_swipe' || action === 'icas_key' || action === 'icas_long_press' || action === 'repeat_tap')) {
       return { ...params, screen_type: 'HU' };
     }
-    if ((dev?.type === 'hkmc_agent' || dev?.type === 'isap_agent' || dev?.type === 'hkmc5th_wide_agent') && (action === 'hkmc_touch' || action === 'hkmc_swipe' || action === 'hkmc_key' || action === 'hkmc_long_press' || action === 'repeat_tap')) {
+    if ((dev?.type === 'hkmc_agent' || dev?.type === 'isap_agent' || dev?.type === 'hkmc5th_wide_agent') && (action === 'hkmc_touch' || action === 'hkmc_swipe' || action === 'hkmc_key' || action === 'hkmc_long_press' || action === 'hkmc_multi_touch' || action === 'repeat_tap')) {
       return { ...params, screen_type: screenType };
     }
     // ADB/BMW multi-display: 모든 디스플레이에 screen_type 주입 (display 0 포함 — screencap에 display 선택 필요)
@@ -5838,7 +5844,7 @@ export default function RecordPage() {
                       </Button>
                     </Tooltip>
                   )}
-                  {isScreenAdb && <>
+                  {(isScreenAdb || isScreenIsap) && <>
                   <Tooltip title={t('record.multiTouch')}>
                     <Radio.Group
                       size="small"
@@ -5866,7 +5872,7 @@ export default function RecordPage() {
                       />
                     </Tooltip>
                   )}
-                  {fingerCount === 1 && (
+                  {fingerCount === 1 && isScreenAdb && (
                     <Tooltip title={t('record.smartSwipeHint')}>
                       <Button
                         size="small"

@@ -298,13 +298,16 @@ def _env_flag(name: str, default: bool = True) -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
-# 송신 원문 덤프 대상 — 하드키/노브 계열 (터치·드래그·캡처는 제외해 로그 폭주 방지).
-# ISAP_LOG_BYTES=0 으로 끌 수 있다.
+# 송신 원문 덤프 대상 — 기본은 하드키/노브 계열만 (터치·드래그는 프레임 수가 많아 제외).
+#   ISAP_LOG_BYTES=0    → 끄기
+#   ISAP_LOG_BYTES=all  → 터치/멀티핑거(0xB0, 0xD6, 0xD7)까지 포함 (멀티핑거 브링업용)
+_LOG_BYTES_RAW = (os.environ.get("ISAP_LOG_BYTES") or "").strip().lower()
 _LOG_BYTES = _env_flag("ISAP_LOG_BYTES", True)
 _BYTE_LOG_CMDS = frozenset({
     CMD_HKEY, CMD_SWRC, CMD_OPSW, CMD_GRIPSW,
     CMD_CCP, CMD_RRC, CMD_MIRROR, CMD_OVERHEADCONSOLE,
-})
+} | ({CMD_LCDTOUCHEXT, CMD_LCDTOUCH_DRAG, CMD_LCDTOUCH_FAST}
+     if _LOG_BYTES_RAW == "all" else set()))
 
 
 def _calc_crc16(data: list[int]) -> int:
