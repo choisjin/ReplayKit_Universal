@@ -546,7 +546,7 @@ def list_available_modules() -> list[dict]:
         # ODAPowerSupply — ODA OPS-3010 DC 전원공급기 (RS-232 SCPI). 생성자(port, bps) →
         # Connect()/IsConnected() 자동 호출 경로(SerialPlugin 과 동일). 장비 기본 통신속도가
         # 9600 이라 default_baudrate 로 UI 드롭다운 초기값을 내려준다 (프론트 baud 기본 115200).
-        {"name": "ODAPowerSupply", "label": "ODAPowerSupply (OPS-3010)", "connect_type": "serial",
+        {"name": "ODAPowerSupply", "label": "ODAPowerSupply", "connect_type": "serial",
          "default_baudrate": 9600,
          "connect_fields": []},
         {"name": "DLTViewer", "label": "DLTViewer", "connect_type": "socket",
