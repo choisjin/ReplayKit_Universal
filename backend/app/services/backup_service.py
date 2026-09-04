@@ -104,6 +104,9 @@ def _iter_source_files() -> list[tuple[Path, str]]:
             if "actual" in fp.name:
                 continue
             rel = fp.relative_to(SCREENSHOTS_DIR).as_posix()
+            # 기대이미지 교체 시 남긴 직전 세대 백업(_prev/) 은 재생에 불필요 → 제외
+            if "/_prev/" in rel:
+                continue
             entries.append((fp, f"screenshots/{rel}"))
 
     return entries

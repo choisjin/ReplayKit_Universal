@@ -315,6 +315,10 @@ export const resultsApi = {
   ) => api.post(`/results/update-steps/${filename}`, { updates }),
   updateStepResult: (filename: string, stepIndex: number, message: string, status?: string) =>
     api.post(`/results/update-step/${filename}`, { step_index: stepIndex, message, ...(status ? { status } : {}) }),
+  // 스텝의 실제 이미지(actual)로 시나리오 기대 이미지를 교체.
+  // 시나리오 JSON 은 그대로 두고 기대이미지 PNG 만 제자리 덮어쓴다.
+  replaceExpectedImages: (filename: string, stepIndexes: number[]) =>
+    api.post(`/results/replace-expected/${filename}`, { step_indexes: stepIndexes }),
   // result.html 재생성 (상세 모달 'HTML 생성' 버튼)
   regenerateHtml: (filename: string) =>
     api.post(`/results/regenerate-html/${filename}`),

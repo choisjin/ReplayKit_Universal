@@ -1866,6 +1866,231 @@ async def update_step_results_bulk(filename: str, body: dict):
     return {"status": "ok", "applied": len(batch), "result_status": result_status}
 
 
+# ------------------------------------------------------------------
+# 기대이미지 교체 (실제 이미지 → 기대 이미지)
+# ------------------------------------------------------------------
+# 시나리오 실행 후 "변화가 적은" actual 을 그대로 새 기준으로 채택하는 기능.
+# 시나리오 JSON 은 건드리지 않고 **기대이미지 PNG 파일만 제자리 덮어쓴다** —
+# 파일명/ROI/라벨/compare_mode 등 시나리오 배선이 그대로 유지되므로 가장 안전하다.
+# 덮어쓰기 직전 원본은 screenshots/{scenario}/_prev/ 로 1세대 백업한다.
+
+from ..utils.cv2_loader import cv2
+from ..utils.cv_io import safe_imread, safe_imwrite
+
+SCENARIOS_DIR = Path(__file__).resolve().parent.parent.parent / "scenarios"
+_PREV_DIR_NAME = "_prev"
+
+
+def _expected_write_path(rel_path: str | None) -> Path | None:
+    """기대이미지 상대경로(`{scenario}/{file}.png`) → 절대 경로.
+
+    _resolve_image_path 와 달리 **파일이 없어도** 경로를 돌려준다(덮어쓸 대상이므로).
+    SCREENSHOTS_DIR 밖으로 벗어나는 경로는 거부한다.
+    """
+    if not rel_path:
+        return None
+    p = str(rel_path).replace("\\", "/")
+    idx = p.find("/screenshots/")
+    if idx >= 0:
+        p = p[idx + len("/screenshots/"):]
+    try:
+        target = (SCREENSHOTS_DIR / p).resolve()
+        target.relative_to(SCREENSHOTS_DIR.resolve())   # 경로 이탈 차단
+    except (ValueError, OSError):
+        return None
+    return target
+
+
+def _load_scenario_steps_raw(scenario_name: str) -> dict:
+    """시나리오 JSON 을 그대로 읽어 uid → step dict 로 반환.
+
+    ROI 원본을 얻기 위한 읽기 전용 경로. RecordingService.load_scenario 는
+    마이그레이션 시 자동 저장까지 하므로 여기서는 쓰지 않는다.
+    """
+    if not scenario_name:
+        return {}
+    fp = SCENARIOS_DIR / f"{scenario_name}.json"
+    if not fp.exists():
+        return {}
+    try:
+        data = json.loads(fp.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for st in data.get("steps", []):
+        uid = st.get("uid")
+        if uid:
+            out[uid] = st
+    return out
+
+
+def _crop_for_expected(img_act, roi: dict | None, expected_path: Path):
+    """actual 전체 이미지에서 기대이미지용 영역을 잘라낸다.
+
+    roi 가 없으면(full / full_exclude) 전체를 그대로 쓴다.
+    ROI 가 actual 밖으로 나가 잘린 경우엔 기존 기대이미지 크기에 맞춰 되돌린다 —
+    크기가 달라지면 다음 비교에서 resize 왜곡이 생기기 때문.
+    """
+    if not roi:
+        return img_act
+    ah, aw = img_act.shape[:2]
+    x = max(0, int(roi.get("x", 0)))
+    y = max(0, int(roi.get("y", 0)))
+    w = int(roi.get("width", 0))
+    h = int(roi.get("height", 0))
+    if w <= 0 or h <= 0:
+        return None
+    x2, y2 = min(aw, x + w), min(ah, y + h)
+    crop = img_act[y:y2, x:x2]
+    if crop.size == 0:
+        return None
+    if crop.shape[0] != h or crop.shape[1] != w:
+        old = safe_imread(str(expected_path)) if expected_path.exists() else None
+        if old is not None and old.shape[:2] != crop.shape[:2]:
+            crop = cv2.resize(crop, (old.shape[1], old.shape[0]))
+    return crop
+
+
+def _write_expected(target: Path, img) -> None:
+    """기대이미지 덮어쓰기 + 1세대 백업(screenshots/{scenario}/_prev/)."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        prev_dir = target.parent / _PREV_DIR_NAME
+        prev_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(str(target), str(prev_dir / target.name))
+        except OSError as e:
+            logger.warning("기대이미지 백업 실패 (%s): %s", target.name, e)
+    if not safe_imwrite(str(target), img):
+        raise RuntimeError(f"이미지 저장 실패: {target.name}")
+
+
+def _replace_targets_for_step(sr: dict, scenario_name: str, sc_step: dict | None):
+    """스텝 결과 하나가 갱신해야 할 (기대이미지 경로, crop ROI) 목록."""
+    mode = sr.get("compare_mode") or (sc_step or {}).get("compare_mode") or "full"
+    targets: list = []
+
+    if mode == "multi_crop":
+        # 크롭 각각 — ROI 는 시나리오 원본이 정본, 없으면 결과의 match_location 폴백
+        crops = (sc_step or {}).get("expected_images") or []
+        if crops:
+            for ci in crops:
+                tp = _expected_write_path(f"{scenario_name}/{ci.get('image', '')}")
+                if tp and ci.get("roi"):
+                    targets.append((tp, ci["roi"]))
+        else:
+            for sub in sr.get("sub_results", []):
+                tp = _expected_write_path(sub.get("expected_image"))
+                if tp and sub.get("match_location"):
+                    targets.append((tp, sub["match_location"]))
+        # 멀티크롭 베이스 이미지(표시/주석용 전체 화면)도 함께 갱신해 좌표계를 맞춘다
+        base = _expected_write_path(sr.get("expected_image"))
+        if base:
+            targets.append((base, None))
+        return targets
+
+    base = _expected_write_path(sr.get("expected_image"))
+    if not base:
+        return []
+    if mode == "match_crop":
+        # 위치 무관 매칭 — 실제 매치된 위치를 잘라야 같은 크기의 크롭이 나온다
+        roi = sr.get("match_location") or (sc_step or {}).get("roi") or sr.get("roi")
+    elif mode in ("full", "full_exclude"):
+        roi = None
+    else:  # single_crop
+        roi = (sc_step or {}).get("roi") or sr.get("roi")
+    targets.append((base, roi))
+    return targets
+
+
+def _replace_expected_sync(filepath: Path, step_indexes: list) -> dict:
+    """요청된 스텝들의 기대이미지를 그 스텝의 actual 이미지로 교체. (스레드 전용)"""
+    if cv2 is None:
+        raise RuntimeError("OpenCV(cv2) 를 로드할 수 없어 이미지 교체를 수행할 수 없습니다")
+
+    data = json.loads(filepath.read_text(encoding="utf-8"))
+    step_results = data.get("step_results", [])
+    scenario_name = data.get("scenario_name", "")
+    sc_steps = _load_scenario_steps_raw(scenario_name)
+
+    # 같은 스텝이 여러 사이클에 등장하면 마지막(가장 최근) 실행만 반영한다.
+    # 앞 사이클로 썼다가 뒤 사이클로 다시 덮어쓰는 낭비/혼선을 막는다.
+    dedup: dict = {}
+    for idx in sorted({int(i) for i in step_indexes}):
+        if idx < 0 or idx >= len(step_results):
+            continue
+        sr = step_results[idx]
+        key = sr.get("step_uid") or f"i:{sr.get('expected_image') or idx}"
+        dedup[key] = idx
+
+    replaced, skipped, files = [], [], []
+    for idx in sorted(dedup.values()):
+        sr = step_results[idx]
+        step_no = sr.get("step_id", idx)
+        act_path = _resolve_image_path(sr.get("actual_image"))
+        if act_path is None:
+            skipped.append({"step_index": idx, "step_id": step_no, "reason": "실제 이미지 없음"})
+            continue
+        sc_step = sc_steps.get(sr.get("step_uid") or "")
+        targets = _replace_targets_for_step(sr, scenario_name, sc_step)
+        if not targets:
+            skipped.append({"step_index": idx, "step_id": step_no, "reason": "교체할 기대 이미지 없음"})
+            continue
+        img_act = safe_imread(str(act_path))
+        if img_act is None:
+            skipped.append({"step_index": idx, "step_id": step_no, "reason": "실제 이미지 로드 실패"})
+            continue
+        written = 0
+        for target, roi in targets:
+            crop = _crop_for_expected(img_act, roi, target)
+            if crop is None:
+                logger.warning("기대이미지 교체 건너뜀 — ROI 가 actual 범위 밖: %s", target.name)
+                continue
+            try:
+                _write_expected(target, crop)
+            except (OSError, RuntimeError) as e:
+                logger.warning("기대이미지 교체 실패 (%s): %s", target.name, e)
+                continue
+            written += 1
+            files.append(target.name)
+        if written:
+            replaced.append({"step_index": idx, "step_id": step_no, "files": written})
+        else:
+            skipped.append({"step_index": idx, "step_id": step_no, "reason": "기대 이미지 저장 실패"})
+
+    logger.info(
+        "기대이미지 교체: scenario=%s 요청=%d 적용=%d 파일=%d 건너뜀=%d",
+        scenario_name, len(step_indexes), len(replaced), len(files), len(skipped),
+    )
+    return {"replaced": replaced, "skipped": skipped,
+            "file_count": len(files), "scenario_name": scenario_name}
+
+
+@router.post("/replace-expected/{filename:path}")
+async def replace_expected_images(filename: str, body: dict):
+    """스텝 결과의 실제 이미지(actual)로 시나리오의 기대 이미지를 교체.
+
+    body: {"step_indexes": [int, ...]}  — result.json 의 step_results 인덱스.
+    단일/멀티크롭은 저장된 ROI 로 actual 을 잘라 넣고, 전체 비교는 통째로 덮어쓴다.
+    """
+    filepath = RESULTS_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Result not found")
+    idxs = body.get("step_indexes")
+    if not isinstance(idxs, list) or not idxs:
+        raise HTTPException(status_code=400, detail="step_indexes must be a non-empty list")
+    try:
+        idxs = [int(i) for i in idxs]
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="step_indexes must be integers")
+
+    try:
+        result = await asyncio.to_thread(_replace_expected_sync, filepath, idxs)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "ok", **result}
+
+
 @router.post("/migrate-legacy")
 async def migrate_legacy():
     """레거시 결과 파일을 새 구조로 마이그레이션.

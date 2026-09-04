@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, Checkbox, Collapse, Col, Descriptions, Image, Input, InputNumber, Modal, Popover, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message, notification } from 'antd';
-import { DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileExcelOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, SettingOutlined, ShrinkOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import { Button, Card, Checkbox, Collapse, Col, Descriptions, Dropdown, Image, Input, InputNumber, Modal, Popover, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message, notification } from 'antd';
+import { DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileExcelOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, SettingOutlined, ShrinkOutlined, SwapOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { resultsApi, scenarioApi } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
@@ -122,7 +122,19 @@ interface ResultDetail {
   stopped_at_iteration?: number | null;
   stopped_at_step?: number | null;
   frame_check_results?: FrameCheckResultEntry[] | null;
+  // 그룹 상세에서 어느 결과 파일에서 왔는지 (기대이미지 교체 API 가 파일 단위라 필요)
+  _filename?: string;
 }
+
+// 기대이미지 교체 대상 — result.json 파일 + 그 안의 step_results 인덱스
+interface ReplaceTarget {
+  filename: string;
+  stepIndex: number;
+}
+
+// 이미지 비교 스텝만 교체 대상이 된다 (기대 + 실제가 모두 있어야 함)
+const isReplaceable = (s: StepResultDetail) =>
+  !!s.actual_image && !!(s.expected_image || s.sub_results?.length);
 
 const statusColor = (s: string) =>
   s === 'pass' ? 'green'
@@ -273,6 +285,9 @@ export default function ResultsPage() {
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [compareStep, setCompareStep] = useState<StepResultDetail | null>(null);
+  // 비교 모달에서 연 스텝의 출처 (기대이미지 교체용). 행 레코드에는 인덱스가 없어 따로 들고 있는다.
+  const [compareRef, setCompareRef] = useState<ReplaceTarget | null>(null);
+  const [replacing, setReplacing] = useState(false);
 
   // 가상 스크롤 테이블 높이 (모달은 top:20 으로 윈도우에 고정 → innerHeight 기반 계산).
   // 수천 스텝도 보이는 행만 렌더하도록 virtual Table 에 numeric scroll.y 필요.
@@ -766,7 +781,8 @@ export default function ResultsPage() {
       const details: ResultDetail[] = [];
       for (const item of group.items) {
         const res = await resultsApi.get(item.filename);
-        details.push(res.data);
+        // 어느 결과 파일에서 온 스텝인지 유지 — 기대이미지 교체 API 가 파일 단위라 필요.
+        details.push({ ...res.data, _filename: item.filename });
       }
       setGroupDetail(details);
       // 모든 시나리오의 녹화 파일을 합쳐서 로드
@@ -809,6 +825,91 @@ export default function ResultsPage() {
       message.error(t('results.detailFailed'));
     }
     setDetailLoading(false);
+  };
+
+  // 행 레코드 → result.json 내 원본 인덱스. 컬럼 필터(상태/장치/사이클)가 걸리면
+  // Table render 의 index 는 '보이는 목록' 기준이라 실제 스텝과 어긋난다 —
+  // 레코드 참조로 되짚어 항상 원본 인덱스를 쓴다(그룹 상세 행은 _srcIndex 로 온다).
+  const stepIndexMap = React.useMemo(() => {
+    const m = new Map<StepResultDetail, number>();
+    (detail?.step_results || []).forEach((s, i) => m.set(s, i));
+    return m;
+  }, [detail]);
+
+  // 비교 모달 열기 — 어느 결과 파일의 몇 번째 스텝인지도 함께 기억한다(기대이미지 교체용).
+  const openCompare = (r: any, idx: number) => {
+    setCompareStep(r);
+    setCompareRef({
+      filename: r._filename || detailFilename,
+      stepIndex: r._srcIndex ?? stepIndexMap.get(r) ?? idx,
+    });
+  };
+
+  // 기대이미지 교체 — 시나리오의 기준 이미지를 이번 실행의 실제 이미지로 덮어쓴다.
+  // 파일 단위 API 라 결과 파일별로 묶어서 보낸다(그룹 상세는 여러 파일이 섞임).
+  const runReplaceExpected = async (targets: ReplaceTarget[]) => {
+    if (!targets.length) return;
+    setReplacing(true);
+    try {
+      const byFile = new Map<string, number[]>();
+      for (const tg of targets) {
+        if (!tg.filename) continue;
+        byFile.set(tg.filename, [...(byFile.get(tg.filename) || []), tg.stepIndex]);
+      }
+      let steps = 0;
+      let files = 0;
+      let skipped = 0;
+      for (const [filename, idxs] of byFile) {
+        const { data } = await resultsApi.replaceExpectedImages(filename, idxs);
+        steps += data.replaced?.length || 0;
+        files += data.file_count || 0;
+        skipped += data.skipped?.length || 0;
+      }
+      const msg = t('results.replaceExpectedDone', { steps: String(steps), files: String(files) });
+      if (skipped > 0) message.warning(`${msg} / ${t('results.replaceExpectedSkipped', { count: String(skipped) })}`);
+      else message.success(msg);
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || t('results.replaceExpectedFailed'));
+    }
+    setReplacing(false);
+  };
+
+  const confirmReplaceExpected = (targets: ReplaceTarget[], scopeLabel: string) => {
+    if (!targets.length) {
+      message.info(t('results.replaceExpectedNone'));
+      return;
+    }
+    Modal.confirm({
+      title: t('results.replaceExpectedTitle'),
+      width: 520,
+      content: (
+        <div style={{ fontSize: 13 }}>
+          <div>{t('results.replaceExpectedConfirm', { scope: scopeLabel, count: String(targets.length) })}</div>
+          <div style={{ marginTop: 8, color: '#888', fontSize: 12, whiteSpace: 'pre-line' }}>
+            {t('results.replaceExpectedNote')}
+          </div>
+        </div>
+      ),
+      okText: t('results.replaceExpected'),
+      cancelText: t('common.cancel'),
+      onOk: () => runReplaceExpected(targets),
+    });
+  };
+
+  // 일괄 교체 대상 수집 — 현재 상세에 로드된 이미지 비교 스텝들.
+  // 같은 스텝이 여러 사이클에 있으면 백엔드가 마지막(최근) 실행만 반영한다.
+  const collectReplaceTargets = (failOnly: boolean): ReplaceTarget[] => {
+    const out: ReplaceTarget[] = [];
+    const push = (filename: string, list: StepResultDetail[]) => {
+      list.forEach((s, i) => {
+        if (!isReplaceable(s)) return;
+        if (failOnly && effStatus(s) !== 'fail') return;
+        out.push({ filename, stepIndex: i });
+      });
+    };
+    if (groupDetail) groupDetail.forEach(d => push(d._filename || detailFilename, d.step_results || []));
+    else if (detail) push(detailFilename, detail.step_results || []);
+    return out;
   };
 
   const deleteResult = (filename: string) => {
@@ -1490,7 +1591,7 @@ export default function ResultsPage() {
       key: 'compare',
       width: 92,
       align: 'center' as const,
-      render: (_: any, r: StepResultDetail) => {
+      render: (_: any, r: StepResultDetail, idx: number) => {
         // 모듈 명령(cmd, adb_send 등)의 출력값을 LOG 버튼으로 노출
         const isModuleMsg = !!r.command?.includes('::');
         const isRandMsg = !!r.message && r.message.startsWith('[RAND]');
@@ -1499,8 +1600,8 @@ export default function ResultsPage() {
         if (!hasMsg && !hasImage) return '-';
         return (
           <Space size={4}>
-            {hasImage && <Button size="small" onClick={() => setCompareStep(r)}>{t('scenario.compare')}</Button>}
-            {hasMsg && <Button size="small" onClick={() => setCompareStep(r)}>LOG</Button>}
+            {hasImage && <Button size="small" onClick={() => openCompare(r, idx)}>{t('scenario.compare')}</Button>}
+            {hasMsg && <Button size="small" onClick={() => openCompare(r, idx)}>LOG</Button>}
           </Space>
         );
       },
@@ -1561,6 +1662,43 @@ export default function ResultsPage() {
         {hiddenStepCols.size > 0 ? ` (${_toggleableCols.length - hiddenStepCols.size}/${_toggleableCols.length})` : ''}
       </Button>
     </Popover>
+  );
+
+  // 기대이미지 일괄 교체 — 변화가 적은 실행 결과를 새 기준으로 승격.
+  // 실패만 / 전체 중 범위를 고르게 해 실수로 전부 덮어쓰는 일을 줄인다.
+  // 에이징 결과는 스텝이 수천~수만 개라 매 렌더마다 전수 스캔하지 않도록 메모화.
+  const [_bulkFailCount, _bulkAllCount] = React.useMemo(
+    () => (detail || groupDetail)
+      ? [collectReplaceTargets(true).length, collectReplaceTargets(false).length]
+      : [0, 0],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [detail, groupDetail, detailFilename],
+  );
+  const replaceExpectedBulk = (
+    <Dropdown
+      trigger={['click']}
+      placement="bottomRight"
+      disabled={_bulkAllCount === 0}
+      menu={{
+        items: [
+          {
+            key: 'fail',
+            label: `${t('results.replaceScopeFail')} (${_bulkFailCount})`,
+            disabled: _bulkFailCount === 0,
+            onClick: () => confirmReplaceExpected(collectReplaceTargets(true), t('results.replaceScopeFail')),
+          },
+          {
+            key: 'all',
+            label: `${t('results.replaceScopeAll')} (${_bulkAllCount})`,
+            onClick: () => confirmReplaceExpected(collectReplaceTargets(false), t('results.replaceScopeAll')),
+          },
+        ],
+      }}
+    >
+      <Button size="small" icon={<SwapOutlined />} loading={replacing} disabled={_bulkAllCount === 0}>
+        {t('results.replaceExpectedBulk')}
+      </Button>
+    </Dropdown>
   );
 
   return (
@@ -1734,14 +1872,20 @@ export default function ResultsPage() {
         {groupDetail && groupDetail.length > 0 && (() => {
           const totalRepeat = Math.max(...groupDetail.map(d => d.total_repeat || 1));
           // 현재 사이클의 스텝들을 시나리오 순서대로 합침 (연번 부여)
-          const cycleSteps: (StepResultDetail & { _seq?: number; _scenarioName?: string })[] = [];
+          const cycleSteps: (StepResultDetail & {
+            _seq?: number; _scenarioName?: string; _filename?: string; _srcIndex?: number;
+          })[] = [];
           let seq = 0;
           for (const d of groupDetail) {
-            const stepsForCycle = d.step_results.filter(sr => sr.repeat_index === groupDetailCycle);
-            for (const s of stepsForCycle) {
+            // 원본 파일 내 인덱스(_srcIndex)를 유지해야 기대이미지 교체가 올바른 스텝을 가리킨다.
+            d.step_results.forEach((s, si) => {
+              if (s.repeat_index !== groupDetailCycle) return;
               seq++;
-              cycleSteps.push({ ...s, _seq: seq, _scenarioName: d.scenario_name });
-            }
+              cycleSteps.push({
+                ...s, _seq: seq, _scenarioName: d.scenario_name,
+                _filename: d._filename, _srcIndex: si,
+              });
+            });
           }
           const cycleBranch = cycleSteps.filter(s => s.excluded_from_result).length;
           // 결과 미반영('분기') 스텝은 pass/fail/error 어디에도 집계하지 않음
@@ -1805,7 +1949,8 @@ export default function ResultsPage() {
                   }]}
                 />
               )}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginBottom: 6 }}>
+                {replaceExpectedBulk}
                 {stepColumnToggle}
               </div>
               <Table
@@ -2068,7 +2213,8 @@ export default function ResultsPage() {
 
               {/* 우측: 스텝 결과 테이블 (스크롤) */}
               <div style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginBottom: 6 }}>
+                  {replaceExpectedBulk}
                   {stepColumnToggle}
                 </div>
                 <Table
@@ -2156,7 +2302,7 @@ export default function ResultsPage() {
       <Modal
         title={t('results.stepCompare', { id: String(compareStep?.step_id || '') })}
         open={!!compareStep}
-        onCancel={() => setCompareStep(null)}
+        onCancel={() => { setCompareStep(null); setCompareRef(null); }}
         width={1100}
         footer={null}
       >
@@ -2235,7 +2381,25 @@ export default function ResultsPage() {
                 </Card>
               </Col>
               <Col span={12}>
-                <Card size="small" title={t('results.actualImage')}>
+                <Card
+                  size="small"
+                  title={t('results.actualImage')}
+                  extra={compareRef && compareStep.actual_image && (compareStep.expected_image || compareStep.sub_results?.length) ? (
+                    <Tooltip title={t('results.replaceExpectedTip')}>
+                      <Button
+                        size="small"
+                        icon={<SwapOutlined />}
+                        loading={replacing}
+                        onClick={() => confirmReplaceExpected(
+                          [compareRef],
+                          t('results.replaceScopeThis', { id: String(compareStep.step_id) }),
+                        )}
+                      >
+                        {t('results.replaceExpected')}
+                      </Button>
+                    </Tooltip>
+                  ) : undefined}
+                >
                   {compareStep.actual_annotated_image ? (
                     <Image
                       src={`${imageUrl(compareStep.actual_annotated_image)!}?t=${Date.now()}`}
