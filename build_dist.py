@@ -857,16 +857,25 @@ def step_build_frontend(force=False) -> bool:
     pkg_hash = _hash_file(fe_dir / "package.json") + _hash_file(fe_dir / "package-lock.json")
     if force or pkg_hash != hashes.get("fe_pkg") or not (fe_dir / "node_modules").exists():
         print("  npm install...")
-        _run([NPM_CMD, "install"], cwd=fe_dir, check=False)
+        # node_modules 가 없는 새 트리에서는 콜드 설치라 _run 기본 타임아웃(300초)을
+        # 넘기기 쉽다 (사내망/프록시면 더). capture_output 이면 그 동안 화면에 아무것도
+        # 안 나와 멈춘 것처럼 보이므로 live_output 으로 진행 상황을 흘려보내고
+        # 타임아웃 없이 기다린다. --no-audit/--no-fund 는 불필요한 네트워크 왕복 제거.
+        r = _run([NPM_CMD, "install", "--no-audit", "--no-fund"],
+                 cwd=fe_dir, check=False, live_output=True)
+        if r.returncode != 0:
+            print(f"  npm install 실패 (rc={r.returncode}) — 아래 build 단계에서 실패할 수 있습니다")
         hashes["fe_pkg"] = pkg_hash
     else:
         print("  npm install — skipped (package.json 변경 없음)")
 
     # npm run build — 무조건 실행. src 해시 검사로 스킵하던 로직 제거.
     print("  npm run build...")
-    result = _run([NPM_CMD, "run", "build"], cwd=fe_dir, check=False)
+    # 느린 PC 의 첫 vite 빌드는 기본 300초를 넘길 수 있어 여유를 둔다.
+    result = _run([NPM_CMD, "run", "build"], cwd=fe_dir, check=False, timeout=900)
     if result.returncode != 0:
-        print(f"  빌드 에러:\n{result.stderr[:500]}")
+        # vite/tsc 에러는 stdout 으로도 나온다 — 둘 다 보여줘야 원인이 보인다.
+        print(f"  빌드 에러:\n{(result.stderr or '')[:500]}\n{(result.stdout or '')[-1500:]}")
         return False
 
     # src 해시는 더 이상 skip 결정에 사용 안 하지만, 로그/디버깅용으로 계속 기록.
