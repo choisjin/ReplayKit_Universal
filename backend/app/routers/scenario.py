@@ -1462,7 +1462,9 @@ async def reorder_group(req: ReorderGroupRequest):
 class JumpTarget(BaseModel):
     """그룹 점프 대상 — 위치가 아닌 불변 ID 로 지정한다.
 
-    member_uid: 대상 그룹 멤버의 uid. GROUP_JUMP_END("END") 면 재생 종료.
+    member_uid: 대상 그룹 멤버의 uid. 두 개의 제어 센티널을 가진다 —
+                GROUP_JUMP_END("END")      : 이번 회차의 남은 멤버만 건너뜀 (반복은 계속)
+                GROUP_JUMP_STOP_ALL("STOP_ALL"): 남은 반복 회차까지 전부 종료
                 (멤버 인덱스는 순서변경/삭제로 바뀌고, 같은 시나리오가 중복으로
                  담길 수 있어 이름만으로도 특정할 수 없다)
     scenario_name: 안내 메시지용 — 대상이 사라졌을 때 이름을 알려주기 위해 함께 보관.

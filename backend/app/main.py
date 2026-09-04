@@ -50,7 +50,7 @@ from .services.adb_service import (
 from .services.capture.ffmpeg_runtime import log_runtime_status as _log_capture_runtime_status
 from .services.capture.scrcpy_server import log_scrcpy_status as _log_scrcpy_status
 from .models.scenario import ScenarioResult
-from .services.recording_service import GROUP_JUMP_END
+from .services.recording_service import GROUP_JUMP_END, GROUP_JUMP_STOP_ALL
 from .services.playback_service import (
     RESULTS_DIR as _RESULTS_DIR,
     STEPS_NDJSON_NAME as _STEPS_NDJSON_NAME,
@@ -2725,6 +2725,8 @@ async def _run_play_group_job(data: dict):
         _multi = (repeat > 1) or (until_time is not None)
 
         _cycle_step = 0   # 관제 표시용 사이클 내 스텝 번호 (global_step_seq 는 그룹 전체 누적이라 부적합)
+        # 그룹 점프 '전체 종료'(STOP_ALL) 요청 — 이번 회차를 마친 뒤 반복 루프를 빠져나간다.
+        stop_all_requested = False
         for iteration in range(1, effective_repeat + 1):
             if playback_service._should_stop:
                 break
@@ -2901,7 +2903,15 @@ async def _run_play_group_job(data: dict):
                     # 점프 대상은 member_uid + step_uid (인덱스가 아님).
                     # 멤버 순서변경·삭제, 대상 시나리오의 스텝 편집에도 어긋나지 않는다.
                     target_uid = jump.get("member_uid") if isinstance(jump, dict) else None
-                    if target_uid == GROUP_JUMP_END:
+                    if target_uid in (GROUP_JUMP_END, GROUP_JUMP_STOP_ALL):
+                        # END: 이번 회차의 남은 멤버만 건너뛴다 (반복 회차는 계속)
+                        # STOP_ALL: 남은 반복 회차까지 전부 중단 — 회차 루프 끝에서 break
+                        if target_uid == GROUP_JUMP_STOP_ALL:
+                            stop_all_requested = True
+                            logger.info(
+                                "그룹 점프 '전체 종료' — %d회차 %d번째 멤버 '%s' 에서 재생을 마칩니다",
+                                iteration, sc_idx + 1, sc_name,
+                            )
                         break
                     next_idx = uid_to_member_idx.get(target_uid)
                     if next_idx is None:
@@ -2955,6 +2965,16 @@ async def _run_play_group_job(data: dict):
             if _until_reached:
                 break
 
+            # 그룹 점프 '전체 종료' — 이번 회차는 완주로 집계하고 반복을 끝낸다.
+            # (사용자 중지가 아니므로 stopped 가 아니라 정상 종료로 판정된다)
+            if stop_all_requested:
+                publish_event({
+                    "type": "group_stop_all",
+                    "iteration": iteration,
+                    "total": repeat if until_time is None else 0,
+                })
+                break
+
         # runtime fail (assert_keyword) 흡수
         runtime_fails = consume_runtime_fails()
         if runtime_fails:
@@ -2968,6 +2988,10 @@ async def _run_play_group_job(data: dict):
 
         unified_result.finished_at = datetime.now(timezone.utc).isoformat()
         unified_result.total_steps = global_step_seq
+        # '전체 종료'로 조기 마감했으면 실제로 돈 회차 수를 기록한다.
+        # (계획된 repeat 을 그대로 두면 결과 표시가 '3/10' 처럼 어긋난다)
+        if stop_all_requested and not playback_service._should_stop:
+            unified_result.total_repeat = max(last_completed_iteration, 1)
         if playback_service._should_stop:
             unified_result.status = "stopped"
             in_progress_iter = iteration if iteration > last_completed_iteration else None

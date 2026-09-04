@@ -64,8 +64,17 @@ def _dedupe_step_uids(scenario: "Scenario") -> bool:
     return changed
 
 
-#: 그룹 점프의 '재생 종료' 센티널 (기존 정수 -1 을 대체)
+#: 그룹 점프의 '재생 종료' 센티널 (기존 정수 -1 을 대체).
+#: 이번 회차의 남은 멤버만 건너뛴다 — 반복(repeat) 회차는 계속된다.
 GROUP_JUMP_END = "END"
+
+#: 그룹 점프의 '전체 종료' 센티널 — 남은 반복 회차까지 전부 중단한다.
+#: (END 는 사이클 하나만 끝내므로, 에이징처럼 repeat 이 큰 실행에서 조건 성립 시
+#:  즉시 멈추려면 이쪽이 필요하다)
+GROUP_JUMP_STOP_ALL = "STOP_ALL"
+
+#: 점프 대상이 실제 멤버가 아닌 제어 센티널인지 판정.
+GROUP_JUMP_SENTINELS = (GROUP_JUMP_END, GROUP_JUMP_STOP_ALL)
 
 
 def _new_group_member_uid() -> str:
@@ -1073,7 +1082,7 @@ class RecordingService:
             if not isinstance(jump, dict):
                 return
             tgt = jump.get("member_uid")
-            if not tgt or tgt == GROUP_JUMP_END:
+            if not tgt or tgt in GROUP_JUMP_SENTINELS:
                 return
             name = jump.get("scenario_name") or "(이름 불명)"
             if tgt not in alive_uids:

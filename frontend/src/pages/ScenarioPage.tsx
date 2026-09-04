@@ -159,6 +159,11 @@ interface JumpTarget {
 }
 
 const GROUP_JUMP_END = 'END';
+/** 남은 반복 회차까지 전부 중단 (END 는 이번 회차만 끝낸다). 백엔드 GROUP_JUMP_STOP_ALL 과 동일 값. */
+const GROUP_JUMP_STOP_ALL = 'STOP_ALL';
+/** 실제 멤버가 아닌 제어 센티널인지 — 시작 스텝 선택을 띄우지 않기 위해 쓴다. */
+const isJumpSentinel = (uid?: string) =>
+  uid === GROUP_JUMP_END || uid === GROUP_JUMP_STOP_ALL;
 
 /** 같은 시나리오가 그룹에 중복으로 있으면 "(2/3)" 같은 구분 접미사를 반환. 없으면 빈 문자열. */
 const dupSuffix = (members: { name: string }[], mi: number): string => {
@@ -1289,6 +1294,9 @@ export default function ScenarioPage() {
       } else if (msg.type === 'until_time_reached') {
         // 지정 시각 도달 — 현재 회차까지 완주 후 종료. playback_complete가 곧 따라온다.
         message.info(t('scenario.untilTimeReached', { iteration: String(msg.iteration ?? '') }));
+      } else if (msg.type === 'group_stop_all') {
+        // 그룹 점프 '전체 종료' — 남은 반복 회차를 돌지 않고 끝난다.
+        message.warning(t('scenario.stopAllReached', { iteration: String(msg.iteration ?? '') }));
       } else if (msg.type === 'playback_complete') {
         if (liveDurationRef.current) { clearInterval(liveDurationRef.current); liveDurationRef.current = null; }
         endPlaying(); setPaused(false); setCurrentStepId(null); resumeScreenStream();
@@ -1623,6 +1631,9 @@ export default function ScenarioPage() {
       } else if (msg.type === 'until_time_reached') {
         // 지정 시각 도달 — 현재 회차까지 완주 후 종료
         message.info(t('scenario.untilTimeReached', { iteration: String(msg.iteration ?? '') }));
+      } else if (msg.type === 'group_stop_all') {
+        // 그룹 점프 '전체 종료' — 남은 반복 회차를 돌지 않고 끝난다.
+        message.warning(t('scenario.stopAllReached', { iteration: String(msg.iteration ?? '') }));
       } else if (msg.type === 'playback_complete') {
         if (liveDurationRef.current) { clearInterval(liveDurationRef.current); liveDurationRef.current = null; }
         endPlaying(); setPaused(false); setPlayingGroupName(null); setCurrentStepId(null); resumeScreenStream();
@@ -2587,7 +2598,7 @@ export default function ScenarioPage() {
                         excludeChecked: boolean, onToggleExclude: (checked: boolean) => void,
                       ) => {
                         const jump = field === 'pass' ? passGoto : failGoto;
-                        const jumpTargetMember = jump && jump.member_uid !== GROUP_JUMP_END
+                        const jumpTargetMember = jump && !isJumpSentinel(jump.member_uid)
                           ? members.find((m: any) => m.uid === jump.member_uid) : undefined;
                         const targetSteps = jumpTargetMember ? (scenarioStepsCache[jumpTargetMember.name] || []) : [];
                         return (
@@ -2605,7 +2616,7 @@ export default function ScenarioPage() {
                                 const tgt = members.find((m: any) => m.uid === uid);
                                 const newJump: JumpTarget | null = uid == null ? null : {
                                   member_uid: uid,
-                                  scenario_name: uid === GROUP_JUMP_END ? '' : (tgt?.name ?? ''),
+                                  scenario_name: isJumpSentinel(uid) ? '' : (tgt?.name ?? ''),
                                   step_uid: null,   // 기본은 시나리오 처음부터
                                 };
                                 if (field === 'pass') onUpdate(newJump, failGoto);
@@ -2613,6 +2624,7 @@ export default function ScenarioPage() {
                               }}
                             >
                               <Select.Option value={GROUP_JUMP_END}>{t('scenario.end')} (END)</Select.Option>
+                              <Select.Option value={GROUP_JUMP_STOP_ALL}>{t('scenario.stopAll')} (STOP ALL)</Select.Option>
                               {members.map((m: any, mi: number) => (
                                 <Select.Option key={m.uid ?? mi} value={m.uid}>{memberLabel(members, mi)}</Select.Option>
                               ))}
@@ -3448,7 +3460,7 @@ export default function ScenarioPage() {
                       excludeChecked: boolean, onToggleExclude: (checked: boolean) => void,
                     ) => {
                       const jump = field === 'pass' ? passGoto : failGoto;
-                      const jumpTargetMember = jump && jump.member_uid !== GROUP_JUMP_END
+                      const jumpTargetMember = jump && !isJumpSentinel(jump.member_uid)
                           ? members.find((m: any) => m.uid === jump.member_uid) : undefined;
                         const targetSteps = jumpTargetMember ? (scenarioStepsCache[jumpTargetMember.name] || []) : [];
                       return (
@@ -3465,7 +3477,7 @@ export default function ScenarioPage() {
                               const tgt = members.find((m: any) => m.uid === uid);
                               const newJump: JumpTarget | null = uid == null ? null : {
                                 member_uid: uid,
-                                scenario_name: uid === GROUP_JUMP_END ? '' : (tgt?.name ?? ''),
+                                scenario_name: isJumpSentinel(uid) ? '' : (tgt?.name ?? ''),
                                 step_uid: null,
                               };
                               if (field === 'pass') onUpdate(newJump, failGoto);
@@ -3473,6 +3485,7 @@ export default function ScenarioPage() {
                             }}
                           >
                             <Select.Option value={GROUP_JUMP_END}>{t('scenario.end')} (END)</Select.Option>
+                            <Select.Option value={GROUP_JUMP_STOP_ALL}>{t('scenario.stopAll')} (STOP ALL)</Select.Option>
                             {members.map((m: any, mi: number) => (
                               <Select.Option key={m.uid ?? mi} value={m.uid}>{memberLabel(members, mi)}</Select.Option>
                             ))}

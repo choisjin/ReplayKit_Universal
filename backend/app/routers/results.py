@@ -2020,7 +2020,15 @@ def _replace_expected_sync(filepath: Path, step_indexes: list) -> dict:
         if idx < 0 or idx >= len(step_results):
             continue
         sr = step_results[idx]
-        key = sr.get("step_uid") or f"i:{sr.get('expected_image') or idx}"
+        # 스텝을 되짚는 키: step_uid 가 정본(구버전 결과엔 없음) →
+        # 기대이미지 경로 → 멀티크롭 첫 크롭 경로 순으로 폴백.
+        # 키가 행마다 유니크해지면 중복 제거가 풀려 같은 파일을 여러 번 쓰게 되고,
+        # _prev 백업이 원본 대신 직전 사이클로 덮여버린다.
+        subs = sr.get("sub_results") or []
+        key = (sr.get("step_uid")
+               or sr.get("expected_image")
+               or (subs[0].get("expected_image") if subs else None)
+               or f"idx:{idx}")
         dedup[key] = idx
 
     replaced, skipped, files = [], [], []

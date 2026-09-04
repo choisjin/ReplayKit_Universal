@@ -941,6 +941,8 @@ const translations = {
     'scenario.overwrite': '덮어쓰기',
     'scenario.nameLabel': '이름',
     'scenario.end': '종료',
+    'scenario.stopAll': '전체 종료',
+    'scenario.stopAllReached': '전체 종료 조건 성립 — {iteration}회차에서 재생을 마칩니다 (남은 반복 취소)',
     'scenario.selectOtherFile': '다른 파일 선택',
     'scenario.importDragText': 'ZIP 파일을 드래그하거나 클릭하여 선택하세요',
 
@@ -2033,6 +2035,8 @@ const translations = {
     'scenario.overwrite': 'Overwrite',
     'scenario.nameLabel': 'Name',
     'scenario.end': 'End',
+    'scenario.stopAll': 'Stop All',
+    'scenario.stopAllReached': 'Stop-All triggered — playback ends at cycle {iteration} (remaining repeats cancelled)',
     'scenario.selectOtherFile': 'Select another file',
     'scenario.importDragText': 'Drag or click to select a ZIP file',
 
