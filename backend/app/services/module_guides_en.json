@@ -2618,5 +2618,159 @@
         }
       }
     }
+  },
+  "ODAPowerSupply": {
+    "_description": "ODA OPS-3010 DC Power Supply — Controls voltage, current limit, and output switch, and measures actual output voltage/current via RS-232 serial SCPI commands. Connection lifecycle is managed automatically by the scenario.",
+    "functions": {
+      "SendCommand": {
+        "description": "Send an arbitrary SCPI command. Returns the instrument reply when is_query=True.",
+        "params": {
+          "command": "SCPI command string to send.",
+          "is_query": "Whether this is a query command. True/False."
+        }
+      },
+      "Query": {
+        "description": "Send a SCPI query command and return the instrument reply.",
+        "params": {
+          "command": "SCPI query string to send."
+        }
+      },
+      "SetVoltage": {
+        "description": "Set the output voltage setpoint (V).",
+        "params": {
+          "voltage": "Target voltage (V). e.g. 12.0"
+        }
+      },
+      "SetCurrent": {
+        "description": "Set the output current limit setpoint (A).",
+        "params": {
+          "current": "Target current limit (A). e.g. 2.0"
+        }
+      },
+      "SetOutput": {
+        "description": "Turn the output switch ON or OFF.",
+        "params": {
+          "state": {
+            "description": "'ON' or 'OFF'",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
+        }
+      },
+      "GetVoltage": {
+        "description": "Read the configured output voltage setpoint (V).",
+        "params": {}
+      },
+      "GetCurrent": {
+        "description": "Read the configured output current limit (A), not the measured load current. Use MeasureCurrent for the actual current.",
+        "params": {}
+      },
+      "GetOutputState": {
+        "description": "Read whether the output switch is ON or OFF.",
+        "params": {}
+      },
+      "MeasureVoltage": {
+        "description": "Measure the actual voltage (V) at the output terminals.",
+        "params": {}
+      },
+      "MeasureCurrent": {
+        "description": "Measure the actual current (A) at the output terminals. For the configured limit, use GetCurrent.",
+        "params": {}
+      },
+      "CheckCurrent": {
+        "description": "Measure the actual output current and return PASS when it enters the specified range for 3 consecutive readings; FAIL on timeout.",
+        "params": {
+          "min_current": "Minimum current (A). e.g. 0.5",
+          "max_current": "Maximum current (A). e.g. 2.0",
+          "check_delay": "Timeout in milliseconds. e.g. 10000. Minimum 3000 ms — values below this are forced up to 3000 ms."
+        }
+      },
+      "SetOVP": {
+        "description": "Set the over-voltage protection (OVP) level (V).",
+        "params": {
+          "voltage": "OVP level (V)."
+        }
+      },
+      "SetOCP": {
+        "description": "Set the over-current protection (OCP) level (A).",
+        "params": {
+          "current": "OCP level (A)."
+        }
+      },
+      "GetOVP": {
+        "description": "Read the configured OVP level (V).",
+        "params": {}
+      },
+      "GetOCP": {
+        "description": "Read the configured OCP level (A).",
+        "params": {}
+      },
+      "GetOVPState": {
+        "description": "Read whether OVP is enabled.",
+        "params": {}
+      },
+      "GetOCPState": {
+        "description": "Read whether OCP is enabled.",
+        "params": {}
+      },
+      "SetVoltageStep": {
+        "description": "Set the step size (V) used by VOLT UP/DOWN commands.",
+        "params": {
+          "step": "Voltage step (V)."
+        }
+      },
+      "SetCurrentStep": {
+        "description": "Set the step size (A) used by CURR UP/DOWN commands.",
+        "params": {
+          "step": "Current step (A)."
+        }
+      },
+      "VoltageUp": {
+        "description": "Increase the voltage setpoint by the current step.",
+        "params": {}
+      },
+      "VoltageDown": {
+        "description": "Decrease the voltage setpoint by the current step.",
+        "params": {}
+      },
+      "CurrentUp": {
+        "description": "Increase the current limit setpoint by the current step.",
+        "params": {}
+      },
+      "CurrentDown": {
+        "description": "Decrease the current limit setpoint by the current step.",
+        "params": {}
+      },
+      "SaveState": {
+        "description": "Save the current power-supply state to the specified memory location (1..N).",
+        "params": {
+          "memory": "Memory location number."
+        }
+      },
+      "RecallState": {
+        "description": "Recall a previously saved power-supply state from the specified memory location.",
+        "params": {
+          "memory": "Memory location number."
+        }
+      },
+      "Reset": {
+        "description": "Reset the instrument to its default state (*RST).",
+        "params": {}
+      },
+      "ClearStatus": {
+        "description": "Clear the status data register (*CLS).",
+        "params": {}
+      },
+      "GetIdentity": {
+        "description": "Read the instrument identification string using *IDN?.",
+        "params": {}
+      },
+      "GetSystemError": {
+        "description": "Read the next error from the instrument error queue.",
+        "params": {}
+      }
+    }
   }
 }

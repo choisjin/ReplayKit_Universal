@@ -2618,5 +2618,159 @@
         }
       }
     }
+  },
+  "ODAPowerSupply": {
+    "_description": "ODA OPS-3010 직류 전원공급장치 — RS-232 시리얼 SCPI 명령으로 전압·전류·출력 스위치를 제어하고 실제 출력 전압/전류를 측정하는 모듈. 연결/해제는 시나리오가 자동 관리합니다.",
+    "functions": {
+      "SendCommand": {
+        "description": "임의 SCPI 명령을 전송합니다. is_query=True 이면 응답을 반환합니다.",
+        "params": {
+          "command": "전송할 SCPI 명령 문자열",
+          "is_query": "질의(query) 명령 여부. True/False"
+        }
+      },
+      "Query": {
+        "description": "SCPI 질의 명령을 전송하고 응답을 반환합니다.",
+        "params": {
+          "command": "전송할 SCPI 질의 문자열"
+        }
+      },
+      "SetVoltage": {
+        "description": "출력 전압 설정값(V)을 지정합니다.",
+        "params": {
+          "voltage": "설정할 전압 (V). 예: 12.0"
+        }
+      },
+      "SetCurrent": {
+        "description": "출력 전류 한계 설정값(A)을 지정합니다.",
+        "params": {
+          "current": "설정할 전류 한계 (A). 예: 2.0"
+        }
+      },
+      "SetOutput": {
+        "description": "출력 스위치를 ON 또는 OFF로 설정합니다.",
+        "params": {
+          "state": {
+            "description": "'ON' 또는 'OFF'",
+            "options": [
+              "ON",
+              "OFF"
+            ]
+          }
+        }
+      },
+      "GetVoltage": {
+        "description": "현재 설정된 출력 전압(V)을 읽어옵니다.",
+        "params": {}
+      },
+      "GetCurrent": {
+        "description": "현재 설정된 출력 전류 한계(A)를 읽어옵니다. 전원 출력 단자에 흐르는 실제 전류는 MeasureCurrent를 사용하세요.",
+        "params": {}
+      },
+      "GetOutputState": {
+        "description": "출력 스위치가 ON인지 OFF인지 읽어옵니다.",
+        "params": {}
+      },
+      "MeasureVoltage": {
+        "description": "전원 출력 단자의 실제 전압(V)을 측정합니다.",
+        "params": {}
+      },
+      "MeasureCurrent": {
+        "description": "전원 출력 단자의 실제 전류(A)를 측정합니다. 설정된 전류 한계는 GetCurrent를 사용하세요.",
+        "params": {}
+      },
+      "CheckCurrent": {
+        "description": "실제 출력 전류를 측정하여 지정 범위 내에 연속 3회 진입하면 PASS, 타임아웃 시 FAIL.",
+        "params": {
+          "min_current": "최소 전류 (A). 예: 0.5",
+          "max_current": "최대 전류 (A). 예: 2.0",
+          "check_delay": "타임아웃 (ms). 예: 10000. 최소 3000ms — 미만 입력 시 3000ms로 강제 상향."
+        }
+      },
+      "SetOVP": {
+        "description": "과전압 보호(OVP) 레벨(V)을 설정합니다.",
+        "params": {
+          "voltage": "OVP 레벨 (V)"
+        }
+      },
+      "SetOCP": {
+        "description": "과전류 보호(OCP) 레벨(A)을 설정합니다.",
+        "params": {
+          "current": "OCP 레벨 (A)"
+        }
+      },
+      "GetOVP": {
+        "description": "설정된 OVP 레벨(V)을 읽어옵니다.",
+        "params": {}
+      },
+      "GetOCP": {
+        "description": "설정된 OCP 레벨(A)을 읽어옵니다.",
+        "params": {}
+      },
+      "GetOVPState": {
+        "description": "OVP 기능이 켜져 있는지 읽어옵니다.",
+        "params": {}
+      },
+      "GetOCPState": {
+        "description": "OCP 기능이 켜져 있는지 읽어옵니다.",
+        "params": {}
+      },
+      "SetVoltageStep": {
+        "description": "VOLT UP/DOWN 명령 사용 시 전압 변동 폭(V)을 설정합니다.",
+        "params": {
+          "step": "전압 스텝 (V)"
+        }
+      },
+      "SetCurrentStep": {
+        "description": "CURR UP/DOWN 명령 사용 시 전류 변동 폭(A)을 설정합니다.",
+        "params": {
+          "step": "전류 스텝 (A)"
+        }
+      },
+      "VoltageUp": {
+        "description": "설정 전압을 현재 스텝만큼 증가시킵니다.",
+        "params": {}
+      },
+      "VoltageDown": {
+        "description": "설정 전압을 현재 스텝만큼 감소시킵니다.",
+        "params": {}
+      },
+      "CurrentUp": {
+        "description": "설정 전류 한계를 현재 스텝만큼 증가시킵니다.",
+        "params": {}
+      },
+      "CurrentDown": {
+        "description": "설정 전류 한계를 현재 스텝만큼 감소시킵니다.",
+        "params": {}
+      },
+      "SaveState": {
+        "description": "현재 전원 상태를 지정 메모리(1..N)에 저장합니다.",
+        "params": {
+          "memory": "저장할 메모리 번호"
+        }
+      },
+      "RecallState": {
+        "description": "지정 메모리에 저장된 전원 상태를 불러옵니다.",
+        "params": {
+          "memory": "불러올 메모리 번호"
+        }
+      },
+      "Reset": {
+        "description": "장비를 기본 상태로 초기화합니다(*RST).",
+        "params": {}
+      },
+      "ClearStatus": {
+        "description": "상태 레지스터를 초기화합니다(*CLS).",
+        "params": {}
+      },
+      "GetIdentity": {
+        "description": "*IDN? 질의로 장비 식별 정보를 읽어옵니다.",
+        "params": {}
+      },
+      "GetSystemError": {
+        "description": "장치 오류 큐에서 다음 오류를 읽어옵니다.",
+        "params": {}
+      }
+    }
   }
 }

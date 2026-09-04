@@ -301,6 +301,10 @@ def _env_flag(name: str, default: bool = True) -> bool:
 # 송신 원문 덤프 대상 — 기본은 하드키/노브 계열만 (터치·드래그는 프레임 수가 많아 제외).
 #   ISAP_LOG_BYTES=0    → 끄기
 #   ISAP_LOG_BYTES=all  → 터치/멀티핑거(0xB0, 0xD6, 0xD7)까지 포함 (멀티핑거 브링업용)
+# SHORT 키 송신 방식 — 기본은 3프레임(PRESS/SHORT/RELEASE).
+# ISAP_SHORT_KEY_MODE=2frame 이면 SHORT(0x43) 를 빼고 PRESS/RELEASE 만 보낸다.
+_SHORT_KEY_2FRAME = (os.environ.get("ISAP_SHORT_KEY_MODE") or "").strip().lower() in ("2", "2frame", "press_release")
+
 _LOG_BYTES_RAW = (os.environ.get("ISAP_LOG_BYTES") or "").strip().lower()
 _LOG_BYTES = _env_flag("ISAP_LOG_BYTES", True)
 _BYTE_LOG_CMDS = frozenset({
@@ -1064,11 +1068,15 @@ class ISAPAgentService:
                     self.send_key(cmd, RELEASE_KEY, key_data, screen_type, direction)
                 logger.info("[iSAP KEY HOLD] %s hold=%dms (press-hold-release)", key_name, hold_ms)
             elif sub_cmd == SHORT_KEY:
-                # 프로토콜 사양: PRESS → SHORT → RELEASE 순서로 송신
+                # 기본: PRESS → SHORT → RELEASE (LGE 정품 플러그인 hkmc6th.py 와 동일).
+                # ISAP_SHORT_KEY_MODE=2frame 이면 중간 SHORT(0x43) 를 빼고 PRESS → RELEASE
+                # 만 보낸다 — 0x43 은 스펙상 "press + 500msec + release" 통합 매크로라
+                # 토글성 키에서 중복 동작하는지 실기 비교가 필요할 때 쓰는 스위치.
                 self.send_key(cmd, PRESS_KEY, key_data, screen_type, direction)
                 time.sleep(0.05)
-                self.send_key(cmd, SHORT_KEY, key_data, screen_type, direction)
-                time.sleep(0.05)
+                if not _SHORT_KEY_2FRAME:
+                    self.send_key(cmd, SHORT_KEY, key_data, screen_type, direction)
+                    time.sleep(0.05)
                 self.send_key(cmd, RELEASE_KEY, key_data, screen_type, direction)
             elif sub_cmd == LONG_KEY:
                 # PRESS~LONG 간격을 짧게(0.05초) — 길게 두면 리어 모니터 포커스가

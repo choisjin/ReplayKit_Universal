@@ -137,6 +137,7 @@
       <a href="#mod-IVIQEBenchIOClient" class="toc-h3">IVIQEBenchIOClient</a>
       <a href="#mod-SmartBench" class="toc-h3">SmartBench</a>
       <a href="#mod-WoohyunBench" class="toc-h3">WoohyunBench</a>
+      <a href="#mod-ODAPowerSupply" class="toc-h3">ODAPowerSupply</a>
       <a href="#cat-can" class="toc-h2">CAN Communication</a>
       <a href="#mod-CANoe_RBS" class="toc-h3">CANoe_RBS</a>
       <a href="#mod-CANoe_Ctrl" class="toc-h3">CANoe_Ctrl</a>
@@ -169,7 +170,7 @@
     </div>
 
     <h2 id="overview">All Modules</h2>
-    <p>Total <strong>17</strong> modules, <strong>160</strong> functions registered.</p>
+    <p>Total <strong>18</strong> modules, <strong>189</strong> functions registered.</p>
     <table>
       <thead><tr><th>Module</th><th>Description</th><th>Functions</th></tr></thead>
       <tbody>
@@ -202,6 +203,7 @@ Standard usage pattern:
 <tr><td><a href="#mod-HKMC6th"><strong>HKMC6th</strong></a></td><td>Screen capture / touch / swipe / HW key control over a TCP socket protocol. Calls the HKMC6thService functions of the connected hkmc_agent device directly.</td><td style="text-align:center">4</td></tr>
 <tr><td><a href="#mod-Android"><strong>Android</strong></a></td><td></td><td style="text-align:center">7</td></tr>
 <tr><td><a href="#mod-Frame_Check"><strong>Frame_Check</strong></a></td><td>Operation-time measurement tool based on the test recording video (webcam). Add a Frame_Measure step to the scenario; when the scenario ends, webcam recording stops automatically and the video is analyzed frame by frame to report the elapsed time (ms) from the measurement start point to the first appearance of the target image, along with a clip of the measured section (5s before start to 5s after end). The PIP webcam must be open before playback for recording/measurement.</td><td style="text-align:center">1</td></tr>
+<tr><td><a href="#mod-ODAPowerSupply"><strong>ODAPowerSupply</strong></a></td><td>Controls voltage, current limit, and output switch, and measures actual output voltage/current via RS-232 serial SCPI commands. Connection lifecycle is managed automatically by the scenario.</td><td style="text-align:center">29</td></tr>
       </tbody>
     </table>
 
@@ -299,7 +301,7 @@ Standard usage pattern:
 <tr>
 <td><code>CheckCurrent</code></td>
 <td>Measures current and returns PASS if within range for 3 consecutive readings, FAIL on timeout.</td>
-<td style="font-size:12px"><code>min_current</code>: Minimum current (A). e.g. 0.5<br><code>max_current</code>: Maximum current (A). e.g. 2.0<br><code>check_delay</code>: Timeout (ms). e.g. 10000</td>
+<td style="font-size:12px"><code>min_current</code>: Minimum current (A). e.g. 0.5<br><code>max_current</code>: Maximum current (A). e.g. 2.0<br><code>check_delay</code>: Timeout (ms). e.g. 10000. Minimum 3000ms — lower values are auto-raised to 3000ms (one reading takes ~1.5s x 3 consecutive readings). 3500-4000ms+ recommended on slow devices</td>
 </tr>
 <tr>
 <td><code>CheckCurrentMoment</code></td>
@@ -482,6 +484,159 @@ Standard usage pattern:
 <tr>
 <td><code>CanSaveStop</code></td>
 <td>Stops unified CAN logging and closes the CSV file.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-ODAPowerSupply">ODAPowerSupply</h3>
+<div class="callout callout-info">ODA OPS-3010 DC Power Supply — Controls voltage, current limit, and output switch, and measures actual output voltage/current via RS-232 serial SCPI commands. Connection lifecycle is managed automatically by the scenario.</div>
+<table>
+<thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
+<tbody>
+<tr>
+<td><code>SendCommand</code></td>
+<td>Send an arbitrary SCPI command. Returns the instrument reply when is_query=True.</td>
+<td style="font-size:12px"><code>command</code>: SCPI command string to send.<br><code>is_query</code>: Whether this is a query command. True/False.</td>
+</tr>
+<tr>
+<td><code>Query</code></td>
+<td>Send a SCPI query command and return the instrument reply.</td>
+<td style="font-size:12px"><code>command</code>: SCPI query string to send.</td>
+</tr>
+<tr>
+<td><code>SetVoltage</code></td>
+<td>Set the output voltage setpoint (V).</td>
+<td style="font-size:12px"><code>voltage</code>: Target voltage (V). e.g. 12.0</td>
+</tr>
+<tr>
+<td><code>SetCurrent</code></td>
+<td>Set the output current limit setpoint (A).</td>
+<td style="font-size:12px"><code>current</code>: Target current limit (A). e.g. 2.0</td>
+</tr>
+<tr>
+<td><code>SetOutput</code></td>
+<td>Turn the output switch ON or OFF.</td>
+<td style="font-size:12px"><code>state</code>: &#x27;ON&#x27; or &#x27;OFF&#x27; [choices: ON / OFF]</td>
+</tr>
+<tr>
+<td><code>GetVoltage</code></td>
+<td>Read the configured output voltage setpoint (V).</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>GetCurrent</code></td>
+<td>Read the configured output current limit (A), not the measured load current. Use MeasureCurrent for the actual current.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>GetOutputState</code></td>
+<td>Read whether the output switch is ON or OFF.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>MeasureVoltage</code></td>
+<td>Measure the actual voltage (V) at the output terminals.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>MeasureCurrent</code></td>
+<td>Measure the actual current (A) at the output terminals. For the configured limit, use GetCurrent.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>CheckCurrent</code></td>
+<td>Measure the actual output current and return PASS when it enters the specified range for 3 consecutive readings; FAIL on timeout.</td>
+<td style="font-size:12px"><code>min_current</code>: Minimum current (A). e.g. 0.5<br><code>max_current</code>: Maximum current (A). e.g. 2.0<br><code>check_delay</code>: Timeout in milliseconds. e.g. 10000. Minimum 3000 ms — values below this are forced up to 3000 ms.</td>
+</tr>
+<tr>
+<td><code>SetOVP</code></td>
+<td>Set the over-voltage protection (OVP) level (V).</td>
+<td style="font-size:12px"><code>voltage</code>: OVP level (V).</td>
+</tr>
+<tr>
+<td><code>SetOCP</code></td>
+<td>Set the over-current protection (OCP) level (A).</td>
+<td style="font-size:12px"><code>current</code>: OCP level (A).</td>
+</tr>
+<tr>
+<td><code>GetOVP</code></td>
+<td>Read the configured OVP level (V).</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>GetOCP</code></td>
+<td>Read the configured OCP level (A).</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>GetOVPState</code></td>
+<td>Read whether OVP is enabled.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>GetOCPState</code></td>
+<td>Read whether OCP is enabled.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>SetVoltageStep</code></td>
+<td>Set the step size (V) used by VOLT UP/DOWN commands.</td>
+<td style="font-size:12px"><code>step</code>: Voltage step (V).</td>
+</tr>
+<tr>
+<td><code>SetCurrentStep</code></td>
+<td>Set the step size (A) used by CURR UP/DOWN commands.</td>
+<td style="font-size:12px"><code>step</code>: Current step (A).</td>
+</tr>
+<tr>
+<td><code>VoltageUp</code></td>
+<td>Increase the voltage setpoint by the current step.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>VoltageDown</code></td>
+<td>Decrease the voltage setpoint by the current step.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>CurrentUp</code></td>
+<td>Increase the current limit setpoint by the current step.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>CurrentDown</code></td>
+<td>Decrease the current limit setpoint by the current step.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>SaveState</code></td>
+<td>Save the current power-supply state to the specified memory location (1..N).</td>
+<td style="font-size:12px"><code>memory</code>: Memory location number.</td>
+</tr>
+<tr>
+<td><code>RecallState</code></td>
+<td>Recall a previously saved power-supply state from the specified memory location.</td>
+<td style="font-size:12px"><code>memory</code>: Memory location number.</td>
+</tr>
+<tr>
+<td><code>Reset</code></td>
+<td>Reset the instrument to its default state (*RST).</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>ClearStatus</code></td>
+<td>Clear the status data register (*CLS).</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>GetIdentity</code></td>
+<td>Read the instrument identification string using *IDN?.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
+</tr>
+<tr>
+<td><code>GetSystemError</code></td>
+<td>Read the next error from the instrument error queue.</td>
 <td style="font-size:12px"><span style="color:var(--text-muted)">(none)</span></td>
 </tr>
 </tbody>

@@ -50,6 +50,8 @@ interface ModuleInfo {
   label: string;
   connect_type?: string;
   connect_fields?: ConnectField[];
+  /** 시리얼 모듈의 장비 기본 통신속도 (예: ODAPowerSupply 9600) — 모듈 선택 시 baudrate 초기값 */
+  default_baudrate?: number;
 }
 
 interface SerialPort {
@@ -2392,7 +2394,11 @@ export default function DevicePage() {
                                       allowClear
                                       placeholder={t('device.moduleSelect')}
                                       value={scanSelectedModule}
-                                      onChange={setScanSelectedModule}
+                                      onChange={(v) => {
+                                        setScanSelectedModule(v);
+                                        const db = modules.find(m => m.name === v)?.default_baudrate;
+                                        if (db) setBaudrate(db);
+                                      }}
                                       style={{ width: 280 }}
                                       options={visibleModules.map(m => ({ label: m.label, value: m.name }))}
                                     />
@@ -3257,6 +3263,8 @@ export default function DevicePage() {
                             }
                           }
                           setExtraFieldValues(seed);
+                          // 장비 기본 통신속도가 선언된 시리얼 모듈은 baudrate 를 자동 세팅
+                          if (modInfo?.default_baudrate) setBaudrate(modInfo.default_baudrate);
                           const ct = getModuleConnectType(v);
                           if (ct === 'serial') setConnectType('serial');
                           else if (ct === 'socket' || ct === 'none' || ct === 'can' || ct === 'audio') setConnectType('module');

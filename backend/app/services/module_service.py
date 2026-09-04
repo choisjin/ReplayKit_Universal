@@ -543,6 +543,12 @@ def list_available_modules() -> list[dict]:
          "connect_fields": [
              {"name": "port", "label": "TCP Port", "type": "number", "default": "5000"},
          ]},
+        # ODAPowerSupply — ODA OPS-3010 DC 전원공급기 (RS-232 SCPI). 생성자(port, bps) →
+        # Connect()/IsConnected() 자동 호출 경로(SerialPlugin 과 동일). 장비 기본 통신속도가
+        # 9600 이라 default_baudrate 로 UI 드롭다운 초기값을 내려준다 (프론트 baud 기본 115200).
+        {"name": "ODAPowerSupply", "label": "ODAPowerSupply (OPS-3010)", "connect_type": "serial",
+         "default_baudrate": 9600,
+         "connect_fields": []},
         {"name": "DLTViewer", "label": "DLTViewer", "connect_type": "socket",
          "connect_fields": [
              {"name": "port", "label": "DLT Port", "type": "number", "default": "3490"},
@@ -1185,6 +1191,8 @@ def get_module_functions(module_name: str) -> list[dict]:
         "Acroname": {"Connect", "Disconnect", "IsConnected"},
         # AudioMonitor: 마이크 연결은 디바이스 등록이 자동 관리 — 스텝엔 녹음/판정만 노출.
         "AudioMonitor": {"Connect", "Disconnect", "IsConnected"},
+        # ODAPowerSupply: 시리얼 연결/해제는 디바이스 등록이 자동 관리 — 스텝엔 전원 제어만 노출.
+        "ODAPowerSupply": {"Connect", "Disconnect", "IsConnected"},
         # POWER: Connect(port, bps)/DisConnect 는 디바이스 연결/해제가 자동 수행
         # (_MODULE_LIFECYCLE). 스텝엔 전원 제어 함수만 노출.
         "POWER": {"Connect", "DisConnect"},

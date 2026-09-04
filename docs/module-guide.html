@@ -137,6 +137,7 @@
       <a href="#mod-IVIQEBenchIOClient" class="toc-h3">IVIQEBenchIOClient</a>
       <a href="#mod-SmartBench" class="toc-h3">SmartBench</a>
       <a href="#mod-WoohyunBench" class="toc-h3">WoohyunBench</a>
+      <a href="#mod-ODAPowerSupply" class="toc-h3">ODAPowerSupply</a>
       <a href="#cat-can" class="toc-h2">CAN 통신</a>
       <a href="#mod-CANoe_RBS" class="toc-h3">CANoe_RBS</a>
       <a href="#mod-CANoe_Ctrl" class="toc-h3">CANoe_Ctrl</a>
@@ -169,7 +170,7 @@
     </div>
 
     <h2 id="overview">전체 모듈 목록</h2>
-    <p>총 <strong>17개</strong> 모듈, <strong>160개</strong> 함수가 등록되어 있습니다.</p>
+    <p>총 <strong>18개</strong> 모듈, <strong>189개</strong> 함수가 등록되어 있습니다.</p>
     <table>
       <thead><tr><th>모듈</th><th>설명</th><th>함수 수</th></tr></thead>
       <tbody>
@@ -202,6 +203,7 @@
 <tr><td><a href="#mod-HKMC6th"><strong>HKMC6th</strong></a></td><td>TCP 소켓 프로토콜로 화면 캡처/터치/스와이프/HW 키 제어. 연결된 hkmc_agent 디바이스의 HKMC6thService 함수를 그대로 호출합니다.</td><td style="text-align:center">4</td></tr>
 <tr><td><a href="#mod-Android"><strong>Android</strong></a></td><td></td><td style="text-align:center">7</td></tr>
 <tr><td><a href="#mod-Frame_Check"><strong>Frame_Check</strong></a></td><td>테스트 녹화 영상(웹캠)을 이용한 동작 시간 측정 도구. 시나리오에 Frame_Measure 스텝을 추가하면, 시나리오 종료 시 웹캠 녹화가 자동 종료된 후 해당 영상을 프레임 단위로 분석하여 측정 시작점→타겟 이미지 최초 등장까지의 경과 시간(ms)을 결과에 표기하고, 측정 구간 클립(시작 5초 전~종료 5초 후)도 함께 제공합니다. 재생 전 PIP 웹캠이 열려 있어야 녹화/측정이 가능합니다.</td><td style="text-align:center">1</td></tr>
+<tr><td><a href="#mod-ODAPowerSupply"><strong>ODAPowerSupply</strong></a></td><td>RS-232 시리얼 SCPI 명령으로 전압·전류·출력 스위치를 제어하고 실제 출력 전압/전류를 측정하는 모듈. 연결/해제는 시나리오가 자동 관리합니다.</td><td style="text-align:center">29</td></tr>
       </tbody>
     </table>
 
@@ -299,7 +301,7 @@
 <tr>
 <td><code>CheckCurrent</code></td>
 <td>전류를 측정하여 범위 내 진입 시 PASS (연속 3회), 타임아웃 시 FAIL.</td>
-<td style="font-size:12px"><code>min_current</code>: 최소 전류 (A). 예: 0.5<br><code>max_current</code>: 최대 전류 (A). 예: 2.0<br><code>check_delay</code>: 타임아웃 (ms). 예: 10000</td>
+<td style="font-size:12px"><code>min_current</code>: 최소 전류 (A). 예: 0.5<br><code>max_current</code>: 최대 전류 (A). 예: 2.0<br><code>check_delay</code>: 타임아웃 (ms). 예: 10000. 최소 3000ms — 미만 입력 시 3000ms로 자동 상향(1회 측정 ~1.5s × 연속 3회 정책). 장비 지연 환경은 3500~4000ms 이상 권장</td>
 </tr>
 <tr>
 <td><code>CheckCurrentMoment</code></td>
@@ -482,6 +484,159 @@
 <tr>
 <td><code>CanSaveStop</code></td>
 <td>통합 CAN 로깅을 종료하고 CSV 파일을 닫습니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-ODAPowerSupply">ODAPowerSupply</h3>
+<div class="callout callout-info">ODA OPS-3010 직류 전원공급장치 — RS-232 시리얼 SCPI 명령으로 전압·전류·출력 스위치를 제어하고 실제 출력 전압/전류를 측정하는 모듈. 연결/해제는 시나리오가 자동 관리합니다.</div>
+<table>
+<thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
+<tbody>
+<tr>
+<td><code>SendCommand</code></td>
+<td>임의 SCPI 명령을 전송합니다. is_query=True 이면 응답을 반환합니다.</td>
+<td style="font-size:12px"><code>command</code>: 전송할 SCPI 명령 문자열<br><code>is_query</code>: 질의(query) 명령 여부. True/False</td>
+</tr>
+<tr>
+<td><code>Query</code></td>
+<td>SCPI 질의 명령을 전송하고 응답을 반환합니다.</td>
+<td style="font-size:12px"><code>command</code>: 전송할 SCPI 질의 문자열</td>
+</tr>
+<tr>
+<td><code>SetVoltage</code></td>
+<td>출력 전압 설정값(V)을 지정합니다.</td>
+<td style="font-size:12px"><code>voltage</code>: 설정할 전압 (V). 예: 12.0</td>
+</tr>
+<tr>
+<td><code>SetCurrent</code></td>
+<td>출력 전류 한계 설정값(A)을 지정합니다.</td>
+<td style="font-size:12px"><code>current</code>: 설정할 전류 한계 (A). 예: 2.0</td>
+</tr>
+<tr>
+<td><code>SetOutput</code></td>
+<td>출력 스위치를 ON 또는 OFF로 설정합니다.</td>
+<td style="font-size:12px"><code>state</code>: &#x27;ON&#x27; 또는 &#x27;OFF&#x27; [선택지: ON / OFF]</td>
+</tr>
+<tr>
+<td><code>GetVoltage</code></td>
+<td>현재 설정된 출력 전압(V)을 읽어옵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>GetCurrent</code></td>
+<td>현재 설정된 출력 전류 한계(A)를 읽어옵니다. 전원 출력 단자에 흐르는 실제 전류는 MeasureCurrent를 사용하세요.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>GetOutputState</code></td>
+<td>출력 스위치가 ON인지 OFF인지 읽어옵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>MeasureVoltage</code></td>
+<td>전원 출력 단자의 실제 전압(V)을 측정합니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>MeasureCurrent</code></td>
+<td>전원 출력 단자의 실제 전류(A)를 측정합니다. 설정된 전류 한계는 GetCurrent를 사용하세요.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>CheckCurrent</code></td>
+<td>실제 출력 전류를 측정하여 지정 범위 내에 연속 3회 진입하면 PASS, 타임아웃 시 FAIL.</td>
+<td style="font-size:12px"><code>min_current</code>: 최소 전류 (A). 예: 0.5<br><code>max_current</code>: 최대 전류 (A). 예: 2.0<br><code>check_delay</code>: 타임아웃 (ms). 예: 10000. 최소 3000ms — 미만 입력 시 3000ms로 강제 상향.</td>
+</tr>
+<tr>
+<td><code>SetOVP</code></td>
+<td>과전압 보호(OVP) 레벨(V)을 설정합니다.</td>
+<td style="font-size:12px"><code>voltage</code>: OVP 레벨 (V)</td>
+</tr>
+<tr>
+<td><code>SetOCP</code></td>
+<td>과전류 보호(OCP) 레벨(A)을 설정합니다.</td>
+<td style="font-size:12px"><code>current</code>: OCP 레벨 (A)</td>
+</tr>
+<tr>
+<td><code>GetOVP</code></td>
+<td>설정된 OVP 레벨(V)을 읽어옵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>GetOCP</code></td>
+<td>설정된 OCP 레벨(A)을 읽어옵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>GetOVPState</code></td>
+<td>OVP 기능이 켜져 있는지 읽어옵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>GetOCPState</code></td>
+<td>OCP 기능이 켜져 있는지 읽어옵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>SetVoltageStep</code></td>
+<td>VOLT UP/DOWN 명령 사용 시 전압 변동 폭(V)을 설정합니다.</td>
+<td style="font-size:12px"><code>step</code>: 전압 스텝 (V)</td>
+</tr>
+<tr>
+<td><code>SetCurrentStep</code></td>
+<td>CURR UP/DOWN 명령 사용 시 전류 변동 폭(A)을 설정합니다.</td>
+<td style="font-size:12px"><code>step</code>: 전류 스텝 (A)</td>
+</tr>
+<tr>
+<td><code>VoltageUp</code></td>
+<td>설정 전압을 현재 스텝만큼 증가시킵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>VoltageDown</code></td>
+<td>설정 전압을 현재 스텝만큼 감소시킵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>CurrentUp</code></td>
+<td>설정 전류 한계를 현재 스텝만큼 증가시킵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>CurrentDown</code></td>
+<td>설정 전류 한계를 현재 스텝만큼 감소시킵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>SaveState</code></td>
+<td>현재 전원 상태를 지정 메모리(1..N)에 저장합니다.</td>
+<td style="font-size:12px"><code>memory</code>: 저장할 메모리 번호</td>
+</tr>
+<tr>
+<td><code>RecallState</code></td>
+<td>지정 메모리에 저장된 전원 상태를 불러옵니다.</td>
+<td style="font-size:12px"><code>memory</code>: 불러올 메모리 번호</td>
+</tr>
+<tr>
+<td><code>Reset</code></td>
+<td>장비를 기본 상태로 초기화합니다(*RST).</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>ClearStatus</code></td>
+<td>상태 레지스터를 초기화합니다(*CLS).</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>GetIdentity</code></td>
+<td>*IDN? 질의로 장비 식별 정보를 읽어옵니다.</td>
+<td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
+</tr>
+<tr>
+<td><code>GetSystemError</code></td>
+<td>장치 오류 큐에서 다음 오류를 읽어옵니다.</td>
 <td style="font-size:12px"><span style="color:var(--text-muted)">(없음)</span></td>
 </tr>
 </tbody>
