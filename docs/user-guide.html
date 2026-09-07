@@ -412,6 +412,8 @@
     <a href="#results-webcam" class="toc-h3">웹캠 녹화</a>
 
     <a href="#settings" class="toc-h2">설정</a>
+    <a href="#settings-backup" class="toc-h3">백업 / 복원</a>
+    <a href="#settings-migration" class="toc-h3">시나리오 마이그레이션</a>
 
     <a href="#webcam" class="toc-h2">웹캠 PiP</a>
     <a href="#webcam-compositor" class="toc-h3">합성 녹화 (Compositor)</a>
@@ -540,7 +542,7 @@
   <tr><td><strong>녹화</strong></td><td>디바이스 화면을 보며 조작을 기록해 시나리오 생성</td></tr>
   <tr><td><strong>시나리오</strong></td><td>저장된 시나리오/그룹 관리 및 재생</td></tr>
   <tr><td><strong>테스트 결과</strong></td><td>재생 결과 확인 및 리포트 생성</td></tr>
-  <tr><td><strong>설정</strong></td><td>테마, 언어, 저장 경로, 유사도 임계값 등</td></tr>
+  <tr><td><strong>설정</strong></td><td>테마, 언어, 기본 대기 시간, 유사도 임계값, 백업/복원 등 → <a href="#settings">설정</a> 참조</td></tr>
   <tr><td><strong>업데이트 내역</strong> <span class="badge badge-blue">신규</span></td><td>프로그램의 변경 이력(커밋 로그) 확인 → <a href="#changelog">업데이트 내역</a> 참조</td></tr>
 </table>
 
@@ -1527,8 +1529,8 @@ npm run dev</code></pre>
   <li>상태별 색상 구분</li>
 </ul>
 <p>
-  설정에서 <strong>Excel 저장 경로</strong>를 지정하면 해당 경로에 자동 저장되며,
-  지정하지 않으면 브라우저 다운로드로 저장됩니다.
+  Excel 파일은 <strong>브라우저 다운로드</strong>로 저장되며, 동시에 해당 결과 폴더에도
+  <code>result.xlsx</code>로 남습니다. (이전 버전의 설정 &gt; <em>Excel 저장 경로</em> 항목은 제거되었습니다.)
 </p>
 
 <h3 id="results-webcam">웹캠 녹화</h3>
@@ -1544,7 +1546,7 @@ npm run dev</code></pre>
 
 <!-- ============================== 설정 ============================== -->
 <h2 id="settings">설정</h2>
-<p><strong>설정</strong> 탭에서 앱의 동작 방식과 외관을 조정합니다.</p>
+<p><strong>설정</strong> 탭에서 앱의 동작 방식과 외관을 조정하고, 시나리오 자산을 백업/복원합니다.</p>
 
 <table>
   <tr><th>설정 항목</th><th>설명</th></tr>
@@ -1557,31 +1559,133 @@ npm run dev</code></pre>
     <td>라이트 모드 / 다크 모드 전환</td>
   </tr>
   <tr>
-    <td><strong>Excel 내보내기 저장 경로</strong></td>
-    <td>Excel 리포트 자동 저장 위치. 비어있으면 브라우저 다운로드 사용</td>
+    <td><strong>기본 wait 시간</strong> <span class="badge badge-blue">신규</span></td>
+    <td>새 스텝을 추가할 때 자동으로 붙는 기본 대기 시간(ms). 기본값 <code>3000</code>ms이며 스텝별 개별 수정도 가능합니다.
+        값을 입력한 뒤 <strong>적용</strong> 버튼(또는 Enter)을 눌러야 저장됩니다.</td>
   </tr>
   <tr>
-    <td><strong>시나리오/그룹 내보내기 저장 경로</strong></td>
-    <td>시나리오/그룹 ZIP 자동 저장 위치. 비어있으면 브라우저 다운로드 사용</td>
+    <td><strong>이미지 비교 유사도 임계값</strong></td>
+    <td>비교 모드별 기본 임계값(0.0~1.0) — 전체화면 <code>0.95</code> / 단일크롭 <code>0.90</code> / 영역제외 <code>0.93</code> / 멀티크롭 <code>0.85</code>.
+        새 기대 이미지를 캡처할 때 해당 모드 값이 자동 적용되며, 스텝별 개별 수정도 가능합니다.
+        네 값을 수정한 뒤 <strong>적용</strong> 버튼으로 한 번에 저장합니다.</td>
   </tr>
   <tr>
-    <td><strong>관제 서버 (Monitor Server)</strong> <span class="badge badge-blue">신규</span></td>
-    <td>통합 관제 서버 주소(URL)를 입력하면 이 ReplayKit의 상태가 실시간으로 전송됩니다. 비어있으면 연결하지 않습니다.</td>
-  </tr>
-  <tr>
-    <td><strong>이미지 비교 유사도 임계값</strong> <span class="badge badge-blue">신규</span></td>
-    <td>비교 모드별(전체화면 / 단일크롭 / 영역제외 / 멀티크롭) 기본 임계값(0.0~1.0). 새 기대 이미지를 캡처할 때 해당 모드 값이 자동 적용되며, 스텝별 개별 수정도 가능합니다.</td>
+    <td><strong>백업 / 복원</strong> <span class="badge badge-blue">신규</span></td>
+    <td>시나리오·스크린샷·그룹 전체를 스냅샷으로 백업하고 되돌립니다 → <a href="#settings-backup">백업 / 복원</a> 참조</td>
   </tr>
 </table>
+
 <div class="callout callout-warning">
-  <strong>⚠️ 웹캠 저장 경로 설정 위치 변경</strong>
-  이전 버전의 <strong>웹캠 녹화 저장 경로</strong> 설정 항목은 제거되었습니다. 웹캠 영상은 해당 결과 폴더에 자동으로 함께 저장됩니다.
+  <strong>⚠️ 저장 경로 설정 항목이 정리되었습니다</strong>
+  이전 버전에 있던 <strong>웹캠 녹화 저장 경로</strong>, <strong>Excel 내보내기 저장 경로</strong>,
+  <strong>시나리오/그룹 내보내기 저장 경로</strong> 설정 항목은 모두 <strong>제거</strong>되었습니다.
+  <ul style="margin-bottom:0">
+    <li><strong>웹캠 영상</strong> — 해당 결과 폴더에 자동으로 함께 저장됩니다</li>
+    <li><strong>Excel 리포트</strong> — 브라우저 다운로드로 저장되며, 동시에 결과 폴더에 <code>result.xlsx</code>가 남습니다</li>
+    <li><strong>시나리오/그룹 ZIP</strong> — 브라우저 다운로드로 저장됩니다</li>
+  </ul>
+  설정 화면에서 직접 지정하는 경로는 이제 <strong>백업 외부 저장 폴더</strong> 하나뿐입니다.
 </div>
 
 <div class="callout callout-info">
-  <strong>💡 폴더 선택</strong>
-  각 경로 옆의 <strong>찾아보기</strong> 버튼을 클릭하면 시스템 폴더 선택 대화상자가 열립니다.
-  직접 경로를 입력할 수도 있습니다.
+  <strong>💡 관제 서버 주소는 어디로 갔나요?</strong>
+  <strong>관제 서버(Monitor Server)</strong> 주소 입력란은 일반 설정 탭에서 <strong>관리자 화면</strong>으로 옮겨졌습니다.
+  브라우저 주소 끝에 <code>#admin</code>을 붙여 접속하면 됩니다. 값을 비워두면 기본 서버 주소가 사용됩니다.
+</div>
+
+
+<h3 id="settings-backup">백업 / 복원 <span class="badge badge-blue">신규</span></h3>
+<p>
+  재생에 필요한 자산 전체 — <strong>모든 시나리오 JSON + 기대 스크린샷 + 그룹/폴더 정보</strong> — 를
+  타임스탬프가 붙은 ZIP 스냅샷으로 저장하고, 필요할 때 그 시점으로 되돌립니다.
+</p>
+
+<h4>저장 위치</h4>
+<table>
+  <tr><th>위치</th><th>경로</th><th>설명</th></tr>
+  <tr>
+    <td><strong>내부</strong> (기본)</td>
+    <td><code>backend/backups/</code></td>
+    <td>항상 저장됩니다. git pull·프로그램 업데이트를 해도 지워지지 않습니다.</td>
+  </tr>
+  <tr>
+    <td><strong>외부</strong> (선택)</td>
+    <td>직접 지정</td>
+    <td><strong>외부 저장 폴더</strong>를 지정하면 같은 스냅샷이 그 폴더에도 함께 복사됩니다.
+        입력란 오른쪽의 <strong>폴더 아이콘</strong>으로 찾아보거나 경로를 직접 입력할 수 있습니다.</td>
+  </tr>
+</table>
+<div class="callout callout-info">
+  <strong>💡 외부 폴더는 다른 드라이브로 지정하세요</strong>
+  내부 백업은 PC나 디스크가 통째로 고장 나면 함께 사라집니다.
+  네트워크 드라이브나 외장 디스크의 폴더를 외부 저장 폴더로 지정해 두는 것을 권장합니다.
+</div>
+
+<h4>백업 설정</h4>
+<table>
+  <tr><th>항목</th><th>설명</th></tr>
+  <tr><td><strong>자동 백업</strong></td>
+      <td>켜면 지정한 주기로 자동 스냅샷을 만듭니다. 직전 백업과 내용이 같으면 건너뜁니다.</td></tr>
+  <tr><td><strong>백업 주기</strong></td>
+      <td>1시간마다 / 6시간마다 / 12시간마다 / <strong>매일</strong>(기본) / 매주</td></tr>
+  <tr><td><strong>외부 저장 폴더</strong></td>
+      <td>내부 저장소 외에 추가로 복사할 폴더 (선택, 비워두면 내부에만 저장)</td></tr>
+  <tr><td><strong>보존 개수</strong></td>
+      <td>저장 위치별로 최근 N개만 남기고 오래된 백업은 자동 삭제합니다 (기본 <code>10</code>개)</td></tr>
+  <tr><td><strong>지금 백업</strong></td>
+      <td>주기와 상관없이 즉시 수동 스냅샷을 만듭니다</td></tr>
+</table>
+
+<h4>백업 목록</h4>
+<p>생성된 스냅샷이 표로 표시됩니다.</p>
+<ul>
+  <li><strong>생성 시각 / 시나리오 개수 / 크기</strong></li>
+  <li><strong>유형</strong> — <code>자동</code>(주기 실행) · <code>수동</code>(지금 백업) · <code>복원 전</code>(복원 직전 안전 백업)</li>
+  <li><strong>위치</strong> — <code>내부</code> / <code>외부</code> 태그로 어디에 저장됐는지 표시</li>
+  <li>행 오른쪽의 <strong>복원</strong> · <strong>다운로드</strong>(ZIP 내려받기) · <strong>삭제</strong> 버튼</li>
+</ul>
+
+<h4>복원 방법</h4>
+<p>백업 목록에서 <strong>복원</strong> 버튼을 누르면 세 가지 방식 중 선택할 수 있습니다.</p>
+<table>
+  <tr><th>방식</th><th>동작</th></tr>
+  <tr>
+    <td><strong>전체 복원 (병합)</strong></td>
+    <td>백업 시점의 항목을 현재에 병합합니다. 이름이 같으면 백업본으로 덮어쓰고,
+        백업에 없는 현재 항목은 그대로 유지됩니다.</td>
+  </tr>
+  <tr>
+    <td><strong>전체 복원 (교체)</strong></td>
+    <td>현재 시나리오·스크린샷·그룹을 <strong>전부 삭제</strong>하고 백업 시점으로 완전히 교체합니다.</td>
+  </tr>
+  <tr>
+    <td><strong>개별 시나리오 복원</strong></td>
+    <td>백업에 담긴 시나리오 중 하나만 골라 되살립니다.
+        실수로 지웠거나 잘못 편집한 시나리오 한 개만 복구할 때 사용합니다.</td>
+  </tr>
+</table>
+<div class="callout callout-warning">
+  <strong>⚠️ 복원 직전 자동 안전 백업</strong>
+  어떤 방식으로 복원하든 실행 직전에 현재 상태가 <code>복원 전</code> 백업으로 자동 저장됩니다.
+  복원 결과가 마음에 들지 않으면 그 백업으로 다시 되돌릴 수 있습니다.
+</div>
+<div class="callout callout-info">
+  <strong>💡 앱 설정은 복원되지 않습니다</strong>
+  스냅샷에는 참고용으로 <code>settings.json</code>이 함께 담기지만 복원 시 자동 적용되지 않습니다.
+  테마·언어·임계값 등 앱 설정은 복원 후에도 현재 값이 그대로 유지됩니다.
+</div>
+
+
+<h3 id="settings-migration">시나리오 마이그레이션 <span class="badge badge-yellow">임시</span></h3>
+<p>
+  설정 탭 맨 아래의 <strong>only_LGSI_Change_CAN_CMD</strong> 버튼은 특정 조직 전용 일회성 변환 도구입니다.
+  저장된 모든 시나리오에서 WoohyunBench <code>SendAvnCan</code> 스텝을 <code>SendCan</code>으로 일괄 변환합니다
+  (<code>msg_id</code>/<code>type</code>/<code>payload_hex</code>는 유지, <code>mcu=mcu1</code>·<code>channel=B</code>·<code>repeat=0</code>·<code>cycle_ms=200</code> 일괄 적용).
+</p>
+<div class="callout callout-warning">
+  <strong>⚠️ 해당되지 않으면 누르지 마세요</strong>
+  모든 시나리오를 한 번에 수정하며 되돌리기 버튼이 없습니다.
+  꼭 필요하다면 <strong>지금 백업</strong>으로 스냅샷을 먼저 만들어 두고 실행하세요.
 </div>
 
 

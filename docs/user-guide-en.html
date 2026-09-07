@@ -412,6 +412,8 @@
     <a href="#results-webcam" class="toc-h3">Webcam Recording</a>
 
     <a href="#settings" class="toc-h2">Settings</a>
+    <a href="#settings-backup" class="toc-h3">Backup / Restore</a>
+    <a href="#settings-migration" class="toc-h3">Scenario Migration</a>
 
     <a href="#webcam" class="toc-h2">Webcam PiP</a>
     <a href="#webcam-compositor" class="toc-h3">Composite Recording (Compositor)</a>
@@ -540,7 +542,7 @@
   <tr><td><strong>Record</strong></td><td>Create scenarios by recording actions on the device screen</td></tr>
   <tr><td><strong>Scenarios</strong></td><td>Manage and play saved scenarios/groups</td></tr>
   <tr><td><strong>Test Results</strong></td><td>Review playback results and generate reports</td></tr>
-  <tr><td><strong>Settings</strong></td><td>Theme, language, save paths, similarity thresholds, etc.</td></tr>
+  <tr><td><strong>Settings</strong></td><td>Theme, language, default wait time, similarity thresholds, backup/restore, etc. &rarr; see <a href="#settings">Settings</a></td></tr>
   <tr><td><strong>Changelog</strong> <span class="badge badge-blue">New</span></td><td>View the program's change history (commit log) &rarr; see <a href="#changelog">Changelog</a></td></tr>
 </table>
 
@@ -1530,8 +1532,8 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
   <li>Color-coded status indicators</li>
 </ul>
 <p>
-  If an <strong>Excel save path</strong> is configured in Settings, the file is automatically saved there;
-  otherwise, it downloads through the browser.
+  The Excel file is saved as a <strong>browser download</strong>, and is also kept as <code>result.xlsx</code>
+  inside the result folder. (The former Settings &gt; <em>Excel save path</em> option has been removed.)
 </p>
 
 <h3 id="results-webcam">Webcam Recording</h3>
@@ -1547,7 +1549,7 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
 
 <!-- ============================== Settings ============================== -->
 <h2 id="settings">Settings</h2>
-<p>The <strong>Settings</strong> tab adjusts the app's behavior and appearance.</p>
+<p>The <strong>Settings</strong> tab adjusts the app's behavior and appearance, and backs up / restores your scenario assets.</p>
 
 <table>
   <tr><th>Setting</th><th>Description</th></tr>
@@ -1560,31 +1562,133 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
     <td>Switch between Light mode / Dark mode</td>
   </tr>
   <tr>
-    <td><strong>Excel Export Save Path</strong></td>
-    <td>Auto-save location for Excel reports. If empty, uses browser download</td>
+    <td><strong>Default Wait Time</strong> <span class="badge badge-blue">New</span></td>
+    <td>Default delay (ms) attached automatically to newly added steps. Defaults to <code>3000</code> ms and can be overridden per step.
+        Enter a value and press the <strong>Apply</strong> button (or Enter) to save it.</td>
   </tr>
   <tr>
-    <td><strong>Scenario/Group Export Save Path</strong></td>
-    <td>Auto-save location for scenario/group ZIP files. If empty, uses browser download</td>
+    <td><strong>Image Comparison Thresholds</strong></td>
+    <td>Default threshold per compare mode (0.0~1.0) &mdash; Full Screen <code>0.95</code> / Single Crop <code>0.90</code> / Exclude Region <code>0.93</code> / Multi Crop <code>0.85</code>.
+        Applied automatically when capturing a new expected image; can be overridden per step.
+        Edit the four values, then save them together with the <strong>Apply</strong> button.</td>
   </tr>
   <tr>
-    <td><strong>Monitor Server</strong> <span class="badge badge-blue">New</span></td>
-    <td>Enter the integrated monitor server URL to send this ReplayKit's status in real time. Leave empty to disable.</td>
-  </tr>
-  <tr>
-    <td><strong>Image Comparison Thresholds</strong> <span class="badge badge-blue">New</span></td>
-    <td>Default threshold per compare mode (Full Screen / Single Crop / Exclude Region / Multi Crop), 0.0~1.0. Applied automatically when capturing a new expected image; can be overridden per step.</td>
+    <td><strong>Backup / Restore</strong> <span class="badge badge-blue">New</span></td>
+    <td>Snapshot and roll back all scenarios, screenshots and groups &rarr; see <a href="#settings-backup">Backup / Restore</a></td>
   </tr>
 </table>
+
 <div class="callout callout-warning">
-  <strong>&#x26A0;&#xFE0F; Webcam Save Path Setting Moved</strong>
-  The previous <strong>Webcam Recording Save Path</strong> setting has been removed. Webcam footage is now saved automatically alongside its result folder.
+  <strong>&#x26A0;&#xFE0F; Save-path settings have been cleaned up</strong>
+  The <strong>Webcam Recording Save Path</strong>, <strong>Excel Export Save Path</strong> and
+  <strong>Scenario/Group Export Save Path</strong> settings from previous versions have all been <strong>removed</strong>.
+  <ul style="margin-bottom:0">
+    <li><strong>Webcam footage</strong> &mdash; saved automatically alongside its result folder</li>
+    <li><strong>Excel report</strong> &mdash; saved as a browser download, and also kept as <code>result.xlsx</code> in the result folder</li>
+    <li><strong>Scenario/Group ZIP</strong> &mdash; saved as a browser download</li>
+  </ul>
+  The only path you now configure on the Settings screen is the <strong>external backup folder</strong>.
 </div>
 
 <div class="callout callout-info">
-  <strong>&#x1F4A1; Folder Selection</strong>
-  Click the <strong>Browse</strong> button next to each path to open the system folder selection dialog.
-  You can also enter the path directly.
+  <strong>&#x1F4A1; Where did the Monitor Server field go?</strong>
+  The <strong>Monitor Server</strong> URL field moved from the regular Settings tab to the <strong>Admin screen</strong>.
+  Reach it by appending <code>#admin</code> to the browser address. If left empty, the default server URL is used.
+</div>
+
+
+<h3 id="settings-backup">Backup / Restore <span class="badge badge-blue">New</span></h3>
+<p>
+  Saves everything playback needs &mdash; <strong>all scenario JSON files + expected screenshots + group/folder metadata</strong> &mdash;
+  as a timestamped ZIP snapshot, so you can roll back to that point whenever needed.
+</p>
+
+<h4>Storage locations</h4>
+<table>
+  <tr><th>Location</th><th>Path</th><th>Description</th></tr>
+  <tr>
+    <td><strong>Internal</strong> (default)</td>
+    <td><code>backend/backups/</code></td>
+    <td>Always written here. Survives git pull and program updates.</td>
+  </tr>
+  <tr>
+    <td><strong>External</strong> (optional)</td>
+    <td>You choose</td>
+    <td>If an <strong>external folder</strong> is configured, the same snapshot is copied there as well.
+        Use the <strong>folder icon</strong> next to the input to browse, or type the path directly.</td>
+  </tr>
+</table>
+<div class="callout callout-info">
+  <strong>&#x1F4A1; Point the external folder at a different drive</strong>
+  Internal backups are lost together with the PC or disk if the hardware fails.
+  Configuring a network drive or external disk folder as the external backup folder is recommended.
+</div>
+
+<h4>Backup settings</h4>
+<table>
+  <tr><th>Item</th><th>Description</th></tr>
+  <tr><td><strong>Auto Backup</strong></td>
+      <td>When on, creates a snapshot automatically at the configured interval. Skipped if nothing changed since the previous backup.</td></tr>
+  <tr><td><strong>Backup Interval</strong></td>
+      <td>Every 1 hour / 6 hours / 12 hours / <strong>Daily</strong> (default) / Weekly</td></tr>
+  <tr><td><strong>External Folder</strong></td>
+      <td>Extra folder to copy snapshots into, besides the internal store (optional; empty = internal only)</td></tr>
+  <tr><td><strong>Keep Count</strong></td>
+      <td>Keeps only the newest N backups per location and deletes older ones automatically (default <code>10</code>)</td></tr>
+  <tr><td><strong>Back Up Now</strong></td>
+      <td>Creates a manual snapshot immediately, regardless of the interval</td></tr>
+</table>
+
+<h4>Backup list</h4>
+<p>Existing snapshots are listed in a table.</p>
+<ul>
+  <li><strong>Created time / scenario count / size</strong></li>
+  <li><strong>Type</strong> &mdash; <code>Auto</code> (scheduled) &middot; <code>Manual</code> (Back Up Now) &middot; <code>Pre-restore</code> (safety backup taken just before a restore)</li>
+  <li><strong>Location</strong> &mdash; <code>Internal</code> / <code>External</code> tags showing where it was stored</li>
+  <li><strong>Restore</strong> &middot; <strong>Download</strong> (ZIP) &middot; <strong>Delete</strong> buttons at the right of each row</li>
+</ul>
+
+<h4>Restore modes</h4>
+<p>Clicking <strong>Restore</strong> on a backup row offers three modes.</p>
+<table>
+  <tr><th>Mode</th><th>Behavior</th></tr>
+  <tr>
+    <td><strong>Full Restore (Merge)</strong></td>
+    <td>Merges the snapshot into the current state. Same-named items are overwritten by the backup;
+        current items not present in the backup are kept.</td>
+  </tr>
+  <tr>
+    <td><strong>Full Restore (Replace)</strong></td>
+    <td><strong>Deletes all</strong> current scenarios, screenshots and groups and replaces them entirely with the snapshot.</td>
+  </tr>
+  <tr>
+    <td><strong>Restore Single Scenario</strong></td>
+    <td>Picks one scenario out of the snapshot and brings it back &mdash;
+        for recovering a single scenario you deleted or edited by mistake.</td>
+  </tr>
+</table>
+<div class="callout callout-warning">
+  <strong>&#x26A0;&#xFE0F; Automatic safety backup before restoring</strong>
+  Whichever mode you choose, the current state is saved automatically as a <code>Pre-restore</code> backup right before the restore runs,
+  so you can roll back again if the result is not what you wanted.
+</div>
+<div class="callout callout-info">
+  <strong>&#x1F4A1; App settings are not restored</strong>
+  A snapshot includes <code>settings.json</code> for reference only &mdash; it is never applied automatically on restore.
+  Theme, language, thresholds and other app settings keep their current values.
+</div>
+
+
+<h3 id="settings-migration">Scenario Migration <span class="badge badge-yellow">Temporary</span></h3>
+<p>
+  The <strong>only_LGSI_Change_CAN_CMD</strong> button at the bottom of the Settings tab is a one-off conversion tool for a specific organization.
+  It converts every WoohyunBench <code>SendAvnCan</code> step in all saved scenarios into <code>SendCan</code>
+  (keeping <code>msg_id</code>/<code>type</code>/<code>payload_hex</code>, and applying <code>mcu=mcu1</code>, <code>channel=B</code>, <code>repeat=0</code>, <code>cycle_ms=200</code>).
+</p>
+<div class="callout callout-warning">
+  <strong>&#x26A0;&#xFE0F; Do not press it unless it applies to you</strong>
+  It rewrites every scenario at once and there is no undo button.
+  If you really need it, create a snapshot with <strong>Back Up Now</strong> first.
 </div>
 
 
