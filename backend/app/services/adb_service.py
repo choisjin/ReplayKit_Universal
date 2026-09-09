@@ -174,6 +174,38 @@ ADB_LIST_CACHE_TTL = float(os.environ.get("REPLAYKIT_ADB_LIST_TTL", "5.0") or 0)
 # 이 문구가 stderr 에 있으면 트랜스포트가 사라진 것 — 디바이스 목록 캐시를 폐기한다.
 _TRANSPORT_GONE_MARKERS = ("not found", "device offline", "error: closed", "no devices")
 
+# 입력 명령이 트랜스포트 유실로 실패했을 때 재연결을 기다리는 최대 시간(초).
+_INPUT_RETRY_WAIT_S = float(os.environ.get("REPLAYKIT_ADB_INPUT_RETRY_WAIT", "8") or 0)
+
+
+# 입력 명령의 "디바이스에 닿지 못했다" 판정용 — 위 목록은 "not found" 처럼 넓어서
+# 디바이스 안 셸 오류(sh: xxx: not found)까지 걸린다. 재시도/실패 처리는 오탐이 곧
+# 멀쩡한 스텝을 죽이는 것이므로 adb 트랜스포트 오류 문구만 좁게 본다.
+_INPUT_TRANSPORT_GONE_MARKERS = (
+    "error: closed",
+    "device offline",
+    "no devices/emulators found",
+    "device not found",
+    "' not found",  # error: device 'XXXX' not found
+    "device still connecting",
+    "device still authorizing",
+)
+
+
+def _is_input_transport_gone(stderr: str) -> bool:
+    if not stderr:
+        return False
+    low = stderr.lower()
+    return any(m in low for m in _INPUT_TRANSPORT_GONE_MARKERS)
+
+
+def _is_transport_gone(stderr: str) -> bool:
+    """stderr 가 "트랜스포트가 사라졌다"는 뜻인지 판정."""
+    if not stderr:
+        return False
+    low = stderr.lower()
+    return any(m in low for m in _TRANSPORT_GONE_MARKERS)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 재생 배타 모드 (quiet gate)
@@ -509,7 +541,7 @@ class ADBService:
         if not s:
             raise ValueError("No device selected")
         dflag = self._display_flag(display_id)
-        return await self._run_device(s, f"shell input {dflag}tap {x} {y}")
+        return await self._run_input(s, f"shell input {dflag}tap {x} {y}")
 
     async def repeat_tap(self, x: int, y: int, count: int = 5, interval_ms: int = 100,
                          serial: Optional[str] = None, display_id: Optional[int] = None) -> str:
@@ -527,7 +559,7 @@ class ADBService:
             if i < count - 1 and sleep_sec > 0:
                 parts.append(f"sleep {sleep_sec:.3f}")
         cmd = 'shell "' + " && ".join(parts) + '"'
-        return await self._run_device(s, cmd, timeout=max(10, count * (sleep_sec + 1)))
+        return await self._run_input(s, cmd, timeout=max(10, count * (sleep_sec + 1)))
 
     async def swipe(
         self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300,
@@ -545,7 +577,7 @@ class ADBService:
             # 이동 duration에 더하면 안 된다(더하면 드래그가 그만큼 느려짐 — 회귀 원인).
             # 사용자가 빠르게 끈 이동 속도를 보존하려면 duration_ms(=이동시간)만 사용.
             move_ms = max(int(duration_ms or 0), 150)
-            out = await self._run_device(
+            out = await self._run_input(
                 s, f"shell input {dflag}draganddrop {x1} {y1} {x2} {y2} {move_ms}"
             )
             low = (out or "").lower()
@@ -554,11 +586,11 @@ class ADBService:
             # 충분히 길게 잡아 pickup을 유발한다(이동이 느려지지만 폴백 한정).
             if "unknown command" in low or "error" in low or "not found" in low:
                 total = max(int(hold_ms) + move_ms, 1000)
-                return await self._run_device(
+                return await self._run_input(
                     s, f"shell input {dflag}swipe {x1} {y1} {x2} {y2} {total}"
                 )
             return out
-        return await self._run_device(s, f"shell input {dflag}swipe {x1} {y1} {x2} {y2} {duration_ms}")
+        return await self._run_input(s, f"shell input {dflag}swipe {x1} {y1} {x2} {y2} {duration_ms}")
 
     async def _probe_sendevent_mode(self, serial: str) -> str:
         """sendevent 권한 모드를 탐지하고 캐시에 저장. 'direct'|'su'|'none' 반환.
@@ -629,7 +661,7 @@ class ADBService:
             a, b = clean[i], clean[i + 1]
             cmds.append(f"input {dflag}swipe {a['x']} {a['y']} {b['x']} {b['y']} {per_segment}")
         joined = " && ".join(cmds)
-        return await self._run_device(s, f'shell "{joined}"')
+        return await self._run_input(s, f'shell "{joined}"')
 
     def _build_sendevent_pattern_cmd(
         self, points: list[dict], duration_ms: int,
@@ -726,6 +758,10 @@ class ADBService:
             stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync, adb_cmd, timeout))
             if rc != 0:
                 logger.error("pattern sendevent failed: %s", stderr.strip())
+                if _is_input_transport_gone(stderr):
+                    raise RuntimeError(
+                        f"ADB 입력이 전달되지 않았습니다(트랜스포트 유실): pattern sendevent — {self._err_line(stderr)}"
+                    )
             return stdout
         finally:
             Path(local_path).unlink(missing_ok=True)
@@ -946,6 +982,10 @@ class ADBService:
             stdout, stderr, rc = await loop.run_in_executor(None, functools.partial(_run_sync, adb_cmd, timeout))
             if rc != 0:
                 logger.error("sendevent failed: %s", stderr.strip())
+                if _is_input_transport_gone(stderr):
+                    raise RuntimeError(
+                        f"ADB 입력이 전달되지 않았습니다(트랜스포트 유실): sendevent — {self._err_line(stderr)}"
+                    )
             return stdout
         finally:
             Path(local_path).unlink(missing_ok=True)
@@ -960,7 +1000,7 @@ class ADBService:
         else:
             cmds = [f"input swipe {f['x1']} {f['y1']} {f['x2']} {f['y2']} {duration_ms}" for f in fingers]
         parallel = " & ".join(cmds) + " & wait"
-        return await self._run_device(serial, f'shell "{parallel}"')
+        return await self._run_input(serial, f'shell "{parallel}"')
 
     async def long_press(self, x: int, y: int, duration_ms: int = 1000,
                          serial: Optional[str] = None, display_id: Optional[int] = None) -> str:
@@ -968,7 +1008,7 @@ class ADBService:
         if not s:
             raise ValueError("No device selected")
         dflag = self._display_flag(display_id)
-        return await self._run_device(s, f"shell input {dflag}swipe {x} {y} {x} {y} {duration_ms}")
+        return await self._run_input(s, f"shell input {dflag}swipe {x} {y} {x} {y} {duration_ms}")
 
     async def input_text(self, text: str, serial: Optional[str] = None, display_id: Optional[int] = None) -> str:
         s = serial or self._active_serial
@@ -976,14 +1016,14 @@ class ADBService:
             raise ValueError("No device selected")
         escaped = text.replace(" ", "%s").replace("&", "\\&").replace("<", "\\<").replace(">", "\\>")
         dflag = self._display_flag(display_id)
-        return await self._run_device(s, f'shell input {dflag}text "{escaped}"')
+        return await self._run_input(s, f'shell input {dflag}text "{escaped}"')
 
     async def key_event(self, keycode: str, serial: Optional[str] = None, display_id: Optional[int] = None) -> str:
         s = serial or self._active_serial
         if not s:
             raise ValueError("No device selected")
         dflag = self._display_flag(display_id)
-        return await self._run_device(s, f"shell input {dflag}keyevent {keycode}")
+        return await self._run_input(s, f"shell input {dflag}keyevent {keycode}")
 
     async def run_shell_command(self, command: str, serial: Optional[str] = None) -> str:
         """Run an arbitrary adb command on the device."""
@@ -1152,10 +1192,16 @@ class ADBService:
                 return f'{prefix}"lxc-attach -n {container} -- {inner}"'
         return args
 
-    async def _run_device(self, serial: str, args: str, timeout: int = 10) -> str:
+    async def _run_device_ex(self, serial: str, args: str,
+                             timeout: int = 10) -> tuple[str, str, int]:
+        """디바이스 대상 adb 실행 — (stdout, stderr, rc) 를 그대로 돌려준다.
+
+        `_run_device` 는 stdout 만 반환해서 실패를 삼킨다. 성공/실패로 분기해야 하는
+        호출부(입력 명령 등)는 이 쪽을 쓴다.
+        """
         # 재생 배타 모드: 백그라운드 호출은 프로세스를 띄우지 않는다(GVM 감지보다 먼저).
         if _quiet_blocked(f"{ADB_Q} -s {serial} {args}"):
-            return ""
+            return ("", "", 0)
         # GVM 컨테이너 감지 (shell/exec-out 명령만 래핑)
         if args.startswith("shell ") or args.startswith("exec-out "):
             container = await self._detect_gvm_container(serial)
@@ -1167,14 +1213,76 @@ class ADBService:
         if rc != 0:
             # 트랜스포트가 사라진 실패면 목록 캐시를 폐기 — 다음 연결 확인이 낙관적
             # 캐시를 재사용해 끊긴 디바이스를 살아있다고 오판하지 않게 한다.
-            if stderr and any(m in stderr.lower() for m in _TRANSPORT_GONE_MARKERS):
+            if _is_transport_gone(stderr):
                 self.invalidate_devices_cache()
             err_short = (stderr.split("\n", 1)[0] if stderr else "").strip()
             logger.error(
                 "ADB error (device %s, args=%r): %s",
                 serial, args, err_short or stderr[:200],
             )
+        return stdout, stderr, rc
+
+    async def _run_device(self, serial: str, args: str, timeout: int = 10) -> str:
+        stdout, _stderr, _rc = await self._run_device_ex(serial, args, timeout)
         return stdout
+
+    async def _await_transport(self, serial: str,
+                               timeout: float = _INPUT_RETRY_WAIT_S) -> bool:
+        """트랜스포트가 돌아올 때까지 최대 timeout 초 대기. 돌아오면 True."""
+        if timeout <= 0:
+            return False
+        cmd = f'{ADB_Q} -s {serial} wait-for-device'
+        # subprocess timeout 은 정수 — 대기 예산을 올림해서 넘긴다(초과 시 rc=1).
+        _out, _err, rc = await _run_in_executor_timed(
+            _run_sync, cmd, max(1, int(timeout + 0.999)),
+        )
+        return rc == 0
+
+    @staticmethod
+    def _err_line(stderr: str) -> str:
+        lines_ = (stderr or '').splitlines()
+        return lines_[0].strip() if lines_ else ''
+
+    async def _run_input(self, serial: str, args: str, timeout: int = 10) -> str:
+        """입력(터치/키) 명령 전용 실행.
+
+        배경: 재생 중 트랜스포트가 잠깐 끊기면 `input tap` 이 `error: closed` 로 죽는데,
+        `_run_device` 는 stdout(빈 문자열)만 돌려줘서 재생은 그 스텝을 **성공으로 기록**했다.
+        디바이스에서는 아무 일도 일어나지 않았는데 결과만 pass 로 남는다(스와이프 직후
+        화면 전환 타이밍에 재현). 그래서 입력 명령만은
+          1) 트랜스포트 유실이면 재연결을 기다렸다가 1회 재시도하고,
+          2) 그래도 실패하면 예외를 던져 스텝을 실패로 남긴다.
+        트랜스포트가 사라진 실패는 명령이 디바이스에 닿지 못한 것이라 재시도해도
+        입력이 중복되지 않는다.
+        """
+        stdout, stderr, rc = await self._run_device_ex(serial, args, timeout)
+        if rc == 0 or not _is_input_transport_gone(stderr):
+            return stdout
+        err = self._err_line(stderr)
+        logger.warning(
+            "ADB 입력 실패(트랜스포트 유실) — 재연결 대기 후 1회 재시도: device=%s args=%r (%s)",
+            serial, args, err,
+        )
+        if await self._await_transport(serial):
+            stdout, stderr, rc = await self._run_device_ex(serial, args, timeout)
+            if rc == 0:
+                logger.info("ADB 입력 재시도 성공: device=%s args=%r", serial, args)
+                return stdout
+            err = self._err_line(stderr) or err
+        # 실패 확정 시점의 목록 스냅샷 — "서버가 재시작돼 트랜스포트가 전멸"인지
+        # "이 디바이스만 빠졌는지"를 사후 로그만으로 구분하기 위해 남긴다.
+        try:
+            devs = await self.list_devices()
+            snapshot = ", ".join(f"{d.serial}:{d.status}" for d in devs) or "(목록 비어 있음)"
+        except Exception as e:
+            snapshot = f"(목록 조회 실패: {e})"
+        logger.error(
+            "ADB 입력 재시도 실패: device=%s args=%r (%s) | adb devices: %s",
+            serial, args, err, snapshot,
+        )
+        raise RuntimeError(
+            f"ADB 입력이 전달되지 않았습니다(트랜스포트 유실): {args} — {err or 'device offline'}"
+        )
 
     # ------------------------------------------------------------------
     # Long-lived screencap streamer (화면 미러링용)
