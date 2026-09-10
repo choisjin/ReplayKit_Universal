@@ -205,6 +205,15 @@ class WebOSStreamService:
     # Deploy (Android 측 ssh_ + Linux VM 측 linuxStream)
     # ------------------------------------------------------------------
 
+    def _android_size_matches(self, remote_path: str, local_size: int) -> bool:
+        """Android 측 파일이 이미 같은 크기면 True (재-push 생략용)."""
+        try:
+            r = self._run_adb("shell", f"stat -c %s {remote_path} 2>/dev/null || echo 0",
+                              timeout=10.0)
+            return int((r.stdout or "0").strip().split()[-1]) == local_size
+        except Exception:
+            return False
+
     def _deploy(self) -> None:
         if self._deployed:
             return
@@ -218,18 +227,34 @@ class WebOSStreamService:
             if not p.is_file():
                 raise WebOSStreamError(f"WebOS: 번들 바이너리 없음 — {p}")
 
-        # 1) adb root (webOS/Linux 로 가는 ssh_ 실행과 /data 쓰기에 필요)
-        self._run_adb("root", timeout=20.0)
-        self._run_adb("wait-for-device", timeout=30.0)
+        # 1) adb root — /data 쓰기와 /data/ssh_ 실행에 필요.
+        #    ⚠ adb root 는 adbd 를 **재시작**한다. 같은 HU 를 ADB 디바이스로도 등록해
+        #    쓰고 있으면(Connect Wide 하드키/미러링) 그 트랜스포트가 끊겨 플래핑한다.
+        #    → 이미 root 면 건너뛴다. (iSAP TCP 소켓은 별개 프로세스라 무관)
+        already_root = False
+        try:
+            r = self._run_adb("shell", "id -u", timeout=10.0)
+            already_root = (r.stdout or "").strip().endswith("0")
+        except Exception:
+            already_root = False
+        if not already_root:
+            logger.info("WebOS: adb root 실행 (adbd 재시작 — 같은 serial 의 ADB 연결이 잠시 끊길 수 있음): %s",
+                        self.adb_serial)
+            self._run_adb("root", timeout=20.0)
+            self._run_adb("wait-for-device", timeout=30.0)
 
-        # 2) ssh_ / libssh.so / askpass 배포
-        r = self._run_adb("push", str(ssh_bin), DEV_SSH, timeout=60.0)
-        if r.returncode != 0:
-            raise WebOSStreamError(f"WebOS: ssh_ push 실패 — {(r.stderr or '').strip()}")
-        self._run_adb("shell", f"chmod 755 {DEV_SSH}", timeout=15.0)
-        r = self._run_adb("push", str(ssh_lib), DEV_LIBSSH, timeout=60.0)
-        if r.returncode != 0:
-            raise WebOSStreamError(f"WebOS: libssh.so push 실패 — {(r.stderr or '').strip()}")
+        # 2) ssh_ / libssh.so / askpass 배포 — 이미 같은 크기면 push 생략.
+        #    iSAP 가 같은 이더넷 링크를 쓰는 환경(네트워크 adb)에서 재연결마다 1MB 를
+        #    다시 밀어 iSAP 캡처와 대역폭을 다투지 않게 한다.
+        if not self._android_size_matches(DEV_SSH, ssh_bin.stat().st_size):
+            r = self._run_adb("push", str(ssh_bin), DEV_SSH, timeout=60.0)
+            if r.returncode != 0:
+                raise WebOSStreamError(f"WebOS: ssh_ push 실패 — {(r.stderr or '').strip()}")
+            self._run_adb("shell", f"chmod 755 {DEV_SSH}", timeout=15.0)
+        if not self._android_size_matches(DEV_LIBSSH, ssh_lib.stat().st_size):
+            r = self._run_adb("push", str(ssh_lib), DEV_LIBSSH, timeout=60.0)
+            if r.returncode != 0:
+                raise WebOSStreamError(f"WebOS: libssh.so push 실패 — {(r.stderr or '').strip()}")
         self._run_adb(
             "shell",
             f"echo '#!/system/bin/sh' > {DEV_ASKPASS}; "
