@@ -1125,10 +1125,23 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     await asyncio.sleep(0.3)
                     continue
                 elif isap and isap.is_connected:
+                    _isap_t0 = asyncio.get_event_loop().time()
                     jpeg_bytes = await isap.async_screencap_bytes(
                         screen_type=screen_type, fmt="jpeg", timeout=3.0
                     )
                     await websocket.send_bytes(jpeg_bytes)
+                    # WebOS 는 백그라운드 linuxStream 이 채워둔 프레임을 즉시 돌려주므로
+                    # 루프가 전속력으로 돌며 JPEG 재인코딩/전송을 낭비한다 → 스트림 fps 로 제한.
+                    if screen_type == "webos":
+                        try:
+                            _wfps = float((dev.info if dev else {}).get("webos_fps") or 30)
+                        except (TypeError, ValueError):
+                            _wfps = 30.0
+                        _wsleep = (1.0 / max(1.0, _wfps)) - (
+                            asyncio.get_event_loop().time() - _isap_t0
+                        )
+                        if _wsleep > 0:
+                            await asyncio.sleep(_wsleep)
                 elif is_isap:
                     await asyncio.sleep(0.3)
                     continue

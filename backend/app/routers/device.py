@@ -348,6 +348,21 @@ async def list_devices():
     }
 
 
+@router.get("/adb-serials")
+async def list_adb_serials():
+    """연결된 ADB 디바이스 시리얼 목록 (WebOS 설정의 시리얼 선택용).
+
+    /device/scan 은 서브넷 스윕까지 도는 무거운 전체 스캔이라, 시리얼만 필요한
+    화면에서는 이 가벼운 엔드포인트를 쓴다.
+    """
+    try:
+        devices = await adb.list_devices()
+    except Exception as e:
+        logger.warning("adb list_devices failed: %s", e)
+        return {"devices": []}
+    return {"devices": [d.to_dict() for d in devices]}
+
+
 @router.get("/scan-settings")
 async def get_scan_settings():
     """현재 스캔 설정 조회."""
@@ -1851,6 +1866,7 @@ async def update_device(req: UpdateDeviceRequest):
     mib_resolution_changed = False
     mib_touch_calib_changed = False
     ksend_variant_changed = False
+    isap_webos_changed = False
     if req.extra_fields is not None:
         for k, v in req.extra_fields.items():
             # MIB의 resolution은 dict 스키마({width,height})를 보존해야 하므로
@@ -1929,6 +1945,17 @@ async def update_device(req: UpdateDeviceRequest):
                     logger.info("Live ksend path updated: %s → %s", dev.id, applied)
                 except Exception as e:
                     logger.warning("Failed to update live ksend path: %s", e)
+        # WebOS(Connect Wide) 설정 라이브 반영 — 재연결 없이 다음 미러링/터치부터 적용.
+        # 접속 정보가 바뀌면 서비스 쪽에서 기존 linuxStream 스트림을 내리고 새로 띄운다.
+        if dev.type == "isap_agent" and any(k.startswith("webos_") for k in req.extra_fields):
+            isap_webos_changed = True
+            svc = dm.get_isap_service(dev.id)
+            if svc is not None:
+                try:
+                    svc.set_webos_config(dev.info)
+                except Exception as e:
+                    logger.warning("Failed to update live WebOS config: %s", e)
+
         # Reset cached module instance when connection params change.
         # 시리얼 디바이스는 아래 serial reconnect 블록이 graceful teardown+재연결로 처리
         # (non-graceful pop 이 포트를 고아화하지 않도록). 재연결만 트리거한다.
@@ -1960,7 +1987,9 @@ async def update_device(req: UpdateDeviceRequest):
     if dev.category == "auxiliary" or (
         dev.type in ("mib_agent", "fpk_agent", "gm_info_agent")
         and (mib_resolution_changed or mib_touch_calib_changed)
-    ) or (dev.type in ("mib_agent", "icas_agent") and ksend_variant_changed):
+    ) or (dev.type in ("mib_agent", "icas_agent") and ksend_variant_changed) or (
+        dev.type == "isap_agent" and isap_webos_changed
+    ):
         dm._save_auxiliary_devices()
 
     # Reopen serial connection if address or baudrate changed

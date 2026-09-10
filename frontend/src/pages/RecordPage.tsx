@@ -1129,6 +1129,11 @@ export default function RecordPage() {
   const screenDevice = primaryDevices.find(d => d.id === screenshotDeviceId);
   const isScreenHkmc = screenDevice?.type === 'hkmc_agent' || screenDevice?.type === 'isap_agent' || screenDevice?.type === 'hkmc5th_wide_agent';
   const isScreenCCRC = isScreenHkmc && screenDevice?.info?.device_model === 'ccRC';
+  // WebOS 화면: Connect Wide(iSAP) + WebOS ADB 시리얼이 설정된 디바이스만.
+  // 시리얼이 비어 있으면 WebOS 없는 모델이라 화면 선택 목록에 아예 넣지 않는다.
+  const hasWebOSScreen = screenDevice?.type === 'isap_agent'
+    && screenDevice?.info?.device_model === 'Connect Wide'
+    && !!screenDevice?.info?.webos_adb_serial;
   // GM Info도 단일 HU 화면 + 하드키 패널을 쓰므로 같은 플래그로 묶는다(스텝 타입도 icas_*).
   const isScreenICAS = screenDevice?.type === 'icas_agent' || screenDevice?.type === 'mib_agent'
     || screenDevice?.type === 'gm_info_agent';
@@ -1139,6 +1144,13 @@ export default function RecordPage() {
       setScreenType('rear_right');
     }
   }, [isScreenCCRC, screenType, setScreenType]);
+
+  // WebOS 미지원 디바이스로 전환됐는데 screenType이 webos로 남아 있으면 전석으로 교정
+  useEffect(() => {
+    if (screenType === 'webos' && !hasWebOSScreen) {
+      setScreenType('front_center');
+    }
+  }, [hasWebOSScreen, screenType, setScreenType]);
 
   // ICAS: 현재 HU만 지원 (IID/HUD 비활성) — 다른 screenType이 들어오면 HU로 교정
   useEffect(() => {
@@ -5788,6 +5800,9 @@ export default function RecordPage() {
                           ccRC(후석 전용)에는 HUD가 없다. */}
                       {!isScreenCCRC && (screenDevice?.type === 'isap_agent' || screenDevice?.type === 'hkmc_agent')
                         && <Option value="hud">HUD</Option>}
+                      {/* WebOS(Connect Wide 한정): iSAP 캡처에 안 잡히는 별도 Linux VM 화면.
+                          ADB+SSH 로 linuxStream 을 띄워 미러링하고 터치는 uinput 으로 주입한다. */}
+                      {hasWebOSScreen && <Option value="webos">WebOS</Option>}
                     </Select>
                     <Select
                       size="small"

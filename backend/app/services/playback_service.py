@@ -1833,7 +1833,8 @@ class PlaybackService:
                 elif dev.type == "isap_agent":
                     from .isap_agent_service import ISAPAgentService
                     svc = ISAPAgentService(dev.address, port, device_id=dev.id,
-                                           key_overrides=dev.info.get("isap_keys"))
+                                           key_overrides=dev.info.get("isap_keys"),
+                                           webos_config=dev.info)
                     ok = await svc.async_connect()
                     if ok:
                         self.dm._isap_conns[dev.id] = svc
@@ -1981,7 +1982,8 @@ class PlaybackService:
                         if isap:
                             await isap.async_disconnect()
                         svc = ISAPAgentService(dev.address, port, device_id=dev.id,
-                                               key_overrides=dev.info.get("isap_keys"))
+                                               key_overrides=dev.info.get("isap_keys"),
+                                               webos_config=dev.info)
                         ok = await svc.async_connect()
                         if ok:
                             self.dm._isap_conns[dev.id] = svc

@@ -115,6 +115,13 @@ SCREEN_PORT_MAP: dict[str, int] = {
     "hud":          20004,
 }
 
+# WebOS 화면 — iSAP 프로토콜 밖의 화면이다.
+# 일부 HU 는 Android(iSAP agent) 위에서 webOS 를 별도 Linux VM 으로 돌리는데, 그 화면은
+# 다른 VM 의 스캔아웃이라 CMD_GETIMG 에 잡히지 않는다. 그래서 screen_type="webos" 요청만
+# webos_stream_service(= screenBridge linuxStream 경로) 로 위임한다.
+# 디바이스 info["webos_adb_serial"] 이 설정된 디바이스에서만 활성 — 없으면 WebOS 없는 모델.
+WEBOS_SCREEN = "webos"
+
 
 # Key tables from spec (Connected_Wide_iSAP_Agent.docx +
 # Reference/isap/iSAP_*.pdf 2.4.12.x 개정판, 2026-08).
@@ -348,12 +355,19 @@ class ISAPAgentService:
         "rear_right":   (1920, 720),
         "cluster":      (1920, 720),
         "hud":          (1920, 720),
+        # WebOS 는 첫 프레임/linuxStream 로그에서 실제 크기를 읽어 덮어쓴다 (아래는 폴백).
+        "webos":        (1920, 720),
     }
 
     def __init__(self, host: str, port: int = 20000, device_id: str = "",
-                 key_overrides: Optional[dict[str, dict]] = None):
+                 key_overrides: Optional[dict[str, dict]] = None,
+                 webos_config: Optional[dict] = None):
         """
         Args:
+            webos_config: 디바이스 info dict. webos_* 키만 읽는다
+                (webos_adb_serial / webos_linux_ip / webos_linux_user /
+                 webos_linux_password / webos_scale / webos_quality / webos_fps /
+                 webos_touch_via). webos_adb_serial 이 없으면 WebOS 화면 비활성.
             key_overrides: 디바이스별 키 오버라이드. 각 항목은
                 {name: {"cmd": int, "key": int, "dial": bool, "visible": bool}}
                 visible=False면 UI에 표시되지 않음. cmd/key/dial 중 지정된 필드만
@@ -368,6 +382,9 @@ class ISAPAgentService:
                 self.default_screen = name
                 break
         self._key_overrides: dict[str, dict] = dict(key_overrides or {})
+        self._webos_config: dict = dict(webos_config or {})
+        self._webos_svc = None          # lazy — 첫 WebOS 요청 때 생성/기동
+        self._webos_lock = threading.Lock()
 
         self._socket: Optional[socket.socket] = None
         self._connected = False
@@ -469,6 +486,7 @@ class ISAPAgentService:
         return True
 
     def disconnect(self) -> None:
+        self._stop_webos()
         self._exit_flag = True
         if self._socket:
             try:
@@ -684,13 +702,98 @@ class ISAPAgentService:
             "cluster":      (self.screen_width_cluster, self.screen_height_cluster),
             "hud":          (self.screen_width_front, self.screen_height_front),
         }
+        if screen_type == WEBOS_SCREEN:
+            # 스트림이 떠 있으면 실제 크기, 아니면 폴백 (여기서 스트림을 띄우지는 않는다)
+            svc = self._webos_svc
+            if svc is not None:
+                sw, sh = svc.size
+                if sw and sh:
+                    return sw, sh
+            return self._DEFAULT_SCREEN_SIZES[WEBOS_SCREEN]
         w, h = mapping.get(screen_type, (0, 0))
         if w == 0 or h == 0:
             return self._DEFAULT_SCREEN_SIZES.get(screen_type, (1920, 720))
         return w, h
 
     def _monitor_byte(self, screen_type: str) -> int:
+        # webos 는 MONITOR_MAP 에 없다 → 0x00(front). 하드키는 화면이 아니라 물리 키라
+        # WebOS 화면을 보는 중에도 전석 기준으로 그대로 전달된다.
         return MONITOR_MAP.get(screen_type, 0x00)
+
+    # ------------------------------------------------------------------
+    # WebOS 화면 (별도 Linux VM) — screenBridge linuxStream 경로로 위임
+    # ------------------------------------------------------------------
+
+    # WebOS 화면을 가진 모델 — 현재 Connect Wide 한정.
+    WEBOS_MODELS = ("Connect Wide",)
+
+    @property
+    def webos_enabled(self) -> bool:
+        """Connect Wide 모델 + WebOS ADB 시리얼이 설정돼 있으면 True."""
+        if str(self._webos_config.get("device_model") or "").strip() not in self.WEBOS_MODELS:
+            return False
+        return bool(str(self._webos_config.get("webos_adb_serial") or "").strip())
+
+    def set_webos_config(self, cfg: Optional[dict]) -> None:
+        """디바이스 설정 변경 반영. 접속 정보가 바뀌면 기존 스트림을 내린다."""
+        new = dict(cfg or {})
+        keys = ("webos_adb_serial", "webos_linux_ip", "webos_linux_user",
+                "webos_linux_password", "webos_scale", "webos_quality", "webos_fps")
+        changed = any(new.get(k) != self._webos_config.get(k) for k in keys)
+        self._webos_config = new
+        if changed:
+            self._stop_webos()
+
+    def _is_webos(self, screen_type: Optional[str]) -> bool:
+        return (screen_type or "") == WEBOS_SCREEN
+
+    def _webos_touch_via_isap(self) -> bool:
+        """터치를 linuxStream uinput 대신 iSAP 전석 터치로 보낼지.
+
+        screenBridge 뷰어는 Linux 레이어에 터치를 보내지 않고 QNX/Android 로만 보낸다
+        (= 투사 앱이 받아 넘기는 구조). uinput 주입이 실기에서 안 먹으면 이 스위치로
+        기존 iSAP 전석 터치에 위임한다. info["webos_touch_via"]="isap".
+        """
+        return str(self._webos_config.get("webos_touch_via") or "").lower() == "isap"
+
+    def _webos(self):
+        """WebOS 스트림 서비스(lazy). 미설정이면 ValueError."""
+        if not self.webos_enabled:
+            raise ValueError("WebOS 화면이 설정되지 않은 디바이스입니다 (webos_adb_serial 없음)")
+        with self._webos_lock:
+            if self._webos_svc is None:
+                from .webos_stream_service import WebOSStreamService
+                cfg = self._webos_config
+                self._webos_svc = WebOSStreamService(
+                    adb_serial=str(cfg.get("webos_adb_serial") or "").strip(),
+                    linux_ip=str(cfg.get("webos_linux_ip") or "172.16.4.1").strip(),
+                    linux_user=str(cfg.get("webos_linux_user") or "root").strip(),
+                    linux_password=str(cfg.get("webos_linux_password") or "root"),
+                    scale=int(cfg.get("webos_scale") or 2),
+                    quality=int(cfg.get("webos_quality") or 60),
+                    fps=int(cfg.get("webos_fps") or 30),
+                    device_id=self.device_id,
+                )
+            return self._webos_svc
+
+    def _stop_webos(self) -> None:
+        with self._webos_lock:
+            svc, self._webos_svc = self._webos_svc, None
+        if svc is not None:
+            try:
+                svc.stop()
+            except Exception as e:
+                logger.debug("WebOS stop failed: %s", e)
+
+    def _webos_to_front(self, x: float, y: float) -> tuple[int, int]:
+        """WebOS 미러 좌표 → iSAP 전석 좌표 (webos_touch_via="isap" 폴백용)."""
+        ww, wh = self.get_screen_size(WEBOS_SCREEN)
+        fw, fh = self.get_screen_size("front_center")
+        if ww and fw and ww != fw:
+            x = x * fw / ww
+        if wh and fh and wh != fh:
+            y = y * fh / wh
+        return int(round(x)), int(round(y))
 
     # ------------------------------------------------------------------
     # Screenshot (CMD_GETIMG, 표 84/85)
@@ -718,6 +821,9 @@ class ISAPAgentService:
 
         Agent가 JPEG/PNG/BMP를 직접 지원하면 변환 없이 반환.
         """
+        if self._is_webos(screen_type):
+            return self._webos().screencap_bytes(fmt=fmt, timeout=timeout)
+
         fmt_map = {"jpeg": IMG_JPEG, "png": IMG_PNG, "bmp": IMG_BMP24}
         sub_cmd = fmt_map.get(fmt, IMG_JPEG)
 
@@ -791,6 +897,12 @@ class ISAPAgentService:
 
     def tap(self, x: int, y: int, screen_type: str = "front_center") -> None:
         x, y = int(x), int(y)
+        if self._is_webos(screen_type):
+            if not self._webos_touch_via_isap():
+                self._webos().tap(x, y)
+                return
+            x, y = self._webos_to_front(x, y)
+            screen_type = "front_center"
         with self._capture_lock:
             time.sleep(0.1)
             with self._send_lock:
@@ -803,6 +915,12 @@ class ISAPAgentService:
     def repeat_tap(self, x: int, y: int, count: int = 5, interval_ms: int = 100,
                    screen_type: str = "front_center") -> None:
         x, y = int(x), int(y)
+        if self._is_webos(screen_type):
+            if not self._webos_touch_via_isap():
+                self._webos().repeat_tap(x, y, count, interval_ms)
+                return
+            x, y = self._webos_to_front(x, y)
+            screen_type = "front_center"
         interval_sec = max(interval_ms, 0) / 1000.0
         with self._capture_lock:
             with self._send_lock:
@@ -817,6 +935,12 @@ class ISAPAgentService:
     def long_press(self, x: int, y: int, duration_ms: int = 3000,
                    screen_type: str = "front_center") -> None:
         x, y = int(x), int(y)
+        if self._is_webos(screen_type):
+            if not self._webos_touch_via_isap():
+                self._webos().long_press(x, y, duration_ms)
+                return
+            x, y = self._webos_to_front(x, y)
+            screen_type = "front_center"
         with self._capture_lock:
             time.sleep(0.1)
             with self._send_lock:
@@ -830,6 +954,13 @@ class ISAPAgentService:
               screen_type: str = "front_center", duration_ms: int = 0,
               hold_ms: int = 0) -> None:
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        if self._is_webos(screen_type):
+            if not self._webos_touch_via_isap():
+                self._webos().swipe(x1, y1, x2, y2, duration_ms, hold_ms)
+                return
+            x1, y1 = self._webos_to_front(x1, y1)
+            x2, y2 = self._webos_to_front(x2, y2)
+            screen_type = "front_center"
         if hold_ms and hold_ms > 0:
             # 드래그앤드롭(앱카드 이동): TOUCH_PRESS → hold → TOUCH_MOVE(보간) → TOUCH_RELEASE.
             # _lcd_drag(고정 fling)는 시작 hold를 표현 못해 ext 터치 시퀀스로 직접 구성.
@@ -888,6 +1019,15 @@ class ISAPAgentService:
         """
         if not fingers:
             return
+        if self._is_webos(screen_type):
+            if not self._webos_touch_via_isap():
+                self._webos().multi_finger_swipe(fingers, duration_ms, hold_ms)
+                return
+            fingers = [dict(f) for f in fingers]
+            for f in fingers:
+                f["x1"], f["y1"] = self._webos_to_front(f["x1"], f["y1"])
+                f["x2"], f["y2"] = self._webos_to_front(f["x2"], f["y2"])
+            screen_type = "front_center"
         n = len(fingers)
         fs = [(int(f["x1"]), int(f["y1"]), int(f["x2"]), int(f["y2"])) for f in fingers]
         move_dur = max(int(duration_ms or 0), 200)
@@ -922,6 +1062,14 @@ class ISAPAgentService:
     def multi_finger_tap(self, points: list[dict],
                          screen_type: str = "front_center") -> None:
         """멀티핑거 탭 (시작=끝). points: [{"x","y"}, ...]."""
+        if self._is_webos(screen_type):
+            if not self._webos_touch_via_isap():
+                self._webos().multi_finger_tap(points)
+                return
+            points = [dict(p) for p in points]
+            for p in points:
+                p["x"], p["y"] = self._webos_to_front(p["x"], p["y"])
+            screen_type = "front_center"
         fingers = [{"x1": p["x"], "y1": p["y"], "x2": p["x"], "y2": p["y"]} for p in points]
         if not fingers:
             return
@@ -1170,13 +1318,7 @@ class ISAPAgentService:
     # ------------------------------------------------------------------
 
     def get_info(self) -> dict:
-        return {
-            "host": self.host,
-            "port": self.port,
-            "connected": self.is_connected,
-            "agent_version": self.agent_version,
-            "default_screen": self.default_screen,
-            "screens": {
+        screens = {
                 "front_center": {"width": self.screen_width_front or self._DEFAULT_SCREEN_SIZES["front_center"][0],
                                  "height": self.screen_height_front or self._DEFAULT_SCREEN_SIZES["front_center"][1]},
                 "rear_left":    {"width": self.screen_width_rear_l or self._DEFAULT_SCREEN_SIZES["rear_left"][0],
@@ -1185,5 +1327,17 @@ class ISAPAgentService:
                                  "height": self.screen_height_rear_r or self._DEFAULT_SCREEN_SIZES["rear_right"][1]},
                 "cluster":      {"width": self.screen_width_cluster or self._DEFAULT_SCREEN_SIZES["cluster"][0],
                                  "height": self.screen_height_cluster or self._DEFAULT_SCREEN_SIZES["cluster"][1]},
-            },
+        }
+        # WebOS(Connect Wide + ADB 시리얼 설정)만 screens 에 추가 — 프론트 화면 선택 목록의 근거.
+        if self.webos_enabled:
+            ww, wh = self.get_screen_size(WEBOS_SCREEN)
+            screens[WEBOS_SCREEN] = {"width": ww, "height": wh}
+        return {
+            "host": self.host,
+            "port": self.port,
+            "connected": self.is_connected,
+            "agent_version": self.agent_version,
+            "default_screen": self.default_screen,
+            "webos": self.webos_enabled,
+            "screens": screens,
         }

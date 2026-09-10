@@ -15,6 +15,8 @@ export const deviceApi = {
   screenshot: (deviceId: string, screenType?: string, fmt: 'jpeg' | 'png' = 'jpeg') => api.get(`/device/screenshot/${deviceId}`, { params: { fmt, screen_type: screenType || 'front_center' } }),
   canPanelGrab: () => api.get('/device/can-panel/grab'),
   scan: () => api.get('/device/scan'),
+  // WebOS(Connect Wide) 설정의 ADB 시리얼 선택용 — 전체 스캔보다 가볍다.
+  adbSerials: () => api.get('/device/adb-serials'),
   getScanSettings: () => api.get('/device/scan-settings'),
   saveScanSettings: (settings: any) => api.post('/device/scan-settings', settings),
   getCatalog: () => api.get('/device/catalog'),

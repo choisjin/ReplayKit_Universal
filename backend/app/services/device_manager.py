@@ -2132,6 +2132,18 @@ class DeviceManager:
                     self._isap_reconnect_attempts.pop(dev.id, None)
                     if dev.status != "connected":
                         dev.status = "connected"
+                    # WebOS 화면 해상도 갱신 — 연결 시점엔 스트림이 없어 폴백값이 들어간다.
+                    # linuxStream 이 뜨면 실제 크기가 잡히므로 여기서 반영해야 프론트의
+                    # 터치 좌표 스케일이 맞는다.
+                    if getattr(isap, "webos_enabled", False):
+                        try:
+                            ww, wh = isap.get_screen_size("webos")
+                            screens = dev.info.setdefault("screens", {})
+                            cur = screens.get("webos") or {}
+                            if ww and wh and (cur.get("width") != ww or cur.get("height") != wh):
+                                screens["webos"] = {"width": ww, "height": wh}
+                        except Exception as e:
+                            logger.debug("WebOS screen size refresh failed: %s", e)
                     continue
                 port = dev.info.get("port", 0)
                 if not port:
@@ -2165,7 +2177,8 @@ class DeviceManager:
                         if isap:
                             isap.disconnect()
                         svc = ISAPAgentService(dev.address, port, device_id=dev.id,
-                                       key_overrides=dev.info.get("isap_keys"))
+                                       key_overrides=dev.info.get("isap_keys"),
+                                       webos_config=dev.info)
                         ok = await svc.async_connect()
                         if ok:
                             self._isap_conns[dev.id] = svc
@@ -2845,7 +2858,8 @@ class DeviceManager:
                     continue
                 try:
                     svc = ISAPAgentService(dev.address, port, device_id=dev.id,
-                                       key_overrides=dev.info.get("isap_keys"))
+                                       key_overrides=dev.info.get("isap_keys"),
+                                       webos_config=dev.info)
                     ok = await svc.async_connect()
                     if ok:
                         self._isap_conns[dev.id] = svc
@@ -3116,7 +3130,8 @@ class DeviceManager:
                 return f"iSAP {dev.id}: no port configured"
             try:
                 svc = ISAPAgentService(dev.address, port, device_id=dev.id,
-                                       key_overrides=dev.info.get("isap_keys"))
+                                       key_overrides=dev.info.get("isap_keys"),
+                                       webos_config=dev.info)
                 ok = await svc.async_connect()
                 if ok:
                     self._isap_conns[dev.id] = svc
