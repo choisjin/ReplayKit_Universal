@@ -30,6 +30,13 @@ import threading
 import time
 from typing import Optional, Callable
 
+from .ksend_path import (
+    DEFAULT_KSEND_VARIANT,
+    normalize_variant,
+    other_ksend_path,
+    resolve_ksend_path,
+)
+
 logger = logging.getLogger(__name__)
 
 # ── 실화면(screen dump) 스트리머 — 컴포지터 합성 결과를 그대로 송출 ──
@@ -260,7 +267,9 @@ class MIBAgentService:
                  key_overrides: Optional[dict[str, dict]] = None,
                  on_resolution_changed: Optional[Callable[[str], None]] = None,
                  on_addr_changed: Optional[Callable[[str, str], None]] = None,
-                 screen_indices: Optional[list[int]] = None):
+                 screen_indices: Optional[list[int]] = None,
+                 ksend_variant: str = DEFAULT_KSEND_VARIANT,
+                 ksend_path: str = ""):
         self.host = host
         self.port = int(port)
         self.device_id = device_id or f"MIB_{host}"
@@ -276,6 +285,10 @@ class MIBAgentService:
         self.private_server_password = private_server_password
         self.iid_display = str(iid_display or "10")
         self.hud_display = str(hud_display or "11")
+        # ksend 바이너리 경로 — 시료 빌드 분기(debug=/lge/app_ro/bin, 0-version=/tmp).
+        # 터치/하드키/POWER 추가 커맨드/주소 진단이 모두 이 값을 참조한다.
+        self.ksend_variant = normalize_variant(ksend_variant)
+        self.ksend_bin = resolve_ksend_path(self.ksend_variant, ksend_path)
 
         self._connected = False
         self.agent_version = "MIB Agent"
@@ -709,6 +722,12 @@ class MIBAgentService:
                 self._detect_touch_source_res()
             except Exception as e:
                 logger.debug("MIB touch source res detect skipped: %s", e)
+            # ksend 바이너리 경로 확인 — 선택한 빌드(debug/0-version)에 실제로 있는지.
+            # 없으면 입력이 무음으로 전부 유실되므로(fire-and-forget shell) 반대편 경로로 폴백.
+            try:
+                self._verify_ksend_bin()
+            except Exception as e:
+                logger.debug("MIB ksend path verify skipped: %s", e)
             # ksend 입력 경로 진단: 바이너리 존재 + src/dst addr로 더미 프레임 송신 결과 확인.
             try:
                 self._probe_ksend()
@@ -724,6 +743,61 @@ class MIBAgentService:
             logger.error("MIB connect failed %s:%d: %s", self.host, self.port, e)
             self._connected = False
             return False
+
+    def set_ksend_variant(self, variant: str, path_override: str = "") -> str:
+        """ksend 빌드 경로 변경 (debug ↔ 0-version). 재연결 없이 즉시 반영.
+
+        반환: 적용된 절대경로.
+        """
+        self.ksend_variant = normalize_variant(variant)
+        self.ksend_bin = resolve_ksend_path(self.ksend_variant, path_override)
+        logger.info("MIB ksend variant set: %s → %s", self.ksend_variant, self.ksend_bin)
+        return self.ksend_bin
+
+    def _verify_ksend_bin(self) -> None:
+        """선택된 ksend 경로의 실행 파일 존재를 확인하고, 없으면 반대편 경로로 폴백.
+
+        ksend 는 invoke_shell 로 fire-and-forget 송신되므로 경로가 틀려도 에러가 보이지
+        않고 입력만 조용히 사라진다(스텝은 pass 로 기록). 연결 시 1회 확인해 로그로 남긴다.
+        """
+        alt = other_ksend_path(self.ksend_bin)
+        # -x(실행가능) 와 -f(존재) 를 나눠 본다: /tmp 로 복사만 하고 chmod +x 를 빠뜨린 경우가
+        # 흔한데, 이때 "파일 없음"으로 오진해 반대 경로로 폴백하면 원인이 가려진다.
+        cmd = (f'( [ -x "{self.ksend_bin}" ] && echo PRIMARY_X ) ; '
+               f'( [ -f "{self.ksend_bin}" ] && echo PRIMARY_F ) ; '
+               f'( [ -x "{alt}" ] && echo ALT_X ) ; echo DONE')
+        with self._input_ssh_lock:
+            ssh = self._get_input_ssh()
+            stdin, stdout, _ = ssh.exec_command(cmd, timeout=5)
+            try:
+                stdin.close()
+            except Exception:
+                pass
+            out = stdout.read().decode("utf-8", errors="replace")
+        if "PRIMARY_X" in out:
+            logger.info("MIB ksend binary ok: variant=%s path=%s",
+                        self.ksend_variant, self.ksend_bin)
+            return
+        if "PRIMARY_F" in out:
+            logger.error(
+                "MIB ksend at %s exists but is not executable — 디바이스에서 "
+                "chmod +x %s 필요. 입력이 전부 무시됩니다.", self.ksend_bin, self.ksend_bin,
+            )
+            return
+        if "ALT_X" in out:
+            logger.warning(
+                "MIB ksend not found at %s (variant=%s) — falling back to %s. "
+                "디바이스 빌드 선택(Debug/0-version)이 시료와 다를 수 있습니다.",
+                self.ksend_bin, self.ksend_variant, alt,
+            )
+            self.ksend_bin = resolve_ksend_path(None, alt)
+            self.ksend_variant = normalize_variant(
+                "0-version" if alt.startswith("/tmp") else "debug")
+            return
+        logger.error(
+            "MIB ksend binary missing on device: neither %s nor %s is executable. "
+            "터치/하드키 입력이 전부 무시됩니다.", self.ksend_bin, alt,
+        )
 
     def _probe_ksend(self) -> None:
         """ksend 입력 경로의 가용성을 진단. 입력 전용 SSH 세션에서 실행.
@@ -751,14 +825,14 @@ class MIBAgentService:
         ]
         ksend_sweep_lines = [
             f"echo '==dst={d}==' ; "
-            f"/lge/app_ro/bin/ksend -v -s 0 -d {d} -b \"0x00 0x01\" 2>&1 | head -n 3 ; "
+            f"{self.ksend_bin} -v -s 0 -d {d} -b \"0x00 0x01\" 2>&1 | head -n 3 ; "
             f"echo \"exit=$?\""
             for d in candidates
         ]
         # (label, command, max_chars)
         probes: list[tuple[str, str, int]] = [
-            ("ksend bin", "ls -la /lge/app_ro/bin/ksend 2>&1", 200),
-            ("ksend usage", "/lge/app_ro/bin/ksend 2>&1 | head -n 25", 1500),
+            ("ksend bin", f"ls -la {self.ksend_bin} 2>&1", 200),
+            ("ksend usage", f"{self.ksend_bin} 2>&1 | head -n 25", 1500),
             ("input nodes", "ls -la /dev/input/ 2>&1 | head -n 30", 800),
             ("uinput", "ls -la /dev/uinput 2>&1", 200),
             ("KIPC procs",
@@ -782,7 +856,7 @@ class MIBAgentService:
              f"echo 'src={self.src_addr} dst={self.dst_addr} market={self.market}'",
              400),
             ("ksend -v dummy (current)",
-             f"/lge/app_ro/bin/ksend -v -s {self.src_addr} -d {self.dst_addr} "
+             f"{self.ksend_bin} -v -s {self.src_addr} -d {self.dst_addr} "
              f'-b "{dummy_data}" 2>&1 ; echo "exit=$?"', 2000),
             # 다양한 dst 후보 sweep — 어느 값이 ksend 파서를 통과하는지 식별
             ("ksend dst sweep", " ; ".join(ksend_sweep_lines), 6000),
@@ -922,7 +996,7 @@ class MIBAgentService:
         """
         try:
             cmd = (
-                f"/lge/app_ro/bin/ksend -v -s {src} -d {dst} -b \"0x00\" 2>&1"
+                f"{self.ksend_bin} -v -s {src} -d {dst} -b \"0x00\" 2>&1"
             )
             stdin, stdout, _ = ssh.exec_command(cmd, timeout=4)
             try:
@@ -1273,7 +1347,7 @@ class MIBAgentService:
         self.last_input_ts = time.monotonic()
         verbose = os.environ.get("MIB_KSEND_VERBOSE", "").strip() in ("1", "true", "yes")
         v_flag = " -v " if verbose else " "
-        cmd = f'/lge/app_ro/bin/ksend{v_flag}-s {self.src_addr} -d {self.dst_addr} -b "{data_bytes}"'
+        cmd = f'{self.ksend_bin}{v_flag}-s {self.src_addr} -d {self.dst_addr} -b "{data_bytes}"'
         if verbose:
             self._ksend_exec_verbose(cmd)
         else:
@@ -1285,7 +1359,7 @@ class MIBAgentService:
         verbose = os.environ.get("MIB_KSEND_VERBOSE", "").strip() in ("1", "true", "yes")
         v_flag = " -v " if verbose else " "
         cmds = [
-            f'/lge/app_ro/bin/ksend{v_flag}-s {self.src_addr} -d {self.dst_addr} -b "{data}"'
+            f'{self.ksend_bin}{v_flag}-s {self.src_addr} -d {self.dst_addr} -b "{data}"'
             for data in data_list
         ]
         if verbose:
@@ -1322,7 +1396,7 @@ class MIBAgentService:
             return
         parts: list[str] = []
         for i, data in enumerate(data_list):
-            parts.append(f'/lge/app_ro/bin/ksend -s {self.src_addr} -d {self.dst_addr} -b "{data}"')
+            parts.append(f'{self.ksend_bin} -s {self.src_addr} -d {self.dst_addr} -b "{data}"')
             if i < len(data_list) - 1:
                 gap = gaps_s[i] if i < len(gaps_s) else 0.0
                 if gap > 0:
@@ -1728,7 +1802,7 @@ class MIBAgentService:
             "0x01 0x91 0xF0 0x01 0x01 0x00 0x00",  # command05
         ]
         cmds = [
-            f'/lge/app_ro/bin/ksend -s {src2} -d {dst2} -b "{p}"'
+            f'{self.ksend_bin} -s {src2} -d {dst2} -b "{p}"'
             for p in payloads
         ]
         logger.debug(
@@ -2508,6 +2582,8 @@ class MIBAgentService:
             "port": self.port,
             "connected": self._connected,
             "agent_version": self.agent_version,
+            "ksend_variant": self.ksend_variant,
+            "ksend_path": self.ksend_bin,
             "screens": {
                 "HU":  {"width": self._res_x, "height": self._res_y},
                 "IID": {"width": self._res_x, "height": self._res_y},

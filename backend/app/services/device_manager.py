@@ -1391,6 +1391,13 @@ class DeviceManager:
         }
         if device_model:
             info["device_model"] = device_model
+        # 재등록(스캔→연결 등)이 사용자가 고른 ksend 빌드 경로를 지우지 않도록 보존.
+        # 등록 폼에는 이 항목이 없고 연결 모달에서만 정해지므로, 여기서 덮이면 조용히 debug 로 되돌아간다.
+        _existing_icas = self._devices.get(final_id)
+        if _existing_icas is not None and _existing_icas.type == "icas_agent":
+            for _k in ("ksend_variant", "ksend_path"):
+                if _existing_icas.info.get(_k):
+                    info[_k] = _existing_icas.info[_k]
 
         dev = ManagedDevice(
             id=final_id,
@@ -1456,6 +1463,7 @@ class DeviceManager:
 
         # 재등록(스캔→연결 등)이 기존 디바이스의 학습/캘리브레이션 값을 지우지 않도록
         # 기존 info 위에 폼 값만 덮어쓴다. 보존 대상: ksend_src/ksend_dst(주소 자동보정),
+        # ksend_variant/ksend_path(시료 빌드별 ksend 경로),
         # touch_x_scale/touch_y_scale/touch_x_offset/touch_y_offset(터치 캘리브레이션),
         # screens/screen_indices, 자동 감지 resolution, mib_keys 등.
         existing = self._devices.get(final_id)
@@ -3174,6 +3182,9 @@ class DeviceManager:
                     market=market,
                     variant=icas_variant,
                     key_overrides=dev.info.get("icas_keys"),
+                    # 시료 빌드별 ksend 경로 (debug=/lge/app_ro/bin, 0-version=/tmp)
+                    ksend_variant=dev.info.get("ksend_variant") or "debug",
+                    ksend_path=dev.info.get("ksend_path") or "",
                 )
                 ok = await svc.async_connect()
                 if ok:
@@ -3277,6 +3288,9 @@ class DeviceManager:
                     on_resolution_changed=_on_mib_resolution_changed,
                     on_addr_changed=_on_mib_addr_changed,
                     screen_indices=screen_indices,
+                    # 시료 빌드별 ksend 경로 (debug=/lge/app_ro/bin, 0-version=/tmp)
+                    ksend_variant=dev.info.get("ksend_variant") or "debug",
+                    ksend_path=dev.info.get("ksend_path") or "",
                 )
                 # 저장된 ksend src/dst override가 있으면 market default를 덮어씀
                 stored_src = dev.info.get("ksend_src")

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { AutoComplete, Button, Card, Checkbox, Input, InputNumber, List, Modal, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd';
+import { AutoComplete, Button, Card, Checkbox, Input, InputNumber, List, Modal, Radio, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd';
 import { ReloadOutlined, PlusOutlined, DisconnectOutlined, DeleteOutlined, WifiOutlined, SearchOutlined, EditOutlined, ApiOutlined, LinkOutlined, SettingOutlined, HolderOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
@@ -285,33 +285,43 @@ export default function DevicePage() {
     return byRes ? byRes.key : '12.9';
   };
 
+  // 저장된 dev.info.ksend_variant → 모달 기본값. 미저장(구 디바이스)은 기존 동작인 debug.
+  const inferKsendVariant = (dev: any): string =>
+    (dev?.info?.ksend_variant === '0-version' ? '0-version' : 'debug');
+
   const handleConnectOne = async (deviceId: string) => {
     const dev = allDevices.find(d => d.id === deviceId);
-    // MIB 주디바이스는 연결 전에 패널 프로파일을 선택한다(해상도 같아도 터치 보정이 다름).
-    if (dev?.type === 'mib_agent') {
+    // VW 계열(MIB/ICAS)은 연결 전에 선택 모달을 띄운다.
+    //  - MIB : 패널 프로파일(해상도 같아도 터치 보정이 다름) + ksend 빌드
+    //  - ICAS: ksend 빌드 (해상도/터치 보정은 등록 시 모델로 결정)
+    if (dev?.type === 'mib_agent' || dev?.type === 'icas_agent') {
       setMibConnectId(deviceId);
-      setMibConnectProfile(inferMibProfileKey(dev));
+      setMibConnectType(dev.type);
+      if (dev.type === 'mib_agent') setMibConnectProfile(inferMibProfileKey(dev));
+      setMibConnectKsend(inferKsendVariant(dev));
       setMibConnectOpen(true);
       return;
     }
     await doConnectOne(deviceId);
   };
 
-  // 선택한 프로파일의 해상도 + 터치 보정을 적용(persist)한 뒤 연결.
+  // 선택한 프로파일의 해상도 + 터치 보정 + ksend 빌드 경로를 적용(persist)한 뒤 연결.
   const handleMibConnectConfirm = async () => {
     const deviceId = mibConnectId;
+    const isMib = mibConnectType === 'mib_agent';
     const prof = MIB_PANEL_PROFILES.find(p => p.key === mibConnectProfile);
     setMibConnectOpen(false);
-    if (!deviceId || !prof) return;
+    if (!deviceId || (isMib && !prof)) return;
     setConnectingIds(prev => new Set(prev).add(deviceId));
     try {
-      await deviceApi.updateDevice(deviceId, {
-        extra_fields: {
-          resolution: prof.resolution,
-          touch_x_scale: prof.txs,   // null → 백엔드 해상도 공식 기본값 사용
-          touch_y_scale: prof.tys,
-        },
-      });
+      // ksend_variant 는 MIB/ICAS 공통 — 백엔드가 절대경로로 변환해 모든 ksend 호출에 적용.
+      const extra: Record<string, any> = { ksend_variant: mibConnectKsend };
+      if (isMib && prof) {
+        extra.resolution = prof.resolution;
+        extra.touch_x_scale = prof.txs;   // null → 백엔드 해상도 공식 기본값 사용
+        extra.touch_y_scale = prof.tys;
+      }
+      await deviceApi.updateDevice(deviceId, { extra_fields: extra });
     } catch (e: any) {
       message.error(e.response?.data?.detail || t('device.connectFailed'));
       setConnectingIds(prev => { const n = new Set(prev); n.delete(deviceId); return n; });
@@ -462,10 +472,20 @@ export default function DevicePage() {
     { key: '9.2',     label: '9.2" — 1280x640 (mqb)',          resolution: '1280x640',  txs: null, tys: null },
     { key: '14.6',    label: '14.6" — 1080x1920 (Ford)',       resolution: '1080x1920', txs: null, tys: null },
   ];
-  // 연결 시 패널 프로파일 선택 모달 상태 (mib_agent 전용).
+  // ksend 바이너리 경로는 시료 빌드에 따라 다르다. 터치/하드키/POWER 커맨드가 전부 이 경로를
+  // 쓰므로 잘못 고르면 입력이 무음으로 전부 유실된다(스텝은 pass 로 기록됨).
+  //   Debug     : /lge/app_ro/bin/ksend  (디버그 빌드 정식 경로)
+  //   0-version : /tmp/ksend             (양산 빌드 — app_ro 에 ksend 가 없어 /tmp 에 올려 씀)
+  const KSEND_VARIANTS: { key: string; label: string; path: string }[] = [
+    { key: 'debug',     label: 'Debug',     path: '/lge/app_ro/bin/ksend' },
+    { key: '0-version', label: '0-version', path: '/tmp/ksend' },
+  ];
+  // 연결 시 선택 모달 상태 (VW 계열: mib_agent = 패널+빌드, icas_agent = 빌드).
   const [mibConnectOpen, setMibConnectOpen] = useState(false);
   const [mibConnectId, setMibConnectId] = useState<string>('');
+  const [mibConnectType, setMibConnectType] = useState<string>('mib_agent');
   const [mibConnectProfile, setMibConnectProfile] = useState<string>('12.9');
+  const [mibConnectKsend, setMibConnectKsend] = useState<string>('debug');
   const [connectAddress, setConnectAddress] = useState('');
   const [baudrate, setBaudrate] = useState(115200);
   const [connecting, setConnecting] = useState(false);
@@ -3934,37 +3954,59 @@ export default function DevicePage() {
           </Space>
         )}
       </Modal>
-      {/* MIB 연결 시 패널 프로파일(해상도+터치보정) 선택 모달 */}
+      {/* VW 계열 연결 모달 — MIB: 패널 프로파일(해상도+터치보정) + ksend 빌드 / ICAS: ksend 빌드 */}
       <Modal
-        title="MIB 패널 선택"
+        title={mibConnectType === 'mib_agent' ? 'MIB 패널 · 빌드 선택' : 'ICAS 빌드 선택'}
         open={mibConnectOpen}
         onCancel={() => setMibConnectOpen(false)}
         onOk={handleMibConnectConfirm}
         okText={t('device.connectOne')}
         width={460}
       >
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <div style={{ fontSize: 12, color: '#888' }}>
-            해상도가 같아도 패널마다 터치 보정이 다릅니다. 연결할 패널을 선택하세요.
-          </div>
-          <Select
-            style={{ width: '100%' }}
-            value={mibConnectProfile}
-            onChange={setMibConnectProfile}
-          >
-            {MIB_PANEL_PROFILES.map(p => (
-              <Option key={p.key} value={p.key}>{p.label}</Option>
-            ))}
-          </Select>
-          {(() => {
-            const p = MIB_PANEL_PROFILES.find(x => x.key === mibConnectProfile);
-            if (!p) return null;
-            return (
-              <div style={{ fontSize: 11, color: '#aaa' }}>
-                해상도 {p.resolution} · 터치 스케일 X={p.txs ?? '자동'} / Y={p.tys ?? '자동'}
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          {mibConnectType === 'mib_agent' && (
+            <div>
+              <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>
+                해상도가 같아도 패널마다 터치 보정이 다릅니다. 연결할 패널을 선택하세요.
               </div>
-            );
-          })()}
+              <Select
+                style={{ width: '100%' }}
+                value={mibConnectProfile}
+                onChange={setMibConnectProfile}
+              >
+                {MIB_PANEL_PROFILES.map(p => (
+                  <Option key={p.key} value={p.key}>{p.label}</Option>
+                ))}
+              </Select>
+              {(() => {
+                const p = MIB_PANEL_PROFILES.find(x => x.key === mibConnectProfile);
+                if (!p) return null;
+                return (
+                  <div style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>
+                    해상도 {p.resolution} · 터치 스케일 X={p.txs ?? '자동'} / Y={p.tys ?? '자동'}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+          <div>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>
+              시료 빌드를 선택하세요. 터치·하드키가 쓰는 ksend 실행 경로가 달라집니다.
+            </div>
+            <Radio.Group
+              optionType="button"
+              buttonStyle="solid"
+              value={mibConnectKsend}
+              onChange={e => setMibConnectKsend(e.target.value)}
+            >
+              {KSEND_VARIANTS.map(v => (
+                <Radio.Button key={v.key} value={v.key}>{v.label}</Radio.Button>
+              ))}
+            </Radio.Group>
+            <div style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>
+              ksend 경로: {KSEND_VARIANTS.find(v => v.key === mibConnectKsend)?.path}
+            </div>
+          </div>
         </Space>
       </Modal>
       {/* 스캔 설정 모달 */}

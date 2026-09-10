@@ -28,6 +28,12 @@ import threading
 import time
 from typing import Optional
 
+from .ksend_path import (
+    DEFAULT_KSEND_VARIANT,
+    normalize_variant,
+    other_ksend_path,
+    resolve_ksend_path,
+)
 from .live_stream_mixin import LiveStreamMixin
 
 logger = logging.getLogger(__name__)
@@ -163,7 +169,9 @@ class ICASAgentService(LiveStreamMixin):
                  hud_display: str = "11",
                  market: str = "EU",
                  variant: str = "icas",
-                 key_overrides: Optional[dict[str, dict]] = None):
+                 key_overrides: Optional[dict[str, dict]] = None,
+                 ksend_variant: str = DEFAULT_KSEND_VARIANT,
+                 ksend_path: str = ""):
         self.host = host
         self.port = int(port)
         self.device_id = device_id or f"ICAS_{host}"
@@ -185,6 +193,10 @@ class ICASAgentService(LiveStreamMixin):
         self.private_server_password = private_server_password
         self.iid_display = str(iid_display or "10")
         self.hud_display = str(hud_display or "11")
+        # ksend 바이너리 경로 — 시료 빌드 분기(debug=/lge/app_ro/bin, 0-version=/tmp).
+        # 터치/하드키/POWER 추가 커맨드가 모두 이 값을 참조한다. variant(icas/icas3)와는 무관.
+        self.ksend_variant = normalize_variant(ksend_variant)
+        self.ksend_bin = resolve_ksend_path(self.ksend_variant, ksend_path)
 
         self._connected = False
         self.agent_version = "ICAS Agent"
@@ -442,6 +454,12 @@ class ICASAgentService(LiveStreamMixin):
                 self._get_shared_ssh()  # 끊어져 있으면 새로 연결
             self._connected = True
             logger.info("ICAS connected to %s:%d", self.host, self.port)
+            # ksend 바이너리 경로 확인 — 선택한 빌드(debug/0-version)에 실제로 있는지.
+            # 없으면 입력이 무음으로 전부 유실되므로(fire-and-forget) 반대편 경로로 폴백.
+            try:
+                self._verify_ksend_bin()
+            except Exception as e:
+                logger.debug("ICAS ksend path verify skipped: %s", e)
             return True
         except Exception as e:
             logger.error("ICAS connect failed %s:%d: %s", self.host, self.port, e)
@@ -593,6 +611,57 @@ class ICASAgentService(LiveStreamMixin):
             ssh = self._get_shared_ssh()
             _run_all(ssh, commands)
 
+    def set_ksend_variant(self, variant: str, path_override: str = "") -> str:
+        """ksend 빌드 경로 변경 (debug ↔ 0-version). 재연결 없이 즉시 반영."""
+        self.ksend_variant = normalize_variant(variant)
+        self.ksend_bin = resolve_ksend_path(self.ksend_variant, path_override)
+        logger.info("ICAS ksend variant set: %s → %s", self.ksend_variant, self.ksend_bin)
+        return self.ksend_bin
+
+    def _verify_ksend_bin(self) -> None:
+        """선택된 ksend 경로 존재 확인 + 없으면 반대편 경로 폴백 (MIB과 동일 규약).
+
+        ksend 는 fire-and-forget 이라 경로가 틀려도 에러가 안 보이고 입력만 사라진다.
+        """
+        alt = other_ksend_path(self.ksend_bin)
+        # -x(실행가능) 와 -f(존재) 를 나눠 본다: /tmp 로 복사만 하고 chmod +x 를 빠뜨린 경우가
+        # 흔한데, 이때 "파일 없음"으로 오진해 반대 경로로 폴백하면 원인이 가려진다.
+        cmd = (f'( [ -x "{self.ksend_bin}" ] && echo PRIMARY_X ) ; '
+               f'( [ -f "{self.ksend_bin}" ] && echo PRIMARY_F ) ; '
+               f'( [ -x "{alt}" ] && echo ALT_X ) ; echo DONE')
+        with self._ssh_lock:
+            ssh = self._get_shared_ssh()
+            stdin, stdout, _ = ssh.exec_command(cmd, timeout=5)
+            try:
+                stdin.close()
+            except Exception:
+                pass
+            out = stdout.read().decode("utf-8", errors="replace")
+        if "PRIMARY_X" in out:
+            logger.info("ICAS ksend binary ok: variant=%s path=%s",
+                        self.ksend_variant, self.ksend_bin)
+            return
+        if "PRIMARY_F" in out:
+            logger.error(
+                "ICAS ksend at %s exists but is not executable — 디바이스에서 "
+                "chmod +x %s 필요. 입력이 전부 무시됩니다.", self.ksend_bin, self.ksend_bin,
+            )
+            return
+        if "ALT_X" in out:
+            logger.warning(
+                "ICAS ksend not found at %s (variant=%s) — falling back to %s. "
+                "디바이스 빌드 선택(Debug/0-version)이 시료와 다를 수 있습니다.",
+                self.ksend_bin, self.ksend_variant, alt,
+            )
+            self.ksend_bin = resolve_ksend_path(None, alt)
+            self.ksend_variant = normalize_variant(
+                "0-version" if alt.startswith("/tmp") else "debug")
+            return
+        logger.error(
+            "ICAS ksend binary missing on device: neither %s nor %s is executable. "
+            "터치/하드키 입력이 전부 무시됩니다.", self.ksend_bin, alt,
+        )
+
     def _ksend_exec(self, cmds: list[str], interval_s: float = 0.0) -> None:
         """ksend를 exec_command로 송신 — 각 호출마다 새 채널 오픈.
 
@@ -647,7 +716,7 @@ class ICASAgentService(LiveStreamMixin):
           - icas3 (CN): exec_command 채널 (안정성 우선 — invoke_shell이 ClientDisconnected 유발)
         """
         self.last_input_ts = time.monotonic()
-        cmd = f'/lge/app_ro/bin/ksend -s {self.src_addr} -d {self.dst_addr} -b "{data_bytes}"'
+        cmd = f'{self.ksend_bin} -s {self.src_addr} -d {self.dst_addr} -b "{data_bytes}"'
         if self.variant == "icas3":
             self._ksend_exec([cmd])
         else:
@@ -657,7 +726,7 @@ class ICASAgentService(LiveStreamMixin):
         """ksend 명령 여러 개를 순차 송신. variant 분기 동일."""
         self.last_input_ts = time.monotonic()
         cmds = [
-            f'/lge/app_ro/bin/ksend -s {self.src_addr} -d {self.dst_addr} -b "{data}"'
+            f'{self.ksend_bin} -s {self.src_addr} -d {self.dst_addr} -b "{data}"'
             for data in data_list
         ]
         if self.variant == "icas3":
@@ -851,7 +920,7 @@ class ICASAgentService(LiveStreamMixin):
             "0x01 0x91 0xF0 0x01 0x01 0x00 0x00",
         ]
         cmds = [
-            f'/lge/app_ro/bin/ksend -s {src2} -d {dst2} -b "{p}"'
+            f'{self.ksend_bin} -s {src2} -d {dst2} -b "{p}"'
             for p in payloads
         ]
         self._shell_run(cmds, post_sleep_s=0.1)
@@ -1468,6 +1537,8 @@ class ICASAgentService(LiveStreamMixin):
             "port": self.port,
             "connected": self._connected,
             "agent_version": self.agent_version,
+            "ksend_variant": self.ksend_variant,
+            "ksend_path": self.ksend_bin,
             "screens": {
                 "HU":  {"width": self._res_x, "height": self._res_y},
                 "IID": {"width": self._res_x, "height": self._res_y},

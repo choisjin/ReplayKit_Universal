@@ -1850,6 +1850,7 @@ async def update_device(req: UpdateDeviceRequest):
         dev.info["connect_type"] = req.connect_type
     mib_resolution_changed = False
     mib_touch_calib_changed = False
+    ksend_variant_changed = False
     if req.extra_fields is not None:
         for k, v in req.extra_fields.items():
             # MIB의 resolution은 dict 스키마({width,height})를 보존해야 하므로
@@ -1911,6 +1912,23 @@ async def update_device(req: UpdateDeviceRequest):
                     )
                 except Exception as e:
                     logger.warning("Failed to update live MIB touch scale: %s", e)
+        # ksend 빌드 경로 라이브 반영 (debug ↔ 0-version). 재연결 없이 다음 입력부터 적용.
+        # MIB/ICAS 공통 — 터치·하드키·POWER 추가 커맨드가 전부 이 경로를 참조한다.
+        if dev.type in ("mib_agent", "icas_agent") and (
+            "ksend_variant" in req.extra_fields or "ksend_path" in req.extra_fields
+        ):
+            ksend_variant_changed = True
+            svc = (dm.get_mib_service(dev.id) if dev.type == "mib_agent"
+                   else dm.get_icas_service(dev.id))
+            if svc is not None:
+                try:
+                    applied = svc.set_ksend_variant(
+                        dev.info.get("ksend_variant") or "debug",
+                        dev.info.get("ksend_path") or "",
+                    )
+                    logger.info("Live ksend path updated: %s → %s", dev.id, applied)
+                except Exception as e:
+                    logger.warning("Failed to update live ksend path: %s", e)
         # Reset cached module instance when connection params change.
         # 시리얼 디바이스는 아래 serial reconnect 블록이 graceful teardown+재연결로 처리
         # (non-graceful pop 이 포트를 고아화하지 않도록). 재연결만 트리거한다.
@@ -1938,10 +1956,11 @@ async def update_device(req: UpdateDeviceRequest):
 
     # Persist changes — auxiliary는 항상, primary 중 mib_agent는 해상도/터치보정 변경 시 저장.
     # 터치 스케일/오프셋은 라이브 반영만 하고 저장하지 않으면 백엔드 재시작 시 유실된다.
+    # ksend 빌드 경로(debug/0-version)도 동일 — ICAS는 primary 라 이 조건에 없으면 저장 안 됨.
     if dev.category == "auxiliary" or (
         dev.type in ("mib_agent", "fpk_agent", "gm_info_agent")
         and (mib_resolution_changed or mib_touch_calib_changed)
-    ):
+    ) or (dev.type in ("mib_agent", "icas_agent") and ksend_variant_changed):
         dm._save_auxiliary_devices()
 
     # Reopen serial connection if address or baudrate changed
