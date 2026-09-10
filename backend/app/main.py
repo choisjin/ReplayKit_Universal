@@ -928,6 +928,17 @@ async def websocket_screen_mirror(websocket: WebSocket):
     is_hkmc = dev and dev.type in ("hkmc_agent", "hkmc5th_wide_agent")
     is_hkmc5th_wide = dev and dev.type == "hkmc5th_wide_agent"
     is_isap = dev and dev.type == "isap_agent"
+    # WebOS(Connect Wide) 화면은 webOS 투사 앱이 **Android 메인 디스플레이**에 올라온 것이라
+    # iSAP CMD_GETIMG 로는 안 잡힌다. 캡처/터치 모두 기존 ADB(scrcpy) 경로를 그대로 탄다
+    # (참조 screenBridge 도 이 화면을 scrcpy 로 보고 scrcpy control 로 터치했다).
+    webos_adb_serial = ""
+    if is_isap and screen_type == "webos":
+        webos_adb_serial = str((dev.info or {}).get("webos_adb_serial") or "").strip()
+        if webos_adb_serial:
+            is_isap = False          # 아래 dispatch 에서 ADB 분기로 보낸다
+        else:
+            logger.warning("Screen mirror: %s webos 선택됐지만 webos_adb_serial 미설정",
+                           target_device_id)
     is_icas = dev and dev.type == "icas_agent"
     is_mib = dev and dev.type == "mib_agent"
     is_fpk = dev and dev.type == "fpk_agent"
@@ -1125,23 +1136,10 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     await asyncio.sleep(0.3)
                     continue
                 elif isap and isap.is_connected:
-                    _isap_t0 = asyncio.get_event_loop().time()
                     jpeg_bytes = await isap.async_screencap_bytes(
                         screen_type=screen_type, fmt="jpeg", timeout=3.0
                     )
                     await websocket.send_bytes(jpeg_bytes)
-                    # WebOS 는 백그라운드 linuxStream 이 채워둔 프레임을 즉시 돌려주므로
-                    # 루프가 전속력으로 돌며 JPEG 재인코딩/전송을 낭비한다 → 스트림 fps 로 제한.
-                    if screen_type == "webos":
-                        try:
-                            _wfps = float((dev.info if dev else {}).get("webos_fps") or 30)
-                        except (TypeError, ValueError):
-                            _wfps = 30.0
-                        _wsleep = (1.0 / max(1.0, _wfps)) - (
-                            asyncio.get_event_loop().time() - _isap_t0
-                        )
-                        if _wsleep > 0:
-                            await asyncio.sleep(_wsleep)
                 elif is_isap:
                     await asyncio.sleep(0.3)
                     continue
@@ -1474,6 +1472,15 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     except (ValueError, TypeError):
                         pass
                     adb_serial = dev.address if dev else target_device_id
+                    if webos_adb_serial:
+                        # WebOS: 미러 대상은 iSAP 주소가 아니라 HU 의 ADB 시리얼.
+                        # 디스플레이는 설정값(webos_display_id), 없으면 메인(=None).
+                        adb_serial = webos_adb_serial
+                        try:
+                            _wdid = int((dev.info or {}).get("webos_display_id") or 0)
+                        except (TypeError, ValueError):
+                            _wdid = 0
+                        adb_display_id = _wdid or None
                     if not adb_serial:
                         await asyncio.sleep(0.3)
                         continue

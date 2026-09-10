@@ -1272,13 +1272,7 @@ export default function DevicePage() {
     // WebOS(Connect Wide 한정): 미설정이면 빈 값 → 화면 목록에 WebOS 가 안 뜬다.
     if (dev.type === 'isap_agent' && dev.info?.device_model === 'Connect Wide') {
       extras.webos_adb_serial = dev.info?.webos_adb_serial ?? '';
-      extras.webos_linux_ip = dev.info?.webos_linux_ip ?? '172.16.4.1';
-      extras.webos_linux_user = dev.info?.webos_linux_user ?? 'root';
-      extras.webos_linux_password = dev.info?.webos_linux_password ?? 'root';
-      extras.webos_scale = dev.info?.webos_scale ?? 2;
-      extras.webos_quality = dev.info?.webos_quality ?? 60;
-      extras.webos_fps = dev.info?.webos_fps ?? 30;
-      extras.webos_touch_via = dev.info?.webos_touch_via ?? 'uinput';
+      extras.webos_display_id = dev.info?.webos_display_id ?? 0;
       deviceApi.adbSerials().then(res => {
         setAdbSerialOptions((res.data.devices || []).map((d: any) => ({
           value: d.serial,
@@ -3925,15 +3919,16 @@ export default function DevicePage() {
                 />
               </div>
             )}
-            {/* WebOS 화면(Connect Wide 한정) — screenBridge linuxStream 경로.
+            {/* WebOS 화면(Connect Wide 한정) — webOS 투사 앱이 Android 디스플레이에 올라오므로
+                미러링/터치 모두 HU 의 ADB(scrcpy) 경로를 그대로 쓴다.
                 ADB 시리얼이 비어 있으면 WebOS 없는 모델로 보고 화면 선택 목록에 노출하지 않는다. */}
             {editDevice.type === 'isap_agent' && editDevice.info?.device_model === 'Connect Wide' && (
               <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: '8px 10px' }}>
                 <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>WebOS 화면 (미러링/터치)</div>
                 <div style={{ fontSize: 10, color: '#888', marginBottom: 6 }}>
-                  webOS 는 별도 Linux VM 이라 iSAP 캡처에 잡히지 않습니다. HU 에 ADB 로 접속해
-                  <code> linuxStream </code>을 Linux VM 에 올려 화면을 받아오고 터치를 주입합니다.
-                  <b> ADB 시리얼을 비우면 WebOS 없는 모델</b>로 취급되어 화면 선택 목록에 표시되지 않습니다.
+                  webOS 화면은 투사 앱으로 <b>Android 디스플레이</b>에 올라오므로 iSAP 캡처에는 잡히지 않습니다.
+                  HU 의 ADB 시리얼을 지정하면 기존 scrcpy 미러링/터치 경로로 화면을 보고 조작합니다.
+                  <b> 비우면 WebOS 없는 모델</b>로 취급되어 화면 선택 목록에 표시되지 않습니다.
                 </div>
                 <Space direction="vertical" style={{ width: '100%' }} size={6}>
                   <div>
@@ -3950,61 +3945,16 @@ export default function DevicePage() {
                     />
                   </div>
                   <Space wrap>
-                    <span style={{ fontSize: 11, color: '#888' }}>Linux VM:</span>
-                    <Input
-                      style={{ width: 140 }}
-                      placeholder="172.16.4.1"
-                      value={editExtraFields.webos_linux_ip ?? ''}
-                      onChange={(e) => setEditExtraFields({ ...editExtraFields, webos_linux_ip: e.target.value })}
+                    <span style={{ fontSize: 11, color: '#888' }}>Android display id:</span>
+                    <InputNumber
+                      style={{ width: 90 }} min={0} max={64}
+                      value={editExtraFields.webos_display_id ?? 0}
+                      onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_display_id: v ?? 0 })}
                     />
-                    <Input
-                      style={{ width: 110 }}
-                      placeholder="user (root)"
-                      value={editExtraFields.webos_linux_user ?? ''}
-                      onChange={(e) => setEditExtraFields({ ...editExtraFields, webos_linux_user: e.target.value })}
-                    />
-                    <Input.Password
-                      style={{ width: 130 }}
-                      placeholder="password (root)"
-                      value={editExtraFields.webos_linux_password ?? ''}
-                      onChange={(e) => setEditExtraFields({ ...editExtraFields, webos_linux_password: e.target.value })}
-                    />
+                    <span style={{ fontSize: 10, color: '#888' }}>
+                      0 = 메인 디스플레이. 투사 화면이 별도 디스플레이에 뜨는 경우에만 변경.
+                    </span>
                   </Space>
-                  <Space wrap>
-                    <span style={{ fontSize: 11, color: '#888' }}>scale:</span>
-                    <InputNumber
-                      style={{ width: 70 }} min={1} max={8}
-                      value={editExtraFields.webos_scale ?? 2}
-                      onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_scale: v ?? 2 })}
-                    />
-                    <span style={{ fontSize: 11, color: '#888' }}>quality:</span>
-                    <InputNumber
-                      style={{ width: 70 }} min={1} max={100}
-                      value={editExtraFields.webos_quality ?? 60}
-                      onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_quality: v ?? 60 })}
-                    />
-                    <span style={{ fontSize: 11, color: '#888' }}>fps:</span>
-                    <InputNumber
-                      style={{ width: 70 }} min={1} max={60}
-                      value={editExtraFields.webos_fps ?? 30}
-                      onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_fps: v ?? 30 })}
-                    />
-                  </Space>
-                  <div>
-                    <span style={{ fontSize: 11, color: '#888', marginRight: 6 }}>터치 경로:</span>
-                    <Select
-                      style={{ width: 260 }}
-                      value={editExtraFields.webos_touch_via ?? 'uinput'}
-                      onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_touch_via: v })}
-                    >
-                      <Option value="uinput">linuxStream uinput 주입 (기본)</Option>
-                      <Option value="isap">iSAP 전석 터치로 전달 (폴백)</Option>
-                    </Select>
-                    <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
-                      uinput 주입은 참조 뷰어(screenBridge)가 쓰지 않던 경로입니다. 실기에서 터치가 안 먹으면
-                      <b> iSAP 전석 터치</b>로 바꿔 보세요(좌표는 자동 환산).
-                    </div>
-                  </div>
                 </Space>
               </div>
             )}

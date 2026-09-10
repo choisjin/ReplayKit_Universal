@@ -520,6 +520,7 @@ export default function RecordPage() {
     screenType, setScreenType, refreshScreenshot,
     screenStatus, streamFps,
     screensaver,
+    streamError,
     screenPausedForPlayback,
     pauseScreenStream, resumeScreenStream,
   } = useDevice();
@@ -5765,6 +5766,13 @@ export default function RecordPage() {
                           : t('record.deviceDisconnected')}
                     </Tag>
                   )}
+                  {/* 백엔드가 프레임을 못 만든 이유를 그대로 노출 (WebOS 스트림 기동 실패 등).
+                      이전엔 이 메시지를 프론트가 버려서 원인 없이 화면만 비어 보였다. */}
+                  {streamError && (
+                    <Tag color="red" style={{ whiteSpace: 'normal', maxWidth: 560, marginLeft: 0 }}>
+                      {streamError}
+                    </Tag>
+                  )}
                   {screenDevice && isScreenBmw && screensaver && (
                     <Tag color="purple" icon={<FundProjectionScreenOutlined />} style={{ marginLeft: 0 }}>
                       {t('record.screensaver')}
@@ -5800,8 +5808,8 @@ export default function RecordPage() {
                           ccRC(후석 전용)에는 HUD가 없다. */}
                       {!isScreenCCRC && (screenDevice?.type === 'isap_agent' || screenDevice?.type === 'hkmc_agent')
                         && <Option value="hud">HUD</Option>}
-                      {/* WebOS(Connect Wide 한정): iSAP 캡처에 안 잡히는 별도 Linux VM 화면.
-                          ADB+SSH 로 linuxStream 을 띄워 미러링하고 터치는 uinput 으로 주입한다. */}
+                      {/* WebOS(Connect Wide 한정): webOS 투사 앱이 Android 디스플레이에 올라온
+                          화면이라 iSAP 캡처엔 안 잡힌다 → HU 의 ADB(scrcpy) 미러링/터치 경로 사용. */}
                       {hasWebOSScreen && <Option value="webos">WebOS</Option>}
                     </Select>
                     <Select

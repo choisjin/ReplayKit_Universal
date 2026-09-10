@@ -2132,18 +2132,26 @@ class DeviceManager:
                     self._isap_reconnect_attempts.pop(dev.id, None)
                     if dev.status != "connected":
                         dev.status = "connected"
-                    # WebOS 화면 해상도 갱신 — 연결 시점엔 스트림이 없어 폴백값이 들어간다.
-                    # linuxStream 이 뜨면 실제 크기가 잡히므로 여기서 반영해야 프론트의
-                    # 터치 좌표 스케일이 맞는다.
-                    if getattr(isap, "webos_enabled", False):
+                    # WebOS 화면 해상도 — Android 투사 화면이라 HU 의 ADB 디스플레이
+                    # 해상도를 써야 미러 터치 좌표 스케일이 맞는다. 최초 1회만 조회.
+                    # screens["webos"] 에는 연결 시점에 폴백값이 이미 들어가 있으므로
+                    # "값 있음"으로 판단하면 영영 감지하지 않는다 → 별도 플래그로 1회 감지.
+                    if getattr(isap, "webos_enabled", False) and not dev.info.get(
+                        "webos_screen_detected"
+                    ):
                         try:
-                            ww, wh = isap.get_screen_size("webos")
-                            screens = dev.info.setdefault("screens", {})
-                            cur = screens.get("webos") or {}
-                            if ww and wh and (cur.get("width") != ww or cur.get("height") != wh):
-                                screens["webos"] = {"width": ww, "height": wh}
+                            ainfo = await self.adb.get_device_info(isap.webos_serial)
+                            r = ainfo.get("resolution") or {}
+                            if r.get("width") and r.get("height"):
+                                dev.info.setdefault("screens", {})["webos"] = {
+                                    "width": r["width"], "height": r["height"],
+                                }
+                                dev.info["webos_screen_detected"] = True
+                                logger.info("WebOS screen size detected: %s -> %sx%s",
+                                            isap.webos_serial, r["width"], r["height"])
                         except Exception as e:
-                            logger.debug("WebOS screen size refresh failed: %s", e)
+                            logger.debug("WebOS screen size detect failed (%s): %s",
+                                         isap.webos_serial, e)
                     continue
                 port = dev.info.get("port", 0)
                 if not port:

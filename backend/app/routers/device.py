@@ -1946,9 +1946,10 @@ async def update_device(req: UpdateDeviceRequest):
                 except Exception as e:
                     logger.warning("Failed to update live ksend path: %s", e)
         # WebOS(Connect Wide) 설정 라이브 반영 — 재연결 없이 다음 미러링/터치부터 적용.
-        # 접속 정보가 바뀌면 서비스 쪽에서 기존 linuxStream 스트림을 내리고 새로 띄운다.
         if dev.type == "isap_agent" and any(k.startswith("webos_") for k in req.extra_fields):
             isap_webos_changed = True
+            # 시리얼/디스플레이가 바뀌면 해상도를 다시 감지해야 한다.
+            dev.info.pop("webos_screen_detected", None)
             svc = dm.get_isap_service(dev.id)
             if svc is not None:
                 try:
