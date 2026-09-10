@@ -338,6 +338,10 @@ class ADBService:
         self._scrcpy_retry_after: dict[str, float] = {}
         # 디바이스 Android SDK 캐시 (scrcpy 버전 선택용). SDK 는 변하지 않으므로 1회 조회.
         self._sdk_cache: dict[str, Optional[int]] = {}
+        # serial → scrcpy 버전 강제 지정. SDK 기반 자동 선택을 덮어쓴다.
+        # (Connect Wide 의 WebOS 투사 화면은 v1.25 로 검은 화면이 나오고 v3.3.4 로 잡힌다 —
+        #  참조본 screenBridge 가 쓰던 scrcpy-server 가 v3.3.4 와 바이트 동일.)
+        self._scrcpy_version_override: dict[str, str] = {}
         # scrcpy 가 한 번이라도 성공한 serial — "scrcpy 가능 기기". 이 기기는 일시적
         # 스트림 끊김/재시작이 있어도 영구 disable 하지 않고 짧은 쿨다운으로 즉시 scrcpy
         # 로 복귀한다 (장기 screencap 폴링으로 눌러앉지 않게 — 사용자 요구).
@@ -1441,12 +1445,35 @@ class ADBService:
           * Android 15 이하 (SDK<=35, 또는 SDK 불명) → v1.25
         선택한 버전의 jar 이 없으면 가용한 다른 버전으로만 보정(미러링 유지 목적).
         """
+        forced = self._scrcpy_version_override.get(serial)
+        if forced and detect_scrcpy_server(forced):
+            return forced
         sdk = await self._get_android_sdk(serial)
         primary = SCRCPY_V3 if (sdk is not None and sdk >= 36) else SCRCPY_V1
         if detect_scrcpy_server(primary):
             return primary
         other = SCRCPY_V1 if primary == SCRCPY_V3 else SCRCPY_V3
         return other if detect_scrcpy_server(other) else primary
+
+    async def set_scrcpy_version_override(self, serial: str, version: Optional[str]) -> bool:
+        """serial 의 scrcpy 버전을 강제 지정(None 이면 해제). 바뀌면 기존 백엔드를 닫는다.
+
+        기존 백엔드는 버전과 무관하게 재사용되므로, 버전을 바꾸려면 한 번 닫아야
+        다음 ensure 에서 새 버전으로 뜬다. 반환값 = 실제로 바뀌었는지.
+        """
+        cur = self._scrcpy_version_override.get(serial)
+        if (version or None) == cur:
+            return False
+        if version:
+            self._scrcpy_version_override[serial] = version
+        else:
+            self._scrcpy_version_override.pop(serial, None)
+        logger.info("scrcpy version override: serial=%s %s -> %s", serial, cur, version)
+        # 버전이 바뀌었으니 캐시된 백엔드/영구 disable 상태를 리셋하고 다시 시도하게 한다.
+        self._scrcpy_disabled.discard(serial)
+        self._scrcpy_failure_count.pop(serial, None)
+        await self.close_scrcpy_backend(serial)
+        return True
 
     def is_scrcpy_capable(self, serial: str) -> bool:
         """scrcpy 가 한 번이라도 성공한 기기인가 (→ 폴링으로 눌러앉지 말고 scrcpy 유지)."""

@@ -936,6 +936,18 @@ async def websocket_screen_mirror(websocket: WebSocket):
         webos_adb_serial = str((dev.info or {}).get("webos_adb_serial") or "").strip()
         if webos_adb_serial:
             is_isap = False          # 아래 dispatch 에서 ADB 분기로 보낸다
+            # scrcpy 버전 강제: 참조본 screenBridge 는 이 화면을 **v3.3.4** 로 캡처했다
+            # (번들 scrcpy-server 가 우리 v3.3.4 jar 과 바이트 동일). SDK<36 자동 선택인
+            # v1.25 는 이 HU 의 투사 화면에서 검은 프레임이 나온다.
+            # info["webos_scrcpy_version"]="auto" 면 자동 선택으로 되돌린다.
+            _wver = str((dev.info or {}).get("webos_scrcpy_version") or "3.3.4").strip()
+            try:
+                await adb_service.set_scrcpy_version_override(
+                    webos_adb_serial,
+                    None if _wver.lower() in ("auto", "none", "") else _wver,
+                )
+            except Exception as e:
+                logger.warning("WebOS scrcpy version override failed: %s", e)
         else:
             logger.warning("Screen mirror: %s webos 선택됐지만 webos_adb_serial 미설정",
                            target_device_id)

@@ -1273,6 +1273,7 @@ export default function DevicePage() {
     if (dev.type === 'isap_agent' && dev.info?.device_model === 'Connect Wide') {
       extras.webos_adb_serial = dev.info?.webos_adb_serial ?? '';
       extras.webos_display_id = dev.info?.webos_display_id ?? 0;
+      extras.webos_scrcpy_version = dev.info?.webos_scrcpy_version ?? '3.3.4';
       deviceApi.adbSerials().then(res => {
         setAdbSerialOptions((res.data.devices || []).map((d: any) => ({
           value: d.serial,
@@ -3955,6 +3956,22 @@ export default function DevicePage() {
                       0 = 메인 디스플레이. 투사 화면이 별도 디스플레이에 뜨는 경우에만 변경.
                     </span>
                   </Space>
+                  <div>
+                    <span style={{ fontSize: 11, color: '#888', marginRight: 6 }}>scrcpy 버전:</span>
+                    <Select
+                      style={{ width: 220 }}
+                      value={editExtraFields.webos_scrcpy_version ?? '3.3.4'}
+                      onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_scrcpy_version: v })}
+                    >
+                      <Option value="3.3.4">3.3.4 (기본 · 참조본과 동일)</Option>
+                      <Option value="1.25">1.25</Option>
+                      <Option value="auto">auto (Android 버전으로 자동 선택)</Option>
+                    </Select>
+                    <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
+                      참조본(screenBridge)은 이 화면을 v3.3.4 로 캡처했습니다. 자동 선택은 SDK&lt;36 에서
+                      v1.25 를 고르는데, 투사 화면이 <b>검게</b> 나오면 3.3.4 로 두세요.
+                    </div>
+                  </div>
                 </Space>
               </div>
             )}
