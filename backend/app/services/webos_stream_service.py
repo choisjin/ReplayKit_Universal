@@ -159,6 +159,7 @@ class WebOSStreamService:
         self._stop = threading.Event()
         self._lock = threading.Lock()          # start/stop 직렬화
         self._touch_lock = threading.Lock()    # 터치 패킷 원자 송신
+        self._touch_fifo_checked = False       # FIFO 존재 확인 1회
 
         self._frame: Optional[np.ndarray] = None   # BGR 합성 프레임
         self._frame_lock = threading.Lock()
@@ -176,8 +177,10 @@ class WebOSStreamService:
         # linuxStream 로그에서 읽어오는 실제 좌표계
         self._stream_w = 0      # 스트리밍(=미러 이미지) 크기
         self._stream_h = 0
-        self._touch_w = 0       # linuxStream 이 보고하는 uinput 크기(미사용 — 진단용)
+        self._touch_w = 0       # uinput 등록 크기 (linuxStream 로그)
         self._touch_h = 0
+        self._native_w = 0      # Linux VM 프레임버퍼 native 크기 (= 패널 좌표계)
+        self._native_h = 0
         self._deployed = False
 
     # ------------------------------------------------------------------
@@ -457,13 +460,19 @@ class WebOSStreamService:
             return
         m = re.search(r"native=(\d+)x(\d+)\s+scale=\d+\s*->\s*(\d+)x(\d+)", log)
         if m:
+            self._native_w, self._native_h = int(m.group(1)), int(m.group(2))
             self._stream_w, self._stream_h = int(m.group(3)), int(m.group(4))
         m = re.search(r"touch injection enabled \((\d+)x(\d+)\)", log)
         if m:
             self._touch_w, self._touch_h = int(m.group(1)), int(m.group(2))
 
-        logger.info("WebOS: geometry stream=%dx%d touch=%dx%d",
+        logger.info("WebOS: geometry native=%dx%d stream=%dx%d touch=%dx%d",
+                    self._native_w, self._native_h,
                     self._stream_w, self._stream_h, self._touch_w, self._touch_h)
+        if not (self._touch_w and self._touch_h):
+            logger.warning("WebOS: linuxStream 로그에 'touch injection enabled' 없음 — "
+                           "uinput 터치가 비활성일 수 있습니다(--no-touch/권한). "
+                           "native 크기로 대체 매핑합니다.")
 
     # ------------------------------------------------------------------
     # Frame reader
@@ -650,10 +659,36 @@ class WebOSStreamService:
         """uinput 이 등록된 좌표계 (linuxStream 로그의 'touch injection enabled (WxH)')."""
         return self._touch_w, self._touch_h
 
+    @property
+    def native_size(self) -> tuple[int, int]:
+        """Linux VM 프레임버퍼 native 크기 = 패널 좌표계.
+
+        로그를 못 읽었으면 스트림 출력 × scale 로 역산한다(-scale 은 우리가 준 값).
+        """
+        if self._native_w and self._native_h:
+            return self._native_w, self._native_h
+        sw, sh = self.size
+        if sw and sh:
+            return sw * self.scale, sh * self.scale
+        return 0, 0
+
     def _ensure_touch_channel(self) -> None:
         p = self._touch_proc
         if p is not None and p.poll() is None:
             return
+        # FIFO 가 실제로 있는지 1회 확인 — 없으면 cat 이 **일반 파일**을 만들고 패킷이
+        # 파일에 쌓이기만 해서 "조용히 아무 일도 안 일어나는" 실패가 된다.
+        if not self._touch_fifo_checked:
+            self._touch_fifo_checked = True
+            try:
+                r = self._ssh(f"test -p {REMOTE_FIFO} && echo FIFO_OK || echo FIFO_MISSING",
+                              timeout=20.0)
+                if "FIFO_OK" not in (r.stdout or ""):
+                    logger.warning(
+                        "WebOS: 터치 FIFO(%s) 없음 — mkfifo 실패 환경으로 보입니다. "
+                        "uinput 터치가 동작하지 않습니다(ADB 경로 사용 권장).", REMOTE_FIFO)
+            except Exception as e:
+                logger.debug("WebOS: FIFO 확인 실패: %s", e)
         cmd = self._adb_args("exec-in", "sh", "-c", self._ssh_wrap(f"cat > {REMOTE_FIFO}"))
         self._touch_proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
@@ -662,13 +697,17 @@ class WebOSStreamService:
         logger.info("WebOS: uinput 터치 채널 열림 (%s)", self.device_id or self.adb_serial)
 
     def _map_touch(self, x: float, y: float) -> tuple[int, int]:
-        """미러 좌표 → uinput 좌표. 두 좌표계가 같으면 그대로 통과."""
-        sw, sh = self.size
+        """**패널(native) 좌표** → uinput 좌표. 보통 1:1 이라 그대로 통과한다.
+
+        ⚠ 입력은 스트림 출력(-scale 축소본) 좌표가 아니라 패널 좌표다. 호출자(isap)가
+        프론트 좌표를 그대로 넘기고, 그 좌표계는 Android 디스플레이 크기로 고정돼 있다.
+        """
+        nw, nh = self.native_size
         tw, th = self._touch_w, self._touch_h
-        if sw and tw and sw != tw:
-            x = x * tw / sw
-        if sh and th and sh != th:
-            y = y * th / sh
+        if nw and tw and nw != tw:
+            x = x * tw / nw
+        if nh and th and nh != th:
+            y = y * th / nh
         return max(0, min(65535, int(round(x)))), max(0, min(65535, int(round(y))))
 
     def send_touch(self, ttype: int, x: float, y: float, touch_id: int = 0) -> None:
@@ -814,5 +853,7 @@ class WebOSStreamService:
             "height": h,
             "touch_width": self._touch_w,
             "touch_height": self._touch_h,
+            "native_width": self.native_size[0],
+            "native_height": self.native_size[1],
             "last_error": self._last_error,
         }
