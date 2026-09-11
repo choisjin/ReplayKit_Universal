@@ -600,6 +600,45 @@ def cmd_edge(args) -> int:
     return 0
 
 
+# 참조본 01_monitor_up.bat / 02_monitor_down.bat 의 vcs_simulator_rx 프레임.
+# 디스플레이 팝업(Extended) 상태를 바꾼다 — 이 상태에 따라 Android 논리 크기가
+# 3840x850 ↔ 3840x1440 으로 달라지고, 화면 레이아웃도 함께 바뀐다.
+_MONITOR_FRAMES = {
+    "up": [
+        "\\x83\\x50\\x10\\x00\\x00\\x01\\x98\\x00\\x00\\x00\\x02\\x01"
+        "\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00",
+        "\\x83\\x50\\x10\\x00\\x00\\x01\\x98\\x00\\x00\\x00\\x01\\x01"
+        "\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00",
+    ],
+    "down": [
+        "\\x83\\x50\\x10\\x00\\x00\\x01\\x98\\x00\\x00\\x00\\x03\\x01"
+        "\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00",
+        "\\x83\\x50\\x10\\x00\\x00\\x01\\x98\\x00\\x00\\x00\\x04\\x01"
+        "\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00",
+    ],
+}
+
+
+def cmd_monitor(args) -> int:
+    """디스플레이 팝업 up/down (참조본 01/02_monitor_*.bat 와 동일 프레임).
+
+    이 상태에 따라 Android 논리 크기(wm size)가 바뀐다 — 기본 화면이 작게 보이거나
+    터치가 어긋날 때 상태를 되돌려 보는 용도.
+    """
+    svc = _make(args)
+    frames = _MONITOR_FRAMES[args.state]
+    for i, fr in enumerate(frames):
+        cmd = svc._adb_args("shell", f"echo -e -n '{fr}' > /dev/vcs_simulator_rx")
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        print(f"[i] frame{i + 1} rc={r.returncode} {(r.stdout + r.stderr).strip()!r}")
+        if i == 0:
+            time.sleep(3.0)
+    r = subprocess.run(svc._adb_args("shell", "wm size"),
+                       capture_output=True, text=True, timeout=20)
+    print(f"[i] 이후 wm size: {(r.stdout + r.stderr).strip()}")
+    return 0
+
+
 def main() -> int:
     # 공통 옵션은 부모 파서로 둬서 하위 명령 앞/뒤 어느 쪽에 써도 먹게 한다.
     #   ⚠ parents= 로 재사용하면 **하위 파서의 기본값이 상위에서 준 값을 덮어쓴다**.
@@ -702,6 +741,11 @@ def main() -> int:
     p.add_argument("--space", choices=["panel", "mirror"], default="panel")
     p.add_argument("--wait", type=float, default=0.7, help="전송 후 로그 확인 대기(초)")
     p.set_defaults(func=cmd_touch)
+
+    p = sub.add_parser("monitor", help="디스플레이 팝업 up/down (Android 논리 크기 변경)",
+                       parents=[common])
+    p.add_argument("state", choices=["up", "down"])
+    p.set_defaults(func=cmd_monitor)
 
     p = sub.add_parser("edge", help="가장자리→안쪽 스와이프(엣지 제스처)",
                        parents=[common])

@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import time as _time
+
 from .adb_service import ADBService
 from .hkmc6th_service import HKMC6thService
 from .hkmc5th_wide_service import HKMC5thWideService
@@ -2167,25 +2169,27 @@ class DeviceManager:
                     self._isap_reconnect_attempts.pop(dev.id, None)
                     if dev.status != "connected":
                         dev.status = "connected"
-                    # WebOS 터치 좌표계 = HU 의 **Android 디스플레이** 크기.
-                    # 미러 이미지는 Linux 스트림(축소본)이라 크기가 다르므로, 터치를 보낼 때
-                    # 이 값으로 환산한다. 최초 1회만 조회(플래그로 판정 — screens 값은 폴백이
-                    # 이미 들어가 있어 값 유무로는 못 씀).
-                    # 플래그만 보면, 예전 빌드에서 플래그만 저장되고 크기는 다른 키에
-                    # 들어갔던 경우 영영 재감지하지 않는다 → 크기가 비어 있으면 다시 감지.
-                    if getattr(isap, "webos_enabled", False) and not (
-                        dev.info.get("webos_android_size") or {}
-                    ).get("width"):
+                    # Android 논리 디스플레이 크기 — `input tap/swipe`(엣지 제스처) 좌표계.
+                    # ⚠ 팝업(Extended) 상태에 따라 3840x850 ↔ 3840x1440 으로 **바뀐다**.
+                    # 1회 감지로 캐시하면 상태가 바뀐 뒤 터치가 어긋나므로 주기적으로 갱신한다.
+                    # (webOS/evdev 는 Linux VM 프레임버퍼 기준이라 이 값과 무관하다)
+                    _now_ts = _time.monotonic()
+                    if getattr(isap, "webos_enabled", False) and (
+                        _now_ts - float(dev.info.get("webos_size_ts") or 0) > 30.0
+                    ):
+                        dev.info["webos_size_ts"] = _now_ts
                         try:
                             ainfo = await self.adb.get_device_info(isap.webos_serial)
                             r = ainfo.get("resolution") or {}
                             if r.get("width") and r.get("height"):
+                                prev = dev.info.get("webos_android_size") or {}
                                 dev.info["webos_android_size"] = {
                                     "width": r["width"], "height": r["height"],
                                 }
-                                dev.info["webos_screen_detected"] = True
-                                logger.info("WebOS android display size: %s -> %sx%s",
-                                            isap.webos_serial, r["width"], r["height"])
+                                if (prev.get("width"), prev.get("height")) != (
+                                        r["width"], r["height"]):
+                                    logger.info("WebOS android display size: %s -> %sx%s",
+                                                isap.webos_serial, r["width"], r["height"])
                         except Exception as e:
                             logger.debug("WebOS android size detect failed (%s): %s",
                                          isap.webos_serial, e)

@@ -96,32 +96,47 @@ class WebOSScreen:
         """터치를 webOS 터치스크린 evdev 에 직접 주입할지 (기본). 'adb' 면 Android 경유."""
         return str(self._info.get("webos_touch_via") or "evdev").lower() != "adb"
 
-    def android_size(self) -> tuple[int, int]:
-        """Android 디스플레이 크기 = 패널 좌표계 = 터치 좌표계.
-
-        우선순위: 감지값(webos_android_size) → **linuxStream native** → info.resolution.
-        native 를 중간에 둔 이유: 스트림만 뜨면 항상 알 수 있는 값이고(로그의
-        `native=3840x1440`), Linux VM 프레임버퍼 = 물리 패널이라 Android 디스플레이와
-        같다. adb 감지가 늦거나 실패해도 좌표계가 흔들리지 않는다.
-        """
-        a = self._info.get("webos_android_size") or {}
-        if isinstance(a, dict) and a.get("width") and a.get("height"):
+    @staticmethod
+    def _size_of(d) -> tuple[int, int]:
+        if isinstance(d, dict) and d.get("width") and d.get("height"):
             try:
-                return int(a["width"]), int(a["height"])
+                return int(d["width"]), int(d["height"])
             except (TypeError, ValueError):
                 pass
+        return 0, 0
+
+    def _native_size(self) -> tuple[int, int]:
+        """Linux VM 프레임버퍼 = 물리 패널 크기 (linuxStream 로그의 native=WxH)."""
         if self._svc is not None:
             nw, nh = self._svc.native_size
             if nw and nh:
                 return nw, nh
-        r = self._info.get("resolution") or {}
-        if isinstance(r, dict) and r.get("width") and r.get("height"):
-            try:
-                return int(r["width"]), int(r["height"])
-            except (TypeError, ValueError):
-                pass
+        return 0, 0
+
+    def panel_size(self) -> tuple[int, int]:
+        """**패널 좌표계** — 미러 이미지와 webOS(evdev) 터치가 쓰는 기준.
+
+        webOS 는 Linux VM 프레임버퍼를 꽉 채우고 그 크기는 팝업 상태와 무관하게
+        고정이다. 그래서 native 를 최우선으로 본다.
+        """
+        for v in (self._native_size(),
+                  self._size_of(self._info.get("webos_android_size")),
+                  self._size_of(self._info.get("resolution"))):
+            if v[0] and v[1]:
+                return v
         fw, fh = self._fallback_size
         return (int(fw), int(fh)) if (fw and fh) else (0, 0)
+
+    def android_size(self) -> tuple[int, int]:
+        """**Android 논리 디스플레이 크기** — `input tap/swipe` 가 쓰는 기준.
+
+        팝업(Extended) 상태에 따라 3840x850 ↔ 3840x1440 으로 바뀐다. 감지값이 없으면
+        패널 크기로 폴백(두 값이 같은 상태라면 결과가 같다).
+        """
+        v = self._size_of(self._info.get("webos_android_size"))
+        if v[0] and v[1]:
+            return v
+        return self.panel_size()
 
     # ------------------------------------------------------------------
     # 스트림
@@ -163,7 +178,7 @@ class WebOSScreen:
         배율만큼 빗나간다 — iSAP 연결에서 실제로 겪은 회귀다. 그래서 스트림 출력
         (-scale 축소본)은 절대 쓰지 않고 패널 크기만 돌려준다.
         """
-        return self.android_size()
+        return self.panel_size()
 
     # ------------------------------------------------------------------
     # 화면 결정
@@ -221,7 +236,7 @@ class WebOSScreen:
     def _clamp(self, x: float, y: float) -> tuple[int, int]:
         """클라이언트 좌표 → 패널(터치) 좌표. 기준이 다르면 배율 환산 후 범위 클램프."""
         sw, sh = self.client_size()
-        aw, ah = self.android_size()
+        aw, ah = self.panel_size()
         if sw and aw and sw != aw:
             x = x * aw / sw
         if sh and ah and sh != ah:
@@ -233,6 +248,23 @@ class WebOSScreen:
                 logger.warning("[WebOS] 터치 좌표가 화면 밖(%s,%s) → 클램프(%s,%s) %sx%s",
                                ix, iy, cx, cy, aw, ah)
             return cx, cy
+        return ix, iy
+
+    def _to_android(self, x: int, y: int) -> tuple[int, int]:
+        """패널 좌표 → Android 입력 좌표.
+
+        팝업 상태에서 Android 논리 크기가 패널보다 작으면(예: 3840x850) 그 비율로
+        줄여야 `input tap/swipe` 가 제자리에 들어간다.
+        """
+        pw, ph = self.panel_size()
+        aw, ah = self.android_size()
+        if pw and aw and pw != aw:
+            x = x * aw / pw
+        if ph and ah and ph != ah:
+            y = y * ah / ph
+        ix, iy = int(round(x)), int(round(y))
+        if aw and ah:
+            ix, iy = max(0, min(aw - 1, ix)), max(0, min(ah - 1, iy))
         return ix, iy
 
     def _adb(self):
@@ -252,8 +284,10 @@ class WebOSScreen:
             await self._run(self.stream().tap, px, py)
             return
         adb, serial, did = self._adb()
-        await adb.tap(px, py, serial=serial, display_id=did)
-        logger.info("[WebOS TAP/adb] (%s,%s) serial=%s", px, py, serial)
+        tx, ty = self._to_android(px, py)
+        await adb.tap(tx, ty, serial=serial, display_id=did)
+        logger.info("[WebOS TAP/adb] panel(%s,%s) -> android(%s,%s) serial=%s",
+                    px, py, tx, ty, serial)
 
     async def repeat_tap(self, x: int, y: int, count: int = 5,
                          interval_ms: int = 100) -> None:
@@ -262,7 +296,8 @@ class WebOSScreen:
             await self._run(self.stream().repeat_tap, px, py, count, interval_ms)
             return
         adb, serial, did = self._adb()
-        await adb.repeat_tap(px, py, count, interval_ms, serial=serial, display_id=did)
+        tx, ty = self._to_android(px, py)
+        await adb.repeat_tap(tx, ty, count, interval_ms, serial=serial, display_id=did)
 
     async def long_press(self, x: int, y: int, duration_ms: int = 3000) -> None:
         px, py = self._clamp(x, y)
@@ -270,7 +305,8 @@ class WebOSScreen:
             await self._run(self.stream().long_press, px, py, duration_ms)
             return
         adb, serial, did = self._adb()
-        await adb.long_press(px, py, duration_ms, serial=serial, display_id=did)
+        tx, ty = self._to_android(px, py)
+        await adb.long_press(tx, ty, duration_ms, serial=serial, display_id=did)
 
     def _edge_snap(self, x: int, y: int, tox: int, toy: int) -> tuple[int, int]:
         """시작점이 가장자리 근처면 **정확한 가장자리로 붙인다**.
@@ -286,7 +322,7 @@ class WebOSScreen:
             th = 24
         if th <= 0:
             return x, y
-        aw, ah = self.android_size()
+        aw, ah = self.panel_size()
         sx, sy = x, y
         if aw:
             if x <= th and tox > x:
@@ -303,8 +339,8 @@ class WebOSScreen:
         return sx, sy
 
     def _is_edge_start(self, x: int, y: int) -> bool:
-        """시작점이 화면 가장자리에 정확히 붙어 있는가 (엣지 스냅 후 판정)."""
-        aw, ah = self.android_size()
+        """시작점이 화면 가장자리에 정확히 붙어 있는가 (엣지 스냅 후 판정, 패널 기준)."""
+        aw, ah = self.panel_size()
         return bool((aw and (x <= 0 or x >= aw - 1))
                     or (ah and (y <= 0 or y >= ah - 1)))
 
@@ -331,10 +367,13 @@ class WebOSScreen:
                             int(duration_ms or 300), hold_ms)
             return
         adb, serial, did = self._adb()
+        tx1, ty1 = self._to_android(ax, ay)
+        tx2, ty2 = self._to_android(bx, by)
         if self.touch_via_evdev:
-            logger.info("[WebOS SWIPE] 엣지 제스처 → Android 경유 (%s,%s)->(%s,%s)",
-                        ax, ay, bx, by)
-        await adb.swipe(ax, ay, bx, by, duration_ms=int(duration_ms or 300),
+            logger.info("[WebOS SWIPE] 엣지 제스처 → Android 경유 "
+                        "panel(%s,%s)->(%s,%s) = android(%s,%s)->(%s,%s)",
+                        ax, ay, bx, by, tx1, ty1, tx2, ty2)
+        await adb.swipe(tx1, ty1, tx2, ty2, duration_ms=int(duration_ms or 300),
                         serial=serial, display_id=did, hold_ms=hold_ms)
 
     async def multi_finger_tap(self, points: list) -> None:
@@ -346,6 +385,7 @@ class WebOSScreen:
             await self._run(self.stream().multi_finger_tap, pts)
             return
         adb, serial, did = self._adb()
+        pts = [dict(zip(("x", "y"), self._to_android(p["x"], p["y"]))) for p in pts]
         await adb.multi_finger_tap(pts, serial=serial, display_id=did)
 
     async def multi_finger_swipe(self, fingers: list, duration_ms: int = 500,
@@ -360,7 +400,12 @@ class WebOSScreen:
                             int(duration_ms or 500), hold_ms)
             return
         adb, serial, did = self._adb()
-        await adb.multi_finger_swipe(fs, duration_ms, serial=serial, display_id=did)
+        conv = []
+        for f in fs:
+            a = self._to_android(f["x1"], f["y1"])
+            b = self._to_android(f["x2"], f["y2"])
+            conv.append({"x1": a[0], "y1": a[1], "x2": b[0], "y2": b[1]})
+        await adb.multi_finger_swipe(conv, duration_ms, serial=serial, display_id=did)
 
     def get_info(self) -> dict:
         info = {
