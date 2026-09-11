@@ -998,6 +998,7 @@ async def websocket_screen_mirror(websocket: WebSocket):
     adb_dispatch_logged = False
     # WebOS 자동 전환 상태(프론트에 변할 때만 통지)
     _webos_auto_sent = False
+    _webos_gate_logged = False   # WebOS 게이트 상태는 세션당 1회만 로깅
     # iSAP 기본화면을 scrcpy(ADB)로 미러링할지 — HU 의 ADB 시리얼을 아는 경우만.
     # (iSAP CMD_GETIMG 는 3840x1440 통째 폴링이라 ~1fps)
     _isap_mirror_serial = ""
@@ -1008,6 +1009,9 @@ async def websocket_screen_mirror(websocket: WebSocket):
         _dinfo = dev.info or {}
         if _dinfo.get("mirror_via_adb", True):
             _ws0 = device_manager.get_webos_screen(target_device_id)
+            if _ws0 is not None and not _ws0.enabled:
+                logger.info("WebOS 미사용: device=%s — %s",
+                            target_device_id, _ws0.disabled_reason)
             if _ws0 is not None and _ws0.enabled:
                 _isap_mirror_serial = _ws0.serial
                 _isap_mirror_display = _ws0.display_id
@@ -1534,6 +1538,19 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     # scrcpy/screencap 으로는 안 잡힌다 → Linux VM 스트림으로 대체.
                     # 메인 화면을 보는 중이면 전면 판별로 자동 전환까지 한다(양방향).
                     _ws = device_manager.get_webos_screen(target_device_id)
+                    if not _webos_gate_logged:
+                        _webos_gate_logged = True
+                        if _ws is None:
+                            logger.info("WebOS 미사용: device=%s — 화면 헬퍼 없음",
+                                        target_device_id)
+                        elif not _ws.enabled:
+                            logger.info("WebOS 미사용: device=%s — %s",
+                                        target_device_id, _ws.disabled_reason)
+                        else:
+                            logger.info("WebOS 사용 가능: device=%s serial=%s auto=%s "
+                                        "display_id=%s screen_type=%r",
+                                        target_device_id, _ws.serial, _ws.auto,
+                                        _ws.display_id, screen_type)
                     if _ws is not None and _ws.enabled:
                         _base = screen_type if screen_type in (
                             None, "", "front_center", "0") else "__other__"

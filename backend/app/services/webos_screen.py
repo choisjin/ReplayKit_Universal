@@ -41,13 +41,17 @@ class WebOSScreen:
     TOUCH_FG_MAX_AGE = 0.3
 
     def __init__(self, info: Optional[dict] = None, device_id: str = "",
-                 default_serial: str = "", fallback_size: tuple = (0, 0)):
+                 default_serial: str = "", fallback_size: tuple = (0, 0),
+                 size_provider=None):
         self._info: dict = info if isinstance(info, dict) else {}
         self.device_id = device_id
         # ADB 로 붙인 디바이스는 그 자신이 HU 라 별도 시리얼 입력이 필요 없다.
         self._default_serial = (default_serial or "").strip()
         # 패널 크기를 아직 모를 때 쓸 폴백(예: iSAP 전석 화면 크기 — 같은 물리 패널).
         self._fallback_size = tuple(fallback_size or (0, 0))
+        # (screen_type) -> (w, h). 자동 전환 시 **터치가 들어온 화면**의 좌표계를
+        # 알아내는 용도. info["screens"] 에 없을 때만 쓴다.
+        self._size_provider = size_provider
         self._svc = None
         self.auto_active = False     # 자동 전환으로 WebOS 를 보여주는 중인지
         # Android 오버레이 캐시 (검정 키 합성용) — (시각, BGR 프레임)
@@ -80,6 +84,18 @@ class WebOSScreen:
         """webOS 를 태운 HU 의 ADB 시리얼. ADB 디바이스는 자기 주소가 기본값."""
         return (str(self._info.get("webos_adb_serial") or "").strip()
                 or self._default_serial)
+
+    @property
+    def disabled_reason(self) -> str:
+        """비활성 사유(활성이면 빈 문자열). 미러가 조용히 넘어가는 걸 막기 위한 진단용."""
+        model = str(self._info.get("device_model") or "").strip()
+        if model not in WEBOS_MODELS:
+            return (f"device_model={model!r} — WebOS 지원 모델이 아님 "
+                    f"(지원: {', '.join(WEBOS_MODELS)}). ADB 리프레시가 info 를 덮어써 "
+                    f"모델이 사라졌을 수 있음")
+        if not self.serial:
+            return "webos_adb_serial 이 비어 있음 (HU 의 ADB 시리얼 필요)"
+        return ""
 
     @property
     def display_id(self) -> Optional[int]:
@@ -329,9 +345,34 @@ class WebOSScreen:
             w = h = 0
         return (w, h) if (w and h) else self.screen_size()
 
-    def _clamp(self, x: float, y: float) -> tuple[int, int]:
+    def _src_size(self, src: str) -> tuple[int, int]:
+        """터치가 들어온 화면의 크기 = 클라이언트가 좌표를 만들 때 쓴 기준.
+
+        ⚠ 자동 전환 중에는 프론트가 **기본화면(front_center)** 을 보고 있으므로 소스
+        좌표계도 그 화면 크기다. webOS 크기로 환산하면 배율이 통째로 빠져 정확히
+        절반으로 들어간다(실기 증상). 프론트가 실제로 받아 간 값인
+        `info["screens"][src]` 를 최우선으로 쓰고, 없으면 소유자가 준 조회 함수를 쓴다.
+        """
+        if src and src != WEBOS_SCREEN:
+            cfg = (self._info.get("screens") or {}).get(src) or {}
+            try:
+                w, h = int(cfg.get("width") or 0), int(cfg.get("height") or 0)
+            except (TypeError, ValueError):
+                w = h = 0
+            if w and h:
+                return w, h
+            if self._size_provider is not None:
+                try:
+                    w, h = self._size_provider(src)
+                    if w and h:
+                        return int(w), int(h)
+                except Exception as e:
+                    logger.debug("WebOS: 소스 화면(%s) 크기 조회 실패 — %s", src, e)
+        return self.client_size()
+
+    def _clamp(self, x: float, y: float, src: str = "") -> tuple[int, int]:
         """클라이언트 좌표 → 패널(터치) 좌표. 기준이 다르면 배율 환산 후 범위 클램프."""
-        sw, sh = self.client_size()
+        sw, sh = self._src_size(src)
         aw, ah = self.panel_size()
         if sw and aw and sw != aw:
             x = x * aw / sw
@@ -371,11 +412,12 @@ class WebOSScreen:
     async def _run(self, fn, *args):
         return await asyncio.get_event_loop().run_in_executor(None, fn, *args)
 
-    async def tap(self, x: int, y: int) -> None:
-        px, py = self._clamp(x, y)
+    async def tap(self, x: int, y: int, src: str = "") -> None:
+        px, py = self._clamp(x, y, src)
         if (px, py) != (int(x), int(y)):
-            logger.info("[WebOS] 좌표 환산 client(%s,%s)/%sx%s -> panel(%s,%s)/%sx%s",
-                        x, y, *self.client_size(), px, py, *self.android_size())
+            logger.info("[WebOS] 좌표 환산 %s(%s,%s)/%sx%s -> panel(%s,%s)/%sx%s",
+                        src or WEBOS_SCREEN, x, y, *self._src_size(src),
+                        px, py, *self.panel_size())
         if self.touch_via_evdev:
             await self._run(self.stream().tap, px, py)
             return
@@ -386,8 +428,8 @@ class WebOSScreen:
                     px, py, tx, ty, serial)
 
     async def repeat_tap(self, x: int, y: int, count: int = 5,
-                         interval_ms: int = 100) -> None:
-        px, py = self._clamp(x, y)
+                         interval_ms: int = 100, src: str = "") -> None:
+        px, py = self._clamp(x, y, src)
         if self.touch_via_evdev:
             await self._run(self.stream().repeat_tap, px, py, count, interval_ms)
             return
@@ -395,8 +437,9 @@ class WebOSScreen:
         tx, ty = self._to_android(px, py)
         await adb.repeat_tap(tx, ty, count, interval_ms, serial=serial, display_id=did)
 
-    async def long_press(self, x: int, y: int, duration_ms: int = 3000) -> None:
-        px, py = self._clamp(x, y)
+    async def long_press(self, x: int, y: int, duration_ms: int = 3000,
+                         src: str = "") -> None:
+        px, py = self._clamp(x, y, src)
         if self.touch_via_evdev:
             await self._run(self.stream().long_press, px, py, duration_ms)
             return
@@ -452,9 +495,9 @@ class WebOSScreen:
         return str(self._info.get("webos_edge_via") or "adb").lower() == "adb"
 
     async def swipe(self, x1: int, y1: int, x2: int, y2: int,
-                    duration_ms: int = 300, hold_ms: int = 0) -> None:
-        ax, ay = self._clamp(x1, y1)
-        bx, by = self._clamp(x2, y2)
+                    duration_ms: int = 300, hold_ms: int = 0, src: str = "") -> None:
+        ax, ay = self._clamp(x1, y1, src)
+        bx, by = self._clamp(x2, y2, src)
         ax, ay = self._edge_snap(ax, ay, bx, by)
         use_adb = (not self.touch_via_evdev) or (
             self.edge_via_adb and self._is_edge_start(ax, ay))
@@ -472,10 +515,10 @@ class WebOSScreen:
         await adb.swipe(tx1, ty1, tx2, ty2, duration_ms=int(duration_ms or 300),
                         serial=serial, display_id=did, hold_ms=hold_ms)
 
-    async def multi_finger_tap(self, points: list) -> None:
+    async def multi_finger_tap(self, points: list, src: str = "") -> None:
         pts = []
         for p in points:
-            px, py = self._clamp(p["x"], p["y"])
+            px, py = self._clamp(p["x"], p["y"], src)
             pts.append({"x": px, "y": py})
         if self.touch_via_evdev:
             await self._run(self.stream().multi_finger_tap, pts)
@@ -485,11 +528,11 @@ class WebOSScreen:
         await adb.multi_finger_tap(pts, serial=serial, display_id=did)
 
     async def multi_finger_swipe(self, fingers: list, duration_ms: int = 500,
-                                 hold_ms: int = 0) -> None:
+                                 hold_ms: int = 0, src: str = "") -> None:
         fs = []
         for f in fingers:
-            ax, ay = self._clamp(f["x1"], f["y1"])
-            bx, by = self._clamp(f["x2"], f["y2"])
+            ax, ay = self._clamp(f["x1"], f["y1"], src)
+            bx, by = self._clamp(f["x2"], f["y2"], src)
             fs.append({"x1": ax, "y1": ay, "x2": bx, "y2": by})
         if self.touch_via_evdev:
             await self._run(self.stream().multi_finger_swipe, fs,

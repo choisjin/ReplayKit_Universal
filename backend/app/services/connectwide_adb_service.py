@@ -90,16 +90,33 @@ CONNECTWIDE_KEYS: dict[str, dict] = {
 }
 
 
-def _shell_arg_for_frames(frames):
+# 프레임 사이 간격(ms). ⚠ 0 으로 두면 "두 번 눌러야 동작" 이 된다.
+# 참조 .bat 은 프레임마다 별도 `adb shell` 이라 왕복 지연(이 HU 기준 ~0.8s)이 그대로
+# 간격이 되고, 그게 키 누름 유지 시간 역할을 한다. 한 줄로 묶으면 그 시간이 0 이 되어
+# HU 가 입력을 무시한다. adb 왕복은 1회로 유지하면서 디바이스 쪽에서 간격을 만든다.
+HK_FRAME_GAP_MS = 100
+
+
+def _sleep_expr(ms: int) -> str:
+    """디바이스 쉘에서 ms 만큼 대기. toybox sleep 이 소수를 못 받으면 usleep 로 폴백."""
+    return f"sleep {ms / 1000.0:.3f} 2>/dev/null || usleep {int(ms) * 1000} 2>/dev/null"
+
+
+def _shell_arg_for_frames(frames, gap_ms=None):
     """프레임 목록을 하나의 `adb shell "..."` 인자로 합친다.
 
-    참조본은 프레임마다 별도 `adb shell` 을 호출하지만, 디바이스 쪽에서는 동일
-    노드에 순차 write 하는 것과 결과가 같으므로 device-shell 세미콜론(;)으로 묶어
-    adb 왕복 1회로 처리한다(속도·안정성). 반환값은 ADBService.run_shell_command 에
-    그대로 넘길 `shell "..."` 문자열이다.
+    참조본은 프레임마다 별도 `adb shell` 을 호출한다. 우리는 adb 왕복 1회로 묶되
+    **프레임 사이 간격을 디바이스 쪽에서 재현**한다(간격 0 이면 HU 가 무시한다).
+    반환값은 ADBService.run_shell_command 에 그대로 넘길 `shell "..."` 문자열이다.
     """
-    writes = "; ".join(f"echo -e -n '{f}' > {VCS_NODE}" for f in frames)
-    return f'shell "{writes}"'
+    gap = HK_FRAME_GAP_MS if gap_ms is None else int(gap_ms)
+    writes = [f"echo -e -n '{f}' > {VCS_NODE}" for f in frames]
+    if gap > 0 and len(writes) > 1:
+        sep = f"; {_sleep_expr(gap)}; "
+        body = sep.join(writes)
+    else:
+        body = "; ".join(writes)
+    return f'shell "{body}"'
 
 
 def resolve_frames(key_name: str, action: str = "short") -> "list[str]":
@@ -129,9 +146,10 @@ def supports_hold(key_name: str) -> bool:
     return bool(acts.get("press") and acts.get("release"))
 
 
-def build_inject_command(key_name: str, action: str = "short") -> str:
+def build_inject_command(key_name: str, action: str = "short",
+                        gap_ms=None) -> str:
     """키 주입에 필요한 `shell "..."` 명령 문자열을 만든다(ADBService 로 전달)."""
-    return _shell_arg_for_frames(resolve_frames(key_name, action))
+    return _shell_arg_for_frames(resolve_frames(key_name, action), gap_ms)
 
 
 async def async_send_key(adb_service, serial: str, key_name: str,
@@ -157,8 +175,9 @@ async def async_send_key(adb_service, serial: str, key_name: str,
         # 롱키 미지원 키 → short 로 폴백
         action = "short"
     cmd = build_inject_command(key_name, action)
-    logger.info("[ConnectWide HK] serial=%s key=%s action=%s frames=%d",
-                serial, key_name, action, len(resolve_frames(key_name, action)))
+    logger.info("[ConnectWide HK] serial=%s key=%s action=%s frames=%d gap=%dms",
+                serial, key_name, action, len(resolve_frames(key_name, action)),
+                HK_FRAME_GAP_MS)
     await adb_service.run_shell_command(cmd, serial=serial)
 
 

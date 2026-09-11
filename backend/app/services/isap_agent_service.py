@@ -739,6 +739,7 @@ class ISAPAgentService:
             self._webos = WebOSScreen(
                 self._webos_config, device_id=self.device_id,
                 fallback_size=(self.screen_width_front, self.screen_height_front),
+                size_provider=self.get_screen_size,
             )
         return self._webos
 
@@ -1226,27 +1227,30 @@ class ISAPAgentService:
         return await loop.run_in_executor(None, self.screencap, output_path, screen_type, timeout, fmt)
 
     async def async_tap(self, x: int, y: int, screen_type: str = "front_center") -> None:
-        screen_type = self.resolve_screen(screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
+        src, screen_type = screen_type, self.resolve_screen(
+            screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
         if self._is_webos(screen_type):
-            await self.webos.tap(x, y)
+            await self.webos.tap(x, y, src=src)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.tap, x, y, screen_type)
 
     async def async_repeat_tap(self, x: int, y: int, count: int = 5, interval_ms: int = 100,
                                screen_type: str = "front_center") -> None:
-        screen_type = self.resolve_screen(screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
+        src, screen_type = screen_type, self.resolve_screen(
+            screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
         if self._is_webos(screen_type):
-            await self.webos.repeat_tap(x, y, count, interval_ms)
+            await self.webos.repeat_tap(x, y, count, interval_ms, src=src)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.repeat_tap, x, y, count, interval_ms, screen_type)
 
     async def async_long_press(self, x: int, y: int, duration_ms: int = 3000,
                                screen_type: str = "front_center") -> None:
-        screen_type = self.resolve_screen(screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
+        src, screen_type = screen_type, self.resolve_screen(
+            screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
         if self._is_webos(screen_type):
-            await self.webos.long_press(x, y, duration_ms)
+            await self.webos.long_press(x, y, duration_ms, src=src)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.long_press, x, y, duration_ms, screen_type)
@@ -1254,9 +1258,10 @@ class ISAPAgentService:
     async def async_swipe(self, x1: int, y1: int, x2: int, y2: int,
                           screen_type: str = "front_center", duration_ms: int = 0,
                           hold_ms: int = 0) -> None:
-        screen_type = self.resolve_screen(screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
+        src, screen_type = screen_type, self.resolve_screen(
+            screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
         if self._is_webos(screen_type):
-            await self.webos.swipe(x1, y1, x2, y2, duration_ms, hold_ms)
+            await self.webos.swipe(x1, y1, x2, y2, duration_ms, hold_ms, src=src)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.swipe, x1, y1, x2, y2, screen_type, duration_ms, hold_ms)
@@ -1264,18 +1269,20 @@ class ISAPAgentService:
     async def async_multi_finger_swipe(self, fingers: list[dict],
                                        screen_type: str = "front_center",
                                        duration_ms: int = 500, hold_ms: int = 0) -> None:
-        screen_type = self.resolve_screen(screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
+        src, screen_type = screen_type, self.resolve_screen(
+            screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
         if self._is_webos(screen_type):
-            await self.webos.multi_finger_swipe(fingers, duration_ms, hold_ms)
+            await self.webos.multi_finger_swipe(fingers, duration_ms, hold_ms, src=src)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.multi_finger_swipe, fingers, screen_type, duration_ms, hold_ms)
 
     async def async_multi_finger_tap(self, points: list[dict],
                                      screen_type: str = "front_center") -> None:
-        screen_type = self.resolve_screen(screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
+        src, screen_type = screen_type, self.resolve_screen(
+            screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
         if self._is_webos(screen_type):
-            await self.webos.multi_finger_tap(points)
+            await self.webos.multi_finger_tap(points, src=src)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.multi_finger_tap, points, screen_type)
