@@ -305,9 +305,17 @@ class WebOSScreen:
         self._ov_cache = (now, cached)
         return cached
 
-    async def screencap_bytes(self, fmt: str = "jpeg", timeout: float = 10.0) -> bytes:
+    async def screencap_bytes(self, fmt: str = "jpeg", timeout: float = 10.0,
+                              overlay: bool = False) -> bytes:
+        """webOS 프레임. overlay=True 일 때만 Android UI 를 합성한다.
+
+        ⚠ 기본이 False 인 이유: 이 함수는 **미러와 재생/이미지비교 캡처가 함께** 쓴다.
+        오버레이는 최대 `overlay_interval` 만큼 묵은 Android 캐시를 덮어쓰고 사이드바도
+        들락거려서, 비교용 캡처에 섞이면 결과가 비결정적이 된다. 보는 용도(미러)만
+        명시적으로 켠다.
+        """
         data = await self.stream().async_screencap_bytes(fmt=fmt, timeout=timeout)
-        if not self.overlay_android:
+        if not (overlay and self.overlay_android):
             return data
         try:
             import cv2

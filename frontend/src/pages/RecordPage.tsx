@@ -1514,6 +1514,13 @@ export default function RecordPage() {
     return action;
   }, [allDevices]);
 
+  // ⚠ 자동 전환 중에는 선택이 '기본화면'이어도 **실제 조작/캡처 대상은 webOS** 다.
+  // 좌표도 webOS(패널) 기준으로 만들어 보내므로(deviceRes 참조) screen_type 도 맞춰야
+  // 백엔드가 재환산하지 않는다. 기록된 스텝도 이 값으로 남아 재생이 결정적이 된다.
+  // 하드키는 예외 — iSAP 하드키는 기본화면 monitor 로 나가야 한다.
+  const effScreenType = (screenSource === 'webos' && screenType !== 'webos')
+    ? 'webos' : screenType;
+
   // Inject screen_type into params for agent / ADB multi-display actions
   const resolveParams = useCallback((action: string, params: Record<string, any>, targetDevice: string): Record<string, any> => {
     const dev = allDevices.find(d => d.id === targetDevice);
@@ -1525,7 +1532,8 @@ export default function RecordPage() {
       return { ...params, screen_type: 'HU' };
     }
     if ((dev?.type === 'hkmc_agent' || dev?.type === 'isap_agent' || dev?.type === 'hkmc5th_wide_agent') && (action === 'hkmc_touch' || action === 'hkmc_swipe' || action === 'hkmc_key' || action === 'hkmc_long_press' || action === 'hkmc_multi_touch' || action === 'repeat_tap')) {
-      return { ...params, screen_type: screenType };
+      // 하드키(hkmc_key)는 화면과 무관하게 기본화면 monitor 로 나간다 — webOS 로 바꾸면 안 된다.
+      return { ...params, screen_type: action === 'hkmc_key' ? screenType : effScreenType };
     }
     // ADB/BMW multi-display: 모든 디스플레이에 screen_type 주입 (display 0 포함 — screencap에 display 선택 필요)
     if ((dev?.type === 'adb' || dev?.type === 'bmw_agent') && screenType && screenType !== 'front_center') {
@@ -1535,7 +1543,7 @@ export default function RecordPage() {
       }
     }
     return params;
-  }, [allDevices, screenType]);
+  }, [allDevices, screenType, effScreenType]);
 
   // 웹캠 노출 설정 모달 열기 — 현재 값을 먼저 조회 후 모달 open
   const openWebcamExposureModal = useCallback(async () => {
@@ -1688,8 +1696,8 @@ export default function RecordPage() {
       || dev.type === 'hkmc5th_wide_agent'
       || ((dev.type === 'adb' || dev.type === 'bmw_agent')
         && ((dev.info?.displays?.length ?? 0) > 1 || screenType === 'webos'));
-    return needsScreenType ? screenType : undefined;
-  }, [primaryDevices, auxiliaryDevices, screenType]);
+    return needsScreenType ? effScreenType : undefined;
+  }, [primaryDevices, auxiliaryDevices, screenType, effScreenType]);
 
   // HKMC 일체형 표시 보정 오프셋 — 일체형(integrated)에서 AVN(front_center) 영역이
   // x로 +1920 밀려 있어, 서버(image_tap/OCR)가 매칭 좌표에 더할 값. 수동 탭과 동일 규칙.

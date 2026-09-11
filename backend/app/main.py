@@ -1178,7 +1178,8 @@ async def websocket_screen_mirror(websocket: WebSocket):
                 elif isap and isap.is_connected and not _isap_adb_mirror:
                     _isap_t0 = asyncio.get_event_loop().time()
                     jpeg_bytes = await isap.async_screencap_bytes(
-                        screen_type=screen_type, fmt="jpeg", timeout=3.0
+                        screen_type=screen_type, fmt="jpeg", timeout=3.0,
+                        overlay=True,   # 미러는 실제 패널처럼(Android UI 합성)
                     )
                     # 전석 시청 중 webOS 가 전면이면 서비스가 자동으로 WebOS 소스로
                     # 바꾼다(캡처·터치 동일 판단). 어떤 화면을 보고 있는지 프론트에 알려
@@ -1592,7 +1593,8 @@ async def websocket_screen_mirror(websocket: WebSocket):
                             _wt0 = asyncio.get_event_loop().time()
                             try:
                                 await websocket.send_bytes(
-                                    await _ws.screencap_bytes(fmt="jpeg", timeout=3.0))
+                                    await _ws.screencap_bytes(fmt="jpeg", timeout=3.0,
+                                                              overlay=True))
                             except WebSocketDisconnect:
                                 raise
                             except Exception as we:

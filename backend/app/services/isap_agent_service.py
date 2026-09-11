@@ -1207,11 +1207,14 @@ class ISAPAgentService:
         await loop.run_in_executor(None, self.disconnect)
 
     async def async_screencap_bytes(self, screen_type: str = "front_center",
-                                    fmt: str = "jpeg", timeout: float = 10.0) -> bytes:
+                                    fmt: str = "jpeg", timeout: float = 10.0,
+                                    overlay: bool = False) -> bytes:
+        """overlay: Android UI 합성 여부. 미러만 True — 캡처/비교는 결정적이어야 한다."""
         screen_type = self.resolve_screen(screen_type)
         # WebOS 화면은 Android 캡처에 hole 로 뚫려 안 잡힌다 → Linux VM 스트림에서.
         if self._is_webos(screen_type):
-            return await self.webos.screencap_bytes(fmt=fmt, timeout=timeout)
+            return await self.webos.screencap_bytes(fmt=fmt, timeout=timeout,
+                                                    overlay=overlay)
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.screencap_bytes, screen_type, fmt, timeout)
 
