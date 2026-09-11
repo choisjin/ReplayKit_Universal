@@ -232,23 +232,33 @@ class WebOSScreen:
 
     @property
     def overlay_android(self) -> bool:
-        """webOS 프레임 위에 Android UI 를 합성할지 (기본 OFF).
+        """webOS 프레임 위에 Android UI 를 합성할지 (기본 ON).
 
-        실제 화면과 같은 그림이 되지만 Android 캡처가 adb 링크를 쓴다.
+        실제 패널은 webOS(베이스) 위에 Android UI(좌측 사이드바·우측 시계/공조)가 얹힌
+        모습인데 WebOS 스트림에는 그게 없다. 합성하면 실제 화면과 같아진다.
+        비용은 걱정보다 작다 — 화면 대부분이 검정이라 3840x1440 PNG 가 ~100KB.
         """
-        return bool(self._info.get("webos_overlay_android", False))
+        return bool(self._info.get("webos_overlay_android", True))
 
     @property
     def overlay_interval(self) -> float:
-        """Android 오버레이 갱신 간격(초). 사이드바/시계는 거의 정적이라 길게 잡는다."""
+        """Android 오버레이 갱신 간격(초). 사이드바/시계는 거의 정적이라 길게 잡는다.
+
+        webOS 프레임은 이 값과 무관하게 30fps 로 흐른다 — 사이드바를 넣고 뺄 때
+        반영이 최대 이만큼 늦을 뿐이다.
+        """
         try:
-            return max(0.5, float(self._info.get("webos_overlay_interval", 3.0)))
+            return max(0.5, float(self._info.get("webos_overlay_interval", 2.0)))
         except (TypeError, ValueError):
-            return 3.0
+            return 2.0
 
     @property
     def overlay_threshold(self) -> int:
-        """이 밝기 이하를 '투명(webOS 가 비치는 영역)'으로 본다."""
+        """이 밝기 이하를 '투명(webOS 가 비치는 영역)'으로 본다.
+
+        실측(Connect Wide): hole 영역은 **정확히 0**(4.17M 픽셀 전부), 사이드바 배경은
+        21/30. 안전 구간은 1~20 이고 32 로 올리면 사이드바가 통째로 날아간다.
+        """
         try:
             return max(0, min(255, int(self._info.get("webos_overlay_threshold", 16))))
         except (TypeError, ValueError):

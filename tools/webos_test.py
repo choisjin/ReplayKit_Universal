@@ -104,9 +104,9 @@ def _make(args) -> WebOSStreamService:
         linux_password=args.password, scale=args.scale, quality=args.quality,
         fps=args.fps, idle_timeout=0, device_id="webos_test",
     )
-    if getattr(args, "no_kill", False):
-        svc.kill_existing = False
-        print("[i] --no-kill: 기존 linuxStream 을 죽이지 않고 추가로 띄웁니다")
+    if getattr(args, "kill_others", False):
+        svc.kill_existing = True
+        print("[!] --kill-others: 같은 HU 를 보는 다른 스트림(백엔드 미러 포함)도 끊깁니다")
     return svc
 
 
@@ -128,22 +128,26 @@ def _to_panel(svc: WebOSStreamService, x: int, y: int, space: str) -> tuple:
 
 
 def _warn_if_contended(svc) -> None:
-    """스트림이 금방 끊기면 같은 HU 를 보는 다른 주체가 있을 가능성을 알린다.
+    """스트림이 중간에 끊겼으면 알린다.
 
-    스트림 기동 시 디바이스에서 `pkill -x linuxStream` 을 하므로, 백엔드 미러가
-    같은 HU 를 보고 있으면 서로 끄는 핑퐁이 된다.
+    예전엔 기동 시 `pkill -x linuxStream` 때문에 같은 HU 를 보는 주체끼리 서로 끄는
+    핑퐁이 원인이었다. 인스턴스 공존이 가능함을 확인하고 pkill 을 뺐으므로
+    (고아만 수거) 이제 여기 걸리면 **다른 원인**이다 — diag 로 확인할 것.
     """
     if "WebOS stream ended" in (svc.last_error or ""):
-        print("[!] 스트림이 끊겼습니다 — 백엔드 미러가 같은 HU 의 WebOS 화면을 보고 있으면"
-              " 서로의 linuxStream 을 종료시킵니다. 브라우저에서 미러를 다른 화면/디바이스로"
-              " 돌린 뒤 다시 실행해 보세요.")
+        print("[!] 스트림이 중간에 끊겼습니다. 구버전 백엔드/툴이 같은 HU 에 붙어 pkill 을"
+              " 하고 있거나(배포본 동기화 확인), 그 밖의 원인입니다."
+              " `webos_test.py diag` 로 디바이스 쪽 상태를 확인하세요.")
 
 
 def _geometry(svc: WebOSStreamService) -> None:
     print(f"[i] 미러(스트림) 크기 : {svc.size}")
     print(f"[i] native(패널) 크기 : {svc.native_size}   ← 터치 좌표 기준")
     print(f"[i] 터치 주입 노드    : {svc.evdev_path or '(첫 터치 때 자동 탐색)'}")
-    print(f"[i] linuxStream uinput: {svc.touch_size} (미사용 — 참고용)")
+    # linuxStream 이 만든 uinput 장치 크기는 로그를 ssh 로 읽어야 알 수 있는데,
+    # 스트림 기동 경로에서 그 ssh 를 뺐다(불필요). 우리가 쓰지 않는 값이라 생략한다.
+    if svc.touch_size != (0, 0):
+        print(f"[i] linuxStream uinput: {svc.touch_size} (미사용 — 참고용)")
 
 
 # ----------------------------------------------------------------------
@@ -692,9 +696,9 @@ def cmd_dual(args) -> int:
     한쪽이 0fps 로 떨어지면 디바이스에서 한 인스턴스만 살 수 있다는 뜻.
     """
     a = _make(args)
-    a.device_id, a.kill_existing = "dual_A", False
+    a.device_id = "dual_A"
     b = _make(args)
-    b.device_id, b.kill_existing = "dual_B", False
+    b.device_id = "dual_B"
 
     # A 를 먼저 띄우고, 안정된 뒤 B 를 붙인다 — B 기동이 A 를 끊는지가 핵심.
     print("\n[A] 기동")
@@ -991,7 +995,7 @@ def main() -> int:
     DEFAULTS = {
         "serial": "", "ip": "172.16.4.1", "user": "root", "password": "root",
         "scale": 2, "quality": 60, "fps": 30, "timeout": 60.0, "verbose": False,
-        "no_kill": False,
+        "kill_others": False,
     }
     S = argparse.SUPPRESS
     common = argparse.ArgumentParser(add_help=False)
@@ -1004,9 +1008,9 @@ def main() -> int:
     common.add_argument("--fps", type=int, default=S)
     common.add_argument("--timeout", type=float, default=S, help="첫 프레임 대기(초)")
     common.add_argument("-v", "--verbose", action="store_true", default=S)
-    common.add_argument("--no-kill", action="store_true", default=S,
-                        dest="no_kill",
-                        help="기존 linuxStream 을 죽이지 않고 추가 기동(동시 사용 실측)")
+    common.add_argument("--kill-others", action="store_true", default=S,
+                        dest="kill_others",
+                        help="살아있는 다른 linuxStream 까지 종료(평소 불필요)")
 
     ap = argparse.ArgumentParser(
         description="WebOS(Connect Wide) 화면/터치 경로 단독 테스트",

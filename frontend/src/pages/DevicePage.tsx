@@ -1281,8 +1281,8 @@ export default function DevicePage() {
       extras.webos_evdev = dev.info?.webos_evdev ?? '';
       extras.webos_auto = dev.info?.webos_auto ?? true;
       extras.mirror_via_adb = dev.info?.mirror_via_adb ?? true;
-      extras.webos_overlay_android = dev.info?.webos_overlay_android ?? false;
-      extras.webos_overlay_interval = dev.info?.webos_overlay_interval ?? 3;
+      extras.webos_overlay_android = dev.info?.webos_overlay_android ?? true;
+      extras.webos_overlay_interval = dev.info?.webos_overlay_interval ?? 2;
       deviceApi.adbSerials().then(res => {
         setAdbSerialOptions((res.data.devices || []).map((d: any) => ({
           value: d.serial,
@@ -4035,16 +4035,16 @@ export default function DevicePage() {
                     <InputNumber
                       style={{ width: 80, marginLeft: 8 }}
                       min={0.5} max={30} step={0.5}
-                      value={editExtraFields.webos_overlay_interval ?? 3}
-                      onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_overlay_interval: v ?? 3 })}
+                      value={editExtraFields.webos_overlay_interval ?? 2}
+                      onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_overlay_interval: v ?? 2 })}
                       addonAfter="초"
                     />
                     <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
-                      실제 패널은 webOS 위에 Android UI(좌측 사이드바·시계·팝업)가 얹혀 있는데,
-                      WebOS 스트림에는 그게 없습니다. 켜면 Android 캡처에서 <b>검정(= webOS 가 비치는 영역)</b>을
+                      실제 패널은 webOS 위에 Android UI(좌측 사이드바·우측 시계/공조)가 얹혀 있는데,
+                      WebOS 스트림에는 그게 없습니다. Android 캡처에서 <b>검정(= webOS 가 비치는 영역)</b>을
                       투명으로 보고 합성해 실제 화면과 같게 그립니다.
-                      <b> Android 캡처가 adb 대역을 쓰므로</b> 사이드바/시계처럼 정적인 요소만 필요하면
-                      갱신 간격을 길게 두세요(webOS 프레임은 그대로 전속).
+                      갱신 간격은 <b>Android 쪽만</b> 해당합니다 — webOS 프레임은 그대로 30fps 로 흐르고,
+                      사이드바를 넣고 뺄 때 반영이 최대 이만큼 늦습니다.
                     </div>
                   </div>
                   <div>

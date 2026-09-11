@@ -270,9 +270,11 @@ class WebOSStreamService:
         self._native_h = 0
         self._deployed = False
         self._shared_key = None      # get_shared_stream 이 채운다
-        # 기동 전 기존 linuxStream 을 죽일지. 끄면 같은 HU 에 인스턴스가 여러 개 뜬다
-        # (동시 사용 가능 여부 실측용 — 기본은 종전대로 죽인다).
-        self.kill_existing = True
+        # 기동 전 **살아있는** linuxStream 까지 죽일지. 기본 False —
+        # 인스턴스는 공존 가능함이 실측으로 확인됐고(dual 테스트, 각 30fps),
+        # 죽이면 같은 HU 를 보는 다른 주체(iSAP/ADB 디바이스, 테스트툴)의 스트림이
+        # 끊긴다. 고아 정리는 항상 하므로 평소엔 켤 일이 없다.
+        self.kill_existing = False
 
     # ------------------------------------------------------------------
     # adb / ssh helpers
@@ -445,6 +447,7 @@ class WebOSStreamService:
             self._last_error = ""
             self._first_bytes = b""
 
+            self._reap_orphans()
             if self.kill_existing:
                 self._ssh("pkill -x linuxStream 2>/dev/null; true", timeout=20.0)
             # -verbose 필수: 없으면 linuxStream 이 아무것도 안 찍어 /tmp/linuxStream.log 가
@@ -525,6 +528,23 @@ class WebOSStreamService:
                             self.idle_timeout, self.device_id or self.adb_serial)
                 self.stop()
                 return
+
+    def _reap_orphans(self) -> None:
+        """ssh 세션이 끊겨 고아가 된(PPID=1) linuxStream 만 정리한다.
+
+        살아있는 남의 스트림은 건드리지 않는다 — 같은 HU 를 여러 주체가 동시에 볼 수
+        있고(인스턴스 공존 확인됨), 무조건 pkill 하면 서로 끄는 핑퐁이 된다.
+        """
+        script = (
+            "for p in $(pgrep -x linuxStream 2>/dev/null); do "
+            "  ppid=$(awk '{print $4}' /proc/$p/stat 2>/dev/null); "
+            "  [ \"$ppid\" = \"1\" ] && kill $p 2>/dev/null; "
+            "done; true"
+        )
+        try:
+            self._ssh(script, timeout=20.0)
+        except Exception as e:
+            logger.debug("WebOS: 고아 linuxStream 정리 실패 — %s", e)
 
     def _read_remote_log(self) -> str:
         try:
