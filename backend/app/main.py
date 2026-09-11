@@ -1201,10 +1201,16 @@ async def websocket_screen_mirror(websocket: WebSocket):
                             await websocket.send_json(_msg)
                         except Exception:
                             pass
+                    # ⚠ 기본화면을 scrcpy(H.264)로 보던 중 webOS 로 넘어오면 프론트는 아직
+                    # H.264 모드라 JPEG 를 디코더에 먹여 검은 화면(0fps)이 된다(실기) → 모드 통지.
+                    if current_ws_mode != "jpeg":
+                        await websocket.send_json({"mode": "jpeg"})
+                        current_ws_mode = "jpeg"
                     await websocket.send_bytes(jpeg_bytes)
                     # WebOS 는 백그라운드 linuxStream 이 채워둔 프레임을 즉시 돌려주므로
                     # 페이싱이 없으면 루프가 전속력으로 돌며 JPEG 재인코딩/전송을 낭비한다.
-                    if screen_type == "webos":
+                    # 자동 전환(선택은 front_center)도 실제 소스는 webOS 라 똑같이 적용.
+                    if screen_type == "webos" or _auto:
                         try:
                             _wfps = float((dev.info if dev else {}).get("webos_fps") or 30)
                         except (TypeError, ValueError):
