@@ -1413,7 +1413,11 @@ export default function RecordPage() {
     const cw = el.clientWidth;
     const ch = el.clientHeight;
     // iSAP: canvas/video의 natural(intrinsic) 크기를 좌표계로 사용
-    const isIsap = screenDevice?.type === 'isap_agent';
+    // ⚠ 단 webOS 화면(명시 선택/자동 전환)은 예외 — 이미지가 linuxStream **축소본**(1920x720)이라
+    // natural 크기를 쓰면 좌표가 절반 기준이 된다. 백엔드는 webOS 좌표를 패널(3840x1440) 기준
+    // (screens.webos / 전환 통지 크기 = deviceRes)으로 받으므로 ADB 와 똑같이 deviceRes 를 쓴다.
+    const isIsap = screenDevice?.type === 'isap_agent'
+      && screenType !== 'webos' && screenSource !== 'webos';
     let refW = deviceRes.width;
     let refH = deviceRes.height;
     if (isIsap) {
@@ -1457,7 +1461,9 @@ export default function RecordPage() {
     if (!el) return { x: 0, y: 0 };
     const cw = el.clientWidth;
     const ch = el.clientHeight;
-    const isIsap = screenDevice?.type === 'isap_agent';
+    // webOS 화면은 toDeviceCoords 와 같은 이유로 deviceRes(패널) 기준.
+    const isIsap = screenDevice?.type === 'isap_agent'
+      && screenType !== 'webos' && screenSource !== 'webos';
     let refW = deviceRes.width;
     let refH = deviceRes.height;
     if (isIsap) {
