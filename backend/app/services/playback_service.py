@@ -3659,6 +3659,11 @@ class PlaybackService:
                 if dev:
                     adb_serial = dev.address  # 커스텀 ID → 실제 ADB 시리얼
 
+            # WebOS(Connect Wide): webOS 화면이면 Android 입력이 아니라 webOS 터치스크린으로.
+            if dev and await self._webos_touch(dev, step.type, params,
+                                               step.screen_type or params.get("screen_type")):
+                return
+
             # screen_type은 우리 displays 배열 인덱스(0,1,...) → input -d 용 Android logical ID로 변환
             # 폴더블에서 우리 인덱스와 Android logical ID가 어긋날 수 있어 변환 필수
             our_index = None
@@ -3711,6 +3716,57 @@ class PlaybackService:
                     await self.adb.multi_finger_tap(points, serial=adb_serial, display_id=adb_display_id)
                 else:
                     await self.adb.multi_finger_swipe(fingers, params.get("duration_ms", 500), serial=adb_serial, display_id=adb_display_id)
+
+    async def _webos_touch(self, dev, step_type: StepType, params: dict,
+                           screen_type: Optional[str]) -> bool:
+        """WebOS(Connect Wide) 화면이면 webOS 터치스크린으로 보내고 True.
+
+        webOS 영역은 Android 레이어의 hole 이라 `adb input tap` 은 rc=0 인데 무반응이다
+        (스텝테스트/재생에서 캡처는 webOS 로 가는데 터치만 Android 로 새던 증상).
+        미러 입력 API(routers/device.py)와 **같은 판단·같은 호출**이어야 한다 — 기록된
+        좌표가 그 API 로 보냈던 값 그대로라서, 환산 기준도 같아야 제자리에 들어간다.
+        """
+        if step_type not in (StepType.TAP, StepType.REPEAT_TAP, StepType.LONG_PRESS,
+                             StepType.SWIPE, StepType.MULTI_TOUCH):
+            return False
+        ws = self.dm.get_webos_screen(dev.id)
+        if ws is None or not ws.enabled:
+            return False
+        base = screen_type if screen_type in (None, "", "front_center", "0") else "__other__"
+        if ws.resolve(screen_type, base, max_age=ws.TOUCH_FG_MAX_AGE) != "webos":
+            return False
+        p = params
+        if step_type == StepType.TAP:
+            await ws.tap(p["x"], p["y"])
+        elif step_type == StepType.REPEAT_TAP:
+            await ws.repeat_tap(p["x"], p["y"], int(p.get("count", 5)),
+                                int(p.get("interval_ms", 100)))
+        elif step_type == StepType.LONG_PRESS:
+            await ws.long_press(p["x"], p["y"], int(p.get("duration_ms", 1000)))
+        elif step_type == StepType.SWIPE:
+            pts = p.get("points") or []
+            if isinstance(pts, list) and len(pts) >= 2:
+                # webOS 경로엔 다구간 패턴 스와이프가 없다 — 시작/끝점 직선으로 근사.
+                logger.warning("[WebOS INPUT] 패턴 스와이프(%d점)는 시작→끝 직선으로 대체",
+                               len(pts))
+                x1, y1, x2, y2 = pts[0]["x"], pts[0]["y"], pts[-1]["x"], pts[-1]["y"]
+            else:
+                x1, y1, x2, y2 = p["x1"], p["y1"], p["x2"], p["y2"]
+            await ws.swipe(x1, y1, x2, y2, int(p.get("duration_ms", 300)),
+                           int(p.get("hold_ms", 0) or 0))
+        else:
+            fingers = p.get("fingers", [])
+            if not fingers:
+                raise ValueError("multi_touch requires fingers")
+            is_tap = all(f.get("x1") == f.get("x2") and f.get("y1") == f.get("y2")
+                         for f in fingers)
+            if is_tap:
+                await ws.multi_finger_tap([{"x": f["x1"], "y": f["y1"]} for f in fingers])
+            else:
+                await ws.multi_finger_swipe(fingers, int(p.get("duration_ms", 500)))
+        logger.info("[WebOS INPUT] device=%s step=%s (재생/스텝테스트)",
+                    dev.id, step_type.value)
+        return True
 
     async def _run_image_tap(self, step: Step, real_id: Optional[str]) -> None:
         """IMAGE_TAP 실행: 현재 화면 캡처 → template_match → 중심 좌표 tap.

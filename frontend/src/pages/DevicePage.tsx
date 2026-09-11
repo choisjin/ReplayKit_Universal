@@ -486,6 +486,27 @@ export default function DevicePage() {
   const [mibConnectType, setMibConnectType] = useState<string>('mib_agent');
   const [mibConnectProfile, setMibConnectProfile] = useState<string>('12.9');
   const [mibConnectKsend, setMibConnectKsend] = useState<string>('debug');
+  // 등록(수동 연결/스캔 연결) 시 ksend 빌드 — 등록 직후 바로 연결되므로 여기서도 골라야 한다.
+  const [addKsendVariant, setAddKsendVariant] = useState<string>('debug');
+  const renderAddKsendPicker = () => (
+    <Space wrap>
+      <span style={{ fontSize: 11, color: '#888' }}>Build:</span>
+      <Radio.Group
+        optionType="button"
+        buttonStyle="solid"
+        size="small"
+        value={addKsendVariant}
+        onChange={e => setAddKsendVariant(e.target.value)}
+      >
+        {KSEND_VARIANTS.map(v => (
+          <Radio.Button key={v.key} value={v.key}>{v.label}</Radio.Button>
+        ))}
+      </Radio.Group>
+      <span style={{ fontSize: 10, color: '#aaa' }}>
+        ksend: {KSEND_VARIANTS.find(v => v.key === addKsendVariant)?.path}
+      </span>
+    </Space>
+  );
   const [connectAddress, setConnectAddress] = useState('');
   const [baudrate, setBaudrate] = useState(115200);
   const [connecting, setConnecting] = useState(false);
