@@ -348,6 +348,8 @@ class ADBService:
         self._sdk_cache: dict[str, Optional[int]] = {}
         # ro.product.model 캐시 (scrcpy 버전 선택용).
         self._model_cache: dict[str, str] = {}
+        # 부팅 중 안 변하는 프로퍼티(model/brand/android_version) 캐시 — 배경 폴링 비용 절감.
+        self._static_props: dict[str, dict] = {}
         # serial → scrcpy 버전 강제 지정. SDK 기반 자동 선택을 덮어쓴다.
         # (Connect Wide 의 WebOS 투사 화면은 v1.25 로 검은 화면이 나오고 v3.3.4 로 잡힌다 —
         #  참조본 screenBridge 가 쓰던 scrcpy-server 가 v3.3.4 와 바이트 동일.)
@@ -433,13 +435,26 @@ class ADBService:
         return True
 
     async def get_device_info(self, serial: Optional[str] = None) -> dict:
-        """Get device properties."""
+        """Get device properties.
+
+        model/brand/android_version 은 **부팅 중 바뀌지 않으므로 1회만 조회하고 캐시**한다.
+        이 함수는 refresh 루프에서 10초마다 불리는데, 미러링으로 adb 링크가 포화된
+        상태에서는 명령 하나가 0.8s 씩 걸려 하드키/터치가 그 뒤로 밀린다(실측).
+        """
         s = serial or self._active_serial
         if not s:
             raise ValueError("No device selected")
-        model = await self._run_device(s, "shell getprop ro.product.model")
-        brand = await self._run_device(s, "shell getprop ro.product.brand")
-        android_ver = await self._run_device(s, "shell getprop ro.build.version.release")
+        props = self._static_props.get(s)
+        if props is None:
+            props = {
+                "model": (await self._run_device(s, "shell getprop ro.product.model")).strip(),
+                "brand": (await self._run_device(s, "shell getprop ro.product.brand")).strip(),
+                "android_version": (await self._run_device(
+                    s, "shell getprop ro.build.version.release")).strip(),
+            }
+            self._static_props[s] = props
+        model, brand = props["model"], props["brand"]
+        android_ver = props["android_version"]
         resolution = await self._run_device(s, "shell wm size")
         # "Override size"가 있으면 스크린샷/터치가 이 해상도 기준이므로 우선 사용
         # 없으면 "Physical size" 사용
@@ -455,9 +470,9 @@ class ADBService:
             height = displays[0]["height"]
         return {
             "serial": s,
-            "model": model.strip(),
-            "brand": brand.strip(),
-            "android_version": android_ver.strip(),
+            "model": model,
+            "brand": brand,
+            "android_version": android_ver,
             "resolution": {"width": width, "height": height},
             "displays": displays,
         }

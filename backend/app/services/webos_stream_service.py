@@ -220,6 +220,7 @@ class WebOSStreamService:
         # webOS 전면 여부 판별 캐시 (dumpsys 는 비싸서 TTL 내 재사용)
         self._fg_cache: tuple = (0.0, False)
         self._fg_ttl = 1.5
+        self._fg_cost = 0.0      # 최근 판별 소요시간(초) — TTL 자동 조정용
 
         # linuxStream 로그에서 읽어오는 실제 좌표계
         self._stream_w = 0      # 스트리밍(=미러 이미지) 크기
@@ -665,11 +666,17 @@ class WebOSStreamService:
                   topResumedActivity=ActivityRecord{... com.lge.app.car.settingshmi/... }
         """
         now = time.monotonic()
-        ttl = self._fg_ttl if max_age is None else max(0.0, max_age)
+        # 링크가 느리면(미러링으로 adb 포화) 판별 비용이 그대로 입력 지연이 된다.
+        # 실측 소요시간의 8배를 최소 간격으로 잡아 부하를 12% 이하로 억제한다.
+        floor = min(10.0, max(self._fg_ttl, self._fg_cost * 8))
+        ttl = floor if max_age is None else max(min(max_age, floor), 0.0)
+        if max_age is not None and self._fg_cost > 0.4:
+            ttl = floor          # 느린 링크에서는 터치 경로도 캐시를 존중
         if now - self._fg_cache[0] < ttl:
             return self._fg_cache[1]
         want = int(display_id or 0)
         result = False
+        _t0 = time.monotonic()
         try:
             r = self._run_adb(
                 "shell",
@@ -689,7 +696,13 @@ class WebOSStreamService:
                     cur = None
         except Exception as e:
             logger.debug("WebOS foreground probe failed: %s", e)
-        self._fg_cache = (now, result)
+        cost = time.monotonic() - _t0
+        if cost > self._fg_cost * 1.5 or cost < self._fg_cost * 0.5:
+            if cost > 0.4 and self._fg_cost <= 0.4:
+                logger.info("WebOS 전면 판별이 느립니다(%.2fs) — 판별 주기를 %.1fs 로 늦춥니다 "
+                            "(미러링이 adb 대역을 쓰는 중일 수 있음)", cost, min(10.0, cost * 8))
+            self._fg_cost = cost
+        self._fg_cache = (time.monotonic(), result)
         return result
 
     # ------------------------------------------------------------------
