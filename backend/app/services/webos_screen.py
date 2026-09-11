@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 WEBOS_SCREEN = "webos"
 # WebOS 화면을 가진 모델 — 현재 Connect Wide 한정.
 WEBOS_MODELS = ("Connect Wide",)
+# 모델별 webOS 패널(Linux VM 프레임버퍼) 크기 — 팝업 상태와 무관하게 고정(linuxStream native 실측).
+# 스트림이 아직 안 떠 있어도 좌표계가 처음부터 이 값이어야 한다(아래 panel_size 참고).
+WEBOS_PANEL_SIZES = {"Connect Wide": (3840, 1440)}
 
 
 class WebOSScreen:
@@ -130,6 +133,10 @@ class WebOSScreen:
         if self._svc is not None:
             nw, nh = self._svc.native_size
             if nw and nh:
+                # 스트림이 없는 다음 순간(재연결·재생 중 미러 중단)에도 같은 값이 나오게 기억.
+                cur = self._info.get("webos_panel_size") or {}
+                if (cur.get("width"), cur.get("height")) != (nw, nh):
+                    self._info["webos_panel_size"] = {"width": nw, "height": nh}
                 return nw, nh
         return 0, 0
 
@@ -137,10 +144,18 @@ class WebOSScreen:
         """**패널 좌표계** — 미러 이미지와 webOS(evdev) 터치가 쓰는 기준.
 
         webOS 는 Linux VM 프레임버퍼를 꽉 채우고 그 크기는 팝업 상태와 무관하게
-        고정이다. 그래서 native 를 최우선으로 본다.
+        고정이다. 순서: 실측 native → 마지막 실측값 → 모델 기본값 → resolution → 폴백.
+
+        ⚠ 스트림이 안 떠 있을 때도 **처음부터 같은 값**이어야 한다(2026-09-11 실기: iSAP
+        webOS 가 1920x720 으로 표시). 예전엔 Android 크기(webos_android_size — 팝업 내리면
+        3840x850)나 iSAP 전석 크기(1920x720)로 폴백해서 ① screens.webos 가 시간에 따라
+        1920x720→3840x1440 으로 바뀌며 프론트와 어긋나고 ② 미러 없이(재생/스텝테스트)
+        evdev 로 누르면 ½ 좌표가 들어갔다. Android 크기는 패널이 아니므로 쓰지 않는다.
         """
+        model = str(self._info.get("device_model") or "").strip()
         for v in (self._native_size(),
-                  self._size_of(self._info.get("webos_android_size")),
+                  self._size_of(self._info.get("webos_panel_size")),
+                  WEBOS_PANEL_SIZES.get(model, (0, 0)),
                   self._size_of(self._info.get("resolution"))):
             if v[0] and v[1]:
                 return v
