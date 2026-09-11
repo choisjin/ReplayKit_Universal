@@ -1193,7 +1193,9 @@ class ISAPAgentService:
         # WebOS = Android 투사 화면 → ADB screencap. (iSAP CMD_GETIMG 로는 안 잡힌다)
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
-            return await adb.screencap_bytes(serial=serial, fmt=fmt, display_id=did)
+            data = await adb.screencap_bytes(serial=serial, fmt=fmt, display_id=did)
+            logger.debug("[WebOS SCREENCAP] serial=%s fmt=%s bytes=%d", serial, fmt, len(data))
+            return data
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.screencap_bytes, screen_type, fmt, timeout)
 
@@ -1211,6 +1213,7 @@ class ISAPAgentService:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
             await adb.tap(int(x), int(y), serial=serial, display_id=did)
+            logger.info("[WebOS TAP] (%s,%s) serial=%s display=%s", x, y, serial, did)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.tap, x, y, screen_type)
@@ -1220,6 +1223,7 @@ class ISAPAgentService:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
             await adb.repeat_tap(int(x), int(y), count, interval_ms, serial=serial, display_id=did)
+            logger.info("[WebOS REPEAT_TAP] (%s,%s) x%d serial=%s", x, y, count, serial)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.repeat_tap, x, y, count, interval_ms, screen_type)
@@ -1229,6 +1233,7 @@ class ISAPAgentService:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
             await adb.long_press(int(x), int(y), duration_ms, serial=serial, display_id=did)
+            logger.info("[WebOS LONG_PRESS] (%s,%s) %dms serial=%s", x, y, duration_ms, serial)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.long_press, x, y, duration_ms, screen_type)
@@ -1241,6 +1246,8 @@ class ISAPAgentService:
             await adb.swipe(int(x1), int(y1), int(x2), int(y2),
                             duration_ms=int(duration_ms or 300), serial=serial,
                             display_id=did, hold_ms=hold_ms)
+            logger.info("[WebOS SWIPE] (%s,%s)->(%s,%s) %sms hold=%sms serial=%s",
+                        x1, y1, x2, y2, duration_ms, hold_ms, serial)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.swipe, x1, y1, x2, y2, screen_type, duration_ms, hold_ms)
@@ -1251,6 +1258,7 @@ class ISAPAgentService:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
             await adb.multi_finger_swipe(fingers, duration_ms, serial=serial, display_id=did)
+            logger.info("[WebOS MULTI_SWIPE] %d fingers serial=%s", len(fingers), serial)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.multi_finger_swipe, fingers, screen_type, duration_ms, hold_ms)
@@ -1260,6 +1268,7 @@ class ISAPAgentService:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
             await adb.multi_finger_tap(points, serial=serial, display_id=did)
+            logger.info("[WebOS MULTI_TAP] %d fingers serial=%s", len(points), serial)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.multi_finger_tap, points, screen_type)
