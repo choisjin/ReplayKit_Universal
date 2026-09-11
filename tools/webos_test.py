@@ -558,6 +558,40 @@ def cmd_evinject(args) -> int:
     return 0
 
 
+def cmd_edge(args) -> int:
+    """가장자리 → 안쪽 스와이프 (리모콘 열기 같은 엣지 제스처 검증).
+
+    시작점을 화면 끝(0 또는 max-1)에 정확히 맞춰 보낸다 — 미러에서 손으로 드래그하면
+    몇 px 안쪽에서 시작해 인식이 안 되는 경우가 많아서, 그 변수를 제거한 테스트다.
+    """
+    svc = _make(args)
+    svc.start(timeout=args.timeout)
+    _geometry(svc)
+    w, h = svc.native_size
+    if not (w and h):
+        print("[!] 패널 크기를 알 수 없습니다")
+        return 1
+    ratio = max(0.05, min(0.95, args.ratio))
+    if args.side == "right":
+        x1, y1 = w - 1, int(h * ratio)
+        x2, y2 = max(0, w - 1 - args.length), y1
+    elif args.side == "left":
+        x1, y1 = 0, int(h * ratio)
+        x2, y2 = min(w - 1, args.length), y1
+    elif args.side == "bottom":
+        x1, y1 = int(w * ratio), h - 1
+        x2, y2 = x1, max(0, h - 1 - args.length)
+    else:  # top
+        x1, y1 = int(w * ratio), 0
+        x2, y2 = x1, min(h - 1, args.length)
+    print(f"[i] {args.side} 엣지: ({x1},{y1}) -> ({x2},{y2})  "
+          f"{args.duration}ms hold={args.hold}ms")
+    svc.swipe(x1, y1, x2, y2, duration_ms=args.duration, hold_ms=args.hold)
+    print("[i] 전송 완료 — 리모콘/패널이 떴는지 확인하세요")
+    svc.stop()
+    return 0
+
+
 def main() -> int:
     # 공통 옵션은 부모 파서로 둬서 하위 명령 앞/뒤 어느 쪽에 써도 먹게 한다.
     #   ⚠ parents= 로 재사용하면 **하위 파서의 기본값이 상위에서 준 값을 덮어쓴다**.
@@ -660,6 +694,16 @@ def main() -> int:
     p.add_argument("--space", choices=["panel", "mirror"], default="panel")
     p.add_argument("--wait", type=float, default=0.7, help="전송 후 로그 확인 대기(초)")
     p.set_defaults(func=cmd_touch)
+
+    p = sub.add_parser("edge", help="가장자리→안쪽 스와이프(엣지 제스처)",
+                       parents=[common])
+    p.add_argument("side", choices=["left", "right", "bottom", "top"])
+    p.add_argument("--ratio", type=float, default=0.85,
+                   help="시작 지점의 위치 비율(좌우 엣지는 세로, 상하 엣지는 가로). 기본 0.85=하단쪽")
+    p.add_argument("--length", type=int, default=900, help="쓸어내는 거리(px, 패널 기준)")
+    p.add_argument("--duration", type=int, default=350)
+    p.add_argument("--hold", type=int, default=0, help="시작점에서 잠시 누르고 이동")
+    p.set_defaults(func=cmd_edge)
 
     p = sub.add_parser("swipe", help="스와이프", parents=[common])
     p.add_argument("x1", type=int)

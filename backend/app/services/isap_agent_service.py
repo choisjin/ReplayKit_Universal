@@ -704,7 +704,12 @@ class ISAPAgentService:
         }
         if screen_type == WEBOS_SCREEN:
             w, h = self.webos.screen_size()
-            return (w, h) if (w and h) else self._DEFAULT_SCREEN_SIZES[WEBOS_SCREEN]
+            if w and h:
+                return w, h
+            # 마지막 폴백도 전석 크기 우선 — 하드코딩 기본값(1920x720)을 쓰면 연결
+            # 직후 프론트가 그 값을 받아가고, 나중에 패널 크기로 바뀌며 터치가 어긋난다.
+            fw, fh = self.screen_width_front, self.screen_height_front
+            return (fw, fh) if (fw and fh) else self._DEFAULT_SCREEN_SIZES[WEBOS_SCREEN]
         w, h = mapping.get(screen_type, (0, 0))
         if w == 0 or h == 0:
             return self._DEFAULT_SCREEN_SIZES.get(screen_type, (1920, 720))
@@ -729,7 +734,12 @@ class ISAPAgentService:
     def webos(self) -> WebOSScreen:
         """이 디바이스의 WebOS 화면 헬퍼 (설정은 dev.info 참조를 그대로 본다)."""
         if self._webos is None:
-            self._webos = WebOSScreen(self._webos_config, device_id=self.device_id)
+            # 패널 크기 폴백 = 전석 화면 크기. webOS 와 같은 물리 패널이라, Android
+            # 크기를 아직 감지 못 한 구간에도 좌표계가 흔들리지 않는다.
+            self._webos = WebOSScreen(
+                self._webos_config, device_id=self.device_id,
+                fallback_size=(self.screen_width_front, self.screen_height_front),
+            )
         return self._webos
 
     @property

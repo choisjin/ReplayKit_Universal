@@ -869,10 +869,19 @@ class WebOSStreamService:
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int,
               duration_ms: int = 300, hold_ms: int = 0) -> None:
+        """드래그. 엣지 제스처(가장자리→안쪽)까지 인식되도록 실제 손가락에 가깝게 보낸다.
+
+        * DOWN 직후 **같은 위치로 한 프레임** 더 보낸다 — 접촉이 먼저 성립해야 이어지는
+          이동이 '드래그'로 읽힌다(첫 이벤트부터 큰 점프면 무시하는 구현이 있다).
+        * 이동은 촘촘하게(기본 24프레임) 보낸다.
+        * 마지막 이동 후 잠깐 머문 뒤 UP — 곧바로 떼면 '취소'로 처리되는 경우가 있다.
+        """
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
         dur = max(int(duration_ms or 0), 100)
-        steps = max(3, min(30, dur // 20))
+        steps = max(8, min(40, dur // 12))
         self._write_ev(_mt_down(x1, y1))
+        time.sleep(0.02)
+        self._write_ev(_mt_move(x1, y1))          # 접촉 성립(같은 위치 1프레임)
         if hold_ms and hold_ms > 0:
             time.sleep(hold_ms / 1000.0)
         interval = (dur / 1000.0) / steps
@@ -881,8 +890,10 @@ class WebOSStreamService:
             self._write_ev(_mt_move(int(round(x1 + (x2 - x1) * t)),
                                     int(round(y1 + (y2 - y1) * t))))
             time.sleep(interval)
+        time.sleep(0.05)                          # 끝점에서 잠시 정지 후 뗌
         self._write_ev(_mt_up())
-        logger.info("[WebOS SWIPE] (%s,%s)->(%s,%s) %dms", x1, y1, x2, y2, dur)
+        logger.info("[WebOS SWIPE] (%s,%s)->(%s,%s) %dms steps=%d",
+                    x1, y1, x2, y2, dur, steps)
 
     def multi_finger_tap(self, points: list) -> None:
         """진짜 멀티터치 — 손가락마다 MT slot 을 따로 쓴다."""

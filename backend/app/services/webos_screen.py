@@ -41,11 +41,13 @@ class WebOSScreen:
     TOUCH_FG_MAX_AGE = 0.3
 
     def __init__(self, info: Optional[dict] = None, device_id: str = "",
-                 default_serial: str = ""):
+                 default_serial: str = "", fallback_size: tuple = (0, 0)):
         self._info: dict = info if isinstance(info, dict) else {}
         self.device_id = device_id
         # ADB 로 붙인 디바이스는 그 자신이 HU 라 별도 시리얼 입력이 필요 없다.
         self._default_serial = (default_serial or "").strip()
+        # 패널 크기를 아직 모를 때 쓸 폴백(예: iSAP 전석 화면 크기 — 같은 물리 패널).
+        self._fallback_size = tuple(fallback_size or (0, 0))
         self._svc = None
         self.auto_active = False     # 자동 전환으로 WebOS 를 보여주는 중인지
 
@@ -97,16 +99,29 @@ class WebOSScreen:
     def android_size(self) -> tuple[int, int]:
         """Android 디스플레이 크기 = 패널 좌표계 = 터치 좌표계.
 
-        device_manager 가 wm size 로 채운 webos_android_size, 없으면 일반 resolution.
+        우선순위: 감지값(webos_android_size) → **linuxStream native** → info.resolution.
+        native 를 중간에 둔 이유: 스트림만 뜨면 항상 알 수 있는 값이고(로그의
+        `native=3840x1440`), Linux VM 프레임버퍼 = 물리 패널이라 Android 디스플레이와
+        같다. adb 감지가 늦거나 실패해도 좌표계가 흔들리지 않는다.
         """
-        for key in ("webos_android_size", "resolution"):
-            a = self._info.get(key) or {}
-            if isinstance(a, dict) and a.get("width") and a.get("height"):
-                try:
-                    return int(a["width"]), int(a["height"])
-                except (TypeError, ValueError):
-                    continue
-        return 0, 0
+        a = self._info.get("webos_android_size") or {}
+        if isinstance(a, dict) and a.get("width") and a.get("height"):
+            try:
+                return int(a["width"]), int(a["height"])
+            except (TypeError, ValueError):
+                pass
+        if self._svc is not None:
+            nw, nh = self._svc.native_size
+            if nw and nh:
+                return nw, nh
+        r = self._info.get("resolution") or {}
+        if isinstance(r, dict) and r.get("width") and r.get("height"):
+            try:
+                return int(r["width"]), int(r["height"])
+            except (TypeError, ValueError):
+                pass
+        fw, fh = self._fallback_size
+        return (int(fw), int(fh)) if (fw and fh) else (0, 0)
 
     # ------------------------------------------------------------------
     # 스트림
@@ -142,20 +157,13 @@ class WebOSScreen:
                 logger.debug("WebOS stream stop failed: %s", e)
 
     def screen_size(self) -> tuple[int, int]:
-        """미러 좌표계 크기 — Android 디스플레이 크기로 **고정**한다.
+        """미러 좌표계 크기 = 패널 크기. **연결 순간부터 끝까지 같은 값**이어야 한다.
 
-        스트림 출력(-scale 축소본)을 보고하면 스트림 기동 전후로 값이 바뀌어,
-        프론트가 옛 값을 쥔 동안 터치가 배율만큼 어긋난다. 프론트는 캔버스 비율로
-        좌표를 만들기 때문에 실제 이미지 해상도와 달라도 무방하다.
+        중간에 값이 바뀌면 프론트(옛 값)와 백엔드(새 값)의 기준이 어긋나 터치가
+        배율만큼 빗나간다 — iSAP 연결에서 실제로 겪은 회귀다. 그래서 스트림 출력
+        (-scale 축소본)은 절대 쓰지 않고 패널 크기만 돌려준다.
         """
-        aw, ah = self.android_size()
-        if aw and ah:
-            return aw, ah
-        if self._svc is not None:
-            nw, nh = self._svc.native_size
-            if nw and nh:
-                return nw, nh
-        return 0, 0
+        return self.android_size()
 
     # ------------------------------------------------------------------
     # 화면 결정
@@ -264,10 +272,41 @@ class WebOSScreen:
         adb, serial, did = self._adb()
         await adb.long_press(px, py, duration_ms, serial=serial, display_id=did)
 
+    def _edge_snap(self, x: int, y: int, tox: int, toy: int) -> tuple[int, int]:
+        """시작점이 가장자리 근처면 **정확한 가장자리로 붙인다**.
+
+        "화면 끝에서 안쪽으로 쓸어 리모콘 열기" 같은 엣지 제스처는 시작점이 진짜 끝
+        (0 또는 max-1)이어야 인식된다. 미러에서 드래그하면 보통 몇 px 안쪽에서 시작해
+        실패하므로, 안쪽으로 향하는 스와이프에 한해 시작점을 끝으로 보정한다.
+        info["webos_edge_snap"]=0 이면 끈다(기본 24px, 패널 좌표 기준).
+        """
+        try:
+            th = int(self._info.get("webos_edge_snap", 24))
+        except (TypeError, ValueError):
+            th = 24
+        if th <= 0:
+            return x, y
+        aw, ah = self.android_size()
+        sx, sy = x, y
+        if aw:
+            if x <= th and tox > x:
+                sx = 0
+            elif x >= aw - 1 - th and tox < x:
+                sx = aw - 1
+        if ah:
+            if y <= th and toy > y:
+                sy = 0
+            elif y >= ah - 1 - th and toy < y:
+                sy = ah - 1
+        if (sx, sy) != (x, y):
+            logger.info("[WebOS] 엣지 스냅 (%s,%s) -> (%s,%s)", x, y, sx, sy)
+        return sx, sy
+
     async def swipe(self, x1: int, y1: int, x2: int, y2: int,
                     duration_ms: int = 300, hold_ms: int = 0) -> None:
         ax, ay = self._clamp(x1, y1)
         bx, by = self._clamp(x2, y2)
+        ax, ay = self._edge_snap(ax, ay, bx, by)
         if self.touch_via_evdev:
             await self._run(self.stream().swipe, ax, ay, bx, by,
                             int(duration_ms or 300), hold_ms)
