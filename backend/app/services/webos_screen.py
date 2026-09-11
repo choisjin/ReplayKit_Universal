@@ -50,6 +50,8 @@ class WebOSScreen:
         self._fallback_size = tuple(fallback_size or (0, 0))
         self._svc = None
         self.auto_active = False     # 자동 전환으로 WebOS 를 보여주는 중인지
+        # Android 오버레이 캐시 (검정 키 합성용) — (시각, BGR 프레임)
+        self._ov_cache: tuple = (0.0, None)
 
     # ------------------------------------------------------------------
     # 설정
@@ -216,8 +218,82 @@ class WebOSScreen:
     # 캡처 / 터치
     # ------------------------------------------------------------------
 
+    # --- Android 오버레이 합성 --------------------------------------
+
+    @property
+    def overlay_android(self) -> bool:
+        """webOS 프레임 위에 Android UI 를 합성할지 (기본 OFF).
+
+        실제 화면과 같은 그림이 되지만 Android 캡처가 adb 링크를 쓴다.
+        """
+        return bool(self._info.get("webos_overlay_android", False))
+
+    @property
+    def overlay_interval(self) -> float:
+        """Android 오버레이 갱신 간격(초). 사이드바/시계는 거의 정적이라 길게 잡는다."""
+        try:
+            return max(0.5, float(self._info.get("webos_overlay_interval", 3.0)))
+        except (TypeError, ValueError):
+            return 3.0
+
+    @property
+    def overlay_threshold(self) -> int:
+        """이 밝기 이하를 '투명(webOS 가 비치는 영역)'으로 본다."""
+        try:
+            return max(0, min(255, int(self._info.get("webos_overlay_threshold", 16))))
+        except (TypeError, ValueError):
+            return 16
+
+    async def _android_frame(self):
+        """Android 화면 캡처(BGR). 갱신 간격 내에는 캐시를 쓴다."""
+        import time as _t
+
+        import cv2
+        import numpy as np
+
+        now = _t.monotonic()
+        ts, cached = self._ov_cache
+        if cached is not None and (now - ts) < self.overlay_interval:
+            return cached
+        adb, serial, _did = self._adb()
+        try:
+            raw = await adb.streaming_screencap_bytes(serial=serial, fmt="png")
+            img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+        except Exception as e:
+            logger.debug("WebOS 오버레이 캡처 실패: %s", e)
+            img = None
+        if img is not None:
+            self._ov_cache = (now, img)
+            return img
+        # 실패 시 직전 프레임 유지(있으면), 없으면 None
+        self._ov_cache = (now, cached)
+        return cached
+
     async def screencap_bytes(self, fmt: str = "jpeg", timeout: float = 10.0) -> bytes:
-        return await self.stream().async_screencap_bytes(fmt=fmt, timeout=timeout)
+        data = await self.stream().async_screencap_bytes(fmt=fmt, timeout=timeout)
+        if not self.overlay_android:
+            return data
+        try:
+            import cv2
+            import numpy as np
+
+            base = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+            andr = await self._android_frame()
+            if base is None or andr is None:
+                return data
+            h, w = base.shape[:2]
+            if (andr.shape[1], andr.shape[0]) != (w, h):
+                andr = cv2.resize(andr, (w, h), interpolation=cv2.INTER_AREA)
+            # 검정(=webOS 가 비치는 영역)만 통과시키고 나머지는 Android 를 덮는다
+            mask = cv2.cvtColor(andr, cv2.COLOR_BGR2GRAY) > self.overlay_threshold
+            base[mask] = andr[mask]
+            ext = ".png" if fmt == "png" else ".jpg"
+            params = [] if fmt == "png" else [cv2.IMWRITE_JPEG_QUALITY, 70]
+            ok, buf = cv2.imencode(ext, base, params)
+            return buf.tobytes() if ok else data
+        except Exception as e:
+            logger.debug("WebOS 오버레이 합성 실패: %s", e)
+            return data
 
     def client_size(self) -> tuple[int, int]:
         """프론트가 좌표를 만들 때 쓰는 기준 크기 = dev.info["screens"]["webos"].

@@ -639,6 +639,76 @@ def cmd_monitor(args) -> int:
     return 0
 
 
+def cmd_composite(args) -> int:
+    """webOS(Linux) 프레임 + Android 화면을 받아 **합성 미리보기**를 만든다.
+
+    실제 패널은 webOS 위에 Android UI(좌측 사이드바, 상태 아이콘, 팝업 등)가 얹힌
+    모습인데, 우리 WebOS 미러는 Linux 레이어만 보여준다. Android 캡처에서 webOS 가
+    비쳐 보이는 영역이 **검정으로 찍히는지**(= 검정을 투명으로 보고 합성 가능한지)를
+    눈으로 확인하려는 도구다.
+
+    저장물: webos.png / android.png / composite.png / android_mask.png
+    """
+    import numpy as np
+    import cv2
+
+    svc = _make(args)
+    svc.start(timeout=args.timeout)
+    _geometry(svc)
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+
+    # webOS(Linux VM) 프레임
+    web = cv2.imdecode(np.frombuffer(svc.screencap_bytes(fmt="png"), np.uint8),
+                       cv2.IMREAD_COLOR)
+    cv2.imwrite(str(out / "webos.png"), web)
+    print(f"[i] webos.png  {web.shape[1]}x{web.shape[0]}")
+
+    # Android 화면 (screencap)
+    cmd = svc._adb_args("exec-out", "screencap", "-p")
+    r = subprocess.run(cmd, capture_output=True, timeout=30)
+    if r.returncode != 0 or not r.stdout:
+        print(f"[!] Android 캡처 실패 rc={r.returncode} {r.stderr[:200]!r}")
+        svc.stop()
+        return 1
+    andr = cv2.imdecode(np.frombuffer(r.stdout, np.uint8), cv2.IMREAD_COLOR)
+    if andr is None:
+        print("[!] Android 캡처 디코딩 실패")
+        svc.stop()
+        return 1
+    cv2.imwrite(str(out / "android.png"), andr)
+    print(f"[i] android.png {andr.shape[1]}x{andr.shape[0]}")
+
+    # 두 레이어 크기를 맞춘다(webOS 스트림은 -scale 축소본)
+    h, w = web.shape[:2]
+    if (andr.shape[1], andr.shape[0]) != (w, h):
+        andr_r = cv2.resize(andr, (w, h), interpolation=cv2.INTER_AREA)
+        print(f"[i] Android 를 {w}x{h} 로 리사이즈")
+    else:
+        andr_r = andr
+
+    # 검정(=hole, webOS 가 비치는 영역)을 투명으로 보고 합성
+    gray = cv2.cvtColor(andr_r, cv2.COLOR_BGR2GRAY)
+    mask = (gray > args.threshold).astype(np.uint8)     # 1 = Android 가 그린 픽셀
+    cv2.imwrite(str(out / "android_mask.png"), mask * 255)
+    comp = web.copy()
+    comp[mask == 1] = andr_r[mask == 1]
+    cv2.imwrite(str(out / "composite.png"), comp)
+
+    opaque = float(mask.mean()) * 100
+    print(f"[i] composite.png 저장 — Android 불투명 픽셀 {opaque:.1f}% "
+          f"(threshold={args.threshold})")
+    if opaque > 80:
+        print("[!] Android 캡처가 거의 전면 불투명합니다 — 검정 키 합성은 부적합할 수 있습니다"
+              "(hole 이 검정으로 안 찍히는 경우).")
+    elif opaque < 1:
+        print("[!] Android 캡처가 거의 전부 검정입니다 — UI 가 안 잡혔을 수 있습니다.")
+    print(f"[i] {out.resolve()} 의 4개 파일을 눈으로 비교해 보세요")
+    svc.stop()
+    return 0
+
+
 def main() -> int:
     # 공통 옵션은 부모 파서로 둬서 하위 명령 앞/뒤 어느 쪽에 써도 먹게 한다.
     #   ⚠ parents= 로 재사용하면 **하위 파서의 기본값이 상위에서 준 값을 덮어쓴다**.
@@ -741,6 +811,13 @@ def main() -> int:
     p.add_argument("--space", choices=["panel", "mirror"], default="panel")
     p.add_argument("--wait", type=float, default=0.7, help="전송 후 로그 확인 대기(초)")
     p.set_defaults(func=cmd_touch)
+
+    p = sub.add_parser("composite", help="webOS + Android 합성 미리보기 생성",
+                       parents=[common])
+    p.add_argument("--out", default="webos_composite")
+    p.add_argument("--threshold", type=int, default=16,
+                   help="이 밝기 이하를 '투명(hole)'으로 본다 (0~255)")
+    p.set_defaults(func=cmd_composite)
 
     p = sub.add_parser("monitor", help="디스플레이 팝업 up/down (Android 논리 크기 변경)",
                        parents=[common])
