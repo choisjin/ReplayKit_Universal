@@ -648,12 +648,16 @@ class WebOSStreamService:
             self._frame_count += 1
         self._frame_event.set()
 
-    def is_foreground(self, display_id: Optional[int] = None) -> bool:
+    def is_foreground(self, display_id: Optional[int] = None,
+                      max_age: Optional[float] = None) -> bool:
         """지금 화면 전면이 webOS 투사 앱인지 (Android dumpsys 기준, TTL 캐시).
 
         BMW 에이전트와 같은 판별이다 — ``topResumedActivity`` 가
         ``com.lge.app.car.webosprojectionhmi`` 면 webOS 화면, 그 외 패키지면 네이티브
         Android 화면. 실패하면 False(= 기존 iSAP 화면 유지).
+
+        max_age: 허용할 캐시 나이(초). 터치처럼 틀리면 안 되는 경로는 짧게 준다
+        (화면 전환 직후 낡은 캐시로 반대쪽에 주입하는 사고 방지).
 
         dumpsys 출력::
 
@@ -661,7 +665,8 @@ class WebOSStreamService:
                   topResumedActivity=ActivityRecord{... com.lge.app.car.settingshmi/... }
         """
         now = time.monotonic()
-        if now - self._fg_cache[0] < self._fg_ttl:
+        ttl = self._fg_ttl if max_age is None else max(0.0, max_age)
+        if now - self._fg_cache[0] < ttl:
             return self._fg_cache[1]
         want = int(display_id or 0)
         result = False

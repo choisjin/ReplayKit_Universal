@@ -779,7 +779,12 @@ class ISAPAgentService:
         v = self._webos_config.get("webos_auto")
         return True if v is None else bool(v)
 
-    def resolve_screen(self, screen_type: Optional[str]) -> str:
+    # 터치 경로가 허용하는 전면 판별 캐시 나이(초). 캡처(1.5s)보다 짧게 둔다 —
+    # webOS ↔ Android(설정 등) 전환 직후 낡은 캐시로 반대쪽에 주입하면 무반응이 된다.
+    WEBOS_TOUCH_FG_MAX_AGE = 0.3
+
+    def resolve_screen(self, screen_type: Optional[str],
+                       max_age: Optional[float] = None) -> str:
         """실제로 쓸 화면을 결정한다 — front_center + webOS 전면이면 'webos'.
 
         캡처와 터치가 **같은 판단**을 써야 한다(화면은 webOS 인데 터치는 iSAP 전석으로
@@ -791,7 +796,8 @@ class ISAPAgentService:
             self.webos_auto_active = False
             return st
         try:
-            active = self._webos_stream().is_foreground(self.webos_display_id)
+            active = self._webos_stream().is_foreground(
+                self.webos_display_id, max_age=max_age)
         except Exception as e:
             logger.debug("WebOS auto-switch probe failed: %s", e)
             active = False
@@ -1322,6 +1328,7 @@ class ISAPAgentService:
 
     async def async_screencap(self, output_path: str, screen_type: str = "front_center",
                               timeout: float = 10.0, fmt: str = "png") -> str:
+        screen_type = self.resolve_screen(screen_type)
         if self._is_webos(screen_type):
             data = await self.async_screencap_bytes(screen_type, fmt, timeout)
             with open(output_path, "wb") as f:
@@ -1331,7 +1338,7 @@ class ISAPAgentService:
         return await loop.run_in_executor(None, self.screencap, output_path, screen_type, timeout, fmt)
 
     async def async_tap(self, x: int, y: int, screen_type: str = "front_center") -> None:
-        screen_type = self.resolve_screen(screen_type)
+        screen_type = self.resolve_screen(screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
         if self._is_webos(screen_type):
             if self._webos_touch_evdev():
                 await asyncio.get_event_loop().run_in_executor(
@@ -1349,7 +1356,7 @@ class ISAPAgentService:
 
     async def async_repeat_tap(self, x: int, y: int, count: int = 5, interval_ms: int = 100,
                                screen_type: str = "front_center") -> None:
-        screen_type = self.resolve_screen(screen_type)
+        screen_type = self.resolve_screen(screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
             if self._webos_touch_evdev():
@@ -1366,7 +1373,7 @@ class ISAPAgentService:
 
     async def async_long_press(self, x: int, y: int, duration_ms: int = 3000,
                                screen_type: str = "front_center") -> None:
-        screen_type = self.resolve_screen(screen_type)
+        screen_type = self.resolve_screen(screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
             if self._webos_touch_evdev():
@@ -1384,7 +1391,7 @@ class ISAPAgentService:
     async def async_swipe(self, x1: int, y1: int, x2: int, y2: int,
                           screen_type: str = "front_center", duration_ms: int = 0,
                           hold_ms: int = 0) -> None:
-        screen_type = self.resolve_screen(screen_type)
+        screen_type = self.resolve_screen(screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
             if self._webos_touch_evdev():
@@ -1407,7 +1414,7 @@ class ISAPAgentService:
     async def async_multi_finger_swipe(self, fingers: list[dict],
                                        screen_type: str = "front_center",
                                        duration_ms: int = 500, hold_ms: int = 0) -> None:
-        screen_type = self.resolve_screen(screen_type)
+        screen_type = self.resolve_screen(screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
             if self._webos_touch_evdev():
@@ -1428,7 +1435,7 @@ class ISAPAgentService:
 
     async def async_multi_finger_tap(self, points: list[dict],
                                      screen_type: str = "front_center") -> None:
-        screen_type = self.resolve_screen(screen_type)
+        screen_type = self.resolve_screen(screen_type, self.WEBOS_TOUCH_FG_MAX_AGE)
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
             if self._webos_touch_evdev():
