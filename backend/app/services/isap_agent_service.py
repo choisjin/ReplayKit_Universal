@@ -761,7 +761,8 @@ class ISAPAgentService:
         prev = self._webos_config
         self._webos_config = cfg if isinstance(cfg, dict) else {}
         keys = ("webos_adb_serial", "webos_linux_ip", "webos_linux_user",
-                "webos_linux_password", "webos_scale", "webos_quality", "webos_fps")
+                "webos_linux_password", "webos_scale", "webos_quality", "webos_fps",
+                "webos_evdev")
         if any(self._webos_config.get(k) != prev.get(k) for k in keys):
             self._stop_webos()
 
@@ -787,12 +788,14 @@ class ISAPAgentService:
         from ..dependencies import adb_service
         return adb_service, self.webos_serial, self.webos_display_id
 
-    def _webos_touch_uinput(self) -> bool:
-        """터치를 linuxStream uinput 으로 보낼지 (기본은 Android ADB).
+    def _webos_touch_evdev(self) -> bool:
+        """터치를 webOS(Linux VM) 터치스크린 evdev 노드에 직접 주입할지.
 
-        webOS 가 Android 터치를 안 받는 기기용 대안. info["webos_touch_via"]="uinput".
+        **기본값**이다. Android `input tap` 은 webOS 영역이 hole 이라 반응이 없고
+        (2026-09-11 실기 확인), evdev 직접 주입은 물리 터치와 동일하게 동작한다.
+        info["webos_touch_via"]="adb" 로 두면 예전 Android 경로를 쓴다.
         """
-        return str(self._webos_config.get("webos_touch_via") or "").lower() == "uinput"
+        return str(self._webos_config.get("webos_touch_via") or "evdev").lower() != "adb"
 
     def _webos_stream(self):
         """WebOS 화면 스트림(Linux VM linuxStream) — lazy 생성.
@@ -816,6 +819,7 @@ class ISAPAgentService:
                     quality=int(cfg.get("webos_quality") or 60),
                     fps=int(cfg.get("webos_fps") or 30),
                     device_id=self.device_id,
+                    evdev_path=str(cfg.get("webos_evdev") or "").strip(),
                 )
             return self._webos_svc
 
@@ -1295,7 +1299,7 @@ class ISAPAgentService:
 
     async def async_tap(self, x: int, y: int, screen_type: str = "front_center") -> None:
         if self._is_webos(screen_type):
-            if self._webos_touch_uinput():
+            if self._webos_touch_evdev():
                 await asyncio.get_event_loop().run_in_executor(
                     None, self._webos_stream().tap, int(x), int(y))
                 return
@@ -1313,7 +1317,7 @@ class ISAPAgentService:
                                screen_type: str = "front_center") -> None:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
-            if self._webos_touch_uinput():
+            if self._webos_touch_evdev():
                 await asyncio.get_event_loop().run_in_executor(
                     None, self._webos_stream().repeat_tap,
                     int(x), int(y), count, interval_ms)
@@ -1329,7 +1333,7 @@ class ISAPAgentService:
                                screen_type: str = "front_center") -> None:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
-            if self._webos_touch_uinput():
+            if self._webos_touch_evdev():
                 await asyncio.get_event_loop().run_in_executor(
                     None, self._webos_stream().long_press, int(x), int(y), duration_ms)
                 return
@@ -1346,7 +1350,7 @@ class ISAPAgentService:
                           hold_ms: int = 0) -> None:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
-            if self._webos_touch_uinput():
+            if self._webos_touch_evdev():
                 await asyncio.get_event_loop().run_in_executor(
                     None, self._webos_stream().swipe,
                     int(x1), int(y1), int(x2), int(y2),
@@ -1368,7 +1372,7 @@ class ISAPAgentService:
                                        duration_ms: int = 500, hold_ms: int = 0) -> None:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
-            if self._webos_touch_uinput():
+            if self._webos_touch_evdev():
                 await asyncio.get_event_loop().run_in_executor(
                     None, self._webos_stream().multi_finger_swipe,
                     fingers, duration_ms, hold_ms)
@@ -1388,7 +1392,7 @@ class ISAPAgentService:
                                      screen_type: str = "front_center") -> None:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
-            if self._webos_touch_uinput():
+            if self._webos_touch_evdev():
                 await asyncio.get_event_loop().run_in_executor(
                     None, self._webos_stream().multi_finger_tap, points)
                 return

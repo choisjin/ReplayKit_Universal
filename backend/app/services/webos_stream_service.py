@@ -20,10 +20,14 @@ Android 레이어에는 hole(예: [970,0,3840,1440]) 이 뚫려 있고 그 구�
 스캔아웃(webOS)이 비친다. 그래서 **scrcpy(Android 캡처)로는 webOS 영역이 안 보이고**,
 webOS 화면을 보려면 이 모듈의 Linux 스트림이 필요하다 (2026-09-11 실기 확인).
 
-터치는 여기서 보내지 않는다. 참조본 뷰어도 Linux 레이어엔 터치를 보내지 않고
-Android/QNX 로만 보내는데, webOS 투사 앱이 Android 터치를 받아 넘기기 때문이다.
-→ ReplayKit 도 **터치는 ADB(`input tap`)**, 화면만 이 스트림을 쓴다.
-(linuxStream 바이너리에 /dev/uinput 주입 기능이 있지만 사용하지 않는다.)
+터치 (2026-09-11 실기로 확정한 경로)
+-----------------------------------
+**Linux VM 의 실제 터치스크린 evdev 노드에 직접 write** 한다. 아래 두 경로는 안 먹었다.
+  * Android ``input tap`` — webOS 영역은 Android 레이어의 hole 이라 무반응.
+  * linuxStream 의 ``/dev/uinput`` 주입 — 패킷은 도달·파싱되는데(로그 ``touch type=0``)
+    화면 무반응. 만들어진 장치가 ``PROP=0``(INPUT_PROP_DIRECT 없음) + ``ABS_X/Y/PRESSURE``
+    (ABS_MT_* 없음) 인 구형 단일터치 스펙이라 webOS 입력 스택이 터치스크린으로 안 본다.
+    (실제 터치스크린은 ``PROP=2`` + MT_SLOT/TRACKING_ID/MT_POSITION_X/Y)
 
 와이어 포맷 (screenStream/linuxStream 공통, screenBridge.exe 역분석으로 확인)
 --------------------------------------------------------------------------
@@ -48,10 +52,6 @@ Android/QNX 로만 보내는데, webOS 투사 앱이 Android 터치를 받아 �
       [1B alpha_flags]
       [dirty 타일들: 각 [4B size][jpeg]]   # 디스플레이 순서 → 타일 인덱스 순서
       [alpha_flags 가 선 디스플레이의 alpha JPEG: 각 [4B size][jpeg]]
-
-  터치 패킷(7B)::
-
-      [0xAA][type][touch_id][x_hi][x_lo][y_hi][y_lo]   # type 0=press 1=move 2=release
 
 Linux 는 최하단 불투명 레이어라 alpha 는 쓰지 않는다(파싱만 하고 버린다).
 """
@@ -85,14 +85,56 @@ DEV_STREAM_BIN = "/data/linuxStream"
 # Linux VM(webOS) 측 경로
 REMOTE_BIN = "/tmp/linuxStream"
 REMOTE_LOG = "/tmp/linuxStream.log"
-REMOTE_FIFO = "/tmp/linuxStream.touch"
 
-# linuxStream 터치 패킷(7B) — screenStream 과 공용 포맷.
-#   [0xAA][type][touch_id][x_hi][x_lo][y_hi][y_lo]
-TOUCH_MAGIC = 0xAA
-TOUCH_PRESS = 0
-TOUCH_MOVE = 1
-TOUCH_RELEASE = 2
+# evdev 주입용 상수 (linux/input-event-codes.h)
+EV_SYN, EV_KEY, EV_ABS = 0x00, 0x01, 0x03
+SYN_REPORT = 0x00
+BTN_TOUCH = 0x14A
+ABS_X, ABS_Y = 0x00, 0x01
+ABS_MT_SLOT = 0x2F
+ABS_MT_POSITION_X, ABS_MT_POSITION_Y = 0x35, 0x36
+ABS_MT_TRACKING_ID = 0x39
+
+
+def _ev(etype: int, code: int, value: int) -> bytes:
+    """struct input_event — aarch64: timeval(16B) + type/code/value = 24B.
+
+    시각은 0 으로 둔다(커널이 input_inject_event 에서 현재 시각으로 채운다).
+    """
+    return struct.pack("<qqHHi", 0, 0, etype, code, value)
+
+
+def _mt_down(x: int, y: int, slot: int = 0, tracking: int = 1) -> bytes:
+    return b"".join([
+        _ev(EV_ABS, ABS_MT_SLOT, slot),
+        _ev(EV_ABS, ABS_MT_TRACKING_ID, tracking),
+        _ev(EV_ABS, ABS_MT_POSITION_X, x),
+        _ev(EV_ABS, ABS_MT_POSITION_Y, y),
+        _ev(EV_KEY, BTN_TOUCH, 1),
+        _ev(EV_ABS, ABS_X, x),
+        _ev(EV_ABS, ABS_Y, y),
+        _ev(EV_SYN, SYN_REPORT, 0),
+    ])
+
+
+def _mt_move(x: int, y: int, slot: int = 0) -> bytes:
+    return b"".join([
+        _ev(EV_ABS, ABS_MT_SLOT, slot),
+        _ev(EV_ABS, ABS_MT_POSITION_X, x),
+        _ev(EV_ABS, ABS_MT_POSITION_Y, y),
+        _ev(EV_ABS, ABS_X, x),
+        _ev(EV_ABS, ABS_Y, y),
+        _ev(EV_SYN, SYN_REPORT, 0),
+    ])
+
+
+def _mt_up(slot: int = 0) -> bytes:
+    return b"".join([
+        _ev(EV_ABS, ABS_MT_SLOT, slot),
+        _ev(EV_ABS, ABS_MT_TRACKING_ID, -1),
+        _ev(EV_KEY, BTN_TOUCH, 0),
+        _ev(EV_SYN, SYN_REPORT, 0),
+    ])
 
 _MAX_FRAME = 50_000_000  # screenBridge 와 동일한 프레임 크기 상한(깨진 스트림 조기 검출)
 
@@ -138,7 +180,8 @@ class WebOSStreamService:
     def __init__(self, adb_serial: str, linux_ip: str = "172.16.4.1",
                  linux_user: str = "root", linux_password: str = "root",
                  scale: int = 2, quality: int = 60, fps: int = 30,
-                 idle_timeout: float = 120.0, device_id: str = ""):
+                 idle_timeout: float = 120.0, device_id: str = "",
+                 evdev_path: str = ""):
         self.adb_serial = (adb_serial or "").strip()
         self.linux_ip = (linux_ip or "172.16.4.1").strip()
         self.linux_user = (linux_user or "root").strip()
@@ -158,8 +201,9 @@ class WebOSStreamService:
         self._reaper: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._lock = threading.Lock()          # start/stop 직렬화
-        self._touch_lock = threading.Lock()    # 터치 패킷 원자 송신
-        self._touch_fifo_checked = False       # FIFO 존재 확인 1회
+        self._touch_lock = threading.Lock()    # 터치 이벤트 원자 송신
+        self._evdev_path = ""                  # 주입 대상 터치스크린 노드(자동 탐색 캐시)
+        self._forced_evdev = evdev_path or ""  # 설정으로 직접 지정한 노드
 
         self._frame: Optional[np.ndarray] = None   # BGR 합성 프레임
         self._frame_lock = threading.Lock()
@@ -354,24 +398,12 @@ class WebOSStreamService:
             self._last_error = ""
             self._first_bytes = b""
 
-            # 이전 스트림 정리는 **별도 세션**에서. 런처와 같은 명령줄에 두면
-            # `pkill -f` 가 자기 자신(그 명령줄에 "linuxStream" 을 포함한 sh)까지
-            # 매칭해 방금 띄운 스트림을 즉사시킨다 → 프레임이 하나도 안 온다.
-            # 이름 정확 매칭(-x)으로 셸 오탐도 막는다.
-            self._ssh(
-                f"pkill -x linuxStream 2>/dev/null; rm -f {REMOTE_FIFO}; "
-                f"mkfifo {REMOTE_FIFO} 2>/dev/null; true",
-                timeout=20.0,
-            )
-            # stdin 을 FIFO 에 붙여 두면 uinput 터치 주입 경로를 쓸 수 있다.
-            #   ⚠ mkfifo 가 실패한 환경에서 그냥 0<>FILE 을 하면 **일반 파일**이 만들어져
-            #     stdin 이 즉시 EOF → linuxStream 이 조기 종료할 수 있다. 실제 FIFO 일
-            #     때만 붙이고, 아니면 화면만 띄운다(ADB 터치 경로는 영향 없음).
-            #   0<> (read-write) 라 writer 가 없어도 열기가 막히지 않고 EOF 도 안 난다.
+            self._ssh("pkill -x linuxStream 2>/dev/null; true", timeout=20.0)
+            # -verbose 필수: 없으면 linuxStream 이 아무것도 안 찍어 /tmp/linuxStream.log 가
+            # 비고 native/scale 기하를 못 읽는다. (전부 stderr → 로그 파일)
             remote = (
-                f"( if [ -p {REMOTE_FIFO} ]; then exec 0<>{REMOTE_FIFO}; fi; "
-                f"exec {REMOTE_BIN} -scale={self.scale} -quality={self.quality} "
-                f"-fps={self.fps} ) 2>{REMOTE_LOG}"
+                f"{REMOTE_BIN} -scale={self.scale} -quality={self.quality} "
+                f"-fps={self.fps} -verbose 2>{REMOTE_LOG}"
             )
             cmd = self._adb_args(
                 "exec-out", "sh", "-c", self._ssh_wrap(remote) + " 2>/dev/null")
@@ -469,10 +501,8 @@ class WebOSStreamService:
         logger.info("WebOS: geometry native=%dx%d stream=%dx%d touch=%dx%d",
                     self._native_w, self._native_h,
                     self._stream_w, self._stream_h, self._touch_w, self._touch_h)
-        if not (self._touch_w and self._touch_h):
-            logger.warning("WebOS: linuxStream 로그에 'touch injection enabled' 없음 — "
-                           "uinput 터치가 비활성일 수 있습니다(--no-touch/권한). "
-                           "native 크기로 대체 매핑합니다.")
+        # touch=... 는 linuxStream 이 만든 uinput 장치 크기 — 우리는 그 장치를 쓰지
+        # 않는다(스펙 불일치로 webOS 가 무시함). 진단 표시 용도로만 남긴다.
 
     # ------------------------------------------------------------------
     # Frame reader
@@ -620,8 +650,38 @@ class WebOSStreamService:
     # ------------------------------------------------------------------
 
     @property
+    def touch_size(self) -> tuple[int, int]:
+        """linuxStream 이 만든 uinput 장치 크기 — **미사용**(진단 표시용).
+
+        그 장치는 INPUT_PROP_DIRECT/ABS_MT_* 가 없어 webOS 가 터치스크린으로 보지 않는다.
+        터치는 실제 터치스크린 evdev 노드에 직접 주입한다(evdev_path 참고).
+        """
+        return self._touch_w, self._touch_h
+
+    @property
+    def touch_size(self) -> tuple[int, int]:
+        """linuxStream 이 만든 uinput 장치 크기 — **미사용**(진단 표시용).
+
+        터치는 실제 터치스크린 evdev 노드에 직접 주입한다(evdev_path 참고).
+        """
+        return self._touch_w, self._touch_h
+
+    @property
+    def native_size(self) -> tuple[int, int]:
+        """Linux VM 프레임버퍼 native 크기 = 패널 좌표계 = 터치 좌표계.
+
+        linuxStream 로그를 못 읽었으면 스트림 출력 × scale 로 역산한다.
+        """
+        if self._native_w and self._native_h:
+            return self._native_w, self._native_h
+        sw, sh = self.size
+        if sw and sh:
+            return sw * self.scale, sh * self.scale
+        return 0, 0
+
+    @property
     def size(self) -> tuple[int, int]:
-        """미러 이미지(=터치 입력 좌표계) 크기."""
+        """미러 이미지 크기(linuxStream 출력, -scale 축소본)."""
         if self._stream_w and self._stream_h:
             return self._stream_w, self._stream_h
         with self._frame_lock:
@@ -646,103 +706,113 @@ class WebOSStreamService:
         return buf.tobytes()
 
     # ------------------------------------------------------------------
-    # 터치 주입 (linuxStream uinput) — webos_touch_via="uinput" 일 때만 사용
+    # 터치 주입 — 실제 터치스크린 evdev 노드에 MT 프로토콜 B 이벤트 직접 write
     # ------------------------------------------------------------------
     #
-    # 기본 경로는 Android ADB(`input tap`)다. webOS 가 Android 터치를 안 받는 기기에서만
-    # 이 경로를 쓴다. linuxStream 이 /dev/uinput 으로 직접 주입하므로 Android 를 거치지
-    # 않는다. 입력 채널은 FIFO — `adb exec-out` 은 stdin 을 전달하지 않아(device→PC 단방향)
-    # 화면 스트림과 같은 프로세스로는 못 보내고, 반대 방향인 `adb exec-in` 세션이 필요하다.
+    # 왜 이 방식인가 (2026-09-11 실기 확인):
+    #   * Android `input tap` → webOS 영역은 Android 레이어의 hole 이라 반응 없음.
+    #   * linuxStream 의 /dev/uinput 주입 → 패킷은 도달·파싱되는데("touch type=0" 로그)
+    #     화면 무반응. 만들어지는 장치가 `PROP=0`(INPUT_PROP_DIRECT 없음) +
+    #     `ABS=ABS_X/Y/PRESSURE`(ABS_MT_* 축 없음)인 **구형 단일터치 스펙**이라
+    #     webOS 입력 스택이 터치스크린으로 인식하지 않는다. (실제 터치스크린은
+    #     PROP=2 + MT_SLOT/TRACKING_ID/MT_POSITION_X/Y)
+    #   * → evdev 노드는 write() 로 이벤트 주입이 되므로 **진짜 터치스크린 장치에**
+    #     물리 터치와 동일한 시퀀스를 써 넣는다. 이게 동작한다.
+    #
+    # 전송은 `cat > /dev/input/eventN` 세션 하나를 열어두고 raw 구조체를 흘려보낸다
+    # (제스처마다 SSH 를 새로 열면 왕복 때문에 드래그 타이밍이 무너진다).
+    # ⚠ `adb exec-out` 은 stdin 을 전달하지 않으므로 반대 방향인 `adb exec-in` 을 쓴다.
 
     @property
-    def touch_size(self) -> tuple[int, int]:
-        """uinput 이 등록된 좌표계 (linuxStream 로그의 'touch injection enabled (WxH)')."""
-        return self._touch_w, self._touch_h
+    def evdev_path(self) -> str:
+        """주입 대상 터치스크린 노드 (자동 탐색 결과 캐시)."""
+        return self._evdev_path
 
-    @property
-    def native_size(self) -> tuple[int, int]:
-        """Linux VM 프레임버퍼 native 크기 = 패널 좌표계.
+    def _find_touch_device(self) -> str:
+        """ABS_MT_POSITION_X/Y 를 가진 실제 터치스크린 evdev 노드를 찾는다.
 
-        로그를 못 읽었으면 스트림 출력 × scale 로 역산한다(-scale 은 우리가 준 값).
+        linuxStream-touch(우리가 띄운 가짜 장치)는 제외한다.
         """
-        if self._native_w and self._native_h:
-            return self._native_w, self._native_h
-        sw, sh = self.size
-        if sw and sh:
-            return sw * self.scale, sh * self.scale
-        return 0, 0
+        if self._evdev_path:
+            return self._evdev_path
+        forced = (self._forced_evdev or "").strip()
+        if forced:
+            self._evdev_path = forced
+            return forced
+        r = self._ssh("cat /proc/bus/input/devices", timeout=20.0)
+        text = (r.stdout or "") + (r.stderr or "")
+        name = handlers = absbits = ""
+        for line in text.splitlines() + [""]:
+            line = line.strip()
+            if line.startswith("N: Name="):
+                name = line.split("=", 1)[1].strip('"')
+            elif line.startswith("H: Handlers="):
+                handlers = line.split("=", 1)[1]
+            elif line.startswith("B: ABS="):
+                absbits = line.split("=", 1)[1].replace(" ", "")
+            elif not line:
+                if name and "linuxStream" not in name and absbits and handlers:
+                    try:
+                        mask = int(absbits, 16)
+                    except ValueError:
+                        mask = 0
+                    if (mask >> ABS_MT_POSITION_X & 1) and (mask >> ABS_MT_POSITION_Y & 1):
+                        evs = [h for h in handlers.split() if h.startswith("event")]
+                        if evs:
+                            self._evdev_path = f"/dev/input/{evs[0]}"
+                            logger.info("WebOS: 터치 주입 대상 = %s (%s)",
+                                        self._evdev_path, name)
+                            return self._evdev_path
+                name = handlers = absbits = ""
+        raise WebOSStreamError(
+            "WebOS: 멀티터치 터치스크린 노드를 찾지 못했습니다 "
+            "(info['webos_evdev'] 로 직접 지정 가능)")
 
-    def _ensure_touch_channel(self) -> None:
+    def _ensure_evdev_channel(self) -> None:
         p = self._touch_proc
         if p is not None and p.poll() is None:
             return
-        # FIFO 가 실제로 있는지 1회 확인 — 없으면 cat 이 **일반 파일**을 만들고 패킷이
-        # 파일에 쌓이기만 해서 "조용히 아무 일도 안 일어나는" 실패가 된다.
-        if not self._touch_fifo_checked:
-            self._touch_fifo_checked = True
-            try:
-                r = self._ssh(f"test -p {REMOTE_FIFO} && echo FIFO_OK || echo FIFO_MISSING",
-                              timeout=20.0)
-                if "FIFO_OK" not in (r.stdout or ""):
-                    logger.warning(
-                        "WebOS: 터치 FIFO(%s) 없음 — mkfifo 실패 환경으로 보입니다. "
-                        "uinput 터치가 동작하지 않습니다(ADB 경로 사용 권장).", REMOTE_FIFO)
-            except Exception as e:
-                logger.debug("WebOS: FIFO 확인 실패: %s", e)
-        cmd = self._adb_args("exec-in", "sh", "-c", self._ssh_wrap(f"cat > {REMOTE_FIFO}"))
+        dev = self._find_touch_device()
+        cmd = self._adb_args("exec-in", "sh", "-c", self._ssh_wrap(f"cat > {dev}"))
         self._touch_proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW,
         )
-        logger.info("WebOS: uinput 터치 채널 열림 (%s)", self.device_id or self.adb_serial)
+        logger.info("WebOS: 터치 채널 열림 %s (%s)", dev, self.device_id or self.adb_serial)
 
-    def _map_touch(self, x: float, y: float) -> tuple[int, int]:
-        """**패널(native) 좌표** → uinput 좌표. 보통 1:1 이라 그대로 통과한다.
-
-        ⚠ 입력은 스트림 출력(-scale 축소본) 좌표가 아니라 패널 좌표다. 호출자(isap)가
-        프론트 좌표를 그대로 넘기고, 그 좌표계는 Android 디스플레이 크기로 고정돼 있다.
-        """
-        nw, nh = self.native_size
-        tw, th = self._touch_w, self._touch_h
-        if nw and tw and nw != tw:
-            x = x * tw / nw
-        if nh and th and nh != th:
-            y = y * th / nh
-        return max(0, min(65535, int(round(x)))), max(0, min(65535, int(round(y))))
-
-    def send_touch(self, ttype: int, x: float, y: float, touch_id: int = 0) -> None:
-        self.ensure_running()
+    def _write_ev(self, payload: bytes) -> None:
+        """input_event 구조체들을 한 번에 write. 채널이 끊겼으면 1회 재연결."""
         self._last_use = time.time()
-        ix, iy = self._map_touch(x, y)
-        pkt = bytes([TOUCH_MAGIC, ttype & 0xFF, touch_id & 0xFF,
-                     (ix >> 8) & 0xFF, ix & 0xFF, (iy >> 8) & 0xFF, iy & 0xFF])
         with self._touch_lock:
-            self._ensure_touch_channel()
-            p = self._touch_proc
-            if p is None or p.stdin is None:
-                raise WebOSStreamError("WebOS: 터치 채널을 열 수 없습니다")
-            try:
-                p.stdin.write(pkt)
-                p.stdin.flush()
-            except Exception as e:
+            for attempt in (1, 2):
+                self._ensure_evdev_channel()
+                p = self._touch_proc
+                if p is None or p.stdin is None:
+                    raise WebOSStreamError("WebOS: 터치 채널을 열 수 없습니다")
                 try:
-                    p.kill()
-                except Exception:
-                    pass
-                self._touch_proc = None
-                raise WebOSStreamError(f"WebOS: 터치 전송 실패 — {e}")
+                    p.stdin.write(payload)
+                    p.stdin.flush()
+                    return
+                except Exception as e:
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+                    self._touch_proc = None
+                    if attempt == 2:
+                        raise WebOSStreamError(f"WebOS: 터치 전송 실패 — {e}")
 
-    def tap(self, x: int, y: int) -> None:
-        self.send_touch(TOUCH_PRESS, x, y)
-        time.sleep(0.05)
-        self.send_touch(TOUCH_RELEASE, x, y)
-        logger.info("[WebOS uinput TAP] (%s,%s) -> %s", x, y, self._map_touch(x, y))
+    # --- 제스처 (좌표는 패널 기준) ---
+
+    def tap(self, x: int, y: int, hold_ms: int = 60) -> None:
+        self._write_ev(_mt_down(int(x), int(y)))
+        time.sleep(max(0, hold_ms) / 1000.0)
+        self._write_ev(_mt_up())
+        logger.info("[WebOS TAP] (%s,%s) -> %s", x, y, self._evdev_path)
 
     def long_press(self, x: int, y: int, duration_ms: int = 3000) -> None:
-        self.send_touch(TOUCH_PRESS, x, y)
-        time.sleep(max(0, duration_ms) / 1000.0)
-        self.send_touch(TOUCH_RELEASE, x, y)
-        logger.info("[WebOS uinput LONG_PRESS] (%s,%s) %dms", x, y, duration_ms)
+        self.tap(x, y, hold_ms=duration_ms)
+        logger.info("[WebOS LONG_PRESS] (%s,%s) %dms", x, y, duration_ms)
 
     def repeat_tap(self, x: int, y: int, count: int = 5, interval_ms: int = 100) -> None:
         for i in range(max(1, count)):
@@ -752,25 +822,31 @@ class WebOSStreamService:
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int,
               duration_ms: int = 300, hold_ms: int = 0) -> None:
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
         dur = max(int(duration_ms or 0), 100)
         steps = max(3, min(30, dur // 20))
-        self.send_touch(TOUCH_PRESS, x1, y1)
+        self._write_ev(_mt_down(x1, y1))
         if hold_ms and hold_ms > 0:
             time.sleep(hold_ms / 1000.0)
         interval = (dur / 1000.0) / steps
-        for i in range(1, steps):
+        for i in range(1, steps + 1):
             t = i / steps
-            self.send_touch(TOUCH_MOVE, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t)
+            self._write_ev(_mt_move(int(round(x1 + (x2 - x1) * t)),
+                                    int(round(y1 + (y2 - y1) * t))))
             time.sleep(interval)
-        self.send_touch(TOUCH_RELEASE, x2, y2)
-        logger.info("[WebOS uinput SWIPE] (%s,%s)->(%s,%s) %dms", x1, y1, x2, y2, dur)
+        self._write_ev(_mt_up())
+        logger.info("[WebOS SWIPE] (%s,%s)->(%s,%s) %dms", x1, y1, x2, y2, dur)
 
     def multi_finger_tap(self, points: list) -> None:
-        for idx, p in enumerate(points):
-            self.send_touch(TOUCH_PRESS, p["x"], p["y"], touch_id=idx)
-        time.sleep(0.05)
-        for idx, p in enumerate(points):
-            self.send_touch(TOUCH_RELEASE, p["x"], p["y"], touch_id=idx)
+        """진짜 멀티터치 — 손가락마다 MT slot 을 따로 쓴다."""
+        if not points:
+            return
+        down = b"".join(_mt_down(int(p["x"]), int(p["y"]), slot=i, tracking=i + 1)
+                        for i, p in enumerate(points))
+        self._write_ev(down)
+        time.sleep(0.06)
+        self._write_ev(b"".join(_mt_up(slot=i) for i in range(len(points))))
+        logger.info("[WebOS MULTI_TAP] %d fingers", len(points))
 
     def multi_finger_swipe(self, fingers: list, duration_ms: int = 500,
                            hold_ms: int = 0) -> None:
@@ -778,20 +854,21 @@ class WebOSStreamService:
             return
         dur = max(int(duration_ms or 0), 100)
         steps = max(3, min(30, dur // 20))
-        for idx, f in enumerate(fingers):
-            self.send_touch(TOUCH_PRESS, f["x1"], f["y1"], touch_id=idx)
+        self._write_ev(b"".join(
+            _mt_down(int(f["x1"]), int(f["y1"]), slot=i, tracking=i + 1)
+            for i, f in enumerate(fingers)))
         if hold_ms and hold_ms > 0:
             time.sleep(hold_ms / 1000.0)
         interval = (dur / 1000.0) / steps
-        for s in range(1, steps):
+        for s in range(1, steps + 1):
             t = s / steps
-            for idx, f in enumerate(fingers):
-                self.send_touch(TOUCH_MOVE,
-                                f["x1"] + (f["x2"] - f["x1"]) * t,
-                                f["y1"] + (f["y2"] - f["y1"]) * t, touch_id=idx)
+            self._write_ev(b"".join(
+                _mt_move(int(round(f["x1"] + (f["x2"] - f["x1"]) * t)),
+                         int(round(f["y1"] + (f["y2"] - f["y1"]) * t)), slot=i)
+                for i, f in enumerate(fingers)))
             time.sleep(interval)
-        for idx, f in enumerate(fingers):
-            self.send_touch(TOUCH_RELEASE, f["x2"], f["y2"], touch_id=idx)
+        self._write_ev(b"".join(_mt_up(slot=i) for i in range(len(fingers))))
+        logger.info("[WebOS MULTI_SWIPE] %d fingers %dms", len(fingers), dur)
 
     # ------------------------------------------------------------------
     # Async wrappers (iSAP 서비스와 시그니처를 맞춘다)
@@ -853,6 +930,7 @@ class WebOSStreamService:
             "height": h,
             "touch_width": self._touch_w,
             "touch_height": self._touch_h,
+            "evdev_path": self._evdev_path,
             "native_width": self.native_size[0],
             "native_height": self.native_size[1],
             "last_error": self._last_error,

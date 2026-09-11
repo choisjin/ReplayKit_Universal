@@ -1276,7 +1276,8 @@ export default function DevicePage() {
       extras.webos_linux_ip = dev.info?.webos_linux_ip ?? '172.16.4.1';
       extras.webos_linux_user = dev.info?.webos_linux_user ?? 'root';
       extras.webos_linux_password = dev.info?.webos_linux_password ?? 'root';
-      extras.webos_touch_via = dev.info?.webos_touch_via ?? 'adb';
+      extras.webos_touch_via = dev.info?.webos_touch_via ?? 'evdev';
+      extras.webos_evdev = dev.info?.webos_evdev ?? '';
       deviceApi.adbSerials().then(res => {
         setAdbSerialOptions((res.data.devices || []).map((d: any) => ({
           value: d.serial,
@@ -3988,17 +3989,23 @@ export default function DevicePage() {
                   <div>
                     <span style={{ fontSize: 11, color: '#888', marginRight: 6 }}>터치 경로:</span>
                     <Select
-                      style={{ width: 260 }}
-                      value={editExtraFields.webos_touch_via ?? 'adb'}
+                      style={{ width: 300 }}
+                      value={editExtraFields.webos_touch_via ?? 'evdev'}
                       onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_touch_via: v })}
                     >
-                      <Option value="adb">ADB input (기본)</Option>
-                      <Option value="uinput">linuxStream uinput 주입</Option>
+                      <Option value="evdev">webOS 터치스크린 직접 주입 (기본)</Option>
+                      <Option value="adb">ADB input (Android 경유)</Option>
                     </Select>
+                    <Input
+                      style={{ width: 200, marginLeft: 6 }}
+                      placeholder="evdev 노드 (자동 탐색)"
+                      value={editExtraFields.webos_evdev ?? ''}
+                      onChange={(e) => setEditExtraFields({ ...editExtraFields, webos_evdev: e.target.value })}
+                    />
                     <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
-                      기본은 Android 로 <code>input tap</code> 을 보냅니다(투사 앱이 webOS 로 넘기는 구조).
-                      <b> 화면은 나오는데 터치만 안 먹으면</b> uinput 으로 바꿔 보세요 — linuxStream 이
-                      Linux VM 의 <code>/dev/uinput</code> 에 직접 주입해 Android 를 거치지 않습니다.
+                      기본값은 Linux VM 의 <b>실제 터치스크린 evdev 노드</b>에 물리 터치와 동일한
+                      멀티터치 이벤트를 직접 씁니다(노드는 자동 탐색 — <code>ABS_MT_POSITION_X/Y</code> 보유 장치).
+                      Android <code>input tap</code> 은 webOS 영역이 hole 이라 반응하지 않습니다.
                     </div>
                   </div>
                 </Space>
