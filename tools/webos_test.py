@@ -99,11 +99,15 @@ def _make(args) -> WebOSStreamService:
     print(f"[i] 로드: {_svc_origin}")
     print(f"[i] serial={serial} linux={args.user}@{args.ip} "
           f"scale={args.scale} q={args.quality} fps={args.fps}")
-    return WebOSStreamService(
+    svc = WebOSStreamService(
         adb_serial=serial, linux_ip=args.ip, linux_user=args.user,
         linux_password=args.password, scale=args.scale, quality=args.quality,
         fps=args.fps, idle_timeout=0, device_id="webos_test",
     )
+    if getattr(args, "no_kill", False):
+        svc.kill_existing = False
+        print("[i] --no-kill: 기존 linuxStream 을 죽이지 않고 추가로 띄웁니다")
+    return svc
 
 
 def _to_panel(svc: WebOSStreamService, x: int, y: int, space: str) -> tuple:
@@ -651,6 +655,255 @@ def cmd_monitor(args) -> int:
     return 0
 
 
+def _adb_text(svc, *a, timeout=60) -> str:
+    r = subprocess.run(svc._adb_args(*a), capture_output=True, text=True, timeout=timeout)
+    return (r.stdout or "") + (r.stderr or "")
+
+
+def _screencap(svc, display_id=None, timeout=60):
+    """Android 화면을 base64 경유로 받아 BGR 로 디코드.
+
+    exec-out 의 raw 바이너리는 PC/adb 조합에 따라 깨지므로 base64 를 쓴다(알려진 이슈).
+    """
+    import base64 as _b64
+
+    import cv2
+    import numpy as np
+
+    d = f"-d {display_id} " if display_id is not None else ""
+    r = subprocess.run(svc._adb_args("shell", f"screencap {d}-p | base64"),
+                       capture_output=True, text=True, timeout=timeout)
+    if r.returncode != 0 or not r.stdout.strip():
+        return None, f"rc={r.returncode} {r.stderr.strip()[:160]}"
+    try:
+        raw = _b64.b64decode("".join(r.stdout.split()))
+    except Exception as e:
+        return None, f"base64 디코딩 실패: {e}"
+    img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return None, f"PNG 디코딩 실패 ({len(raw)}B)"
+    return img, ""
+
+
+def cmd_dual(args) -> int:
+    """스트림 2개를 **서로 죽이지 않게** 동시에 띄워 공존 가능 여부를 본다.
+
+    둘 다 30fps 근처를 유지하면 pkill 을 제거해도 된다는 뜻이다.
+    한쪽이 0fps 로 떨어지면 디바이스에서 한 인스턴스만 살 수 있다는 뜻.
+    """
+    a = _make(args)
+    a.device_id, a.kill_existing = "dual_A", False
+    b = _make(args)
+    b.device_id, b.kill_existing = "dual_B", False
+
+    # A 를 먼저 띄우고, 안정된 뒤 B 를 붙인다 — B 기동이 A 를 끊는지가 핵심.
+    print("\n[A] 기동")
+    a.start(timeout=args.timeout)
+    time.sleep(2.0)
+    print(f"[A] 단독 안정화 완료 (프레임 {a._frame_count})")
+
+    print("[B] 기동 — 여기서 A 가 끊기면 공존 불가")
+    try:
+        b.start(timeout=args.timeout)
+    except Exception as e:
+        print(f"[!] B 기동 실패: {e}")
+
+    pa, pb = a._frame_count, b._frame_count
+    ok = True
+    for i in range(args.seconds):
+        time.sleep(1.0)
+        ca, cb = a._frame_count, b._frame_count
+        fa, fb = ca - pa, cb - pb
+        pa, pb = ca, cb
+        if fa == 0 or fb == 0:
+            ok = False
+        print(f"  {i + 1:2d}s   A {fa:3d} fps (총 {ca}, running={a.is_running})"
+              f"   B {fb:3d} fps (총 {cb}, running={b.is_running})")
+
+    print("\n=== 디바이스 프로세스 ===")
+    r = a._ssh("pgrep -x linuxStream | tr '\\n' ' '; echo", timeout=25.0)
+    pids = (r.stdout or "").strip()
+    print(f"  linuxStream pid: {pids or '(없음)'}")
+
+    a.stop()
+    b.stop()
+    print()
+    if ok:
+        print("[결론] 두 인스턴스 공존 OK → 기동 시 pkill 을 제거해도 됩니다.")
+        print("       (iSAP·ADB·테스트툴이 같은 HU 를 동시에 봐도 서로 안 끊김)")
+    else:
+        print("[결론] 한 번에 한 인스턴스만 가능합니다 → pkill 유지 + 프로세스 내 공유로 갑니다.")
+        print("       (테스트툴을 쓸 때는 백엔드 미러를 다른 화면으로 돌려야 합니다)")
+    return 0
+
+
+def cmd_diag(args) -> int:
+    """스트림이 끊길 때까지 기다렸다가 **디바이스 쪽 상태**를 그대로 찍는다.
+
+    linuxStream 이 죽었는지(=스스로 종료) 살아있는지(=파이프만 끊김)가 갈림길이다.
+    """
+    svc = _make(args)
+    try:
+        svc.start(timeout=args.timeout)
+    except Exception as e:
+        print(f"[!] 기동 실패: {e}")
+
+    t0 = time.time()
+    while time.time() - t0 < args.wait:
+        if not svc.is_running:
+            break
+        time.sleep(0.2)
+    dead = not svc.is_running
+    print(f"\n[i] {time.time() - t0:.2f}s 경과, 프레임 {svc._frame_count}개, "
+          f"running={svc.is_running}")
+    if svc.last_error:
+        print(f"[i] last_error: {svc.last_error}")
+    if not dead:
+        print("[i] 살아있습니다 — 이 구성에서는 재현 안 됨")
+
+    # 이 시점의 디바이스 상태. ssh 동시 세션은 정상임을 sshtest 로 확인했다.
+    print("\n=== linuxStream 프로세스 ===")
+    r = svc._ssh("pgrep -x linuxStream || echo NO_PROC", timeout=25.0)
+    alive = "NO_PROC" not in (r.stdout or "")
+    print((r.stdout or r.stderr).strip()[:200])
+    print(f"  → linuxStream {'살아있음 (파이프만 끊긴 것)' if alive else '죽음 (스스로 종료)'}")
+
+    print("\n=== /tmp/linuxStream.log (마지막 40줄) ===")
+    r = svc._ssh(f"tail -n 40 /tmp/linuxStream.log 2>/dev/null || echo NO_LOG", timeout=25.0)
+    print((r.stdout or r.stderr).strip()[:3000])
+
+    print("\n=== dmesg 마지막 20줄 (OOM/세그폴트 확인) ===")
+    r = svc._ssh("dmesg 2>/dev/null | tail -n 20 || echo NO_DMESG", timeout=25.0)
+    print((r.stdout or r.stderr).strip()[:2000])
+
+    print("\n=== 메모리 ===")
+    r = svc._ssh("head -n 3 /proc/meminfo", timeout=25.0)
+    print((r.stdout or r.stderr).strip()[:300])
+
+    print("\n=== adb 상태 ===")
+    print(_adb_text(svc, "devices", "-l").strip()[:400])
+
+    svc.stop()
+    print("\n[i] linuxStream 이 '죽음' 이면 로그/dmesg 의 마지막 줄이 사유입니다.")
+    print("[i] '살아있음' 이면 adb exec-out 전송이 끊긴 것이라 전송 경로를 바꿔야 합니다.")
+    return 0
+
+
+def cmd_sshtest(args) -> int:
+    """Linux VM ssh 세션이 **배타적인지** 실측한다.
+
+    긴 ssh(1초마다 TICK)를 띄워 두고 중간에 (1) Android adb shell, (2) 두 번째 ssh 를
+    붙여 첫 세션이 끊기는지 본다. 끊긴다면 스트림이 사는 동안 어떤 ssh 도 쓸 수 없다는
+    뜻이고, 터치/노드탐색을 전부 한 세션으로 다중화해야 한다.
+    """
+    import threading
+
+    svc = _make(args)
+    svc._deploy()
+
+    ticks, dead_at = [], [None]
+    remote = "i=0; while [ $i -lt 20 ]; do i=$((i+1)); echo TICK$i; sleep 1; done"
+    cmd = svc._adb_args("exec-out", "sh", "-c", svc._ssh_wrap(remote) + " 2>/dev/null")
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+    def _rx():
+        for raw in iter(proc.stdout.readline, b""):
+            line = raw.decode("utf-8", "replace").strip()
+            if line:
+                ticks.append((time.time(), line))
+        dead_at[0] = time.time()
+
+    threading.Thread(target=_rx, daemon=True).start()
+
+    t0 = time.time()
+    time.sleep(3.0)
+    n1 = len(ticks)
+    print(f"[1] 단독 3초: TICK {n1}개 (살아있음={dead_at[0] is None})")
+    if n1 == 0:
+        print("[!] 첫 세션이 아예 안 뜹니다 — ssh/배포 문제입니다")
+        proc.kill()
+        return 1
+
+    print("[2] Android adb shell 한 번 실행 (ssh 아님)")
+    subprocess.run(svc._adb_args("shell", "echo ANDROID_OK"),
+                   capture_output=True, text=True, timeout=20)
+    time.sleep(2.0)
+    n2 = len(ticks)
+    alive2 = dead_at[0] is None
+    print(f"    → TICK {n2}개(+{n2 - n1}) 살아있음={alive2}")
+
+    print("[3] 두 번째 ssh 세션 실행")
+    r = svc._ssh("echo SECOND_OK", timeout=25.0)
+    print(f"    두 번째 ssh 결과: {(r.stdout or r.stderr).strip()[:80]!r}")
+    time.sleep(2.0)
+    n3 = len(ticks)
+    alive3 = dead_at[0] is None
+    print(f"    → TICK {n3}개(+{n3 - n2}) 살아있음={alive3}")
+
+    proc.kill()
+    print()
+    if not alive2:
+        print("[결론] adb shell 한 번에 첫 세션이 죽습니다 — ssh 가 아니라 **adb 링크** 문제입니다.")
+    elif not alive3 or n3 == n2:
+        print("[결론] ssh 세션은 **배타적**입니다. 스트림이 도는 동안 별도 ssh 를 열면 안 됩니다")
+        print("       → 터치/노드탐색을 스트림과 한 세션으로 다중화해야 합니다.")
+    else:
+        print("[결론] ssh 동시 세션 정상. 스트림이 죽는 원인은 다른 데 있습니다.")
+        print(f"       (경과 {time.time() - t0:.1f}s, 총 TICK {n3}개)")
+    return 0
+
+
+def cmd_displays(args) -> int:
+    """Android 디스플레이를 **전부** 캡처해 어디에 UI 가 그려지는지 찾는다.
+
+    webOS 가 떠 있을 때 기본 디스플레이 캡처가 전부 검정이면, 실제 패널에 보이는
+    사이드바/시계는 (a) 다른 display id 에 있거나 (b) Android 가 아닌 QNX 컴포지터
+    레이어다. (b) 라면 Android 합성으로는 재현할 수 없다.
+    """
+    import cv2
+
+    svc = _make(args)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+
+    print("=== dumpsys SurfaceFlinger --display-id ===")
+    print(_adb_text(svc, "shell", "dumpsys SurfaceFlinger --display-id").strip()[:1500])
+
+    print("\n=== 현재 포커스 ===")
+    print(_adb_text(
+        svc, "shell",
+        "dumpsys activity activities | grep -iE 'Display #|topResumedActivity'"
+    ).strip()[:1200])
+
+    # 캡처 대상: 기본(-d 없음) + dumpsys 에서 찾은 물리 display id + 논리 id 0..3
+    ids = []
+    for line in _adb_text(svc, "shell", "dumpsys SurfaceFlinger --display-id").splitlines():
+        for tok in line.replace(":", " ").replace(",", " ").split():
+            if tok.isdigit() and len(tok) >= 3 and tok not in ids:
+                ids.append(tok)
+    targets = [None] + ids + [t for t in ("0", "1", "2", "3") if t not in ids]
+
+    print(f"\n=== 캡처 ({len(targets)}개) ===")
+    for t in targets:
+        img, err = _screencap(svc, t)
+        name = "default" if t is None else f"d{t}"
+        if img is None:
+            print(f"  {name:<16} 실패 — {err}")
+            continue
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        opaque = float((gray > args.threshold).mean()) * 100
+        path = out / f"android_{name}.png"
+        cv2.imwrite(str(path), img)
+        mark = "  ← UI 있음" if opaque > 0.5 else ""
+        print(f"  {name:<16} {img.shape[1]}x{img.shape[0]}  "
+              f"불투명 {opaque:5.1f}%  -> {path.name}{mark}")
+
+    print(f"\n[i] {out.resolve()} 확인")
+    print("[i] 어느 것도 UI 가 없으면 사이드바는 Android 가 아닌 QNX 레이어입니다"
+          " (Android 합성으로 재현 불가).")
+    return 0
+
+
 def cmd_composite(args) -> int:
     """webOS(Linux) 프레임 + Android 화면을 받아 **합성 미리보기**를 만든다.
 
@@ -738,6 +991,7 @@ def main() -> int:
     DEFAULTS = {
         "serial": "", "ip": "172.16.4.1", "user": "root", "password": "root",
         "scale": 2, "quality": 60, "fps": 30, "timeout": 60.0, "verbose": False,
+        "no_kill": False,
     }
     S = argparse.SUPPRESS
     common = argparse.ArgumentParser(add_help=False)
@@ -750,6 +1004,9 @@ def main() -> int:
     common.add_argument("--fps", type=int, default=S)
     common.add_argument("--timeout", type=float, default=S, help="첫 프레임 대기(초)")
     common.add_argument("-v", "--verbose", action="store_true", default=S)
+    common.add_argument("--no-kill", action="store_true", default=S,
+                        dest="no_kill",
+                        help="기존 linuxStream 을 죽이지 않고 추가 기동(동시 사용 실측)")
 
     ap = argparse.ArgumentParser(
         description="WebOS(Connect Wide) 화면/터치 경로 단독 테스트",
@@ -832,6 +1089,25 @@ def main() -> int:
     p.add_argument("--space", choices=["panel", "mirror"], default="panel")
     p.add_argument("--wait", type=float, default=0.7, help="전송 후 로그 확인 대기(초)")
     p.set_defaults(func=cmd_touch)
+
+    p = sub.add_parser("dual", help="스트림 2개 동시 기동 — 공존 가능 여부 실측",
+                       parents=[common])
+    p.add_argument("--seconds", type=int, default=10, help="관찰 시간(초)")
+    p.set_defaults(func=cmd_dual)
+
+    p = sub.add_parser("diag", help="스트림이 끊긴 직후 디바이스 상태 덤프",
+                       parents=[common])
+    p.add_argument("--wait", type=float, default=20.0, help="끊길 때까지 최대 대기(초)")
+    p.set_defaults(func=cmd_diag)
+
+    sub.add_parser("sshtest", help="Linux VM ssh 동시 세션 가능 여부 실측",
+                   parents=[common]).set_defaults(func=cmd_sshtest)
+
+    p = sub.add_parser("displays", help="Android 디스플레이 전수 캡처(UI 위치 탐색)",
+                       parents=[common])
+    p.add_argument("--out", default="webos_composite")
+    p.add_argument("--threshold", type=int, default=16)
+    p.set_defaults(func=cmd_displays)
 
     p = sub.add_parser("composite", help="webOS + Android 합성 미리보기 생성",
                        parents=[common])

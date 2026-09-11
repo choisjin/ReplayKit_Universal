@@ -270,6 +270,9 @@ class WebOSStreamService:
         self._native_h = 0
         self._deployed = False
         self._shared_key = None      # get_shared_stream 이 채운다
+        # 기동 전 기존 linuxStream 을 죽일지. 끄면 같은 HU 에 인스턴스가 여러 개 뜬다
+        # (동시 사용 가능 여부 실측용 — 기본은 종전대로 죽인다).
+        self.kill_existing = True
 
     # ------------------------------------------------------------------
     # adb / ssh helpers
@@ -442,7 +445,8 @@ class WebOSStreamService:
             self._last_error = ""
             self._first_bytes = b""
 
-            self._ssh("pkill -x linuxStream 2>/dev/null; true", timeout=20.0)
+            if self.kill_existing:
+                self._ssh("pkill -x linuxStream 2>/dev/null; true", timeout=20.0)
             # -verbose 필수: 없으면 linuxStream 이 아무것도 안 찍어 /tmp/linuxStream.log 가
             # 비고 native/scale 기하를 못 읽는다. (전부 stderr → 로그 파일)
             remote = (
@@ -477,7 +481,12 @@ class WebOSStreamService:
             err = self._last_error or self._read_remote_log()
             self.stop()
             raise WebOSStreamError(f"WebOS: 첫 프레임 수신 실패({timeout:.0f}s) — {err or '원인 불명'}")
-        self._probe_geometry()
+        # ⚠ 여기서 geometry 를 ssh 로 읽지 않는다.
+        # 스트림이 사는 ssh 세션과 **동시에** 두 번째 ssh 를 붙이면 스트림이 끊긴다
+        # (첫 프레임 직후 매번 EOF). native 크기는 스트림 크기 × scale 로 역산되고
+        # (native_size 프로퍼티) touch= 는 쓰지 않는 진단값이라 손해가 없다.
+        logger.info("WebOS: geometry stream=%dx%d native=%dx%d (scale=%d, 프레임에서 역산)",
+                    *self.size, *self.native_size, self.scale)
 
     def stop(self) -> None:
         with self._lock:
@@ -526,6 +535,9 @@ class WebOSStreamService:
 
     def _probe_geometry(self) -> None:
         """linuxStream 로그에서 스트림/터치 좌표계를 읽는다.
+
+        ⚠ **스트림이 도는 중에는 호출 금지** — 두 번째 ssh 세션이 스트림을 끊는다.
+        진단(probe) 경로에서만 쓴다.
 
         ``native=%ux%u scale=%d -> %ux%u q=%d fps=%d swap=%d``
         ``touch injection enabled (%ux%u)``
