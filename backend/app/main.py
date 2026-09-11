@@ -1561,8 +1561,14 @@ async def websocket_screen_mirror(websocket: WebSocket):
                             and not playback_service.is_running
                             and scrcpy_task is None and scrcpy_backend is None):
                         scrcpy_serial = adb_serial
+                        # WebOS(Connect Wide) 는 3840x1440 전체 디스플레이라 기본 4Mbps 로는
+                        # 뭉개진다. 참조본(screenBridge)과 동일하게 16Mbps/30fps 로 올린다.
+                        _scrcpy_kwargs = {}
+                        if webos_adb_serial:
+                            _scrcpy_kwargs = {"bitrate": 16_000_000, "max_fps": 30}
                         scrcpy_task = asyncio.create_task(
-                            adb_service.ensure_scrcpy_backend(adb_serial, _logical_id),
+                            adb_service.ensure_scrcpy_backend(
+                                adb_serial, _logical_id, **_scrcpy_kwargs),
                         )
                         logger.info(
                             "scrcpy try_start dispatched in background (serial=%s display=%s) — "
