@@ -984,10 +984,12 @@ async def websocket_screen_mirror(websocket: WebSocket):
     # WS 세션별 백그라운드 scrcpy try_start task와 그 결과 backend
     scrcpy_task: Optional[asyncio.Task] = None
     scrcpy_backend = None
-    # 현재 프론트에 통지한 렌더 모드. scrcpy(H.264 relay) ↔ screencap(JPEG) 전환 시에만
-    # mode 메시지를 보내 프론트가 JMuxer ↔ <img> 경로를 올바르게 토글하도록 한다.
-    # 초기값은 아래 send_json({"mode":"jpeg"})와 일치시킨다.
-    current_ws_mode = "jpeg"
+    # 현재 프론트에 통지한 렌더 모드. scrcpy(H.264 relay) ↔ screencap(JPEG) 전환 시
+    # mode 메시지를 보내 프론트가 디코더 ↔ <img> 경로를 올바르게 토글하도록 한다.
+    # 빈 값으로 시작해 **세션의 첫 프레임에서 실제 모드를 반드시 1회 통지**한다 —
+    # "클라이언트는 JPEG 상태일 것"이라고 가정하면, 이전 세션의 H.264 상태가 남아 있는
+    # 클라이언트가 JPEG 프레임을 디코더에 먹여 검은 화면이 된다.
+    current_ws_mode = ""
     # 이 WS 세션이 scrcpy를 시도/점유한 디바이스 serial. disconnect 시 정확히 이
     # serial의 backend만 정리하기 위해 세션 스코프로 보관 (finally에서 adb_serial은
     # ADB 분기 로컬이라 unbound일 수 있음).

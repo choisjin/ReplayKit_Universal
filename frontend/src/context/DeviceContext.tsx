@@ -322,9 +322,29 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       }, delay);
     };
 
+    // H.264 디코더를 내리고 JPEG 경로로 되돌린다.
+    // 새 WS 세션은 항상 JPEG 로 시작한다(백엔드도 그렇게 가정) — 이걸 안 하면
+    // 화면 전환 후 이전 세션의 H.264 상태가 남아 JPEG 프레임을 디코더에 먹여
+    // 검은 화면이 된다(WebOS ↔ 기본화면 왕복에서 재현).
+    const resetToJpegMode = () => {
+      if (h264RendererRef.current) {
+        try { h264RendererRef.current.close(); } catch { /* ignore */ }
+        h264RendererRef.current = null;
+      }
+      if (jmuxerRef.current) {
+        try { jmuxerRef.current.destroy(); } catch { /* ignore */ }
+        jmuxerRef.current = null;
+        releaseVideoBuffer();
+      }
+      h264FeedCountRef.current = 0;
+      h264ModeRef.current = false;
+      setH264Mode(false);
+    };
+
     ws.onopen = () => {
       setStreamError('');   // 화면/디바이스 전환 시 이전 에러 표기 제거
       setScreenSource('');
+      resetToJpegMode();
       ws.send(JSON.stringify({ device_id: deviceId, screen_type: st }));
       startFpsCounter();
       wsRetryCountRef.current = 0; // 연결 성공 → 재시도 카운터 초기화
@@ -344,19 +364,8 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
           } else if (msg.mode === 'jpeg') {
             // H.264 → JPEG 폴백 전환: 디코더를 정리해야 <img> 경로가 깨끗이 렌더된다.
             if (h264ModeRef.current) {
-              if (h264RendererRef.current) {
-                try { h264RendererRef.current.close(); } catch { /* ignore */ }
-                h264RendererRef.current = null;
-              }
-              if (jmuxerRef.current) {
-                try { jmuxerRef.current.destroy(); } catch { /* ignore */ }
-                jmuxerRef.current = null;
-                releaseVideoBuffer();
-              }
-              h264FeedCountRef.current = 0;
+              resetToJpegMode();
             }
-            h264ModeRef.current = false;
-            setH264Mode(false);
           } else if (msg.type === 'screen_source') {
             // WebOS 자동 전환 통지 — 표시용.
             if (screenshotDeviceIdRef.current === deviceId) {
