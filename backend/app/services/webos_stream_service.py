@@ -27,11 +27,19 @@ Android/QNX 로만 보내는데, webOS 투사 앱이 Android 터치를 받아 �
 
 와이어 포맷 (screenStream/linuxStream 공통, screenBridge.exe 역분석으로 확인)
 --------------------------------------------------------------------------
-  풀 프레임::
+  프레임 타입은 3종이다 (payload 첫 바이트). ⚠ 'S' 는 풀 프레임이 아니라 **skip** 이다 —
+  정적 화면에서 매 프레임 날아오며 payload 가 1바이트뿐이라, 풀 프레임으로 오인해 파싱하면
+  즉시 IndexError 로 스트림이 죽는다.
 
-      [4B total_len BE][1B 'S'][1B N]
+  풀 프레임 'L'::
+
+      [4B total_len BE][1B 'L'][1B N]
       [N x [4B rgb_size][rgb_jpeg]]
       [N x [4B alpha_size][alpha_jpeg]]
+
+  skip 프레임 'S'::
+
+      [4B total_len BE][1B 'S']       # 변경 없음 → 마지막 프레임 유지
 
   델타 프레임::
 
@@ -151,6 +159,9 @@ class WebOSStreamService:
         # 기동 실패 후 재시도 쿨다운 — 미러 루프가 프레임마다(0.3s) 재시도하면서
         # 매번 20~40s 짜리 배포/핸드셰이크를 다시 돌지 않게 한다.
         self._fail_until = 0.0
+        # 스트림에서 실제로 받은 첫 바이트들(진단용). 프레임이 아니라 텍스트가
+        # 흘러들어오는 경우(ssh 경고 등)를 눈으로 확인하려고 남긴다.
+        self._first_bytes = b""
 
         # linuxStream 로그에서 읽어오는 실제 좌표계
         self._stream_w = 0      # 스트리밍(=미러 이미지) 크기
@@ -328,6 +339,7 @@ class WebOSStreamService:
             self._frame_event.clear()
             self._frame_count = 0
             self._last_error = ""
+            self._first_bytes = b""
 
             # 이전 스트림 정리는 **별도 세션**에서. 런처와 같은 명령줄에 두면
             # `pkill -f` 가 자기 자신(그 명령줄에 "linuxStream" 을 포함한 sh)까지
@@ -338,7 +350,8 @@ class WebOSStreamService:
                 f"{REMOTE_BIN} -scale={self.scale} -quality={self.quality} "
                 f"-fps={self.fps} 2>{REMOTE_LOG}"
             )
-            cmd = self._adb_args("exec-out", "sh", "-c", self._ssh_wrap(remote))
+            cmd = self._adb_args(
+                "exec-out", "sh", "-c", self._ssh_wrap(remote) + " 2>/dev/null")
             logger.info("WebOS: starting stream serial=%s linux=%s scale=%d q=%d fps=%d",
                         self.adb_serial, self.linux_ip, self.scale, self.quality, self.fps)
             try:
@@ -436,15 +449,24 @@ class WebOSStreamService:
     # Frame reader
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _read_exact(stream, n: int) -> bytes:
+    def _read_exact(self, stream, n: int) -> bytes:
         buf = b""
         while len(buf) < n:
             chunk = stream.read(n - len(buf))
             if not chunk:
                 raise EOFError("WebOS stream ended")
             buf += chunk
+            if len(self._first_bytes) < 256:
+                self._first_bytes += chunk[:256 - len(self._first_bytes)]
         return buf
+
+    def _head_preview(self) -> str:
+        """수신 첫 바이트를 hex + ascii 로 — 프레임인지 텍스트인지 한눈에 본다."""
+        b = self._first_bytes[:64]
+        if not b:
+            return "(수신 없음)"
+        ascii_ = "".join(chr(c) if 32 <= c < 127 else "." for c in b)
+        return f"hex={b.hex()} ascii={ascii_!r}"
 
     def _read_loop(self) -> None:
         proc = self._proc
@@ -456,18 +478,33 @@ class WebOSStreamService:
                 hdr = self._read_exact(stream, 4)
                 (size,) = struct.unpack(">I", hdr)
                 if size == 0 or size > _MAX_FRAME:
-                    raise ValueError(f"Invalid frame size: {size} hdr={hdr.hex()}")
+                    # 프레임이 아니라 텍스트(ssh 경고/adb 에러)가 흘러들어온 경우가 많다.
+                    raise ValueError(
+                        f"Invalid frame size: {size} hdr={hdr.hex()} "
+                        f"stream_head={self._head_preview()}"
+                    )
                 data = self._read_exact(stream, size)
                 ftype = data[0:1]
-                if ftype == b"S":
+                if ftype == b"L":
                     self._on_full_frame(data)
                 elif ftype == b"D":
                     self._on_delta_frame(data)
+                elif ftype == b"S":
+                    # skip = 직전 프레임과 동일. payload 는 1바이트뿐이라 파싱하지 않는다.
+                    # (정적 화면이면 이것만 계속 온다 — 미러는 마지막 프레임을 그대로 유지)
+                    if self._frame is not None:
+                        self._frame_count += 1
+                        self._frame_event.set()
                 # 그 외 타입은 무시 (프로토콜 확장 대비)
         except Exception as e:
             if not self._stop.is_set():
                 self._last_error = f"{type(e).__name__}: {e}"
-                logger.warning("WebOS: stream ended (%s) frames=%d", self._last_error, self._frame_count)
+                logger.warning(
+                    "WebOS: stream ended (%s) frames=%d recv=%dB %s",
+                    self._last_error, self._frame_count,
+                    len(self._first_bytes), self._head_preview(),
+                    exc_info=True,
+                )
         finally:
             try:
                 if proc.poll() is None:
@@ -476,6 +513,8 @@ class WebOSStreamService:
                 pass
 
     def _on_full_frame(self, data: bytes) -> None:
+        if len(data) < 2:
+            return
         num = data[1]
         off = 2
         rgb_jpegs: list[bytes] = []
@@ -505,6 +544,8 @@ class WebOSStreamService:
             base = self._frame
             if base is None:
                 return  # 풀 프레임 이전의 델타는 버린다
+            if len(data) < 8:          # [1B type][2B cols/rows][4B mask][1B alpha_flags]
+                return
             frame = base  # in-place 갱신 (읽기는 encode 시점에 복사)
             fh, fw = frame.shape[:2]
 

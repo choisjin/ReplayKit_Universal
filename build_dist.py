@@ -1288,6 +1288,11 @@ tools/*
 !tools/platform-tools/adb.exe
 !tools/platform-tools/AdbWinApi.dll
 !tools/platform-tools/AdbWinUsbApi.dll
+# WebOS(Connect Wide) 화면 스트리밍 — Linux VM 에 올려 DRM 스캔아웃을 JPEG 로 뽑는
+# linuxStream(aarch64) + 그 배포에 쓰는 온디바이스 ssh 클라이언트. 합계 ~1MB.
+# 없으면 WebOS 화면이 "번들 바이너리 없음" 으로 뜨지 않는다.
+!tools/webos
+!tools/webos/*
 
 # 사용자 데이터
 backend/screenshots/
