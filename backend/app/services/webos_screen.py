@@ -302,16 +302,38 @@ class WebOSScreen:
             logger.info("[WebOS] 엣지 스냅 (%s,%s) -> (%s,%s)", x, y, sx, sy)
         return sx, sy
 
+    def _is_edge_start(self, x: int, y: int) -> bool:
+        """시작점이 화면 가장자리에 정확히 붙어 있는가 (엣지 스냅 후 판정)."""
+        aw, ah = self.android_size()
+        return bool((aw and (x <= 0 or x >= aw - 1))
+                    or (ah and (y <= 0 or y >= ah - 1)))
+
+    @property
+    def edge_via_adb(self) -> bool:
+        """엣지 스와이프를 Android 로 보낼지 (기본 ON).
+
+        리모콘 호출 같은 **시스템 제스처는 Android 레이어가 처리**한다 — webOS
+        터치스크린(evdev)으로 보내면 반응이 없다(실기 확인). 콘텐츠 스크롤은 반대로
+        evdev 라야 먹으므로, 시작점이 가장자리인 스와이프만 Android 로 보낸다.
+        info["webos_edge_via"]="evdev" 로 끌 수 있다.
+        """
+        return str(self._info.get("webos_edge_via") or "adb").lower() == "adb"
+
     async def swipe(self, x1: int, y1: int, x2: int, y2: int,
                     duration_ms: int = 300, hold_ms: int = 0) -> None:
         ax, ay = self._clamp(x1, y1)
         bx, by = self._clamp(x2, y2)
         ax, ay = self._edge_snap(ax, ay, bx, by)
-        if self.touch_via_evdev:
+        use_adb = (not self.touch_via_evdev) or (
+            self.edge_via_adb and self._is_edge_start(ax, ay))
+        if not use_adb:
             await self._run(self.stream().swipe, ax, ay, bx, by,
                             int(duration_ms or 300), hold_ms)
             return
         adb, serial, did = self._adb()
+        if self.touch_via_evdev:
+            logger.info("[WebOS SWIPE] 엣지 제스처 → Android 경유 (%s,%s)->(%s,%s)",
+                        ax, ay, bx, by)
         await adb.swipe(ax, ay, bx, by, duration_ms=int(duration_ms or 300),
                         serial=serial, display_id=did, hold_ms=hold_ms)
 

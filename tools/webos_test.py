@@ -585,8 +585,16 @@ def cmd_edge(args) -> int:
         x1, y1 = int(w * ratio), 0
         x2, y2 = x1, min(h - 1, args.length)
     print(f"[i] {args.side} 엣지: ({x1},{y1}) -> ({x2},{y2})  "
-          f"{args.duration}ms hold={args.hold}ms")
-    svc.swipe(x1, y1, x2, y2, duration_ms=args.duration, hold_ms=args.hold)
+          f"{args.duration}ms hold={args.hold}ms  via={args.via}")
+    if args.via == "adb":
+        # Android 레이어(투사 앱/시스템 UI)가 제스처를 가로채는지 확인용.
+        cmd = svc._adb_args(
+            "shell", f"input swipe {x1} {y1} {x2} {y2} {args.duration}")
+        print(f"[i] {' '.join(cmd)}")
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        print(f"[i] rc={r.returncode} out={(r.stdout + r.stderr).strip()!r}")
+    else:
+        svc.swipe(x1, y1, x2, y2, duration_ms=args.duration, hold_ms=args.hold)
     print("[i] 전송 완료 — 리모콘/패널이 떴는지 확인하세요")
     svc.stop()
     return 0
@@ -703,6 +711,8 @@ def main() -> int:
     p.add_argument("--length", type=int, default=900, help="쓸어내는 거리(px, 패널 기준)")
     p.add_argument("--duration", type=int, default=350)
     p.add_argument("--hold", type=int, default=0, help="시작점에서 잠시 누르고 이동")
+    p.add_argument("--via", choices=["evdev", "adb"], default="evdev",
+                   help="evdev=webOS(Linux VM) / adb=Android 레이어")
     p.set_defaults(func=cmd_edge)
 
     p = sub.add_parser("swipe", help="스와이프", parents=[common])
