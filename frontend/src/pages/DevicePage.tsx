@@ -1276,6 +1276,7 @@ export default function DevicePage() {
       extras.webos_linux_ip = dev.info?.webos_linux_ip ?? '172.16.4.1';
       extras.webos_linux_user = dev.info?.webos_linux_user ?? 'root';
       extras.webos_linux_password = dev.info?.webos_linux_password ?? 'root';
+      extras.webos_touch_via = dev.info?.webos_touch_via ?? 'adb';
       deviceApi.adbSerials().then(res => {
         setAdbSerialOptions((res.data.devices || []).map((d: any) => ({
           value: d.serial,
@@ -3983,6 +3984,22 @@ export default function DevicePage() {
                   <div style={{ fontSize: 10, color: '#888' }}>
                     Linux VM 은 HU 안에서만 보이는 주소입니다(기본 172.16.4.1). PC 에서 직접 접속하지 않고
                     ADB 로 HU 에 들어가 SSH 합니다 — 참조본 screenBridge 와 동일한 경로입니다.
+                  </div>
+                  <div>
+                    <span style={{ fontSize: 11, color: '#888', marginRight: 6 }}>터치 경로:</span>
+                    <Select
+                      style={{ width: 260 }}
+                      value={editExtraFields.webos_touch_via ?? 'adb'}
+                      onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_touch_via: v })}
+                    >
+                      <Option value="adb">ADB input (기본)</Option>
+                      <Option value="uinput">linuxStream uinput 주입</Option>
+                    </Select>
+                    <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
+                      기본은 Android 로 <code>input tap</code> 을 보냅니다(투사 앱이 webOS 로 넘기는 구조).
+                      <b> 화면은 나오는데 터치만 안 먹으면</b> uinput 으로 바꿔 보세요 — linuxStream 이
+                      Linux VM 의 <code>/dev/uinput</code> 에 직접 주입해 Android 를 거치지 않습니다.
+                    </div>
                   </div>
                 </Space>
               </div>
