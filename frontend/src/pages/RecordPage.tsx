@@ -522,6 +522,7 @@ export default function RecordPage() {
     screensaver,
     streamError,
     screenSource,
+    screenSourceSize,
     screenPausedForPlayback,
     pauseScreenStream, resumeScreenStream,
   } = useDevice();
@@ -1202,7 +1203,13 @@ export default function RecordPage() {
     }
     return { width: 1080, height: 1920 };
   })();
-  const deviceRes = selectedDisplay?.width
+  // ⚠ 자동 전환(WebOS)이 최우선이다. 선택은 기본화면(front_center)인데 실제로 보이는 건
+  // webOS 라, 기본화면 크기로 좌표를 만들면 백엔드가 그걸 패널 좌표로 오인해 정확히
+  // 절반으로 주입한다. 백엔드가 전환 통지에 실어 보낸 기준 크기를 그대로 쓴다.
+  const autoSourceRes = screenSource && screenSourceSize?.width ? screenSourceSize : null;
+  const deviceRes = autoSourceRes
+    ? { width: autoSourceRes.width, height: autoSourceRes.height }
+    : selectedDisplay?.width
     ? { width: selectedDisplay.width, height: selectedDisplay.height }
     : hkmcScreen?.width
       ? { width: hkmcScreen.width, height: hkmcScreen.height }

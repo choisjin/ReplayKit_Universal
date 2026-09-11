@@ -412,12 +412,22 @@ class WebOSScreen:
     async def _run(self, fn, *args):
         return await asyncio.get_event_loop().run_in_executor(None, fn, *args)
 
+    def _log_map(self, kind: str, src: str, pairs) -> None:
+        """좌표 환산 결과를 **항상** 남긴다.
+
+        ⚠ "값이 바뀐 경우에만" 찍으면 배율이 1배일 때 로그가 통째로 사라져,
+        코드가 안 올라간 것인지 환산이 필요 없었던 것인지 구분할 수 없다(실제로
+        그 때문에 한 라운드를 날렸다). 기준 크기는 항상 보이게 둔다.
+        """
+        sw, sh = self._src_size(src)
+        pw, ph = self.panel_size()
+        logger.info("[WebOS %s] %s %sx%s %s -> panel %sx%s %s (x%.3f)",
+                    kind, src or WEBOS_SCREEN, sw, sh, pairs[0], pw, ph, pairs[1],
+                    (pw / sw) if sw else 0.0)
+
     async def tap(self, x: int, y: int, src: str = "") -> None:
         px, py = self._clamp(x, y, src)
-        if (px, py) != (int(x), int(y)):
-            logger.info("[WebOS] 좌표 환산 %s(%s,%s)/%sx%s -> panel(%s,%s)/%sx%s",
-                        src or WEBOS_SCREEN, x, y, *self._src_size(src),
-                        px, py, *self.panel_size())
+        self._log_map("MAP", src, (f"({x},{y})", f"({px},{py})"))
         if self.touch_via_evdev:
             await self._run(self.stream().tap, px, py)
             return
@@ -498,6 +508,8 @@ class WebOSScreen:
                     duration_ms: int = 300, hold_ms: int = 0, src: str = "") -> None:
         ax, ay = self._clamp(x1, y1, src)
         bx, by = self._clamp(x2, y2, src)
+        self._log_map("MAP", src, (f"({x1},{y1})->({x2},{y2})",
+                                   f"({ax},{ay})->({bx},{by})"))
         ax, ay = self._edge_snap(ax, ay, bx, by)
         use_adb = (not self.touch_via_evdev) or (
             self.edge_via_adb and self._is_edge_start(ax, ay))

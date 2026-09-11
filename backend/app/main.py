@@ -890,6 +890,19 @@ async def websocket_logcat_stream(websocket: WebSocket, session_id: str):
     await logcat_log_router.ws_logcat_stream(websocket, session_id)
 
 
+def _webos_client_size(isap, screen_type, auto: bool):
+    """자동 전환 상태에서 프론트가 좌표 기준으로 삼아야 할 크기.
+
+    webOS 를 보여주는 중이면 패널 크기, 기본 화면으로 돌아오면 그 화면 크기.
+    실패하면 None — 프론트는 기존 값을 그대로 쓴다.
+    """
+    try:
+        return isap.get_screen_size("webos" if auto else (screen_type or "front_center"))
+    except Exception as e:
+        logger.debug("WebOS 좌표 기준 크기 조회 실패: %s", e)
+        return None
+
+
 @app.websocket("/ws/screen")
 async def websocket_screen_mirror(websocket: WebSocket):
     """WebSocket endpoint for real-time screen mirroring.
@@ -1174,11 +1187,17 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     if _auto != _webos_auto_sent:
                         _webos_auto_sent = _auto
                         try:
-                            await websocket.send_json({
+                            _msg = {
                                 "type": "screen_source",
                                 "source": "webos" if _auto else screen_type,
                                 "auto": True,
-                            })
+                            }
+                            # 좌표 기준 해상도를 같이 내려준다 — 프론트가 이 크기로
+                            # 좌표를 만들면 ADB 경로와 동일하게 환산이 필요 없어진다.
+                            _sz = _webos_client_size(isap, screen_type, _auto)
+                            if _sz:
+                                _msg["width"], _msg["height"] = _sz
+                            await websocket.send_json(_msg)
                         except Exception:
                             pass
                     await websocket.send_bytes(jpeg_bytes)
@@ -1559,10 +1578,12 @@ async def websocket_screen_mirror(websocket: WebSocket):
                             if _ws.auto_active != _webos_auto_sent:
                                 _webos_auto_sent = _ws.auto_active
                                 try:
-                                    await websocket.send_json({
-                                        "type": "screen_source",
-                                        "source": "webos", "auto": True,
-                                    })
+                                    _msg = {"type": "screen_source",
+                                            "source": "webos", "auto": True}
+                                    _pw, _ph = _ws.screen_size()
+                                    if _pw and _ph:
+                                        _msg["width"], _msg["height"] = _pw, _ph
+                                    await websocket.send_json(_msg)
                                 except Exception:
                                     pass
                             if current_ws_mode != "jpeg":
@@ -1591,10 +1612,13 @@ async def websocket_screen_mirror(websocket: WebSocket):
                         if _webos_auto_sent:
                             _webos_auto_sent = False
                             try:
-                                await websocket.send_json({
-                                    "type": "screen_source",
-                                    "source": screen_type or "front_center", "auto": True,
-                                })
+                                _msg = {"type": "screen_source",
+                                        "source": screen_type or "front_center",
+                                        "auto": True}
+                                _bs = _ws.android_size()
+                                if all(_bs):
+                                    _msg["width"], _msg["height"] = _bs
+                                await websocket.send_json(_msg)
                             except Exception:
                                 pass
 

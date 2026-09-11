@@ -56,6 +56,8 @@ interface DeviceContextType {
   // 실제로 보고 있는 화면 소스. WebOS 자동 전환 시 'webos' 로 바뀐다(선택은 front_center 인데
   // 화면엔 webOS 가 나오는 상황을 사용자가 알 수 있게).
   screenSource: string;
+  // 자동 전환 시 백엔드가 알려준 좌표 기준 해상도(없으면 null → 기존 screens 값 사용).
+  screenSourceSize: { width: number; height: number } | null;
   // 백엔드 미러 루프가 보낸 에러 메시지 (프레임을 못 만드는 이유). 프레임이 들어오면 해제.
   // 예: WebOS 스트림 기동 실패 — 이전에는 이 메시지를 버려서 화면이 그냥 검게만 보였다.
   streamError: string;
@@ -93,6 +95,10 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const [screensaver, setScreensaver] = useState(false);
   const [streamError, setStreamError] = useState('');
   const [screenSource, setScreenSource] = useState('');
+  // 자동 전환 시 백엔드가 알려주는 **좌표 기준 해상도**.
+  // 이게 없으면 프론트는 screens[screenType](기본화면 크기)로 좌표를 만들고,
+  // 백엔드는 그걸 패널 좌표로 오인해 정확히 절반으로 주입한다.
+  const [screenSourceSize, setScreenSourceSize] = useState<{ width: number; height: number } | null>(null);
   const [h264Mode, setH264Mode] = useState(false);
   const [h264Size, setH264Size] = useState({ width: 1080, height: 1920 });
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -344,6 +350,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     ws.onopen = () => {
       setStreamError('');   // 화면/디바이스 전환 시 이전 에러 표기 제거
       setScreenSource('');
+      setScreenSourceSize(null);   // 이전 화면의 좌표 기준이 남으면 터치가 틀어진다
       resetToJpegMode();
       ws.send(JSON.stringify({ device_id: deviceId, screen_type: st }));
       startFpsCounter();
@@ -367,9 +374,12 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
               resetToJpegMode();
             }
           } else if (msg.type === 'screen_source') {
-            // WebOS 자동 전환 통지 — 표시용.
+            // WebOS 자동 전환 통지 — 표시 + **좌표 기준 해상도 교체**.
             if (screenshotDeviceIdRef.current === deviceId) {
               setScreenSource(String(msg.source || ''));
+              const w = Number(msg.width);
+              const h = Number(msg.height);
+              setScreenSourceSize(w > 0 && h > 0 ? { width: w, height: h } : null);
             }
           } else if (msg.type === 'error') {
             // 백엔드가 프레임을 못 만든 이유 — 화면에 그대로 노출한다(WebOS 기동 실패 등).
@@ -704,6 +714,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       screensaver,
       streamError,
       screenSource,
+      screenSourceSize,
       screenPausedForPlayback,
       pauseScreenStream,
       resumeScreenStream,
