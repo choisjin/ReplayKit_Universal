@@ -888,6 +888,9 @@ class DeviceManager:
         self._hkmc5th_wide_conns: dict[str, HKMC5thWideService] = {}  # device_id -> HKMC5thWideService
         self._hkmc5th_wide_reconnect_attempts: dict[str, int] = {}
         self._isap_conns: dict[str, ISAPAgentService] = {}  # device_id -> ISAPAgentService
+        # ADB 로 붙인 WebOS 지원 디바이스(Connect Wide)의 WebOS 화면 헬퍼.
+        # iSAP 는 서비스가 직접 들고 있어서 여기엔 ADB 디바이스만 들어온다.
+        self._webos_screens: dict = {}
         self._isap_reconnect_attempts: dict[str, int] = {}
         self._icas_conns: dict[str, ICASAgentService] = {}  # device_id -> ICASAgentService
         self._icas_reconnect_attempts: dict[str, int] = {}
@@ -1333,6 +1336,38 @@ class DeviceManager:
         self._devices[final_id] = dev
         self._save_auxiliary_devices()
         return dev
+
+    def get_webos_screen(self, device_id: str):
+        """디바이스의 WebOS 화면 헬퍼 (없으면 None).
+
+        같은 HU 를 iSAP 로 붙이든 ADB 로 붙이든 WebOS 동작이 같아야 해서 헬퍼를 공유한다.
+        iSAP 는 서비스가 들고 있고(연결 상태와 수명이 같음), ADB 디바이스는 여기서
+        디바이스 단위로 만들어 캐시한다.
+        """
+        dev = self.get_device(device_id)
+        if dev is None:
+            return None
+        if dev.type == "isap_agent":
+            svc = self._isap_conns.get(dev.id)
+            return svc.webos if svc is not None else None
+        if dev.type != "adb":
+            return None
+        ws = self._webos_screens.get(dev.id)
+        if ws is None:
+            from .webos_screen import WebOSScreen
+            # ADB 디바이스는 자기 자신이 HU → 시리얼 기본값 = 디바이스 주소
+            ws = WebOSScreen(dev.info, device_id=dev.id, default_serial=dev.address)
+            self._webos_screens[dev.id] = ws
+        return ws
+
+    def stop_webos_screen(self, device_id: str) -> None:
+        """설정 변경/장치 제거 시 WebOS 스트림 정리."""
+        ws = self._webos_screens.pop(device_id, None)
+        if ws is not None:
+            try:
+                ws.stop()
+            except Exception as e:
+                logger.debug("WebOS screen stop failed (%s): %s", device_id, e)
 
     def get_isap_service(self, device_id: str) -> Optional[ISAPAgentService]:
         """Get ISAPAgentService instance for a device. Returns None if not found."""
@@ -2136,9 +2171,11 @@ class DeviceManager:
                     # 미러 이미지는 Linux 스트림(축소본)이라 크기가 다르므로, 터치를 보낼 때
                     # 이 값으로 환산한다. 최초 1회만 조회(플래그로 판정 — screens 값은 폴백이
                     # 이미 들어가 있어 값 유무로는 못 씀).
-                    if getattr(isap, "webos_enabled", False) and not dev.info.get(
-                        "webos_screen_detected"
-                    ):
+                    # 플래그만 보면, 예전 빌드에서 플래그만 저장되고 크기는 다른 키에
+                    # 들어갔던 경우 영영 재감지하지 않는다 → 크기가 비어 있으면 다시 감지.
+                    if getattr(isap, "webos_enabled", False) and not (
+                        dev.info.get("webos_android_size") or {}
+                    ).get("width"):
                         try:
                             ainfo = await self.adb.get_device_info(isap.webos_serial)
                             r = ainfo.get("resolution") or {}

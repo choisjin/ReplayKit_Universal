@@ -1498,6 +1498,57 @@ async def websocket_screen_mirror(websocket: WebSocket):
                         await asyncio.sleep(0.3)
                         continue
 
+                    # WebOS(Connect Wide): webOS 화면은 Android 레이어에 hole 로 뚫려
+                    # scrcpy/screencap 으로는 안 잡힌다 → Linux VM 스트림으로 대체.
+                    # 메인 화면을 보는 중이면 전면 판별로 자동 전환까지 한다(양방향).
+                    _ws = device_manager.get_webos_screen(target_device_id)
+                    if _ws is not None and _ws.enabled:
+                        _base = screen_type if screen_type in (
+                            None, "", "front_center", "0") else "__other__"
+                        _eff = _ws.resolve(screen_type, _base)
+                        if _eff == "webos":
+                            if _ws.auto_active != _webos_auto_sent:
+                                _webos_auto_sent = _ws.auto_active
+                                try:
+                                    await websocket.send_json({
+                                        "type": "screen_source",
+                                        "source": "webos", "auto": True,
+                                    })
+                                except Exception:
+                                    pass
+                            if current_ws_mode != "jpeg":
+                                await websocket.send_json({"mode": "jpeg"})
+                                current_ws_mode = "jpeg"
+                            _wt0 = asyncio.get_event_loop().time()
+                            try:
+                                await websocket.send_bytes(
+                                    await _ws.screencap_bytes(fmt="jpeg", timeout=3.0))
+                            except WebSocketDisconnect:
+                                raise
+                            except Exception as we:
+                                await websocket.send_json({
+                                    "type": "error", "message": str(we)})
+                                await asyncio.sleep(0.5)
+                                continue
+                            try:
+                                _wfps = float((dev.info if dev else {}).get("webos_fps") or 30)
+                            except (TypeError, ValueError):
+                                _wfps = 30.0
+                            _wsleep = (1.0 / max(1.0, _wfps)) - (
+                                asyncio.get_event_loop().time() - _wt0)
+                            if _wsleep > 0:
+                                await asyncio.sleep(_wsleep)
+                            continue
+                        if _webos_auto_sent:
+                            _webos_auto_sent = False
+                            try:
+                                await websocket.send_json({
+                                    "type": "screen_source",
+                                    "source": screen_type or "front_center", "auto": True,
+                                })
+                            except Exception:
+                                pass
+
                     # 디스플레이 활성 여부 결정:
                     #   * 폴더블처럼 "일부만" inactive면 그건 신뢰 가능한 정보 → 차단
                     #   * GVM/IVI 환경처럼 "전체" inactive면 dumpsys 정보가 신뢰 불가

@@ -1270,7 +1270,8 @@ export default function DevicePage() {
       }
     }
     // WebOS(Connect Wide 한정): 미설정이면 빈 값 → 화면 목록에 WebOS 가 안 뜬다.
-    if (dev.type === 'isap_agent' && dev.info?.device_model === 'Connect Wide') {
+    if ((dev.type === 'isap_agent' || dev.type === 'adb')
+        && dev.info?.device_model === 'Connect Wide') {
       extras.webos_adb_serial = dev.info?.webos_adb_serial ?? '';
       extras.webos_display_id = dev.info?.webos_display_id ?? 0;
       extras.webos_linux_ip = dev.info?.webos_linux_ip ?? '172.16.4.1';
@@ -3928,14 +3929,17 @@ export default function DevicePage() {
             {/* WebOS 화면(Connect Wide 한정) — webOS 투사 앱이 Android 디스플레이에 올라오므로
                 미러링/터치 모두 HU 의 ADB(scrcpy) 경로를 그대로 쓴다.
                 ADB 시리얼이 비어 있으면 WebOS 없는 모델로 보고 화면 선택 목록에 노출하지 않는다. */}
-            {editDevice.type === 'isap_agent' && editDevice.info?.device_model === 'Connect Wide' && (
+            {(editDevice.type === 'isap_agent' || editDevice.type === 'adb')
+              && editDevice.info?.device_model === 'Connect Wide' && (
               <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: '8px 10px' }}>
                 <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>WebOS 화면 (미러링/터치)</div>
                 <div style={{ fontSize: 10, color: '#888', marginBottom: 6 }}>
                   webOS 는 별도 Linux VM 이고, Android 캡처에는 그 영역이 <b>hole 로 뚫려</b> 있어
                   iSAP·scrcpy 어느 쪽으로도 안 잡힙니다. 그래서 <b>화면은 Linux VM 스트림</b>(HU 를 경유해
-                  linuxStream 실행)으로 가져오고, <b>터치는 ADB</b>(<code>input tap</code>)로 보냅니다.
-                  <b> ADB 시리얼을 비우면 WebOS 없는 모델</b>로 취급되어 화면 선택 목록에 표시되지 않습니다.
+                  linuxStream 실행)으로 가져오고, <b>터치는 webOS 터치스크린에 직접 주입</b>합니다.
+                  {editDevice.type === 'isap_agent'
+                    ? ' iSAP 연결에서는 ADB 시리얼을 비우면 WebOS 없는 모델로 취급되어 화면 목록에 표시되지 않습니다.'
+                    : ' ADB 연결이라 이 디바이스 자신이 HU 입니다 — 시리얼은 비워두면 됩니다.'}
                 </div>
                 <Space direction="vertical" style={{ width: '100%' }} size={6}>
                   <div>
@@ -3946,7 +3950,9 @@ export default function DevicePage() {
                       options={adbSerialOptions}
                       value={editExtraFields.webos_adb_serial ?? ''}
                       onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_adb_serial: v ?? '' })}
-                      placeholder="비우면 WebOS 미사용 (예: 0123456789ABCDEF)"
+                      placeholder={editDevice.type === 'adb'
+                        ? '비우면 이 디바이스 자신 (' + (editDevice.address || '') + ')'
+                        : '비우면 WebOS 미사용 (예: 0123456789ABCDEF)'}
                       filterOption={(input, option) =>
                         (option?.value as string || '').toLowerCase().includes(input.toLowerCase())}
                     />

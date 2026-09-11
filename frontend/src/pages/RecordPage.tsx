@@ -1042,7 +1042,9 @@ export default function RecordPage() {
       try {
         const dev = primaryDevices.find(d => d.id === targetId)
           || auxiliaryDevices.find(d => d.id === targetId);
-        const needsScreenType = (dev?.type === 'hkmc_agent' || dev?.type === 'isap_agent' || dev?.type === 'icas_agent' || dev?.type === 'mib_agent' || dev?.type === 'gm_info_agent' || dev?.type === 'hkmc5th_wide_agent') || ((dev?.type === 'adb' || dev?.type === 'bmw_agent') && (dev.info?.displays?.length ?? 0) > 1);
+        // ADB 는 멀티 디스플레이일 때만 screen_type 이 필요했는데, Connect Wide 의 WebOS 는
+        // 단일 디스플레이에서도 화면을 구분해야 해서 함께 넘긴다.
+        const needsScreenType = (dev?.type === 'hkmc_agent' || dev?.type === 'isap_agent' || dev?.type === 'icas_agent' || dev?.type === 'mib_agent' || dev?.type === 'gm_info_agent' || dev?.type === 'hkmc5th_wide_agent') || ((dev?.type === 'adb' || dev?.type === 'bmw_agent') && ((dev.info?.displays?.length ?? 0) > 1 || screenType === 'webos'));
         const res = await deviceApi.screenshot(targetId, needsScreenType ? screenType : undefined, 'png');
         if (res.data.image) {
           const fmt = res.data.format || 'png';
@@ -1131,11 +1133,12 @@ export default function RecordPage() {
   const screenDevice = primaryDevices.find(d => d.id === screenshotDeviceId);
   const isScreenHkmc = screenDevice?.type === 'hkmc_agent' || screenDevice?.type === 'isap_agent' || screenDevice?.type === 'hkmc5th_wide_agent';
   const isScreenCCRC = isScreenHkmc && screenDevice?.info?.device_model === 'ccRC';
-  // WebOS 화면: Connect Wide(iSAP) + WebOS ADB 시리얼이 설정된 디바이스만.
-  // 시리얼이 비어 있으면 WebOS 없는 모델이라 화면 선택 목록에 아예 넣지 않는다.
-  const hasWebOSScreen = screenDevice?.type === 'isap_agent'
-    && screenDevice?.info?.device_model === 'Connect Wide'
-    && !!screenDevice?.info?.webos_adb_serial;
+  // WebOS 화면: Connect Wide 한정. iSAP 로 붙였으면 WebOS 대상 ADB 시리얼이 필요하고
+  // (비어 있으면 WebOS 없는 모델로 보고 목록에서 뺀다), ADB 로 붙였으면 그 디바이스
+  // 자신이 HU 라 시리얼 입력 없이 바로 쓸 수 있다.
+  const hasWebOSScreen = screenDevice?.info?.device_model === 'Connect Wide'
+    && (screenDevice?.type === 'adb'
+      || (screenDevice?.type === 'isap_agent' && !!screenDevice?.info?.webos_adb_serial));
   // GM Info도 단일 HU 화면 + 하드키 패널을 쓰므로 같은 플래그로 묶는다(스텝 타입도 icas_*).
   const isScreenICAS = screenDevice?.type === 'icas_agent' || screenDevice?.type === 'mib_agent'
     || screenDevice?.type === 'gm_info_agent';
@@ -1676,7 +1679,8 @@ export default function RecordPage() {
     const needsScreenType = dev.type === 'hkmc_agent' || dev.type === 'isap_agent'
       || dev.type === 'icas_agent' || dev.type === 'mib_agent' || dev.type === 'gm_info_agent'
       || dev.type === 'hkmc5th_wide_agent'
-      || ((dev.type === 'adb' || dev.type === 'bmw_agent') && (dev.info?.displays?.length ?? 0) > 1);
+      || ((dev.type === 'adb' || dev.type === 'bmw_agent')
+        && ((dev.info?.displays?.length ?? 0) > 1 || screenType === 'webos'));
     return needsScreenType ? screenType : undefined;
   }, [primaryDevices, auxiliaryDevices, screenType]);
 
@@ -5828,6 +5832,19 @@ export default function RecordPage() {
                       <Option value="integrated">{t('record.hkmcIntegrated')}</Option>
                     </Select>
                     </>
+                  )}
+                  {/* ADB 로 붙인 Connect Wide — 디스플레이 드롭다운이 없으므로 WebOS 선택만 따로 둔다.
+                      (멀티 디스플레이면 아래 디스플레이 Select 에 WebOS 항목이 함께 들어간다) */}
+                  {hasWebOSScreen && !isScreenHkmc && !hasMultiDisplay && (
+                    <Select
+                      size="small"
+                      value={screenType === 'webos' ? 'webos' : 'main'}
+                      onChange={(v) => setScreenType(v === 'webos' ? 'webos' : 'front_center')}
+                      style={{ minWidth: 130 }}
+                    >
+                      <Option value="main">기본 화면</Option>
+                      <Option value="webos">WebOS</Option>
+                    </Select>
                   )}
                   {hasMultiDisplay && (
                     <Select

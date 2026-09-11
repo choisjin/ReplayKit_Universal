@@ -1710,6 +1710,42 @@ async def device_input(req: InputRequest):
         display_id = resolve_input_display_id(dev.info if dev else None, our_index)
 
         p = req.params
+        # WebOS(Connect Wide): webOS 화면이 떠 있으면 Android 입력이 아니라 webOS
+        # 터치스크린으로 보내야 한다(그 영역은 Android 레이어의 hole). 화면 선택이
+        # webos 이거나, 메인 화면 시청 중 자동 전환 상태면 여기로 간다.
+        _ws = dm.get_webos_screen(req.device_id)
+        if _ws is not None and _ws.enabled and req.action in (
+            "tap", "repeat_tap", "long_press", "swipe", "multi_touch",
+        ):
+            _st = p.get("screen_type")
+            _base = _st if _st in (None, "", "front_center", "0") else "__other__"
+            if _ws.resolve(_st, _base, max_age=_ws.TOUCH_FG_MAX_AGE) == "webos":
+                if req.action == "tap":
+                    await _ws.tap(p["x"], p["y"])
+                elif req.action == "repeat_tap":
+                    await _ws.repeat_tap(p["x"], p["y"], int(p.get("count", 5)),
+                                         int(p.get("interval_ms", 100)))
+                elif req.action == "long_press":
+                    await _ws.long_press(p["x"], p["y"], int(p.get("duration_ms", 1000)))
+                elif req.action == "swipe":
+                    await _ws.swipe(p["x1"], p["y1"], p["x2"], p["y2"],
+                                    int(p.get("duration_ms", 300)),
+                                    int(p.get("hold_ms", 0) or 0))
+                else:
+                    fingers = p.get("fingers", [])
+                    if not fingers:
+                        raise HTTPException(status_code=400, detail="fingers array required")
+                    is_tap = all(f.get("x1") == f.get("x2") and f.get("y1") == f.get("y2")
+                                 for f in fingers)
+                    if is_tap:
+                        await _ws.multi_finger_tap(
+                            [{"x": f["x1"], "y": f["y1"]} for f in fingers])
+                    else:
+                        await _ws.multi_finger_swipe(fingers, int(p.get("duration_ms", 500)))
+                logger.info("[WebOS INPUT] device=%s action=%s (ADB 디바이스)",
+                            req.device_id, req.action)
+                return {"result": "ok"}
+
         if req.action == "tap":
             await adb.tap(p["x"], p["y"], serial=adb_serial, display_id=display_id)
         elif req.action == "repeat_tap":
@@ -1976,6 +2012,11 @@ async def update_device(req: UpdateDeviceRequest):
                 except Exception as e:
                     logger.warning("Failed to update live ksend path: %s", e)
         # WebOS(Connect Wide) 설정 라이브 반영 — 재연결 없이 다음 미러링/터치부터 적용.
+        if dev.type == "adb" and any(k.startswith("webos_") for k in req.extra_fields):
+            # ADB 디바이스는 헬퍼가 device_manager 에 캐시돼 있어 접속 정보가 바뀌면
+            # 스트림을 내려야 새 설정으로 다시 뜬다.
+            dev.info.pop("webos_screen_detected", None)
+            dm.stop_webos_screen(dev.id)
         if dev.type == "isap_agent" and any(k.startswith("webos_") for k in req.extra_fields):
             isap_webos_changed = True
             # 시리얼/디스플레이가 바뀌면 해상도를 다시 감지해야 한다.
@@ -3342,6 +3383,16 @@ async def get_screenshot(device_id: str, fmt: str = "jpeg", screen_type: str = "
         else:
             # ADB device
             adb_serial = dev.address if dev else device_id
+            # WebOS(Connect Wide): 그 화면은 Android 캡처에 hole 로 뚫려 안 잡힌다.
+            # 명시 선택(webos) 또는 자동 전환 상태면 Linux VM 스트림에서 가져온다.
+            _ws = dm.get_webos_screen(device_id)
+            if _ws is not None and _ws.enabled:
+                _base = screen_type if screen_type in (
+                    None, "", "front_center", "0") else "__other__"
+                if _ws.resolve(screen_type, _base) == "webos":
+                    img_bytes = await _ws.screencap_bytes(fmt=fmt)
+                    return {"image": base64.b64encode(img_bytes).decode("ascii"),
+                            "format": fmt}
             display_id = _parse_adb_display_id(screen_type)
             sf_did = resolve_sf_display_id(dev.info if dev else None, display_id)
             # 단발 캡처도 미러링과 동일한 base64 스트리머 경로 사용 — 특정 PC/adb에서

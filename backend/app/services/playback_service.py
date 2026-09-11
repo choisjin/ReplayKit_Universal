@@ -1019,9 +1019,24 @@ class PlaybackService:
                             from .adb_service import resolve_sf_display_id
                             sf_did = resolve_sf_display_id(dev_obj.info, adb_did)
                     adb_serial = ss_device.get("serial") or ss_device["id"]
-                    logger.debug("Screenshot capture: device=%s adb_did=%s sf_did=%s",
-                                 ss_device["id"], adb_did, sf_did)
-                    await self.adb.screencap(actual_path, serial=adb_serial, sf_display_id=sf_did)
+                    # WebOS(Connect Wide): webOS 화면이면 Android 캡처 대신 Linux VM 스트림.
+                    _ws = self.dm.get_webos_screen(ss_device["id"])
+                    _st = ss_device.get("screen_type")
+                    if _ws is not None and _ws.enabled:
+                        _base = _st if _st in (None, "", "front_center", "0") else "__other__"
+                        if _ws.resolve(_st, _base) == "webos":
+                            with open(actual_path, "wb") as f:
+                                f.write(await _ws.screencap_bytes(fmt="png"))
+                            _ws_done = True
+                        else:
+                            _ws_done = False
+                    else:
+                        _ws_done = False
+                    if not _ws_done:
+                        logger.debug("Screenshot capture: device=%s adb_did=%s sf_did=%s",
+                                     ss_device["id"], adb_did, sf_did)
+                        await self.adb.screencap(actual_path, serial=adb_serial,
+                                                 sf_display_id=sf_did)
                 elif ss_device["type"] == "isap_agent":
                     isap_svc = self.dm.get_isap_service(ss_device["id"])
                     if isap_svc:
