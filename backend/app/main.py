@@ -998,6 +998,22 @@ async def websocket_screen_mirror(websocket: WebSocket):
     adb_dispatch_logged = False
     # WebOS 자동 전환 상태(프론트에 변할 때만 통지)
     _webos_auto_sent = False
+    # iSAP 기본화면을 scrcpy(ADB)로 미러링할지 — HU 의 ADB 시리얼을 아는 경우만.
+    # (iSAP CMD_GETIMG 는 3840x1440 통째 폴링이라 ~1fps)
+    _isap_mirror_serial = ""
+    _isap_mirror_display = None
+    _isap_mirror_adb_enabled = False
+    # 기본화면(front_center)에만 적용 — cluster/HUD/후석은 ADB 로 대체할 수 없다.
+    if is_isap and dev is not None and screen_type in (None, "", "front_center"):
+        _dinfo = dev.info or {}
+        if _dinfo.get("mirror_via_adb", True):
+            _ws0 = device_manager.get_webos_screen(target_device_id)
+            if _ws0 is not None and _ws0.enabled:
+                _isap_mirror_serial = _ws0.serial
+                _isap_mirror_display = _ws0.display_id
+                _isap_mirror_adb_enabled = True
+                logger.info("iSAP 기본화면 미러를 scrcpy 로 처리: device=%s serial=%s",
+                            target_device_id, _isap_mirror_serial)
 
     # ── MIB/ICAS 적응형 화면 리프레시 페이싱 ──
     # SSH+scp 캡처(LayerManagerControl dump)는 디바이스 부하가 커서 무한 폴링하면
@@ -1120,6 +1136,16 @@ async def websocket_screen_mirror(websocket: WebSocket):
                 else:
                     hkmc = None
                 isap = device_manager.get_isap_service(target_device_id) if is_isap else None
+                # iSAP 기본화면은 CMD_GETIMG 폴링이라 ~1fps 다. HU 의 ADB 시리얼을
+                # 아는 디바이스(Connect Wide)면 기본화면만 scrcpy 로 돌려 fps 를 올린다.
+                # webOS 로 전환된 상태이거나 cluster/HUD 등 다른 화면이면 해당 없음.
+                _isap_adb_mirror = False
+                if isap is not None and isap.is_connected and _isap_mirror_adb_enabled:
+                    try:
+                        if isap.resolve_screen(screen_type) != "webos":
+                            _isap_adb_mirror = True
+                    except Exception as e:
+                        logger.debug("iSAP scrcpy mirror 판정 실패: %s", e)
                 if hkmc and hkmc.is_connected:
                     _cap_kwargs = {"screen_type": screen_type, "fmt": "jpeg", "timeout": 3.0}
                     # HKMC6th cluster 2-레이어 합성: 라이브 토글(cluster_composite_live)을 존중.
@@ -1132,7 +1158,7 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     # HKMC 재연결 대기 중 — 빈 프레임 대신 잠시 대기
                     await asyncio.sleep(0.3)
                     continue
-                elif isap and isap.is_connected:
+                elif isap and isap.is_connected and not _isap_adb_mirror:
                     _isap_t0 = asyncio.get_event_loop().time()
                     jpeg_bytes = await isap.async_screencap_bytes(
                         screen_type=screen_type, fmt="jpeg", timeout=3.0
@@ -1164,7 +1190,7 @@ async def websocket_screen_mirror(websocket: WebSocket):
                         )
                         if _wsleep > 0:
                             await asyncio.sleep(_wsleep)
-                elif is_isap:
+                elif is_isap and not _isap_adb_mirror:
                     await asyncio.sleep(0.3)
                     continue
                 elif is_icas:
@@ -1496,6 +1522,10 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     except (ValueError, TypeError):
                         pass
                     adb_serial = dev.address if dev else target_device_id
+                    if _isap_adb_mirror and _isap_mirror_serial:
+                        # iSAP 디바이스의 주소는 에이전트 IP 다 — 미러 대상은 HU 의 ADB 시리얼.
+                        adb_serial = _isap_mirror_serial
+                        adb_display_id = _isap_mirror_display
                     if not adb_serial:
                         await asyncio.sleep(0.3)
                         continue

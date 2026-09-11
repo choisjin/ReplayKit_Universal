@@ -1280,6 +1280,7 @@ export default function DevicePage() {
       extras.webos_touch_via = dev.info?.webos_touch_via ?? 'evdev';
       extras.webos_evdev = dev.info?.webos_evdev ?? '';
       extras.webos_auto = dev.info?.webos_auto ?? true;
+      extras.mirror_via_adb = dev.info?.mirror_via_adb ?? true;
       deviceApi.adbSerials().then(res => {
         setAdbSerialOptions((res.data.devices || []).map((d: any) => ({
           value: d.serial,
@@ -3993,6 +3994,22 @@ export default function DevicePage() {
                     Linux VM 은 HU 안에서만 보이는 주소입니다(기본 172.16.4.1). PC 에서 직접 접속하지 않고
                     ADB 로 HU 에 들어가 SSH 합니다 — 참조본 screenBridge 와 동일한 경로입니다.
                   </div>
+                  {editDevice.type === 'isap_agent' && (
+                    <div>
+                      <Checkbox
+                        checked={editExtraFields.mirror_via_adb !== false}
+                        onChange={(e) => setEditExtraFields({ ...editExtraFields, mirror_via_adb: e.target.checked })}
+                      >
+                        <span style={{ fontSize: 12 }}>기본화면 미러링을 ADB(scrcpy)로</span>
+                      </Checkbox>
+                      <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
+                        iSAP <code>CMD_GETIMG</code> 는 3840x1440 을 통째로 받아 <b>~1fps</b> 입니다.
+                        위 ADB 시리얼로 <b>scrcpy H.264 미러링</b>(30fps+)을 대신 씁니다 — 전석 화면만
+                        해당하고 cluster/HUD 는 기존 iSAP 캡처를 그대로 씁니다.
+                        <b> 스텝 캡처·이미지 비교는 iSAP 경로 그대로</b>라 기존 시나리오에 영향 없습니다.
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <Checkbox
                       checked={editExtraFields.webos_auto !== false}
