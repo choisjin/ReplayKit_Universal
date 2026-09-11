@@ -433,10 +433,52 @@ class WebOSScreen:
                     kind, src or WEBOS_SCREEN, sw, sh, pairs[0], pw, ph, pairs[1],
                     (pw / sw) if sw else 0.0)
 
+    @property
+    def android_hit(self) -> bool:
+        """webOS 위에 얹힌 Android UI(사이드바·시계·팝업)를 누르면 Android 로 보낼지 (기본 ON).
+
+        실제 패널은 webOS 위에 Android UI 가 합성돼 있어 그 위를 누르면 Android 가 받아야
+        한다. evdev(webOS)로 보내면 사이드바가 무반응이다(실기). info["webos_android_hit"]
+        =false 로 끈다.
+        """
+        v = self._info.get("webos_android_hit")
+        return True if v is None else bool(v)
+
+    async def _on_android_ui(self, px: int, py: int) -> bool:
+        """패널 좌표 (px,py) 가 Android UI 위인가 — 미러 오버레이와 **같은 판정**(검정 키).
+
+        Android 캡처에서 webOS 영역(hole)은 정확히 0 이라 threshold 초과 = Android UI.
+        미러 합성과 같은 캐시 프레임(_android_frame)을 보므로 사용자가 본 화면과 라우팅이
+        일치한다. 합성처럼 Android 캡처를 패널 전체에 비율로 대응시킨다.
+        """
+        if not self.android_hit:
+            return False
+        img = await self._android_frame()
+        if img is None:
+            return False
+        pw, ph = self.panel_size()
+        h, w = img.shape[:2]
+        if not (pw and ph and w and h):
+            return False
+        ax = min(w - 1, max(0, int(px * w / pw)))
+        ay = min(h - 1, max(0, int(py * h / ph)))
+        b, g, r = (int(v) for v in img[ay, ax][:3])
+        gray = 0.114 * b + 0.587 * g + 0.299 * r      # cv2 BGR2GRAY 와 동일 가중치
+        return gray > self.overlay_threshold
+
+    async def _use_evdev(self, px: int, py: int) -> bool:
+        """이 점을 webOS 터치스크린(evdev)으로 보낼지. Android UI 위면 False."""
+        if not self.touch_via_evdev:
+            return False
+        if await self._on_android_ui(px, py):
+            logger.info("[WebOS] panel(%s,%s) 는 Android UI 위 → Android 입력", px, py)
+            return False
+        return True
+
     async def tap(self, x: int, y: int, src: str = "") -> None:
         px, py = self._clamp(x, y, src)
         self._log_map("MAP", src, (f"({x},{y})", f"({px},{py})"))
-        if self.touch_via_evdev:
+        if await self._use_evdev(px, py):
             await self._run(self.stream().tap, px, py)
             return
         adb, serial, did = self._adb()
@@ -448,7 +490,7 @@ class WebOSScreen:
     async def repeat_tap(self, x: int, y: int, count: int = 5,
                          interval_ms: int = 100, src: str = "") -> None:
         px, py = self._clamp(x, y, src)
-        if self.touch_via_evdev:
+        if await self._use_evdev(px, py):
             await self._run(self.stream().repeat_tap, px, py, count, interval_ms)
             return
         adb, serial, did = self._adb()
@@ -458,7 +500,7 @@ class WebOSScreen:
     async def long_press(self, x: int, y: int, duration_ms: int = 3000,
                          src: str = "") -> None:
         px, py = self._clamp(x, y, src)
-        if self.touch_via_evdev:
+        if await self._use_evdev(px, py):
             await self._run(self.stream().long_press, px, py, duration_ms)
             return
         adb, serial, did = self._adb()
@@ -519,8 +561,9 @@ class WebOSScreen:
         self._log_map("MAP", src, (f"({x1},{y1})->({x2},{y2})",
                                    f"({ax},{ay})->({bx},{by})"))
         ax, ay = self._edge_snap(ax, ay, bx, by)
-        use_adb = (not self.touch_via_evdev) or (
-            self.edge_via_adb and self._is_edge_start(ax, ay))
+        edge = self.touch_via_evdev and self.edge_via_adb and self._is_edge_start(ax, ay)
+        # 시작점이 Android UI(사이드바 등) 위면 그 제스처는 Android 소관이다.
+        use_adb = (not self.touch_via_evdev) or edge or not await self._use_evdev(ax, ay)
         if not use_adb:
             await self._run(self.stream().swipe, ax, ay, bx, by,
                             int(duration_ms or 300), hold_ms)
@@ -529,8 +572,9 @@ class WebOSScreen:
         tx1, ty1 = self._to_android(ax, ay)
         tx2, ty2 = self._to_android(bx, by)
         if self.touch_via_evdev:
-            logger.info("[WebOS SWIPE] 엣지 제스처 → Android 경유 "
+            logger.info("[WebOS SWIPE] %s → Android 경유 "
                         "panel(%s,%s)->(%s,%s) = android(%s,%s)->(%s,%s)",
+                        "엣지 제스처" if edge else "Android UI 위",
                         ax, ay, bx, by, tx1, ty1, tx2, ty2)
         await adb.swipe(tx1, ty1, tx2, ty2, duration_ms=int(duration_ms or 300),
                         serial=serial, display_id=did, hold_ms=hold_ms)
@@ -540,7 +584,7 @@ class WebOSScreen:
         for p in points:
             px, py = self._clamp(p["x"], p["y"], src)
             pts.append({"x": px, "y": py})
-        if self.touch_via_evdev:
+        if pts and await self._use_evdev(pts[0]["x"], pts[0]["y"]):
             await self._run(self.stream().multi_finger_tap, pts)
             return
         adb, serial, did = self._adb()
@@ -554,7 +598,7 @@ class WebOSScreen:
             ax, ay = self._clamp(f["x1"], f["y1"], src)
             bx, by = self._clamp(f["x2"], f["y2"], src)
             fs.append({"x1": ax, "y1": ay, "x2": bx, "y2": by})
-        if self.touch_via_evdev:
+        if fs and await self._use_evdev(fs[0]["x1"], fs[0]["y1"]):
             await self._run(self.stream().multi_finger_swipe, fs,
                             int(duration_ms or 500), hold_ms)
             return

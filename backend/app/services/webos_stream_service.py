@@ -861,8 +861,13 @@ class WebOSStreamService:
         return self._evdev_path
 
     def _find_touch_device(self) -> str:
-        """ABS_MT_POSITION_X/Y 를 가진 실제 터치스크린 evdev 노드를 찾는다.
+        """화면 터치스크린 evdev 노드를 찾는다 — **INPUT_PROP_DIRECT 필수 우선**.
 
+        ⚠ MT 축(ABS_MT_POSITION_X/Y)만 보면 안 된다. **터치패드(터치 리모컨)도 MT 축을
+        가진다.** 그걸 고르면 좌표가 커서 이동으로만 쓰이고 탭은 '클릭'이 돼, 어디를
+        눌러도 **현재 포커스 항목이 눌리는** 증상이 난다(2026-09-11 실기: 어디를 눌러도
+        SPOTV NOW). 화면 터치스크린은 PROP 에 INPUT_PROP_DIRECT(bit1)가 있고 터치패드는
+        POINTER(bit0)만 있다. 장치 번호(eventN)는 부팅마다 바뀔 수 있어 순서도 믿지 않는다.
         linuxStream-touch(우리가 띄운 가짜 장치)는 제외한다.
         """
         if self._evdev_path:
@@ -873,13 +878,18 @@ class WebOSStreamService:
             return forced
         r = self._ssh("cat /proc/bus/input/devices", timeout=20.0)
         text = (r.stdout or "") + (r.stderr or "")
-        name = handlers = absbits = ""
+        prop_direct = 1 << 1                      # INPUT_PROP_DIRECT
+        direct: list = []
+        others: list = []
+        name = handlers = absbits = props = ""
         for line in text.splitlines() + [""]:
             line = line.strip()
             if line.startswith("N: Name="):
                 name = line.split("=", 1)[1].strip('"')
             elif line.startswith("H: Handlers="):
                 handlers = line.split("=", 1)[1]
+            elif line.startswith("B: PROP="):
+                props = line.split("=", 1)[1].strip()
             elif line.startswith("B: ABS="):
                 absbits = line.split("=", 1)[1].replace(" ", "")
             elif not line:
@@ -888,17 +898,34 @@ class WebOSStreamService:
                         mask = int(absbits, 16)
                     except ValueError:
                         mask = 0
-                    if (mask >> ABS_MT_POSITION_X & 1) and (mask >> ABS_MT_POSITION_Y & 1):
-                        evs = [h for h in handlers.split() if h.startswith("event")]
-                        if evs:
-                            self._evdev_path = f"/dev/input/{evs[0]}"
-                            logger.info("WebOS: 터치 주입 대상 = %s (%s)",
-                                        self._evdev_path, name)
-                            return self._evdev_path
-                name = handlers = absbits = ""
-        raise WebOSStreamError(
-            "WebOS: 멀티터치 터치스크린 노드를 찾지 못했습니다 "
-            "(info['webos_evdev'] 로 직접 지정 가능)")
+                    evs = [h for h in handlers.split() if h.startswith("event")]
+                    if evs and (mask >> ABS_MT_POSITION_X & 1) and (mask >> ABS_MT_POSITION_Y & 1):
+                        try:
+                            prop = int(props or "0", 16)
+                        except ValueError:
+                            prop = 0
+                        cand = (f"/dev/input/{evs[0]}", name, prop)
+                        (direct if prop & prop_direct else others).append(cand)
+                name = handlers = absbits = props = ""
+        for path, nm, prop in direct + others:
+            logger.info("WebOS: 터치 후보 %s name=%r PROP=%#x (%s)", path, nm, prop,
+                        "화면 터치스크린" if prop & prop_direct else "터치패드/기타 — 제외 대상")
+        if direct:
+            if len(direct) > 1:
+                logger.warning("WebOS: 화면 터치스크린이 %d개 — 첫 번째(%s) 사용. 다르면 "
+                               "디바이스 설정 webos_evdev 로 지정", len(direct), direct[0][0])
+            self._evdev_path, nm, _p = direct[0]
+        elif others:
+            self._evdev_path, nm, _p = others[0]
+            logger.warning("WebOS: INPUT_PROP_DIRECT 터치스크린이 없어 %s(%s) 사용 — 터치패드면 "
+                           "위치가 무시되고 포커스 항목이 눌린다 (webos_evdev 로 지정)",
+                           self._evdev_path, nm)
+        else:
+            raise WebOSStreamError(
+                "WebOS: 멀티터치 터치스크린 노드를 찾지 못했습니다 "
+                "(info['webos_evdev'] 로 직접 지정 가능)")
+        logger.info("WebOS: 터치 주입 대상 = %s (%s)", self._evdev_path, nm)
+        return self._evdev_path
 
     def _ensure_evdev_channel(self) -> None:
         p = self._touch_proc

@@ -1614,13 +1614,14 @@ async def websocket_screen_mirror(websocket: WebSocket):
                         if _webos_auto_sent:
                             _webos_auto_sent = False
                             try:
-                                _msg = {"type": "screen_source",
-                                        "source": screen_type or "front_center",
-                                        "auto": True}
-                                _bs = _ws.android_size()
-                                if all(_bs):
-                                    _msg["width"], _msg["height"] = _bs
-                                await websocket.send_json(_msg)
+                                # ⚠ 좌표 기준 크기는 싣지 않는다 — 프론트가 평소 ADB 기준
+                                # (displays/resolution)으로 돌아가야 한다. android_size() 는
+                                # 30초 주기 감지라 팝업을 내린 직후엔 옛 값이고, 한 번 보낸 값은
+                                # 다음 전환까지 고정돼 좌표가 복구되지 않았다(실기).
+                                await websocket.send_json({
+                                    "type": "screen_source",
+                                    "source": screen_type or "front_center",
+                                    "auto": True})
                             except Exception:
                                 pass
 
@@ -1754,10 +1755,46 @@ async def websocket_screen_mirror(websocket: WebSocket):
                         # 으로 이 WS 만 닫힌 것"이라 백엔드를 죽이지 않고 그대로 유지한다
                         # (정식 scrcpy 처럼 연결 유지 → 복귀 시 살아있는 스트림 즉시 재사용).
                         scrcpy_dead = False
+                        # WebOS(Connect Wide): relay 중에도 webOS 전면 여부를 주기적으로 본다.
+                        # ⚠ 예전엔 relay 루프에 갇혀, 팝업을 다시 올려 webOS 가 떠도 Android
+                        # (hole=검정)만 계속 보였다(실기). 정적 화면이면 NAL 이 안 와 루프 본문이
+                        # 돌지 않으므로 NAL 도착과 무관하게 타임아웃 대기로 점검한다. webOS 로
+                        # 돌아갈 때 scrcpy 백엔드는 닫지 않는다(Android 복귀 시 즉시 재사용).
+                        _relay_ws = _ws if (_ws is not None and _ws.enabled) else None
+                        _relay_base = (screen_type if screen_type in (
+                            None, "", "front_center", "0") else "__other__")
+                        _agen = scrcpy_backend.stream_h264()
+                        _nxt = None
+                        _next_check = asyncio.get_event_loop().time() + 1.5
                         try:
-                            async for nal in scrcpy_backend.stream_h264():
+                            while True:
+                                if _nxt is None:
+                                    _nxt = asyncio.ensure_future(_agen.__anext__())
+                                if _relay_ws is None:
+                                    await asyncio.wait({_nxt})
+                                else:
+                                    await asyncio.wait({_nxt}, timeout=max(
+                                        0.05, _next_check - asyncio.get_event_loop().time()))
+                                    if asyncio.get_event_loop().time() >= _next_check:
+                                        _next_check = asyncio.get_event_loop().time() + 1.5
+                                        # dumpsys 왕복이 동기라 루프를 막지 않게 executor 로.
+                                        _eff2 = await asyncio.get_event_loop().run_in_executor(
+                                            None, _relay_ws.resolve, screen_type, _relay_base)
+                                        if _eff2 == "webos":
+                                            logger.info("WebOS 전면 감지 — H.264 relay 에서 "
+                                                        "WebOS 화면으로 전환 (device=%s)",
+                                                        target_device_id)
+                                            break
+                                if not _nxt.done():
+                                    continue
+                                try:
+                                    nal = _nxt.result()
+                                except StopAsyncIteration:
+                                    _nxt = None
+                                    scrcpy_dead = True  # 정상 종료 = scrcpy 소켓 EOF
+                                    break
+                                _nxt = None
                                 await websocket.send_bytes(nal)
-                            scrcpy_dead = True  # 정상 종료 = scrcpy 소켓 EOF
                         except WebSocketDisconnect:
                             raise
                         except Exception as e:
@@ -1780,6 +1817,11 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                 getattr(scrcpy_backend, "_total_bytes_in", -1),
                             )
                             scrcpy_dead = True
+                        finally:
+                            # webOS 전환으로 빠질 때 대기 중인 __anext__ 만 정리(백엔드는 유지 —
+                            # 다음 소비자가 GOP prime 으로 재동기).
+                            if _nxt is not None and not _nxt.done():
+                                _nxt.cancel()
                         if scrcpy_dead:
                             # scrcpy 가능 기기는 짧은 쿨다운으로 즉시 재시작(장기 폴링 금지).
                             if not playback_service.is_running:

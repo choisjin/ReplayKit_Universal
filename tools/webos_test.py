@@ -508,20 +508,24 @@ def _write_events(svc, device: str, payload: bytes, timeout: float = 30.0) -> st
 
 
 def _find_touch_device(svc) -> str:
-    """실제 터치스크린 evdev 노드 탐색 — MT 축(ABS bit 53/54)을 가진 첫 장치.
+    """화면 터치스크린 evdev 노드 탐색 — MT 축(ABS bit 53/54) + **INPUT_PROP_DIRECT 우선**.
 
+    터치패드(터치 리모컨)도 MT 축이 있다 — 그걸 고르면 어디를 눌러도 포커스 항목이
+    눌린다. 백엔드 WebOSStreamService._find_touch_device 와 같은 규칙.
     linuxStream-touch 는 제외한다(우리가 만든 가짜 장치).
     """
     r = svc._ssh("cat /proc/bus/input/devices", timeout=20.0)
     text = (r.stdout or "") + (r.stderr or "")
-    name, handlers, absbits = "", "", ""
-    best = ""
+    name, handlers, absbits, props = "", "", "", ""
+    direct, others = [], []
     for line in text.splitlines() + [""]:
         line = line.strip()
         if line.startswith("N: Name="):
             name = line.split("=", 1)[1].strip('"')
         elif line.startswith("H: Handlers="):
             handlers = line.split("=", 1)[1]
+        elif line.startswith("B: PROP="):
+            props = line.split("=", 1)[1].strip()
         elif line.startswith("B: ABS="):
             absbits = line.split("=", 1)[1].replace(" ", "")
         elif not line:
@@ -530,13 +534,19 @@ def _find_touch_device(svc) -> str:
                     mask = int(absbits, 16)
                 except ValueError:
                     mask = 0
-                # ABS_MT_POSITION_X(53) / Y(54) 보유 = 진짜 멀티터치 터치스크린
-                if mask >> 53 & 1 and mask >> 54 & 1:
-                    ev = [h for h in handlers.split() if h.startswith("event")]
-                    if ev and not best:
-                        best = f"/dev/input/{ev[0]}"
-                        print(f"[i] 터치스크린 감지: {name} -> {best}")
-            name, handlers, absbits = "", "", ""
+                ev = [h for h in handlers.split() if h.startswith("event")]
+                if ev and mask >> 53 & 1 and mask >> 54 & 1:
+                    try:
+                        prop = int(props or "0", 16)
+                    except ValueError:
+                        prop = 0
+                    kind = "화면 터치스크린" if prop & 0x2 else "터치패드/기타"
+                    print(f"[i] 후보: {name} -> /dev/input/{ev[0]}  PROP={prop:#x} ({kind})")
+                    (direct if prop & 0x2 else others).append(f"/dev/input/{ev[0]}")
+            name, handlers, absbits, props = "", "", "", ""
+    best = (direct or others or [""])[0]
+    if best and not direct:
+        print("[!] INPUT_PROP_DIRECT 장치 없음 — 터치패드일 수 있음 (--device 로 지정)")
     return best
 
 
