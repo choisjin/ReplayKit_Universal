@@ -59,6 +59,8 @@ tools/*
 # 배포본에 없으면 WebOS 화면 미러링이 "번들 바이너리 없음" 으로 실패한다. 합계 ~1MB.
 !tools/webos/
 !tools/webos/*
+# WebOS 화면/터치 단독 테스트 CLI (빌드 없이 실기 검증용).
+!tools/webos_test.py
 # Windows 배포본 webcam 녹화의 H.264 libx264 인코딩 필수.
 # 누락 시 cv2.VideoWriter(mp4v) fallback → 브라우저에서 재생 불가.
 # capture/ffmpeg_runtime.py + webcam_service.py 둘 다 이 경로 탐색.

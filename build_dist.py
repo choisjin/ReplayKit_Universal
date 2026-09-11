@@ -1293,6 +1293,8 @@ tools/*
 # 없으면 WebOS 화면이 "번들 바이너리 없음" 으로 뜨지 않는다.
 !tools/webos
 !tools/webos/*
+# WebOS 화면/터치 단독 테스트 CLI (빌드 없이 실기 검증용).
+!tools/webos_test.py
 
 # 사용자 데이터
 backend/screenshots/
