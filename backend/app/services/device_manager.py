@@ -2132,10 +2132,10 @@ class DeviceManager:
                     self._isap_reconnect_attempts.pop(dev.id, None)
                     if dev.status != "connected":
                         dev.status = "connected"
-                    # WebOS 화면 해상도 — Android 투사 화면이라 HU 의 ADB 디스플레이
-                    # 해상도를 써야 미러 터치 좌표 스케일이 맞는다. 최초 1회만 조회.
-                    # screens["webos"] 에는 연결 시점에 폴백값이 이미 들어가 있으므로
-                    # "값 있음"으로 판단하면 영영 감지하지 않는다 → 별도 플래그로 1회 감지.
+                    # WebOS 터치 좌표계 = HU 의 **Android 디스플레이** 크기.
+                    # 미러 이미지는 Linux 스트림(축소본)이라 크기가 다르므로, 터치를 보낼 때
+                    # 이 값으로 환산한다. 최초 1회만 조회(플래그로 판정 — screens 값은 폴백이
+                    # 이미 들어가 있어 값 유무로는 못 씀).
                     if getattr(isap, "webos_enabled", False) and not dev.info.get(
                         "webos_screen_detected"
                     ):
@@ -2143,15 +2143,26 @@ class DeviceManager:
                             ainfo = await self.adb.get_device_info(isap.webos_serial)
                             r = ainfo.get("resolution") or {}
                             if r.get("width") and r.get("height"):
-                                dev.info.setdefault("screens", {})["webos"] = {
+                                dev.info["webos_android_size"] = {
                                     "width": r["width"], "height": r["height"],
                                 }
                                 dev.info["webos_screen_detected"] = True
-                                logger.info("WebOS screen size detected: %s -> %sx%s",
+                                logger.info("WebOS android display size: %s -> %sx%s",
                                             isap.webos_serial, r["width"], r["height"])
                         except Exception as e:
-                            logger.debug("WebOS screen size detect failed (%s): %s",
+                            logger.debug("WebOS android size detect failed (%s): %s",
                                          isap.webos_serial, e)
+                    # 미러 이미지 크기(=Linux 스트림 출력)를 screens 에 반영 — 프론트 좌표 스케일.
+                    if getattr(isap, "webos_enabled", False):
+                        try:
+                            ww, wh = isap.get_screen_size("webos")
+                            screens = dev.info.setdefault("screens", {})
+                            cur = screens.get("webos") or {}
+                            if ww and wh and (cur.get("width") != ww or cur.get("height") != wh):
+                                screens["webos"] = {"width": ww, "height": wh}
+                                logger.info("WebOS mirror size: %s -> %sx%s", dev.id, ww, wh)
+                        except Exception as e:
+                            logger.debug("WebOS mirror size refresh failed: %s", e)
                     continue
                 port = dev.info.get("port", 0)
                 if not port:

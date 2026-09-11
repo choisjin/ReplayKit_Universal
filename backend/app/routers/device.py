@@ -348,6 +348,36 @@ async def list_devices():
     }
 
 
+@router.get("/webos-status/{device_id}")
+async def webos_status(device_id: str):
+    """WebOS(Connect Wide) 화면 경로 진단 — 어느 단계에서 막혔는지 단계별로 반환.
+
+    스트림을 띄우지 않고 adb → Android ssh_ → Linux VM → linuxStream 순서로 확인만 한다.
+    미러가 비어 보일 때 브라우저로 이 주소를 열어 원인을 특정한다.
+    """
+    import asyncio as _asyncio
+
+    dev = dm.get_device(device_id)
+    if not dev or dev.type != "isap_agent":
+        raise HTTPException(status_code=404, detail=f"iSAP device {device_id} not found")
+    svc = dm.get_isap_service(device_id)
+    if svc is None:
+        raise HTTPException(status_code=400, detail=f"iSAP device {device_id} not connected")
+    if not svc.webos_enabled:
+        return {
+            "enabled": False,
+            "reason": "WebOS 비활성 — device_model 이 'Connect Wide' 이고 "
+                      "디바이스 편집에서 WebOS ADB 시리얼이 설정돼야 합니다.",
+            "device_model": dev.info.get("device_model"),
+            "webos_adb_serial": dev.info.get("webos_adb_serial"),
+        }
+    stream = svc._webos_stream()      # 생성만(기동 X) — 진단 전용 접근
+    result = await _asyncio.to_thread(stream.probe)
+    result["enabled"] = True
+    result["android_size"] = dev.info.get("webos_android_size")
+    return result
+
+
 @router.get("/adb-serials")
 async def list_adb_serials():
     """연결된 ADB 디바이스 시리얼 목록 (WebOS 설정의 시리얼 선택용).

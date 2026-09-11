@@ -385,6 +385,8 @@ class ISAPAgentService:
         # dev.info 를 **복사하지 않고 참조로** 들고 있는다 — device_manager 가 나중에
         # 채우는 screens["webos"](Android 해상도)와 편집 모달 저장분을 그대로 보기 위함.
         self._webos_config: dict = webos_config if isinstance(webos_config, dict) else {}
+        self._webos_svc = None          # lazy — 첫 WebOS 캡처 때 생성/기동
+        self._webos_lock = threading.Lock()
 
         self._socket: Optional[socket.socket] = None
         self._connected = False
@@ -486,6 +488,7 @@ class ISAPAgentService:
         return True
 
     def disconnect(self) -> None:
+        self._stop_webos()
         self._exit_flag = True
         if self._socket:
             try:
@@ -702,10 +705,16 @@ class ISAPAgentService:
             "hud":          (self.screen_width_front, self.screen_height_front),
         }
         if screen_type == WEBOS_SCREEN:
-            # Android 디스플레이 해상도 — device_manager 가 wm size 로 채워준다.
-            ws = (self._webos_config.get("screens") or {}).get(WEBOS_SCREEN) or {}
-            if ws.get("width") and ws.get("height"):
-                return int(ws["width"]), int(ws["height"])
+            # 미러 이미지 크기 = linuxStream 출력 크기. 스트림 기동 전에는 Android
+            # 디스플레이 크기(터치 좌표계)로, 그것도 없으면 폴백값.
+            svc = self._webos_svc
+            if svc is not None:
+                sw, sh = svc.size
+                if sw and sh:
+                    return sw, sh
+            aw, ah = self._webos_android_size()
+            if aw and ah:
+                return aw, ah
             return self._DEFAULT_SCREEN_SIZES[WEBOS_SCREEN]
         w, h = mapping.get(screen_type, (0, 0))
         if w == 0 or h == 0:
@@ -718,7 +727,7 @@ class ISAPAgentService:
         return MONITOR_MAP.get(screen_type, 0x00)
 
     # ------------------------------------------------------------------
-    # WebOS 화면 — Android 투사 화면이라 ADB(scrcpy) 경로로 위임
+    # WebOS 화면 — 캡처는 Linux VM 스트림, 터치는 Android ADB (하이브리드)
     # ------------------------------------------------------------------
 
     # WebOS 화면을 가진 모델 — 현재 Connect Wide 한정.
@@ -747,19 +756,24 @@ class ISAPAgentService:
 
     def set_webos_config(self, cfg: Optional[dict]) -> None:
         """디바이스 설정 변경 반영 (편집 모달 저장 시 호출). dev.info 참조를 그대로 보관."""
+        prev = self._webos_config
         self._webos_config = cfg if isinstance(cfg, dict) else {}
+        keys = ("webos_adb_serial", "webos_linux_ip", "webos_linux_user",
+                "webos_linux_password", "webos_scale", "webos_quality", "webos_fps")
+        if any(self._webos_config.get(k) != prev.get(k) for k in keys):
+            self._stop_webos()
 
     def _is_webos(self, screen_type: Optional[str]) -> bool:
         return (screen_type or "") == WEBOS_SCREEN
 
     def _webos_guard(self, screen_type: Optional[str]) -> None:
-        """WebOS 는 ADB 경로 전용 — 동기 iSAP 경로로 새어 들어오면 즉시 알린다.
+        """WebOS 는 전용 경로 — 동기 iSAP 경로로 새어 들어오면 즉시 알린다.
 
-        (라우터/재생은 전부 async_* 래퍼를 쓰고, 거기서 ADB 로 라우팅된다.
-         가드가 없으면 monitor 바이트 0x00 으로 전석에 입력이 나가버린다.)
+        (라우터/재생은 전부 async_* 래퍼를 쓰고 거기서 라우팅된다. 가드가 없으면
+         monitor 바이트 0x00 으로 전석에 입력이 나가버린다.)
         """
         if self._is_webos(screen_type):
-            raise ValueError("WebOS 화면은 ADB 경로 전용입니다 (async_* 래퍼 사용)")
+            raise ValueError("WebOS 화면은 전용 경로입니다 (async_* 래퍼 사용)")
 
     def _webos_adb(self):
         """(adb_service, serial, display_id) — WebOS 미설정이면 ValueError.
@@ -770,6 +784,62 @@ class ISAPAgentService:
             raise ValueError("WebOS 화면이 설정되지 않은 디바이스입니다 (webos_adb_serial 없음)")
         from ..dependencies import adb_service
         return adb_service, self.webos_serial, self.webos_display_id
+
+    def _webos_stream(self):
+        """WebOS 화면 스트림(Linux VM linuxStream) — lazy 생성.
+
+        Android 캡처(scrcpy/screencap)에는 webOS 영역이 hole 로 뚫려 있어 안 잡힌다
+        (참조본도 Android 레이어의 hole 에 Linux 스트림을 합성한다).
+        그래서 **화면만** 이 스트림에서 가져오고, 터치는 계속 ADB 로 보낸다.
+        """
+        if not self.webos_enabled:
+            raise ValueError("WebOS 화면이 설정되지 않은 디바이스입니다 (webos_adb_serial 없음)")
+        with self._webos_lock:
+            if self._webos_svc is None:
+                from .webos_stream_service import WebOSStreamService
+                cfg = self._webos_config
+                self._webos_svc = WebOSStreamService(
+                    adb_serial=self.webos_serial,
+                    linux_ip=str(cfg.get("webos_linux_ip") or "172.16.4.1").strip(),
+                    linux_user=str(cfg.get("webos_linux_user") or "root").strip(),
+                    linux_password=str(cfg.get("webos_linux_password") or "root"),
+                    scale=int(cfg.get("webos_scale") or 2),
+                    quality=int(cfg.get("webos_quality") or 60),
+                    fps=int(cfg.get("webos_fps") or 30),
+                    device_id=self.device_id,
+                )
+            return self._webos_svc
+
+    def _stop_webos(self) -> None:
+        with self._webos_lock:
+            svc, self._webos_svc = self._webos_svc, None
+        if svc is not None:
+            try:
+                svc.stop()
+            except Exception as e:
+                logger.debug("WebOS stream stop failed: %s", e)
+
+    def _webos_android_size(self) -> tuple[int, int]:
+        """Android 디스플레이 크기 = 터치 좌표계 (device_manager 가 wm size 로 채운다)."""
+        a = self._webos_config.get("webos_android_size") or {}
+        try:
+            return int(a.get("width") or 0), int(a.get("height") or 0)
+        except (TypeError, ValueError):
+            return 0, 0
+
+    def _webos_to_android(self, x: float, y: float) -> tuple[int, int]:
+        """WebOS 미러(Linux 스트림) 좌표 → Android 터치 좌표.
+
+        linuxStream 은 -scale 로 축소해 보내므로(기본 1/2) 미러 이미지 크기와 Android
+        디스플레이 크기가 다르다. 두 레이어는 같은 패널 기하를 공유하므로 배율만 맞춘다.
+        """
+        sw, sh = self.get_screen_size(WEBOS_SCREEN)
+        aw, ah = self._webos_android_size()
+        if sw and aw and sw != aw:
+            x = x * aw / sw
+        if sh and ah and sh != ah:
+            y = y * ah / sh
+        return int(round(x)), int(round(y))
 
     # ------------------------------------------------------------------
     # Screenshot (CMD_GETIMG, 표 84/85)
@@ -1190,12 +1260,9 @@ class ISAPAgentService:
 
     async def async_screencap_bytes(self, screen_type: str = "front_center",
                                     fmt: str = "jpeg", timeout: float = 10.0) -> bytes:
-        # WebOS = Android 투사 화면 → ADB screencap. (iSAP CMD_GETIMG 로는 안 잡힌다)
+        # WebOS 화면은 Android 캡처에 hole 로 뚫려 안 잡힌다 → Linux VM 스트림에서.
         if self._is_webos(screen_type):
-            adb, serial, did = self._webos_adb()
-            data = await adb.screencap_bytes(serial=serial, fmt=fmt, display_id=did)
-            logger.debug("[WebOS SCREENCAP] serial=%s fmt=%s bytes=%d", serial, fmt, len(data))
-            return data
+            return await self._webos_stream().async_screencap_bytes(fmt=fmt, timeout=timeout)
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.screencap_bytes, screen_type, fmt, timeout)
 
@@ -1212,8 +1279,10 @@ class ISAPAgentService:
     async def async_tap(self, x: int, y: int, screen_type: str = "front_center") -> None:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
-            await adb.tap(int(x), int(y), serial=serial, display_id=did)
-            logger.info("[WebOS TAP] (%s,%s) serial=%s display=%s", x, y, serial, did)
+            ax, ay = self._webos_to_android(x, y)
+            await adb.tap(ax, ay, serial=serial, display_id=did)
+            logger.info("[WebOS TAP] mirror(%s,%s) -> android(%s,%s) serial=%s",
+                        x, y, ax, ay, serial)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.tap, x, y, screen_type)
@@ -1222,8 +1291,9 @@ class ISAPAgentService:
                                screen_type: str = "front_center") -> None:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
-            await adb.repeat_tap(int(x), int(y), count, interval_ms, serial=serial, display_id=did)
-            logger.info("[WebOS REPEAT_TAP] (%s,%s) x%d serial=%s", x, y, count, serial)
+            ax, ay = self._webos_to_android(x, y)
+            await adb.repeat_tap(ax, ay, count, interval_ms, serial=serial, display_id=did)
+            logger.info("[WebOS REPEAT_TAP] android(%s,%s) x%d serial=%s", ax, ay, count, serial)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.repeat_tap, x, y, count, interval_ms, screen_type)
@@ -1232,8 +1302,10 @@ class ISAPAgentService:
                                screen_type: str = "front_center") -> None:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
-            await adb.long_press(int(x), int(y), duration_ms, serial=serial, display_id=did)
-            logger.info("[WebOS LONG_PRESS] (%s,%s) %dms serial=%s", x, y, duration_ms, serial)
+            ax, ay = self._webos_to_android(x, y)
+            await adb.long_press(ax, ay, duration_ms, serial=serial, display_id=did)
+            logger.info("[WebOS LONG_PRESS] android(%s,%s) %dms serial=%s",
+                        ax, ay, duration_ms, serial)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.long_press, x, y, duration_ms, screen_type)
@@ -1243,11 +1315,13 @@ class ISAPAgentService:
                           hold_ms: int = 0) -> None:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
-            await adb.swipe(int(x1), int(y1), int(x2), int(y2),
+            ax1, ay1 = self._webos_to_android(x1, y1)
+            ax2, ay2 = self._webos_to_android(x2, y2)
+            await adb.swipe(ax1, ay1, ax2, ay2,
                             duration_ms=int(duration_ms or 300), serial=serial,
                             display_id=did, hold_ms=hold_ms)
-            logger.info("[WebOS SWIPE] (%s,%s)->(%s,%s) %sms hold=%sms serial=%s",
-                        x1, y1, x2, y2, duration_ms, hold_ms, serial)
+            logger.info("[WebOS SWIPE] android(%s,%s)->(%s,%s) %sms hold=%sms serial=%s",
+                        ax1, ay1, ax2, ay2, duration_ms, hold_ms, serial)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.swipe, x1, y1, x2, y2, screen_type, duration_ms, hold_ms)
@@ -1257,8 +1331,13 @@ class ISAPAgentService:
                                        duration_ms: int = 500, hold_ms: int = 0) -> None:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
-            await adb.multi_finger_swipe(fingers, duration_ms, serial=serial, display_id=did)
-            logger.info("[WebOS MULTI_SWIPE] %d fingers serial=%s", len(fingers), serial)
+            fs = []
+            for f in fingers:
+                ax1, ay1 = self._webos_to_android(f["x1"], f["y1"])
+                ax2, ay2 = self._webos_to_android(f["x2"], f["y2"])
+                fs.append({"x1": ax1, "y1": ay1, "x2": ax2, "y2": ay2})
+            await adb.multi_finger_swipe(fs, duration_ms, serial=serial, display_id=did)
+            logger.info("[WebOS MULTI_SWIPE] %d fingers serial=%s", len(fs), serial)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.multi_finger_swipe, fingers, screen_type, duration_ms, hold_ms)
@@ -1267,8 +1346,12 @@ class ISAPAgentService:
                                      screen_type: str = "front_center") -> None:
         if self._is_webos(screen_type):
             adb, serial, did = self._webos_adb()
-            await adb.multi_finger_tap(points, serial=serial, display_id=did)
-            logger.info("[WebOS MULTI_TAP] %d fingers serial=%s", len(points), serial)
+            pts = []
+            for p in points:
+                ax, ay = self._webos_to_android(p["x"], p["y"])
+                pts.append({"x": ax, "y": ay})
+            await adb.multi_finger_tap(pts, serial=serial, display_id=did)
+            logger.info("[WebOS MULTI_TAP] %d fingers serial=%s", len(pts), serial)
             return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.multi_finger_tap, points, screen_type)

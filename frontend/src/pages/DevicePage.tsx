@@ -1273,7 +1273,9 @@ export default function DevicePage() {
     if (dev.type === 'isap_agent' && dev.info?.device_model === 'Connect Wide') {
       extras.webos_adb_serial = dev.info?.webos_adb_serial ?? '';
       extras.webos_display_id = dev.info?.webos_display_id ?? 0;
-      extras.webos_scrcpy_version = dev.info?.webos_scrcpy_version ?? '3.3.4';
+      extras.webos_linux_ip = dev.info?.webos_linux_ip ?? '172.16.4.1';
+      extras.webos_linux_user = dev.info?.webos_linux_user ?? 'root';
+      extras.webos_linux_password = dev.info?.webos_linux_password ?? 'root';
       deviceApi.adbSerials().then(res => {
         setAdbSerialOptions((res.data.devices || []).map((d: any) => ({
           value: d.serial,
@@ -3927,9 +3929,10 @@ export default function DevicePage() {
               <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: '8px 10px' }}>
                 <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>WebOS 화면 (미러링/터치)</div>
                 <div style={{ fontSize: 10, color: '#888', marginBottom: 6 }}>
-                  webOS 화면은 투사 앱으로 <b>Android 디스플레이</b>에 올라오므로 iSAP 캡처에는 잡히지 않습니다.
-                  HU 의 ADB 시리얼을 지정하면 기존 scrcpy 미러링/터치 경로로 화면을 보고 조작합니다.
-                  <b> 비우면 WebOS 없는 모델</b>로 취급되어 화면 선택 목록에 표시되지 않습니다.
+                  webOS 는 별도 Linux VM 이고, Android 캡처에는 그 영역이 <b>hole 로 뚫려</b> 있어
+                  iSAP·scrcpy 어느 쪽으로도 안 잡힙니다. 그래서 <b>화면은 Linux VM 스트림</b>(HU 를 경유해
+                  linuxStream 실행)으로 가져오고, <b>터치는 ADB</b>(<code>input tap</code>)로 보냅니다.
+                  <b> ADB 시리얼을 비우면 WebOS 없는 모델</b>로 취급되어 화면 선택 목록에 표시되지 않습니다.
                 </div>
                 <Space direction="vertical" style={{ width: '100%' }} size={6}>
                   <div>
@@ -3953,24 +3956,33 @@ export default function DevicePage() {
                       onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_display_id: v ?? 0 })}
                     />
                     <span style={{ fontSize: 10, color: '#888' }}>
-                      0 = 메인 디스플레이. 투사 화면이 별도 디스플레이에 뜨는 경우에만 변경.
+                      터치를 보낼 Android 디스플레이. 0 = 메인. 보통 바꿀 필요 없습니다.
                     </span>
                   </Space>
-                  <div>
-                    <span style={{ fontSize: 11, color: '#888', marginRight: 6 }}>scrcpy 버전:</span>
-                    <Select
-                      style={{ width: 220 }}
-                      value={editExtraFields.webos_scrcpy_version ?? '3.3.4'}
-                      onChange={(v) => setEditExtraFields({ ...editExtraFields, webos_scrcpy_version: v })}
-                    >
-                      <Option value="3.3.4">3.3.4 (기본 · 참조본과 동일)</Option>
-                      <Option value="1.25">1.25</Option>
-                      <Option value="auto">auto (Android 버전·모델로 자동 선택)</Option>
-                    </Select>
-                    <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
-                      Connect Wide(Android 14)는 v1.25 로 <b>화면이 검게</b> 나옵니다(일반 ADB 미러링도 동일).
-                      auto 도 이제 이 모델을 인식해 3.3.4 를 고르므로, 보통은 기본값 그대로 두시면 됩니다.
-                    </div>
+                  <Space wrap>
+                    <span style={{ fontSize: 11, color: '#888' }}>Linux VM:</span>
+                    <Input
+                      style={{ width: 140 }}
+                      placeholder="172.16.4.1"
+                      value={editExtraFields.webos_linux_ip ?? ''}
+                      onChange={(e) => setEditExtraFields({ ...editExtraFields, webos_linux_ip: e.target.value })}
+                    />
+                    <Input
+                      style={{ width: 110 }}
+                      placeholder="user (root)"
+                      value={editExtraFields.webos_linux_user ?? ''}
+                      onChange={(e) => setEditExtraFields({ ...editExtraFields, webos_linux_user: e.target.value })}
+                    />
+                    <Input.Password
+                      style={{ width: 130 }}
+                      placeholder="password (root)"
+                      value={editExtraFields.webos_linux_password ?? ''}
+                      onChange={(e) => setEditExtraFields({ ...editExtraFields, webos_linux_password: e.target.value })}
+                    />
+                  </Space>
+                  <div style={{ fontSize: 10, color: '#888' }}>
+                    Linux VM 은 HU 안에서만 보이는 주소입니다(기본 172.16.4.1). PC 에서 직접 접속하지 않고
+                    ADB 로 HU 에 들어가 SSH 합니다 — 참조본 screenBridge 와 동일한 경로입니다.
                   </div>
                 </Space>
               </div>

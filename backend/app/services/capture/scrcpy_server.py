@@ -319,6 +319,7 @@ class ScrcpyServerBackend:
         # GOP 을 IDR 부터 잘라 주면 config 가 없어 디코딩이 안 되므로, config 를 별도로
         # 보관해 새 소비자 primer 앞에 붙인다(GOP 이 SPS 로 시작하면 중복이라 생략).
         self._codec_config: bytes = b""
+        self._nal_log_count = 0   # 첫 청크 NAL 타입 진단 로그 횟수
         # 활성 소비자 seq — stream_h264 가 시작할 때마다 증가. 한 백엔드의 단일 큐를
         # 둘 이상이 동시에 빨면 H.264 NAL 이 쪼개져 디코딩이 깨지므로, "최신 소비자만
         # 활성"으로 강제한다(이전 소비자는 seq 불일치를 보고 스스로 퇴출). 장치 전환으로
@@ -835,6 +836,13 @@ class ScrcpyServerBackend:
                     self._gop_buf.extend(chunk)
                     if len(self._gop_buf) > _GOP_BUF_CAP:
                         del self._gop_buf[:len(self._gop_buf) - _GOP_BUF_CAP]
+                if self._nal_log_count < 3:
+                    self._nal_log_count += 1
+                    logger.info(
+                        "scrcpy first chunks (%s #%d): bytes=%d nal=[%s] codec_config=%dB",
+                        self.serial, self._nal_log_count, len(chunk),
+                        _nal_type_summary(chunk), len(self._codec_config),
+                    )
                 if not self._first_frame_event.is_set():
                     self._first_frame_event.set()
         except (asyncio.CancelledError, GeneratorExit):
@@ -1117,6 +1125,30 @@ def _find_keyframe_offset(buf: bytes) -> int:
                 return j - 1  # 4바이트 start code 포함
             return j
         i = j + 3
+
+
+def _nal_type_summary(buf: bytes, limit: int = 12) -> str:
+    """Annex-B 버퍼의 NAL 타입 나열 — 진단용 ("7(SPS),8(PPS),5(IDR),1,1 ...").
+
+    빈 화면 디버깅의 핵심: SPS(7)/PPS(8) 가 스트림에 실려오는지, IDR(5) 이 오는지.
+    """
+    names = {1: "P", 5: "IDR", 6: "SEI", 7: "SPS", 8: "PPS", 9: "AUD"}
+    out: list[str] = []
+    i = 0
+    n = len(buf)
+    while i < n - 4 and len(out) < limit:
+        if buf[i] == 0 and buf[i + 1] == 0 and buf[i + 2] == 1:
+            t = buf[i + 3] & 0x1F
+            out.append(f"{t}({names.get(t, '?')})")
+            i += 4
+        elif (buf[i] == 0 and buf[i + 1] == 0 and buf[i + 2] == 0
+              and buf[i + 3] == 1 and i + 4 < n):
+            t = buf[i + 4] & 0x1F
+            out.append(f"{t}({names.get(t, '?')})")
+            i += 5
+        else:
+            i += 1
+    return ",".join(out) if out else "(start code 없음)"
 
 
 def _find_last_keyframe_offset(buf: bytes) -> int:
