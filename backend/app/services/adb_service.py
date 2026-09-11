@@ -24,6 +24,14 @@ from .adb_path import resolve_adb_path, resolve_adb_shell_path
 
 logger = logging.getLogger(__name__)
 
+# scrcpy v1.25 로는 "스트림은 흐르는데 프레임이 전부 검은" 기기 (ro.product.model 소문자 부분일치).
+# v1.25 는 SurfaceControl.createDisplay 로 가상 디스플레이를 만들어 미러링하는데, 일부
+# IVI/AAOS 빌드에서 그 디스플레이가 비어 있는 채로 인코딩된다. 해당 기기는 SDK 와 무관하게
+# v3.3.4 를 쓴다.
+#   - connect_w : HKMC Connect Wide (Android 14). 일반 ADB 미러링·webOS 투사 화면 모두
+#                 v1.25 검정 / v3.3.4 정상 (2026-09 실기 확인).
+_V3_ONLY_MODELS = ("connect_w",)
+
 # 전 PC 동일 adb 보장 — 번들 tools/platform-tools/adb 우선, 미배치 시 PATH 'adb' 폴백.
 # (adb 서버 포트는 기본 5037 공유 — 격리 시 USB 디바이스 경합으로 스캔 실패)
 ADB_PATH = resolve_adb_path()
@@ -338,6 +346,8 @@ class ADBService:
         self._scrcpy_retry_after: dict[str, float] = {}
         # 디바이스 Android SDK 캐시 (scrcpy 버전 선택용). SDK 는 변하지 않으므로 1회 조회.
         self._sdk_cache: dict[str, Optional[int]] = {}
+        # ro.product.model 캐시 (scrcpy 버전 선택용).
+        self._model_cache: dict[str, str] = {}
         # serial → scrcpy 버전 강제 지정. SDK 기반 자동 선택을 덮어쓴다.
         # (Connect Wide 의 WebOS 투사 화면은 v1.25 로 검은 화면이 나오고 v3.3.4 로 잡힌다 —
         #  참조본 screenBridge 가 쓰던 scrcpy-server 가 v3.3.4 와 바이트 동일.)
@@ -1436,18 +1446,45 @@ class ADBService:
         self._sdk_cache[serial] = sdk
         return sdk
 
+    async def _get_device_model(self, serial: str) -> str:
+        """ro.product.model 조회 + 캐시 (scrcpy 버전 선택용). 실패 시 빈 문자열."""
+        if serial in self._model_cache:
+            return self._model_cache[serial]
+        model = ""
+        try:
+            out = await self._run_device(
+                serial, "shell getprop ro.product.model", timeout=5,
+            )
+            model = (out or "").strip()
+        except Exception:
+            model = ""
+        self._model_cache[serial] = model
+        return model
+
     async def _scrcpy_version_for(self, serial: str) -> str:
-        """이 디바이스에서 쓸 scrcpy 버전 — Android 버전으로 **결정적** 선택.
+        """이 디바이스에서 쓸 scrcpy 버전 — Android 버전/모델로 **결정적** 선택.
 
         SurfaceControl.createDisplay(String, boolean) 가 Android 16(API 36)에서
         제거돼 v1.25 는 Android 16+ 에서 즉사한다. 그래서 버전을 1:1로 못박는다:
           * Android 16+ (SDK>=36) → v3.3.4
-          * Android 15 이하 (SDK<=35, 또는 SDK 불명) → v1.25
+          * _V3_ONLY_MODELS 에 해당하는 기기 → v3.3.4 (SDK 무관)
+          * 그 외 (SDK<=35, 또는 SDK 불명) → v1.25
         선택한 버전의 jar 이 없으면 가용한 다른 버전으로만 보정(미러링 유지 목적).
+
+        _V3_ONLY_MODELS: v1.25 가 "스트림은 흐르는데 프레임이 전부 검은" 기기들.
+        HKMC Connect Wide(ro.product.model=connect_w, Android 14) 가 실기에서 확인됐다
+        — 일반 ADB 미러링·webOS 투사 화면 모두 v1.25 는 검고 v3.3.4 로는 정상.
+        (참조본 screenBridge 도 이 기기에서 v3.3.4 서버를 쓴다 — jar 이 바이트 동일)
         """
         forced = self._scrcpy_version_override.get(serial)
         if forced and detect_scrcpy_server(forced):
             return forced
+        model = (await self._get_device_model(serial)).lower()
+        if model and any(m in model for m in _V3_ONLY_MODELS):
+            if detect_scrcpy_server(SCRCPY_V3):
+                logger.info("scrcpy %s selected by model (%s): v1.25 renders black on this device",
+                            SCRCPY_V3, model)
+                return SCRCPY_V3
         sdk = await self._get_android_sdk(serial)
         primary = SCRCPY_V3 if (sdk is not None and sdk >= 36) else SCRCPY_V1
         if detect_scrcpy_server(primary):

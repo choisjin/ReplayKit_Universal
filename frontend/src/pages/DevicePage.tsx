@@ -3965,11 +3965,11 @@ export default function DevicePage() {
                     >
                       <Option value="3.3.4">3.3.4 (기본 · 참조본과 동일)</Option>
                       <Option value="1.25">1.25</Option>
-                      <Option value="auto">auto (Android 버전으로 자동 선택)</Option>
+                      <Option value="auto">auto (Android 버전·모델로 자동 선택)</Option>
                     </Select>
                     <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
-                      참조본(screenBridge)은 이 화면을 v3.3.4 로 캡처했습니다. 자동 선택은 SDK&lt;36 에서
-                      v1.25 를 고르는데, 투사 화면이 <b>검게</b> 나오면 3.3.4 로 두세요.
+                      Connect Wide(Android 14)는 v1.25 로 <b>화면이 검게</b> 나옵니다(일반 ADB 미러링도 동일).
+                      auto 도 이제 이 모델을 인식해 3.3.4 를 고르므로, 보통은 기본값 그대로 두시면 됩니다.
                     </div>
                   </div>
                 </Space>
