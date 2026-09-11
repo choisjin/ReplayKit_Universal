@@ -165,6 +165,45 @@ def _bundle_dir() -> Path:
     return candidates[0]
 
 
+# serial 단위 공유 인스턴스 — 같은 HU 를 보는 주체가 둘 이상일 때 서로의
+# 디바이스측 linuxStream 을 pkill 로 끄는 핑퐁을 막는다.
+_SHARED: dict = {}
+_SHARED_LOCK = threading.Lock()
+
+
+def get_shared_stream(**kwargs) -> "WebOSStreamService":
+    """설정이 같으면 같은 스트림 인스턴스를 돌려준다(없으면 생성).
+
+    key 에 접속·화질 설정을 모두 넣어, 설정이 다르면 별도 인스턴스가 되게 한다.
+    """
+    key = (
+        (kwargs.get("adb_serial") or "").strip(),
+        (kwargs.get("linux_ip") or "").strip(),
+        int(kwargs.get("scale") or 2),
+        int(kwargs.get("quality") or 60),
+        int(kwargs.get("fps") or 30),
+    )
+    with _SHARED_LOCK:
+        svc = _SHARED.get(key)
+        if svc is None:
+            svc = WebOSStreamService(**kwargs)
+            svc._shared_key = key
+            _SHARED[key] = svc
+        return svc
+
+
+def drop_shared_stream(svc) -> None:
+    """공유 인스턴스를 레지스트리에서 제거하고 종료(설정 변경/디바이스 삭제 시)."""
+    key = getattr(svc, "_shared_key", None)
+    with _SHARED_LOCK:
+        if key is not None and _SHARED.get(key) is svc:
+            _SHARED.pop(key, None)
+    try:
+        svc.stop()
+    except Exception as e:
+        logger.debug("WebOS shared stream stop failed: %s", e)
+
+
 class WebOSStreamError(RuntimeError):
     """WebOS 스트림 준비/기동 실패 — 사용자에게 그대로 노출할 메시지를 담는다."""
 
@@ -230,6 +269,7 @@ class WebOSStreamService:
         self._native_w = 0      # Linux VM 프레임버퍼 native 크기 (= 패널 좌표계)
         self._native_h = 0
         self._deployed = False
+        self._shared_key = None      # get_shared_stream 이 채운다
 
     # ------------------------------------------------------------------
     # adb / ssh helpers

@@ -52,6 +52,7 @@ class WebOSScreen:
         self.auto_active = False     # 자동 전환으로 WebOS 를 보여주는 중인지
         # Android 오버레이 캐시 (검정 키 합성용) — (시각, BGR 프레임)
         self._ov_cache: tuple = (0.0, None)
+        self._restart_needed = False   # 설정 변경으로 공유 스트림까지 내려야 하는지
 
     # ------------------------------------------------------------------
     # 설정
@@ -65,6 +66,7 @@ class WebOSScreen:
                 "webos_linux_password", "webos_scale", "webos_quality", "webos_fps",
                 "webos_evdev")
         if any(self._info.get(k) != prev.get(k) for k in keys):
+            self._restart_needed = True      # 접속/화질 변경 → 공유 스트림도 내린다
             self.stop()
 
     @property
@@ -149,9 +151,11 @@ class WebOSScreen:
         if not self.enabled:
             raise ValueError("WebOS 화면이 설정되지 않은 디바이스입니다 (webos_adb_serial 없음)")
         if self._svc is None:
-            from .webos_stream_service import WebOSStreamService
+            from .webos_stream_service import get_shared_stream
             cfg = self._info
-            self._svc = WebOSStreamService(
+            # 같은 HU 를 보는 디바이스가 둘 이상이어도(iSAP + ADB 동시 등록) 디바이스측
+            # linuxStream 은 하나여야 한다 — 아니면 서로 pkill 로 끄는 핑퐁이 난다.
+            self._svc = get_shared_stream(
                 adb_serial=self.serial,
                 linux_ip=str(cfg.get("webos_linux_ip") or "172.16.4.1").strip(),
                 linux_user=str(cfg.get("webos_linux_user") or "root").strip(),
@@ -165,13 +169,19 @@ class WebOSScreen:
         return self._svc
 
     def stop(self) -> None:
+        """이 디바이스의 참조만 놓는다.
+
+        스트림 인스턴스는 serial 단위 공유라 여기서 끄지 않는다(다른 디바이스가
+        보고 있을 수 있다). 아무도 안 쓰면 스트림 쪽 idle reaper 가 정리한다.
+        설정이 바뀐 경우엔 drop_shared_stream 으로 확실히 내린다.
+        """
         svc, self._svc = self._svc, None
         self.auto_active = False
-        if svc is not None:
-            try:
-                svc.stop()
-            except Exception as e:
-                logger.debug("WebOS stream stop failed: %s", e)
+        self._ov_cache = (0.0, None)
+        if svc is not None and self._restart_needed:
+            self._restart_needed = False
+            from .webos_stream_service import drop_shared_stream
+            drop_shared_stream(svc)
 
     def screen_size(self) -> tuple[int, int]:
         """미러 좌표계 크기 = 패널 크기. **연결 순간부터 끝까지 같은 값**이어야 한다.

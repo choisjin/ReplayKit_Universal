@@ -123,6 +123,18 @@ def _to_panel(svc: WebOSStreamService, x: int, y: int, space: str) -> tuple:
     return int(round(x)), int(round(y))
 
 
+def _warn_if_contended(svc) -> None:
+    """스트림이 금방 끊기면 같은 HU 를 보는 다른 주체가 있을 가능성을 알린다.
+
+    스트림 기동 시 디바이스에서 `pkill -x linuxStream` 을 하므로, 백엔드 미러가
+    같은 HU 를 보고 있으면 서로 끄는 핑퐁이 된다.
+    """
+    if "WebOS stream ended" in (svc.last_error or ""):
+        print("[!] 스트림이 끊겼습니다 — 백엔드 미러가 같은 HU 의 WebOS 화면을 보고 있으면"
+              " 서로의 linuxStream 을 종료시킵니다. 브라우저에서 미러를 다른 화면/디바이스로"
+              " 돌린 뒤 다시 실행해 보세요.")
+
+
 def _geometry(svc: WebOSStreamService) -> None:
     print(f"[i] 미러(스트림) 크기 : {svc.size}")
     print(f"[i] native(패널) 크기 : {svc.native_size}   ← 터치 좌표 기준")
@@ -665,14 +677,22 @@ def cmd_composite(args) -> int:
     cv2.imwrite(str(out / "webos.png"), web)
     print(f"[i] webos.png  {web.shape[1]}x{web.shape[0]}")
 
-    # Android 화면 (screencap)
-    cmd = svc._adb_args("exec-out", "screencap", "-p")
-    r = subprocess.run(cmd, capture_output=True, timeout=30)
-    if r.returncode != 0 or not r.stdout:
+    # Android 화면 — exec-out 의 raw 바이너리는 PC/adb 조합에 따라 깨진다(알려진 이슈).
+    # 백엔드와 동일하게 **base64 경유**로 받는다.
+    import base64 as _b64
+    cmd = svc._adb_args("shell", "screencap -p | base64")
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if r.returncode != 0 or not r.stdout.strip():
         print(f"[!] Android 캡처 실패 rc={r.returncode} {r.stderr[:200]!r}")
         svc.stop()
         return 1
-    andr = cv2.imdecode(np.frombuffer(r.stdout, np.uint8), cv2.IMREAD_COLOR)
+    try:
+        raw = _b64.b64decode("".join(r.stdout.split()))
+    except Exception as e:
+        print(f"[!] base64 디코딩 실패: {e}")
+        svc.stop()
+        return 1
+    andr = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
     if andr is None:
         print("[!] Android 캡처 디코딩 실패")
         svc.stop()
@@ -705,6 +725,7 @@ def cmd_composite(args) -> int:
     elif opaque < 1:
         print("[!] Android 캡처가 거의 전부 검정입니다 — UI 가 안 잡혔을 수 있습니다.")
     print(f"[i] {out.resolve()} 의 4개 파일을 눈으로 비교해 보세요")
+    _warn_if_contended(svc)
     svc.stop()
     return 0
 
