@@ -994,6 +994,8 @@ async def websocket_screen_mirror(websocket: WebSocket):
     scrcpy_serial: Optional[str] = None
     # WS 세션 진입 시 ADB 분기에 한 번만 dispatch 의도를 INFO 로그로 출력
     adb_dispatch_logged = False
+    # WebOS 자동 전환 상태(프론트에 변할 때만 통지)
+    _webos_auto_sent = False
 
     # ── MIB/ICAS 적응형 화면 리프레시 페이싱 ──
     # SSH+scp 캡처(LayerManagerControl dump)는 디바이스 부하가 커서 무한 폴링하면
@@ -1133,6 +1135,20 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     jpeg_bytes = await isap.async_screencap_bytes(
                         screen_type=screen_type, fmt="jpeg", timeout=3.0
                     )
+                    # 전석 시청 중 webOS 가 전면이면 서비스가 자동으로 WebOS 소스로
+                    # 바꾼다(캡처·터치 동일 판단). 어떤 화면을 보고 있는지 프론트에 알려
+                    # 사용자가 혼란스럽지 않게 한다. 변할 때만 전송.
+                    _auto = bool(getattr(isap, "webos_auto_active", False))
+                    if _auto != _webos_auto_sent:
+                        _webos_auto_sent = _auto
+                        try:
+                            await websocket.send_json({
+                                "type": "screen_source",
+                                "source": "webos" if _auto else screen_type,
+                                "auto": True,
+                            })
+                        except Exception:
+                            pass
                     await websocket.send_bytes(jpeg_bytes)
                     # WebOS 는 백그라운드 linuxStream 이 채워둔 프레임을 즉시 돌려주므로
                     # 페이싱이 없으면 루프가 전속력으로 돌며 JPEG 재인코딩/전송을 낭비한다.

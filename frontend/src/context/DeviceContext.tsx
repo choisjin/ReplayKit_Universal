@@ -53,6 +53,9 @@ interface DeviceContextType {
   streamFps: number;
   // 현재 보고 있는 화면이 스크린세이버(대기화면) 상태인지 — 라이브 뷰 배지용 (BMW 등).
   screensaver: boolean;
+  // 실제로 보고 있는 화면 소스. WebOS 자동 전환 시 'webos' 로 바뀐다(선택은 front_center 인데
+  // 화면엔 webOS 가 나오는 상황을 사용자가 알 수 있게).
+  screenSource: string;
   // 백엔드 미러 루프가 보낸 에러 메시지 (프레임을 못 만드는 이유). 프레임이 들어오면 해제.
   // 예: WebOS 스트림 기동 실패 — 이전에는 이 메시지를 버려서 화면이 그냥 검게만 보였다.
   streamError: string;
@@ -89,6 +92,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const POLL_FAIL_LIMIT = 5; // 연속 실패 이 횟수 이상이면 진성 끊김 처리
   const [screensaver, setScreensaver] = useState(false);
   const [streamError, setStreamError] = useState('');
+  const [screenSource, setScreenSource] = useState('');
   const [h264Mode, setH264Mode] = useState(false);
   const [h264Size, setH264Size] = useState({ width: 1080, height: 1920 });
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -320,6 +324,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
 
     ws.onopen = () => {
       setStreamError('');   // 화면/디바이스 전환 시 이전 에러 표기 제거
+      setScreenSource('');
       ws.send(JSON.stringify({ device_id: deviceId, screen_type: st }));
       startFpsCounter();
       wsRetryCountRef.current = 0; // 연결 성공 → 재시도 카운터 초기화
@@ -352,6 +357,11 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
             }
             h264ModeRef.current = false;
             setH264Mode(false);
+          } else if (msg.type === 'screen_source') {
+            // WebOS 자동 전환 통지 — 표시용.
+            if (screenshotDeviceIdRef.current === deviceId) {
+              setScreenSource(String(msg.source || ''));
+            }
           } else if (msg.type === 'error') {
             // 백엔드가 프레임을 못 만든 이유 — 화면에 그대로 노출한다(WebOS 기동 실패 등).
             const em = String(msg.message || '알 수 없는 오류');
@@ -684,6 +694,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       streamFps,
       screensaver,
       streamError,
+      screenSource,
       screenPausedForPlayback,
       pauseScreenStream,
       resumeScreenStream,

@@ -1278,6 +1278,7 @@ export default function DevicePage() {
       extras.webos_linux_password = dev.info?.webos_linux_password ?? 'root';
       extras.webos_touch_via = dev.info?.webos_touch_via ?? 'evdev';
       extras.webos_evdev = dev.info?.webos_evdev ?? '';
+      extras.webos_auto = dev.info?.webos_auto ?? true;
       deviceApi.adbSerials().then(res => {
         setAdbSerialOptions((res.data.devices || []).map((d: any) => ({
           value: d.serial,
@@ -3985,6 +3986,19 @@ export default function DevicePage() {
                   <div style={{ fontSize: 10, color: '#888' }}>
                     Linux VM 은 HU 안에서만 보이는 주소입니다(기본 172.16.4.1). PC 에서 직접 접속하지 않고
                     ADB 로 HU 에 들어가 SSH 합니다 — 참조본 screenBridge 와 동일한 경로입니다.
+                  </div>
+                  <div>
+                    <Checkbox
+                      checked={editExtraFields.webos_auto !== false}
+                      onChange={(e) => setEditExtraFields({ ...editExtraFields, webos_auto: e.target.checked })}
+                    >
+                      <span style={{ fontSize: 12 }}>전석 화면에서 자동 전환</span>
+                    </Checkbox>
+                    <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
+                      전석(front_center)을 보는 중 webOS 가 전면으로 올라오면 화면·터치를 자동으로
+                      WebOS 로 전환합니다(Android <code>topResumedActivity</code> 판별, 1.5초 캐시).
+                      끄면 화면 목록에서 WebOS 를 직접 골라야 합니다.
+                    </div>
                   </div>
                   <div>
                     <span style={{ fontSize: 11, color: '#888', marginRight: 6 }}>터치 경로:</span>

@@ -217,6 +217,9 @@ class WebOSStreamService:
         # 스트림에서 실제로 받은 첫 바이트들(진단용). 프레임이 아니라 텍스트가
         # 흘러들어오는 경우(ssh 경고 등)를 눈으로 확인하려고 남긴다.
         self._first_bytes = b""
+        # webOS 전면 여부 판별 캐시 (dumpsys 는 비싸서 TTL 내 재사용)
+        self._fg_cache: tuple = (0.0, False)
+        self._fg_ttl = 1.5
 
         # linuxStream 로그에서 읽어오는 실제 좌표계
         self._stream_w = 0      # 스트리밍(=미러 이미지) 크기
@@ -644,6 +647,45 @@ class WebOSStreamService:
                 frame[y0:y0 + h, x0:x0 + w] = tile[:h, :w]
             self._frame_count += 1
         self._frame_event.set()
+
+    def is_foreground(self, display_id: Optional[int] = None) -> bool:
+        """지금 화면 전면이 webOS 투사 앱인지 (Android dumpsys 기준, TTL 캐시).
+
+        BMW 에이전트와 같은 판별이다 — ``topResumedActivity`` 가
+        ``com.lge.app.car.webosprojectionhmi`` 면 webOS 화면, 그 외 패키지면 네이티브
+        Android 화면. 실패하면 False(= 기존 iSAP 화면 유지).
+
+        dumpsys 출력::
+
+            Display #0 (activities from top to bottom):
+                  topResumedActivity=ActivityRecord{... com.lge.app.car.settingshmi/... }
+        """
+        now = time.monotonic()
+        if now - self._fg_cache[0] < self._fg_ttl:
+            return self._fg_cache[1]
+        want = int(display_id or 0)
+        result = False
+        try:
+            r = self._run_adb(
+                "shell",
+                "dumpsys activity activities | grep -iE 'Display #|topResumedActivity'",
+                timeout=8.0,
+            )
+            cur = None
+            for line in (r.stdout or "").splitlines():
+                m = re.search(r"Display\s+#(\d+)", line)
+                if m:
+                    cur = int(m.group(1))
+                    continue
+                if "topResumedActivity" in line and cur is not None:
+                    if cur == want:
+                        result = "webosprojectionhmi" in line
+                        break
+                    cur = None
+        except Exception as e:
+            logger.debug("WebOS foreground probe failed: %s", e)
+        self._fg_cache = (now, result)
+        return result
 
     # ------------------------------------------------------------------
     # Public: capture

@@ -521,6 +521,7 @@ export default function RecordPage() {
     screenStatus, streamFps,
     screensaver,
     streamError,
+    screenSource,
     screenPausedForPlayback,
     pauseScreenStream, resumeScreenStream,
   } = useDevice();
@@ -5765,6 +5766,11 @@ export default function RecordPage() {
                           ? `${h264Mode ? 'H.264' : 'JPEG'} · ${t('record.screenStatic')}`
                           : t('record.deviceDisconnected')}
                     </Tag>
+                  )}
+                  {/* 전석 시청 중 webOS 가 전면이면 백엔드가 자동으로 WebOS 소스로 바꾼다.
+                      선택은 front_center 인데 화면은 webOS 이므로 배지로 알려준다. */}
+                  {screenSource === 'webos' && screenType !== 'webos' && (
+                    <Tag color="purple">WebOS 자동 전환</Tag>
                   )}
                   {/* 백엔드가 프레임을 못 만든 이유를 그대로 노출 (WebOS 스트림 기동 실패 등).
                       이전엔 이 메시지를 프론트가 버려서 원인 없이 화면만 비어 보였다. */}
