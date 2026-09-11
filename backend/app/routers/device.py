@@ -922,6 +922,7 @@ async def connect_device(req: ConnectRequest):
                 iid_display=str(ef.get("iid_display", "10") or "10"),
                 hud_display=str(ef.get("hud_display", "11") or "11"),
                 market=str(ef.get("market", "") or ""),
+                ksend_variant=str(ef.get("ksend_variant", "") or ""),
             )
             # 등록 직후 실제 SSH 연결 시도
             try:
@@ -954,6 +955,7 @@ async def connect_device(req: ConnectRequest):
                 iid_display=str(ef.get("iid_display", "10") or "10"),
                 hud_display=str(ef.get("hud_display", "11") or "11"),
                 market=str(ef.get("market", "") or ""),
+                ksend_variant=str(ef.get("ksend_variant", "") or ""),
             )
             try:
                 connect_msg = await dm.connect_device_by_id(dev.id)

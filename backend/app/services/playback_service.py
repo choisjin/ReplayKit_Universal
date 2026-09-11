@@ -2397,6 +2397,15 @@ class PlaybackService:
         dev_id = dev_info["id"]
         screen_type = dev_info.get("screen_type", "front_center")
         try:
+            if dev_type in ("adb", "isap_agent"):
+                # WebOS(Connect Wide): 캡처 판단과 이미지 크기를 dev_info 에 남겨
+                # _tap_ocr_device 가 같은 화면·같은 좌표계(캡처 px → 터치)로 누르게 한다.
+                ws = self._webos_target(dev_id, screen_type)
+                if ws is not None:
+                    data = await ws.screencap_bytes(fmt="png")
+                    dev_info["_webos_shape"] = self._png_shape(data)
+                    return data
+                dev_info.pop("_webos_shape", None)
             if dev_type == "adb":
                 return await self.adb.screencap_bytes(serial=dev_info.get("address") or dev_id, fmt="png")
             elif dev_type == "hkmc_agent":
@@ -2450,6 +2459,13 @@ class PlaybackService:
         dev_type = dev_info["type"]
         dev_id = dev_info["id"]
         screen_type = dev_info.get("screen_type", "front_center")
+        webos_shape = dev_info.get("_webos_shape")
+        if webos_shape and dev_type in ("adb", "isap_agent"):
+            ws = self.dm.get_webos_screen(dev_id)
+            if ws is None:
+                raise RuntimeError(f"OCR ClickText: WebOS 화면 헬퍼 없음 (device={dev_id})")
+            await self._webos_image_tap(ws, x, y, webos_shape)
+            return
         if dev_type == "adb":
             await self.adb.tap(x, y, serial=dev_info.get("address") or dev_id)
         elif dev_type == "hkmc_agent":
@@ -3717,6 +3733,58 @@ class PlaybackService:
                 else:
                     await self.adb.multi_finger_swipe(fingers, params.get("duration_ms", 500), serial=adb_serial, display_id=adb_display_id)
 
+    def _webos_target(self, dev_id: Optional[str], screen_type: Optional[str],
+                      touch: bool = False):
+        """이 캡처/터치가 webOS 로 가야 하면 WebOSScreen, 아니면 None (ADB·iSAP 공통).
+
+        기준 화면은 연결 방식별로 기존 판단과 같게 둔다 — iSAP 는
+        `ISAPAgentService.resolve_screen`(항상 front_center), ADB 는 미러 입력 API
+        (routers/device.py)와 같은 규칙. touch=True 면 전면 판별 캐시를 짧게 본다.
+        """
+        ws = self.dm.get_webos_screen(dev_id) if dev_id else None
+        if ws is None or not ws.enabled:
+            return None
+        dev = self.dm.get_device(dev_id)
+        if dev is not None and dev.type == "isap_agent":
+            base = "front_center"
+        else:
+            base = screen_type if screen_type in (None, "", "front_center", "0") else "__other__"
+        max_age = ws.TOUCH_FG_MAX_AGE if touch else None
+        return ws if ws.resolve(screen_type, base, max_age=max_age) == "webos" else None
+
+    @staticmethod
+    def _png_shape(data: bytes) -> tuple[int, int]:
+        """PNG 이미지 (h, w) — IHDR 헤더에서 읽어 디코드 비용 없음."""
+        if len(data) >= 24 and data[:8] == b"\x89PNG\r\n\x1a\n":
+            import struct
+            w, h = struct.unpack(">II", data[16:24])
+            return int(h), int(w)
+        import cv2
+        import numpy as np
+        img = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        return (int(img.shape[0]), int(img.shape[1])) if img is not None else (0, 0)
+
+    async def _webos_image_tap(self, ws, x: float, y: float, shape,
+                               long_press: bool = False, duration_ms: int = 3000) -> None:
+        """캡처 이미지 좌표(image_tap/OCR 매칭 결과)로 webOS 를 누른다.
+
+        ⚠ webOS 캡처는 linuxStream **축소본**(예: 1920x720)인데 터치 기준은 클라이언트
+        좌표계(`client_size()` = screens.webos, 보통 패널 3840x1440)다. 매칭 좌표를 그대로
+        넘기면 정확히 ½ 위치가 눌린다 → 캡처 크기 대비 비율로 클라이언트 좌표로 올린 뒤
+        일반 터치와 같은 경로(`tap` → `_clamp`)로 보낸다.
+        """
+        h, w = int(shape[0] or 0), int(shape[1] or 0)
+        cw, ch = ws.client_size()
+        tx = x * cw / w if (w and cw) else x
+        ty = y * ch / h if (h and ch) else y
+        ix, iy = int(round(tx)), int(round(ty))
+        logger.info("[WebOS IMAGE TAP] capture %sx%s (%s,%s) -> client %sx%s (%s,%s) long_press=%s",
+                    w, h, int(x), int(y), cw, ch, ix, iy, long_press)
+        if long_press:
+            await ws.long_press(ix, iy, duration_ms)
+        else:
+            await ws.tap(ix, iy)
+
     async def _webos_touch(self, dev, step_type: StepType, params: dict,
                            screen_type: Optional[str]) -> bool:
         """WebOS(Connect Wide) 화면이면 webOS 터치스크린으로 보내고 True.
@@ -3729,11 +3797,8 @@ class PlaybackService:
         if step_type not in (StepType.TAP, StepType.REPEAT_TAP, StepType.LONG_PRESS,
                              StepType.SWIPE, StepType.MULTI_TOUCH):
             return False
-        ws = self.dm.get_webos_screen(dev.id)
-        if ws is None or not ws.enabled:
-            return False
-        base = screen_type if screen_type in (None, "", "front_center", "0") else "__other__"
-        if ws.resolve(screen_type, base, max_age=ws.TOUCH_FG_MAX_AGE) != "webos":
+        ws = self._webos_target(dev.id, screen_type, touch=True)
+        if ws is None:
             return False
         p = params
         if step_type == StepType.TAP:
@@ -3793,9 +3858,15 @@ class PlaybackService:
         if not dev:
             raise ValueError(f"image_tap: device {real_id} not found")
         screen_type = step.screen_type or params.get("screen_type")
+        # WebOS(Connect Wide, ADB·iSAP 공통): 캡처와 탭이 **같은 판단**을 써야 한다 —
+        # 여기서 한 번 정해 아래 탭에도 그대로 쓴다(탭 시점에 다시 판별하면 반대쪽으로 샐 수 있다).
+        webos_ws = (self._webos_target(real_id, screen_type)
+                    if dev.type in ("adb", "isap_agent") else None)
 
         png_bytes: Optional[bytes] = None
-        if dev.type == "hkmc_agent":
+        if webos_ws is not None:
+            png_bytes = await webos_ws.screencap_bytes(fmt="png")
+        elif dev.type == "hkmc_agent":
             svc = self.dm.get_hkmc_service(real_id)
             if not svc:
                 raise RuntimeError(f"image_tap: HKMC device {real_id} not connected")
@@ -3929,7 +4000,11 @@ class PlaybackService:
         )
 
         # 3) 디바이스별 tap / long press 실행
-        if dev.type in ("hkmc_agent", "isap_agent"):
+        if webos_ws is not None:
+            # 매칭 좌표는 캡처(스트림 축소본) 픽셀 기준 — x_offset(HKMC 일체형 전용)은 무관.
+            await self._webos_image_tap(webos_ws, center_x, center_y, src_img.shape,
+                                        long_press, duration_ms)
+        elif dev.type in ("hkmc_agent", "isap_agent"):
             svc = (self.dm.get_isap_service(real_id) if dev.type == "isap_agent"
                    else self.dm.get_hkmc_service(real_id))
             if not svc:

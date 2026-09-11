@@ -1389,7 +1389,8 @@ class DeviceManager:
                                     private_server_password: str = "",
                                     iid_display: str = "10",
                                     hud_display: str = "11",
-                                    market: str = "") -> ManagedDevice:
+                                    market: str = "",
+                                    ksend_variant: str = "") -> ManagedDevice:
         """ICAS Agent 디바이스 등록만 (연결은 connect_device_by_id로 별도 수행).
 
         market이 비어있으면 device_model에서 추론 (EU/NAR/CN/GP). 추론 실패 시 "EU" 기본.
@@ -1429,12 +1430,15 @@ class DeviceManager:
         if device_model:
             info["device_model"] = device_model
         # 재등록(스캔→연결 등)이 사용자가 고른 ksend 빌드 경로를 지우지 않도록 보존.
-        # 등록 폼에는 이 항목이 없고 연결 모달에서만 정해지므로, 여기서 덮이면 조용히 debug 로 되돌아간다.
+        # 등록 폼에서 빌드를 명시하지 않은 구 클라이언트 요청이면 여기서 덮여 조용히 debug 로 되돌아간다.
         _existing_icas = self._devices.get(final_id)
         if _existing_icas is not None and _existing_icas.type == "icas_agent":
             for _k in ("ksend_variant", "ksend_path"):
                 if _existing_icas.info.get(_k):
                     info[_k] = _existing_icas.info[_k]
+        # 등록 폼(수동/스캔)에서 고른 빌드가 있으면 그것이 우선.
+        if ksend_variant:
+            info["ksend_variant"] = ksend_variant
 
         dev = ManagedDevice(
             id=final_id,
@@ -1467,7 +1471,8 @@ class DeviceManager:
                                    private_server_password: str = "",
                                    iid_display: str = "10",
                                    hud_display: str = "11",
-                                   market: str = "") -> ManagedDevice:
+                                   market: str = "",
+                                   ksend_variant: str = "") -> ManagedDevice:
         """MIB Agent 디바이스 등록만 (연결은 connect_device_by_id로 별도 수행).
 
         VW MIB(Modular Infotainment Building Block) HU용. ksend의 bit-position form 사용,
@@ -1515,6 +1520,9 @@ class DeviceManager:
             info = merged
             if not name:
                 display_name = existing.name
+        # 등록 폼(수동/스캔)에서 고른 빌드가 있으면 보존값보다 우선.
+        if ksend_variant:
+            info["ksend_variant"] = ksend_variant
 
         dev = ManagedDevice(
             id=final_id,

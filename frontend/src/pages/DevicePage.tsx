@@ -960,6 +960,7 @@ export default function DevicePage() {
         extra.username = (sshUser && sshUser.trim()) || 'root';
         extra.password = sshPass || '';
         extra.resolution = '1560x700';
+        extra.ksend_variant = addKsendVariant;
       }
       // MIB Agent도 SSH 자격증명 + 해상도 (사용자 지정 가능)
       if (devType === 'mib_agent') {
@@ -967,6 +968,7 @@ export default function DevicePage() {
         extra.username = (sshUser && sshUser.trim()) || 'root';
         extra.password = sshPass || '';
         extra.resolution = (mibResolution || MIB_DEFAULT_RESOLUTION).trim();
+        extra.ksend_variant = addKsendVariant;
       }
       // FPK Agent: SSH 자격증명 + 프레임버퍼 해상도. 캡처 전용(터치/하드키 미지원).
       // 해상도는 연결 시 /dev/fb0 실제 값으로 자동 보정되므로 기본값으로 충분.
@@ -1236,10 +1238,12 @@ export default function DevicePage() {
         if (fpkIpv6.trim()) extra.ipv6_address = fpkIpv6.trim();
       } else if (devType === 'mib_agent') {
         extra.resolution = (mibResolution || MIB_DEFAULT_RESOLUTION).trim();
+        extra.ksend_variant = addKsendVariant;
       } else {
         // ICAS Agent — 모델별 기본 해상도 (ICAS3 CN: 2240x1260, 기존 ICAS EU: 1560x700)
         const _model = (deviceModel || '').toUpperCase();
         extra.resolution = _model.includes('ICAS3') ? '2240x1260' : '1560x700';
+        extra.ksend_variant = addKsendVariant;
       }
       const result = await connectDevice(
         devType, ip, undefined, '', 'primary',
@@ -2572,6 +2576,8 @@ export default function DevicePage() {
                         key: 'icas',
                         label: <span>{t('device.detectedIcas')} <Tag style={{ marginLeft: 3 }}>{scannedIcas.length}</Tag></span>,
                         children: (
+                          <>
+                          <div style={{ marginBottom: 6 }}>{renderAddKsendPicker()}</div>
                           <List
                             size="small"
                             dataSource={scannedIcas}
@@ -2590,6 +2596,7 @@ export default function DevicePage() {
                               );
                             }}
                           />
+                          </>
                         ),
                       });
                     }
@@ -2599,6 +2606,8 @@ export default function DevicePage() {
                         key: 'mib',
                         label: <span>MIB Agent <Tag style={{ marginLeft: 3 }}>{scannedMib.length}</Tag></span>,
                         children: (
+                          <>
+                          <div style={{ marginBottom: 6 }}>{renderAddKsendPicker()}</div>
                           <List
                             size="small"
                             dataSource={scannedMib}
@@ -2617,6 +2626,7 @@ export default function DevicePage() {
                               );
                             }}
                           />
+                          </>
                         ),
                       });
                     }
@@ -3531,6 +3541,7 @@ export default function DevicePage() {
                           <span style={{ fontSize: 11, color: '#888' }}>Password:</span>
                           <Input.Password value={sshPass} onChange={(e) => setSshPass(e.target.value)} style={{ width: 160 }} placeholder="(blank if none)" />
                         </Space>
+                        {renderAddKsendPicker()}
                         <div style={{ fontSize: 10, color: '#888' }}>
                           해상도는 1560x700(10") 또는 2240x1260(15") 중 선택 — 등록 후 수정 모달에서 변경 가능
                         </div>
@@ -3579,6 +3590,7 @@ export default function DevicePage() {
                             style={{ width: 140 }}
                           />
                         </Space>
+                        {renderAddKsendPicker()}
                         <div style={{ fontSize: 10, color: '#888' }}>
                           MIB는 캡처 시 PNG 실제 크기로 자동 보정됩니다. 등록 후 수정 모달에서도 변경/자동 감지 가능.
                         </div>
