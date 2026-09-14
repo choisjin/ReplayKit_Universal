@@ -4,7 +4,7 @@ import { PlayCircleOutlined, PauseOutlined, PlusOutlined, SwapOutlined, FolderOp
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { deviceApi, scenarioApi } from '../services/api';
+import { deviceApi, resultsApi, scenarioApi } from '../services/api';
 import { useDevice } from '../context/DeviceContext';
 import { useSettings } from '../context/SettingsContext';
 import { useTestMode, TEST_ONLY_MODULES } from '../hooks/useTestMode';
@@ -936,6 +936,7 @@ export default function RecordPage() {
   // Step test
   const [testResultModalOpen, setTestResultModalOpen] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
+  const [replacingExpected, setReplacingExpected] = useState(false);
   const [testingStepIndex, setTestingStepIndex] = useState<number | null>(null);
   // 활성 bg 폴링 refs (모달 닫힘 시 정리용)
   const activeBgPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -3134,7 +3135,8 @@ export default function RecordPage() {
         ? { screenshotDeviceId, screenType }
         : undefined;
       const res = await scenarioApi.testStep(scenarioName, stepIdx, currentStep, overrides);
-      const result = { ...res.data, _ts: Date.now() };
+      // _stepIdx: 결과 모달의 기대이미지 교체가 어느 스텝을 갱신할지 알아야 한다
+      const result = { ...res.data, _ts: Date.now(), _stepIdx: stepIdx };
       setTestResult(result);
       setTestResultModalOpen(true);
       resumeScreenStream();
@@ -3189,6 +3191,50 @@ export default function RecordPage() {
       setTestingStepIndex(null);
     }
   }, [scenarioName, steps, refreshScreenshot, pauseScreenStream, resumeScreenStream, screenshotDeviceId, screenType]);
+
+  // 스텝 테스트 결과의 실제 이미지로 기대 이미지 교체 (시나리오 결과 상세의 '이미지 교체'와 동일 규칙).
+  // 테스트 actual 은 모달을 닫으면 clean-test-screenshots 가 지우므로 모달 안에서만 가능하다.
+  const confirmReplaceExpectedFromTest = () => {
+    const tr = testResult;
+    if (!tr || !scenarioName) return;
+    const stepIdx: number | undefined = tr._stepIdx;
+    const step = stepIdx != null ? steps[stepIdx] : undefined;
+    Modal.confirm({
+      title: t('results.replaceExpectedTitle'),
+      width: 520,
+      content: (
+        <div style={{ fontSize: 13 }}>
+          <div>{t('results.replaceExpectedConfirm', { scope: t('results.replaceScopeThis', { id: String(tr.step_id ?? (stepIdx ?? 0) + 1) }), count: '1' })}</div>
+          <div style={{ marginTop: 8, color: '#888', fontSize: 12, whiteSpace: 'pre-line' }}>
+            {t('record.replaceExpectedNote')}
+          </div>
+        </div>
+      ),
+      okText: t('results.replaceExpected'),
+      cancelText: t('common.cancel'),
+      onOk: async () => {
+        setReplacingExpected(true);
+        try {
+          let stepData: any;
+          if (step) {
+            const { _imageVer, ...rest } = step;
+            stepData = rest;
+          }
+          const { data } = await resultsApi.replaceExpectedFromStepTest(scenarioName, tr, stepData);
+          message.success(t('results.replaceExpectedDone', { steps: '1', files: String(data.file_count || 0) }));
+          // 스텝 목록 썸네일 + 모달 기대이미지 갱신 (테스트 당시 주석 이미지는 옛 기준이라 버린다)
+          if (stepIdx != null) {
+            setSteps(prev => prev.map((s, i) => i === stepIdx ? { ...s, _imageVer: Date.now() } : s));
+          }
+          setTestResult((prev: any) => prev ? { ...prev, expected_annotated_image: null, _ts: Date.now() } : prev);
+        } catch (e: any) {
+          message.error(e.response?.data?.detail || t('results.replaceExpectedFailed'));
+        } finally {
+          setReplacingExpected(false);
+        }
+      },
+    });
+  };
 
   const drawCaptureCanvas = useCallback((dragRect?: { x: number; y: number; w: number; h: number }) => {
     const canvas = captureCanvasRef.current;
@@ -8405,6 +8451,19 @@ export default function RecordPage() {
                       <span style={{ fontWeight: 400, color: '#ff4d4f', marginLeft: 3 }}>
                         ({t('record.matchLocation')}: {testResult.match_location.x},{testResult.match_location.y} {testResult.match_location.width}×{testResult.match_location.height})
                       </span>
+                    )}
+                    {(testResult.expected_image || testResult.sub_results?.length > 0) && (
+                      <Tooltip title={t('results.replaceExpectedTip')}>
+                        <Button
+                          size="small"
+                          icon={<SwapOutlined />}
+                          loading={replacingExpected}
+                          onClick={confirmReplaceExpectedFromTest}
+                          style={{ marginLeft: 6, fontSize: 11 }}
+                        >
+                          {t('results.replaceExpected')}
+                        </Button>
+                      </Tooltip>
                     )}
                   </div>
                   {(() => {

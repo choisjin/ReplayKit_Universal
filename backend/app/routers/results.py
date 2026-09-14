@@ -2003,6 +2003,35 @@ def _replace_targets_for_step(sr: dict, scenario_name: str, sc_step: dict | None
     return targets
 
 
+def _replace_one_step(sr: dict, scenario_name: str, sc_step: dict | None) -> tuple[list, str]:
+    """스텝 결과 하나의 actual 로 기대이미지들을 덮어쓴다.
+
+    반환: (쓴 파일명 목록, 실패 사유) — 목록이 비면 사유가 채워진다.
+    """
+    act_path = _resolve_image_path(sr.get("actual_image"))
+    if act_path is None:
+        return [], "실제 이미지 없음"
+    targets = _replace_targets_for_step(sr, scenario_name, sc_step)
+    if not targets:
+        return [], "교체할 기대 이미지 없음"
+    img_act = safe_imread(str(act_path))
+    if img_act is None:
+        return [], "실제 이미지 로드 실패"
+    written: list = []
+    for target, roi in targets:
+        crop = _crop_for_expected(img_act, roi, target)
+        if crop is None:
+            logger.warning("기대이미지 교체 건너뜀 — ROI 가 actual 범위 밖: %s", target.name)
+            continue
+        try:
+            _write_expected(target, crop)
+        except (OSError, RuntimeError) as e:
+            logger.warning("기대이미지 교체 실패 (%s): %s", target.name, e)
+            continue
+        written.append(target.name)
+    return written, ("" if written else "기대 이미지 저장 실패")
+
+
 def _replace_expected_sync(filepath: Path, step_indexes: list) -> dict:
     """요청된 스텝들의 기대이미지를 그 스텝의 actual 이미지로 교체. (스레드 전용)"""
     if cv2 is None:
@@ -2035,36 +2064,13 @@ def _replace_expected_sync(filepath: Path, step_indexes: list) -> dict:
     for idx in sorted(dedup.values()):
         sr = step_results[idx]
         step_no = sr.get("step_id", idx)
-        act_path = _resolve_image_path(sr.get("actual_image"))
-        if act_path is None:
-            skipped.append({"step_index": idx, "step_id": step_no, "reason": "실제 이미지 없음"})
-            continue
         sc_step = sc_steps.get(sr.get("step_uid") or "")
-        targets = _replace_targets_for_step(sr, scenario_name, sc_step)
-        if not targets:
-            skipped.append({"step_index": idx, "step_id": step_no, "reason": "교체할 기대 이미지 없음"})
-            continue
-        img_act = safe_imread(str(act_path))
-        if img_act is None:
-            skipped.append({"step_index": idx, "step_id": step_no, "reason": "실제 이미지 로드 실패"})
-            continue
-        written = 0
-        for target, roi in targets:
-            crop = _crop_for_expected(img_act, roi, target)
-            if crop is None:
-                logger.warning("기대이미지 교체 건너뜀 — ROI 가 actual 범위 밖: %s", target.name)
-                continue
-            try:
-                _write_expected(target, crop)
-            except (OSError, RuntimeError) as e:
-                logger.warning("기대이미지 교체 실패 (%s): %s", target.name, e)
-                continue
-            written += 1
-            files.append(target.name)
+        written, reason = _replace_one_step(sr, scenario_name, sc_step)
         if written:
-            replaced.append({"step_index": idx, "step_id": step_no, "files": written})
+            replaced.append({"step_index": idx, "step_id": step_no, "files": len(written)})
+            files.extend(written)
         else:
-            skipped.append({"step_index": idx, "step_id": step_no, "reason": "기대 이미지 저장 실패"})
+            skipped.append({"step_index": idx, "step_id": step_no, "reason": reason})
 
     logger.info(
         "기대이미지 교체: scenario=%s 요청=%d 적용=%d 파일=%d 건너뜀=%d",
@@ -2096,6 +2102,45 @@ async def replace_expected_images(filename: str, body: dict):
         result = await asyncio.to_thread(_replace_expected_sync, filepath, idxs)
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "ok", **result}
+
+
+def _replace_expected_step_sync(scenario_name: str, step_result: dict, step: dict | None) -> dict:
+    """스텝 테스트 결과(result.json 없음)로 기대이미지 교체. (스레드 전용)"""
+    if cv2 is None:
+        raise RuntimeError("OpenCV(cv2) 를 로드할 수 없어 이미지 교체를 수행할 수 없습니다")
+    # ROI/크롭 정의는 편집 중인(미저장일 수 있는) 스텝이 정본 — 없으면 저장본에서 uid 로 찾는다
+    sc_step = step or _load_scenario_steps_raw(scenario_name).get(step_result.get("step_uid") or "")
+    written, reason = _replace_one_step(step_result, scenario_name, sc_step)
+    logger.info(
+        "기대이미지 교체(스텝 테스트): scenario=%s step=%s 파일=%d%s",
+        scenario_name, step_result.get("step_id"), len(written),
+        f" 사유={reason}" if reason else "",
+    )
+    return {"file_count": len(written), "files": written, "reason": reason}
+
+
+@router.post("/replace-expected-step")
+async def replace_expected_step(body: dict):
+    """스텝 테스트 결과의 실제 이미지로 시나리오 기대 이미지를 교체.
+
+    body: {"scenario_name": str, "step_result": {...test-step 응답}, "step": {...편집 중 스텝}}
+    스텝 테스트 actual 은 결과 파일 없이 screenshots/{scenario}/actual_<ts>/ 에만 있으므로
+    결과 모달이 닫혀 clean-test-screenshots 가 지우기 전에 호출해야 한다.
+    """
+    scenario_name = body.get("scenario_name") or ""
+    step_result = body.get("step_result")
+    step = body.get("step")
+    if not scenario_name or not isinstance(step_result, dict):
+        raise HTTPException(status_code=400, detail="scenario_name and step_result are required")
+    if step is not None and not isinstance(step, dict):
+        raise HTTPException(status_code=400, detail="step must be an object")
+    try:
+        result = await asyncio.to_thread(_replace_expected_step_sync, scenario_name, step_result, step)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not result["file_count"]:
+        raise HTTPException(status_code=400, detail=result["reason"] or "기대 이미지 교체 실패")
     return {"status": "ok", **result}
 
 

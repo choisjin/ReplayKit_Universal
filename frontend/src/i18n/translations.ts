@@ -781,6 +781,7 @@ const translations = {
     'record.label': '라벨',
     'record.diffHeatmap': '차이 히트맵',
     'record.noExpectedImage': '기대이미지가 없어 비교 없이 실행만 완료되었습니다.',
+    'record.replaceExpectedNote': '· 시나리오의 기대이미지 파일을 덮어쓰므로 이후 모든 실행과 기존 결과 표시에 반영됩니다.\n· 단일/멀티크롭은 현재 스텝의 크롭 영역만 잘라 넣고, 전체 비교는 화면 전체를 교체합니다.\n· 직전 이미지는 screenshots/{시나리오}/_prev/ 에 1세대 백업됩니다.\n· 테스트 이미지는 이 창을 닫으면 삭제되므로 닫기 전에 교체하세요.',
 
     // === Scenario Page ===
     'scenario.title': '시나리오',
@@ -1893,6 +1894,7 @@ const translations = {
     'record.label': 'Label',
     'record.diffHeatmap': 'Diff Heatmap',
     'record.noExpectedImage': 'No expected image — executed without comparison.',
+    'record.replaceExpectedNote': "· The scenario expected-image files are overwritten, so all future runs and existing result views use the new baseline.\n· Single/multi crop modes copy only the current step's crop regions; full comparison replaces the whole screen.\n· The previous image is kept as one backup generation under screenshots/{scenario}/_prev/.\n· Test images are deleted when this window closes, so replace before closing.",
 
     // === Scenario Page ===
     'scenario.title': 'Scenarios',

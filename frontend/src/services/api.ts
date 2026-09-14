@@ -321,6 +321,10 @@ export const resultsApi = {
   // 시나리오 JSON 은 그대로 두고 기대이미지 PNG 만 제자리 덮어쓴다.
   replaceExpectedImages: (filename: string, stepIndexes: number[]) =>
     api.post(`/results/replace-expected/${filename}`, { step_indexes: stepIndexes }),
+  // 스텝 테스트 결과(결과 파일 없음)의 실제 이미지로 기대 이미지 교체.
+  // step 은 편집 중인 스텝 — ROI/크롭 정의가 미저장이어도 그대로 반영된다.
+  replaceExpectedFromStepTest: (scenarioName: string, stepResult: any, step?: any) =>
+    api.post('/results/replace-expected-step', { scenario_name: scenarioName, step_result: stepResult, step }),
   // result.html 재생성 (상세 모달 'HTML 생성' 버튼)
   regenerateHtml: (filename: string) =>
     api.post(`/results/regenerate-html/${filename}`),
