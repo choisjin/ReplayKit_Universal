@@ -12,6 +12,7 @@ import { useTranslation } from '../i18n';
 //   Space = 재생/일시정지, A/D = 이동 간격(기본 1초) 뒤로/앞으로, Q/E = 1프레임 이전/다음
 //   S/W = 배속 한 단계 낮춤/높임 (x0 · x1 · x2 · x4 · x8 · x10). x0 은 일시정지, x0 에서 W 는 x1 로 재생.
 //   A/D·Q/E 이동량은 배속만큼 곱해진다 (x4 → 4초/4프레임, x0 은 x1 로 취급). 방향은 키가 정한다.
+//   재생이 끝나거나 0초 이전/끝 이후로 이동하면 onBoundary 로 알려 인접 회차 녹화로 넘길 수 있다.
 
 const SPEEDS = [0, 1, 2, 4, 8, 10];
 const JUMP_OPTIONS = [0.5, 1, 2, 5, 10];
@@ -45,11 +46,18 @@ interface Props {
   children: React.ReactNode;
   /** 단축키 활성화 여부 */
   hotkeys?: boolean;
+  /**
+   * 녹화 경계를 넘을 때 호출. dir 1 = 끝을 지남(재생 종료 포함), -1 = 0초 이전으로 이동.
+   * overshootSec 은 경계를 넘은 양. 인접 녹화로 넘겼으면 true 를 반환 — 이때는 여기서 seek 하지 않는다.
+   */
+  onBoundary?: (dir: 1 | -1, overshootSec: number, wasPlaying: boolean) => boolean;
 }
 
-export default function VideoTransport({ video, children, hotkeys = true }: Props) {
+export default function VideoTransport({ video, children, hotkeys = true, onBoundary }: Props) {
   const { t } = useTranslation();
   const wrapRef = useRef<HTMLDivElement>(null);
+  const onBoundaryRef = useRef(onBoundary);
+  onBoundaryRef.current = onBoundary;
 
   const [rate, setRateState] = useState(1);
   const rateRef = useRef(1);
@@ -137,12 +145,25 @@ export default function VideoTransport({ video, children, hotkeys = true }: Prop
     setTime(v.currentTime);
   }, [video]);
 
+  // 이동 목표가 0초 이전/끝 이후면 인접 녹화로 넘긴다. 넘겼으면 true.
+  const crossBoundary = useCallback((target: number, wasPlaying: boolean): boolean => {
+    const v = video;
+    const cb = onBoundaryRef.current;
+    if (!v || !cb) return false;
+    if (target < 0) return cb(-1, -target, wasPlaying);
+    const dur = v.duration;
+    if (Number.isFinite(dur) && dur > 0 && target > dur) return cb(1, target - dur, wasPlaying);
+    return false;
+  }, [video]);
+
   const jump = useCallback((dir: 1 | -1) => {
     if (!video) return;
     const sec = jumpSec * Math.max(1, rateRef.current);
-    seekTo(video.currentTime + dir * sec);
+    const target = video.currentTime + dir * sec;
     showOsd(`${dir < 0 ? '◀' : '▶'} ${sec}s`);
-  }, [video, jumpSec, seekTo, showOsd]);
+    if (crossBoundary(target, !video.paused && !video.ended)) return;
+    seekTo(target);
+  }, [video, jumpSec, seekTo, showOsd, crossBoundary]);
 
   const stepFrame = useCallback((dir: 1 | -1) => {
     const v = video;
@@ -153,9 +174,11 @@ export default function VideoTransport({ video, children, hotkeys = true }: Prop
     // 현재 표시 중인 프레임의 PTS 를 기준으로 삼아야 VFR 에서도 한 프레임씩 넘어간다.
     const last = lastFrameRef.current;
     const base = last && Math.abs(last.mediaTime - v.currentTime) < fs * 1.5 ? last.mediaTime : v.currentTime;
-    seekTo(base + dir * fs * n + (dir > 0 ? 0.001 : 0));
+    const target = base + dir * fs * n + (dir > 0 ? 0.001 : 0);
     showOsd(dir < 0 ? `◀ ${n}f` : `${n}f ▶`);
-  }, [video, frameSec, seekTo, showOsd]);
+    if (crossBoundary(target, false)) return;
+    seekTo(target);
+  }, [video, frameSec, seekTo, showOsd, crossBoundary]);
 
   const toggleMute = useCallback(() => {
     if (!video) return;
@@ -199,13 +222,18 @@ export default function VideoTransport({ video, children, hotkeys = true }: Prop
       if (rateRef.current > 0 && v.playbackRate !== rateRef.current) setRate(v.playbackRate);
     };
     const onVolume = () => setMuted(v.muted);
+    // 재생이 끝까지 가면 다음 회차로 이어서 재생
+    const onEnded = () => {
+      syncPlaying();
+      onBoundaryRef.current?.(1, 0, true);
+    };
     v.addEventListener('timeupdate', onTime);
     v.addEventListener('seeked', onTime);
     v.addEventListener('loadedmetadata', onDuration);
     v.addEventListener('durationchange', onDuration);
     v.addEventListener('play', onPlay);
     v.addEventListener('pause', syncPlaying);
-    v.addEventListener('ended', syncPlaying);
+    v.addEventListener('ended', onEnded);
     v.addEventListener('ratechange', onRateChange);
     v.addEventListener('volumechange', onVolume);
 
@@ -240,7 +268,7 @@ export default function VideoTransport({ video, children, hotkeys = true }: Prop
       v.removeEventListener('durationchange', onDuration);
       v.removeEventListener('play', onPlay);
       v.removeEventListener('pause', syncPlaying);
-      v.removeEventListener('ended', syncPlaying);
+      v.removeEventListener('ended', onEnded);
       v.removeEventListener('ratechange', onRateChange);
       v.removeEventListener('volumechange', onVolume);
       if (vfcHandle != null && typeof anyV.cancelVideoFrameCallback === 'function') {

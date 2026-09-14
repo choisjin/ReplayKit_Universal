@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, Checkbox, Collapse, Col, Descriptions, Dropdown, Image, Input, InputNumber, Modal, Popover, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message, notification, theme } from 'antd';
+import { Button, Card, Checkbox, Collapse, Col, Descriptions, Dropdown, Image, Input, InputNumber, Modal, Pagination, Popover, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message, notification, theme } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileExcelOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, SettingOutlined, ShrinkOutlined, SwapOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { resultsApi, scenarioApi } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
@@ -322,7 +322,8 @@ export default function ResultsPage() {
 
   // 그룹 상세 뷰 (사이클별 통합)
   const [groupDetail, setGroupDetail] = useState<ResultDetail[] | null>(null);
-  const [groupDetailCycle, setGroupDetailCycle] = useState(1);
+  // 상세 표에 보이는 회차 (단일/그룹 공통 — 회차별 페이지네이션)
+  const [detailCycle, setDetailCycle] = useState(1);
 
   // 백그라운드 CMD/SSH 폴링 (task_id도 함께 추적해서 취소 가능)
   const bgPollTimers = useRef<ReturnType<typeof setInterval>[]>([]);
@@ -406,6 +407,9 @@ export default function ResultsPage() {
   const pendingSeekRef = useRef<{ offset: number; recUrl: string; applied: boolean } | null>(null);
   // 새 seek 요청이 발생할 때마다 증가시켜 useEffect를 트리거한다.
   const [pendingSeekTick, setPendingSeekTick] = useState(0);
+  // 회차 경계 넘기기(끝 → 다음 회차 처음 / 0초 이전 → 이전 회차 끝)로 새 녹화가 로드되면 적용할 위치.
+  // 스텝 클릭 seek(pendingSeekRef)와 달리 프리롤·자동재생 강제가 없다.
+  const pendingPositionRef = useRef<{ recUrl: string; atSec?: number; fromEndSec?: number; autoplay: boolean } | null>(null);
   // 영상 현재 위치에 해당하는 스텝 결과 행 키 (단일: row_{원본인덱스}, 그룹: groupRowKey)
   const [playingRowKey, setPlayingRowKey] = useState<string | null>(null);
   const detailTableRef = useRef<TableRef>(null);
@@ -687,6 +691,7 @@ export default function ResultsPage() {
 
     // 항상 pendingSeekRef에 기록. URL 변경/패널 마운트/readyState 지연 등의 race를
     // useEffect와 비디오 이벤트 핸들러가 모두 흡수한다.
+    pendingPositionRef.current = null;
     pendingSeekRef.current = { offset: offsetSec, recUrl: rec.url, applied: false };
     setActiveRecUrl(rec.url);
     setActiveRecRepeat(targetRepeat);
@@ -711,15 +716,38 @@ export default function ResultsPage() {
   }, [activeRecUrl]);
 
   // React 커밋 후 보류 중인 seek 적용 시도. 패널 마운트/URL 변경/리렌더 모두 커버.
+  const applyPendingPosition = useCallback(() => {
+    const p = pendingPositionRef.current;
+    const v = detailVideoRef.current;
+    if (!p || !v || v.readyState < 1) return;
+    let want = p.recUrl;
+    try { want = new URL(p.recUrl, window.location.href).href; } catch { /* 원문 비교 */ }
+    const src = v.currentSrc || v.src || '';
+    if (src !== want && src.indexOf(p.recUrl) === -1) return;  // 아직 이전 녹화
+    const dur = v.duration;
+    const hasDur = Number.isFinite(dur) && dur > 0;
+    let at = p.fromEndSec != null ? (hasDur ? dur - p.fromEndSec : 0) : (p.atSec ?? 0);
+    if (hasDur) at = Math.min(at, dur - 0.05);
+    at = Math.max(0, at);
+    pendingPositionRef.current = null;
+    if (at > 0) v.currentTime = at;
+    if (p.autoplay) {
+      const pr = v.play();
+      if (pr && typeof pr.catch === 'function') pr.catch(() => {});
+    }
+  }, []);
+
   useEffect(() => {
     tryApplyPendingSeek();
-  }, [pendingSeekTick, activeRecBlobUrl, webcamPanelOpen, tryApplyPendingSeek]);
+    applyPendingPosition();
+  }, [pendingSeekTick, activeRecBlobUrl, webcamPanelOpen, tryApplyPendingSeek, applyPendingPosition]);
 
   // <video onCanPlay> / <video onLoadedMetadata> 콜백 — URL 변경 후 비디오 로드 완료 시 pending seek 적용.
   // pendingSeekRef.offset은 seekToStep에서 이미 "비디오 내 절대 시간(초)"으로 계산되어 있다.
   const handleVideoCanPlay = useCallback(() => {
     tryApplyPendingSeek();
-  }, [tryApplyPendingSeek]);
+    applyPendingPosition();
+  }, [tryApplyPendingSeek, applyPendingPosition]);
 
   // <video onError> — 디코드 실패(예: 코덱 미지원, 파일 손상) 시 호출.
   // pendingSeekRef를 비우고 재시도 타이머도 취소하여 [seek-debug] WAIT readyState<1 무한 폴링을 막는다.
@@ -787,6 +815,38 @@ export default function ResultsPage() {
     setPlayingRowKey(matched);
   }, [detail, groupDetail, activeRecRepeat, recordings, activeRecUrl]);
 
+  // 영상 경계에서 인접 회차 녹화로 넘긴다 (VideoTransport onBoundary).
+  // dir 1: 끝을 지남 → 다음 회차 처음(+넘은 만큼), -1: 0초 이전 → 이전 회차 끝(-넘은 만큼).
+  // 재생 중이었으면 이어서 재생한다. 인접 녹화가 없으면 false → 컨트롤러가 경계에 멈춘다.
+  const gotoAdjacentRecording = useCallback((dir: 1 | -1, overshootSec: number, wasPlaying: boolean): boolean => {
+    const idx = recordings.findIndex(r => r.url === activeRecUrl);
+    const target = idx < 0 ? undefined : recordings[idx + dir];
+    if (!target) return false;
+    cancelPendingSeek();
+    pendingPositionRef.current = dir > 0
+      ? { recUrl: target.url, atSec: overshootSec, autoplay: wasPlaying }
+      : { recUrl: target.url, fromEndSec: overshootSec, autoplay: wasPlaying };
+    const ci = cycleIndexOf(target.filename);
+    const cycle = ci === Number.MAX_SAFE_INTEGER ? 1 : ci;
+    setActiveRecUrl(target.url);
+    setActiveRecRepeat(cycle);
+    setDetailCycle(cycle);
+    message.info({ content: `${t('webcam.repeat')} ${cycle}`, key: 'rec-cycle-switch', duration: 1.2 });
+    return true;
+  }, [recordings, activeRecUrl, cancelPendingSeek, t]);
+
+  // 회차 페이지 선택 — 영상도 그 회차 녹화로 맞춘다 (재생 위치 따라가기와 서로 되돌리지 않도록).
+  const selectDetailCycle = useCallback((cycle: number) => {
+    setDetailCycle(cycle);
+    const rec = recordings.find(r => cycleIndexOf(r.filename) === cycle);
+    if (rec && rec.url !== activeRecUrl) {
+      cancelPendingSeek();
+      pendingPositionRef.current = null;
+      setActiveRecUrl(rec.url);
+      setActiveRecRepeat(cycle);
+    }
+  }, [recordings, activeRecUrl, cancelPendingSeek]);
+
   // 녹화(회차)가 바뀌면 이전 영상 기준 하이라이트는 무효
   useEffect(() => {
     setPlayingRowKey(null);
@@ -794,14 +854,13 @@ export default function ResultsPage() {
 
   // 재생 위치의 행을 따라간다. 행이 이미 보이면 스크롤하지 않는다
   // (rc-virtual-list scrollTo 는 align 미지정 시 화면 밖일 때만 top/bottom 으로 맞춤).
-  // 그룹 상세는 회차별 표라 영상 회차로 전환한 뒤, 그 데이터가 렌더되고 나서 스크롤한다.
+  // 상세 표는 회차별 페이지라 영상 회차 페이지로 전환한 뒤, 그 데이터가 렌더되고 나서 스크롤한다.
   const lastFollowedKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!playingRowKey) {
       lastFollowedKeyRef.current = null;
       return;
     }
-    const isGroup = !!groupDetail && groupDetail.length > 0;
     const follow = () => {
       const shown = filteredRowKeysRef.current;
       if (shown && !shown.has(playingRowKey)) return;
@@ -809,15 +868,15 @@ export default function ResultsPage() {
     };
     if (lastFollowedKeyRef.current !== playingRowKey) {
       lastFollowedKeyRef.current = playingRowKey;
-      if (isGroup && groupDetailCycle !== activeRecRepeat) {
-        setGroupDetailCycle(activeRecRepeat);
-        return;  // groupDetailCycle 변경으로 이 effect 가 다시 돌며 스크롤
+      if (detailCycle !== activeRecRepeat) {
+        setDetailCycle(activeRecRepeat);
+        return;  // detailCycle 변경으로 이 effect 가 다시 돌며 스크롤
       }
       follow();
-    } else if (isGroup && groupDetailCycle === activeRecRepeat) {
+    } else if (detailCycle === activeRecRepeat) {
       follow();
     }
-  }, [playingRowKey, groupDetail, groupDetailCycle, activeRecRepeat]);
+  }, [playingRowKey, groupDetail, detailCycle, activeRecRepeat]);
 
   const fetchResults = async () => {
     setLoading(true);
@@ -835,7 +894,7 @@ export default function ResultsPage() {
     setDetailVisible(true);
     setDetail(null);
     setGroupDetail(null);
-    setGroupDetailCycle(1);
+    setDetailCycle(1);
     setDetailFilename(group.items[0].filename);
     try {
       const details: ResultDetail[] = [];
@@ -897,6 +956,7 @@ export default function ResultsPage() {
 
   const viewDetail = async (filename: string) => {
     setDetailLoading(true);
+    setDetailCycle(1);
     setDetailFilename(filename);
     setDetailVisible(true);
     setDetail(null);
@@ -1784,6 +1844,35 @@ export default function ResultsPage() {
     </Dropdown>
   );
 
+  // 회차 페이지네이션 — 에이징 결과는 회차가 수백 개라 한 표에 몰아넣지 않고 회차별로 나눠 보여준다.
+  // 페이지 수는 계획 반복수(total_repeat)가 아니라 실제 실행된 최대 회차 (중단된 실행의 빈 페이지 방지).
+  const detailCycleCount = React.useMemo(() => {
+    const sources = groupDetail && groupDetail.length > 0 ? groupDetail : detail ? [detail] : [];
+    let max = 0;
+    for (const d of sources) for (const s of d.step_results) max = Math.max(max, s.repeat_index || 1);
+    if (max === 0) for (const d of sources) max = Math.max(max, d.total_repeat || 1);
+    return Math.max(1, max);
+  }, [detail, groupDetail]);
+  const detailCycleSteps = React.useMemo(
+    () => (detail ? detail.step_results.filter(s => (s.repeat_index || 1) === detailCycle) : []),
+    [detail, detailCycle],
+  );
+  const renderCyclePager = (isStopped: (cycle: number) => boolean) => (
+    <Pagination
+      size="small"
+      current={Math.min(detailCycle, detailCycleCount)}
+      total={detailCycleCount}
+      pageSize={1}
+      showSizeChanger={false}
+      showQuickJumper={detailCycleCount > 10}
+      showTotal={() => `Cycle ${detailCycle} / ${detailCycleCount}`}
+      onChange={selectDetailCycle}
+      itemRender={(page, type, el) => (type === 'page' && isStopped(page)
+        ? <a title="중단된 회차" style={{ color: '#ff4d4f' }}>{page} ⏹</a>
+        : el)}
+    />
+  );
+
   return (
     <div>
       <Card
@@ -1962,7 +2051,6 @@ export default function ResultsPage() {
           </div>
         )}
         {groupDetail && groupDetail.length > 0 && (() => {
-          const totalRepeat = Math.max(...groupDetail.map(d => d.total_repeat || 1));
           // 현재 사이클의 스텝들을 시나리오 순서대로 합침 (연번 부여)
           const cycleSteps: (StepResultDetail & {
             _seq?: number; _scenarioName?: string; _filename?: string; _srcIndex?: number;
@@ -1971,7 +2059,7 @@ export default function ResultsPage() {
           for (const d of groupDetail) {
             // 원본 파일 내 인덱스(_srcIndex)를 유지해야 기대이미지 교체가 올바른 스텝을 가리킨다.
             d.step_results.forEach((s, si) => {
-              if (s.repeat_index !== groupDetailCycle) return;
+              if (s.repeat_index !== detailCycle) return;
               seq++;
               cycleSteps.push({
                 ...s, _seq: seq, _scenarioName: d.scenario_name,
@@ -1987,17 +2075,9 @@ export default function ResultsPage() {
           const cycleErr = cycleSteps.filter(s => !s.excluded_from_result && s.status !== 'pass' && s.status !== 'fail' && s.status !== 'warning').length;
           return (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <span style={{ fontWeight: 600 }}>Cycle:</span>
-                {Array.from({ length: totalRepeat }, (_, i) => i + 1).map(c => {
-                  // 어떤 시나리오라도 이 cycle에서 중단됐으면 마킹
-                  const stoppedHere = groupDetail.some(d => d.stopped_at_iteration === c);
-                  return (
-                    <Button key={c} size="small" type={groupDetailCycle === c ? 'primary' : 'default'} onClick={() => setGroupDetailCycle(c)} danger={stoppedHere}>
-                      {c}{stoppedHere ? ' ⏹' : ''}
-                    </Button>
-                  );
-                })}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+                {/* 어떤 시나리오라도 이 cycle에서 중단됐으면 마킹 */}
+                {renderCyclePager(c => groupDetail.some(d => d.stopped_at_iteration === c))}
                 <span style={{ marginLeft: 'auto', color: '#888' }}>
                   {groupDetail.map(d => d.scenario_name).join(' → ')}
                 </span>
@@ -2028,7 +2108,7 @@ export default function ResultsPage() {
                             return (
                               <Button key={rec.filename} size="small"
                                 type={activeRecUrl === rec.url ? 'primary' : 'default'}
-                                onClick={() => { setActiveRecUrl(rec.url); setActiveRecRepeat(recCycle); setGroupDetailCycle(recCycle); }}
+                                onClick={() => { setActiveRecUrl(rec.url); setActiveRecRepeat(recCycle); setDetailCycle(recCycle); }}
                               >
                                 Cycle {recCycle}
                               </Button>
@@ -2036,7 +2116,7 @@ export default function ResultsPage() {
                           })}
                         </Space>
                         {activeRecBlobUrl && (
-                          <VideoTransport video={detailVideoEl}>
+                          <VideoTransport video={detailVideoEl} onBoundary={gotoAdjacentRecording}>
                             <video key={activeRecBlobUrl} ref={bindDetailVideo} src={activeRecBlobUrl} preload="auto" onLoadedMetadata={handleVideoCanPlay} onCanPlay={handleVideoCanPlay} onTimeUpdate={handleVideoTimeUpdate} onError={handleVideoError} style={{ width: '100%', maxHeight: 400, background: '#000', display: 'block' }} />
                           </VideoTransport>
                         )}
@@ -2219,7 +2299,7 @@ export default function ResultsPage() {
                       bodyStyle={{ padding: 5 }}
                     >
                       <div style={{ marginBottom: 5 }}>
-                        <VideoTransport video={detailVideoEl}>
+                        <VideoTransport video={detailVideoEl} onBoundary={gotoAdjacentRecording}>
                           <video
                             key={activeRecBlobUrl}
                             ref={bindDetailVideo}
@@ -2245,7 +2325,7 @@ export default function ResultsPage() {
                               value={activeRecRepeat}
                               onChange={(v) => {
                                 const rec = recordings.find(r => cycleIndexOf(r.filename) === v);
-                                if (rec) { setActiveRecUrl(rec.url); setActiveRecRepeat(v); }
+                                if (rec) { setActiveRecUrl(rec.url); setActiveRecRepeat(v); setDetailCycle(v); }
                               }}
                               style={{ width: '100%', marginBottom: 5 }}
                               options={recordings.map(r => {
@@ -2320,7 +2400,9 @@ export default function ResultsPage() {
 
               {/* 우측: 스텝 결과 테이블 (스크롤) */}
               <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginBottom: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+                  {renderCyclePager(c => detail.status === 'stopped' && detail.stopped_at_iteration === c)}
+                  <span style={{ flex: 1 }} />
                   {replaceExpectedBulk}
                   {stepColumnToggle}
                 </div>
@@ -2328,7 +2410,7 @@ export default function ResultsPage() {
                 <Table
                   ref={detailTableRef}
                   columns={stepColumns}
-                  dataSource={detail.step_results}
+                  dataSource={detailCycleSteps}
                   // step_id는 반복/조건부이동 재실행 시 중복되므로 원본 위치로 키 부여
                   // (render index 는 컬럼 필터 적용 후 기준이라 쓰지 않는다)
                   rowKey={(r: StepResultDetail) => `row_${stepIndexMap.get(r)}`}
