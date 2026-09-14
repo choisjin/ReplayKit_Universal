@@ -1055,6 +1055,11 @@ const translations = {
     'webcam.speed': '배속',
     'webcam.fullscreen': '전체화면',
     'webcam.mute': '음소거',
+    'webcam.hkNextRec': '다음 영상 (다음 회차)',
+    'webcam.hkPrevRec': '이전 영상 (이전 회차)',
+    'webcam.noNextRec': '다음 영상 없음',
+    'webcam.noPrevRec': '이전 영상 없음',
+    'results.noCycleMatch': '필터와 일치하는 회차 없음',
 
     // === Settings ===
     'settings.adminServerUrl': '관리자 서버 주소',
@@ -2161,6 +2166,11 @@ const translations = {
     'webcam.speed': 'Speed',
     'webcam.fullscreen': 'Fullscreen',
     'webcam.mute': 'Mute',
+    'webcam.hkNextRec': 'Next video (next cycle)',
+    'webcam.hkPrevRec': 'Previous video (previous cycle)',
+    'webcam.noNextRec': 'No next video',
+    'webcam.noPrevRec': 'No previous video',
+    'results.noCycleMatch': 'No cycle matches the filter',
 
     // === Settings ===
     'settings.adminServerUrl': 'Admin Server URL',

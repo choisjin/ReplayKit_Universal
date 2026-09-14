@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Select, Slider, Tooltip } from 'antd';
 import {
-  BackwardOutlined, CaretRightOutlined, ForwardOutlined, FullscreenExitOutlined, FullscreenOutlined,
+  BackwardOutlined, CaretRightOutlined, DoubleLeftOutlined, DoubleRightOutlined, ForwardOutlined, FullscreenExitOutlined, FullscreenOutlined,
   MutedOutlined, PauseOutlined, SoundOutlined, StepBackwardOutlined, StepForwardOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from '../i18n';
@@ -12,7 +12,7 @@ import { useTranslation } from '../i18n';
 //   Space = 재생/일시정지, A/D = 이동 간격(기본 1초) 뒤로/앞으로, Q/E = 1프레임 이전/다음
 //   S/W = 배속 한 단계 낮춤/높임 (x0 · x1 · x2 · x4 · x8 · x10). x0 은 일시정지, x0 에서 W 는 x1 로 재생.
 //   A/D·Q/E 이동량은 배속만큼 곱해진다 (x4 → 4초/4프레임, x0 은 x1 로 취급). 방향은 키가 정한다.
-//   재생이 끝나거나 0초 이전/끝 이후로 이동하면 onBoundary 로 알려 인접 회차 녹화로 넘길 수 있다.
+//   F/R = 다음/이전 영상(회차) — onSwitchRecording 이 있을 때만. 영상 끝/0초에서 자동으로 넘어가지는 않는다.
 
 const SPEEDS = [0, 1, 2, 4, 8, 10];
 const JUMP_OPTIONS = [0.5, 1, 2, 5, 10];
@@ -47,17 +47,17 @@ interface Props {
   /** 단축키 활성화 여부 */
   hotkeys?: boolean;
   /**
-   * 녹화 경계를 넘을 때 호출. dir 1 = 끝을 지남(재생 종료 포함), -1 = 0초 이전으로 이동.
-   * overshootSec 은 경계를 넘은 양. 인접 녹화로 넘겼으면 true 를 반환 — 이때는 여기서 seek 하지 않는다.
+   * F/R 단축키·버튼으로 다음(1)/이전(-1) 영상으로 전환. wasPlaying 이면 새 영상도 이어서 재생.
+   * 전환했으면 true, 인접 영상이 없으면 false.
    */
-  onBoundary?: (dir: 1 | -1, overshootSec: number, wasPlaying: boolean) => boolean;
+  onSwitchRecording?: (dir: 1 | -1, wasPlaying: boolean) => boolean;
 }
 
-export default function VideoTransport({ video, children, hotkeys = true, onBoundary }: Props) {
+export default function VideoTransport({ video, children, hotkeys = true, onSwitchRecording }: Props) {
   const { t } = useTranslation();
   const wrapRef = useRef<HTMLDivElement>(null);
-  const onBoundaryRef = useRef(onBoundary);
-  onBoundaryRef.current = onBoundary;
+  const onSwitchRef = useRef(onSwitchRecording);
+  onSwitchRef.current = onSwitchRecording;
 
   const [rate, setRateState] = useState(1);
   const rateRef = useRef(1);
@@ -145,25 +145,21 @@ export default function VideoTransport({ video, children, hotkeys = true, onBoun
     setTime(v.currentTime);
   }, [video]);
 
-  // 이동 목표가 0초 이전/끝 이후면 인접 녹화로 넘긴다. 넘겼으면 true.
-  const crossBoundary = useCallback((target: number, wasPlaying: boolean): boolean => {
-    const v = video;
-    const cb = onBoundaryRef.current;
-    if (!v || !cb) return false;
-    if (target < 0) return cb(-1, -target, wasPlaying);
-    const dur = v.duration;
-    if (Number.isFinite(dur) && dur > 0 && target > dur) return cb(1, target - dur, wasPlaying);
-    return false;
-  }, [video]);
+  // F/R — 다음/이전 영상. 현재 재생 상태를 넘겨 새 영상도 같은 상태로 시작하게 한다.
+  const switchRecording = useCallback((dir: 1 | -1) => {
+    const cb = onSwitchRef.current;
+    if (!cb) return;
+    const wasPlaying = !!video && !video.paused && !video.ended;
+    if (!cb(dir, wasPlaying)) showOsd(t(dir > 0 ? 'webcam.noNextRec' : 'webcam.noPrevRec'));
+  }, [video, showOsd, t]);
 
   const jump = useCallback((dir: 1 | -1) => {
     if (!video) return;
     const sec = jumpSec * Math.max(1, rateRef.current);
     const target = video.currentTime + dir * sec;
     showOsd(`${dir < 0 ? '◀' : '▶'} ${sec}s`);
-    if (crossBoundary(target, !video.paused && !video.ended)) return;
     seekTo(target);
-  }, [video, jumpSec, seekTo, showOsd, crossBoundary]);
+  }, [video, jumpSec, seekTo, showOsd]);
 
   const stepFrame = useCallback((dir: 1 | -1) => {
     const v = video;
@@ -176,9 +172,8 @@ export default function VideoTransport({ video, children, hotkeys = true, onBoun
     const base = last && Math.abs(last.mediaTime - v.currentTime) < fs * 1.5 ? last.mediaTime : v.currentTime;
     const target = base + dir * fs * n + (dir > 0 ? 0.001 : 0);
     showOsd(dir < 0 ? `◀ ${n}f` : `${n}f ▶`);
-    if (crossBoundary(target, false)) return;
     seekTo(target);
-  }, [video, frameSec, seekTo, showOsd, crossBoundary]);
+  }, [video, frameSec, seekTo, showOsd]);
 
   const toggleMute = useCallback(() => {
     if (!video) return;
@@ -222,18 +217,13 @@ export default function VideoTransport({ video, children, hotkeys = true, onBoun
       if (rateRef.current > 0 && v.playbackRate !== rateRef.current) setRate(v.playbackRate);
     };
     const onVolume = () => setMuted(v.muted);
-    // 재생이 끝까지 가면 다음 회차로 이어서 재생
-    const onEnded = () => {
-      syncPlaying();
-      onBoundaryRef.current?.(1, 0, true);
-    };
     v.addEventListener('timeupdate', onTime);
     v.addEventListener('seeked', onTime);
     v.addEventListener('loadedmetadata', onDuration);
     v.addEventListener('durationchange', onDuration);
     v.addEventListener('play', onPlay);
     v.addEventListener('pause', syncPlaying);
-    v.addEventListener('ended', onEnded);
+    v.addEventListener('ended', syncPlaying);
     v.addEventListener('ratechange', onRateChange);
     v.addEventListener('volumechange', onVolume);
 
@@ -268,7 +258,7 @@ export default function VideoTransport({ video, children, hotkeys = true, onBoun
       v.removeEventListener('durationchange', onDuration);
       v.removeEventListener('play', onPlay);
       v.removeEventListener('pause', syncPlaying);
-      v.removeEventListener('ended', onEnded);
+      v.removeEventListener('ended', syncPlaying);
       v.removeEventListener('ratechange', onRateChange);
       v.removeEventListener('volumechange', onVolume);
       if (vfcHandle != null && typeof anyV.cancelVideoFrameCallback === 'function') {
@@ -305,6 +295,14 @@ export default function VideoTransport({ video, children, hotkeys = true, onBoun
         case 'KeyW': if (!e.repeat) stepSpeed(1); break;
         case 'KeyQ': stepFrame(-1); break;
         case 'KeyE': stepFrame(1); break;
+        case 'KeyF':
+          if (!onSwitchRef.current) { handled = false; break; }
+          if (!e.repeat) switchRecording(1);
+          break;
+        case 'KeyR':
+          if (!onSwitchRef.current) { handled = false; break; }
+          if (!e.repeat) switchRecording(-1);
+          break;
         default: handled = false;
       }
       if (handled) {
@@ -315,7 +313,7 @@ export default function VideoTransport({ video, children, hotkeys = true, onBoun
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [hotkeys, video, togglePlay, jump, stepSpeed, stepFrame]);
+  }, [hotkeys, video, togglePlay, jump, stepSpeed, stepFrame, switchRecording]);
 
   // 컨트롤 버튼이 포커스를 가져가지 않게 해서 Space 단축키와 충돌을 막는다
   const noFocus = (e: React.MouseEvent) => e.preventDefault();
@@ -339,6 +337,9 @@ export default function VideoTransport({ video, children, hotkeys = true, onBoun
     ['W', t('webcam.hkSpeedUp')],
     ['Q', t('webcam.hkFramePrev', { n: mult })],
     ['E', t('webcam.hkFrameNext', { n: mult })],
+    ...(onSwitchRecording
+      ? ([['R', t('webcam.hkPrevRec')], ['F', t('webcam.hkNextRec')]] as [string, string][])
+      : []),
   ];
 
   return (
@@ -380,18 +381,23 @@ export default function VideoTransport({ video, children, hotkeys = true, onBoun
             {btn(`${t('webcam.hkPlayPause')} (Space)`, playing ? <PauseOutlined /> : <CaretRightOutlined />, togglePlay)}
             {btn(`${t('webcam.hkJumpFwd', { sec: effJump })} (D)`, <ForwardOutlined />, () => jump(1))}
             {btn(`${t('webcam.hkFrameNext', { n: mult })} (E)`, <StepForwardOutlined />, () => stepFrame(1))}
+            {onSwitchRecording && btn(`${t('webcam.hkPrevRec')} (R)`, <DoubleLeftOutlined />, () => switchRecording(-1))}
+            {onSwitchRecording && btn(`${t('webcam.hkNextRec')} (F)`, <DoubleRightOutlined />, () => switchRecording(1))}
             <span style={{ fontSize: 11, fontFamily: 'monospace', margin: '0 4px', whiteSpace: 'nowrap' }}>
               {formatTime(time)} / {formatTime(duration)}
             </span>
             <span style={{ flex: 1 }} />
-            {btn(`${t('webcam.hkSpeedDown')} (S)`, null, () => stepSpeed(-1), '−')}
-            <Tooltip title={t('webcam.speed')}>
-              <span style={{
-                fontSize: 11, fontWeight: 700, minWidth: 34, textAlign: 'center',
-                color: rate === 0 ? '#fa541c' : rate > 1 ? '#1677ff' : undefined,
-              }}>{formatRate(rate)}</span>
-            </Tooltip>
-            {btn(`${t('webcam.hkSpeedUp')} (W)`, null, () => stepSpeed(1), '+')}
+            {/* − 배속 + 는 줄바꿈 시 함께 넘어가도록 한 묶음으로 */}
+            <span style={{ display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+              {btn(`${t('webcam.hkSpeedDown')} (S)`, null, () => stepSpeed(-1), '−')}
+              <Tooltip title={t('webcam.speed')}>
+                <span style={{
+                  fontSize: 11, fontWeight: 700, minWidth: 34, textAlign: 'center',
+                  color: rate === 0 ? '#fa541c' : rate > 1 ? '#1677ff' : undefined,
+                }}>{formatRate(rate)}</span>
+              </Tooltip>
+              {btn(`${t('webcam.hkSpeedUp')} (W)`, null, () => stepSpeed(1), '+')}
+            </span>
             <Tooltip title={t('webcam.jumpStep')}>
               <Select
                 size="small"
