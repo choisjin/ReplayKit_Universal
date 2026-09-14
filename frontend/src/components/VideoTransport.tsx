@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Select, Slider, Tooltip } from 'antd';
+import { Button, Popover, Select, Slider, Tooltip } from 'antd';
 import {
   BackwardOutlined, CaretRightOutlined, DoubleLeftOutlined, DoubleRightOutlined, ForwardOutlined, FullscreenExitOutlined, FullscreenOutlined,
   MutedOutlined, PauseOutlined, SoundOutlined, StepBackwardOutlined, StepForwardOutlined,
@@ -27,6 +27,16 @@ const formatTime = (sec: number): string => {
 
 const formatRate = (r: number) => `x${r}`;
 
+// 키보드 아이콘 — antd 아이콘 세트에 없고, ⌨ 문자는 글꼴에 따라 네모(tofu)로 보여 SVG 로 그린다
+const KeyboardIcon = () => (
+  <span className="anticon" role="img" aria-hidden>
+    <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+      <rect x="2.5" y="6" width="19" height="12" rx="2" />
+      <path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M6.5 13.5h.01M17 13.5h.01M9.5 14h5" />
+    </svg>
+  </span>
+);
+
 // 모달/이미지 미리보기가 떠 있으면 단축키를 양보한다.
 const overlayOpen = (): boolean =>
   Array.from(document.querySelectorAll('.ant-modal-wrap, .ant-image-preview-wrap'))
@@ -51,9 +61,11 @@ interface Props {
    * 전환했으면 true, 인접 영상이 없으면 false.
    */
   onSwitchRecording?: (dir: 1 | -1, wasPlaying: boolean) => boolean;
+  /** 전체화면 버튼 오른쪽에 붙일 아이콘 버튼 (예: 구간 저장, 삭제). 단축키 버튼은 그 뒤에 온다. */
+  extraActions?: React.ReactNode;
 }
 
-export default function VideoTransport({ video, children, hotkeys = true, onSwitchRecording }: Props) {
+export default function VideoTransport({ video, children, hotkeys = true, onSwitchRecording, extraActions }: Props) {
   const { t } = useTranslation();
   const wrapRef = useRef<HTMLDivElement>(null);
   const onSwitchRef = useRef(onSwitchRecording);
@@ -345,7 +357,7 @@ export default function VideoTransport({ video, children, hotkeys = true, onSwit
   return (
     <div>
       <style>{`
-        .vt-wrap:fullscreen { background: #000; display: flex; flex-direction: column; padding: 8px; }
+        .vt-wrap:fullscreen { background: #000; display: flex; flex-direction: column; padding: 8px; position: relative; }
         .vt-wrap:fullscreen .vt-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
         .vt-wrap:fullscreen video { max-height: 100% !important; height: 100%; object-fit: contain; margin: 0 !important; }
         .vt-wrap:fullscreen .vt-bar { color: #fff; }
@@ -411,25 +423,39 @@ export default function VideoTransport({ video, children, hotkeys = true, onSwit
             </Tooltip>
             {btn(t('webcam.mute'), muted ? <MutedOutlined /> : <SoundOutlined />, toggleMute)}
             {btn(t('webcam.fullscreen'), isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />, toggleFullscreen)}
+            {extraActions}
+            {hotkeys && (
+              <Popover
+                trigger="click"
+                placement="topRight"
+                title={t('webcam.hotkeys')}
+                // 전체화면에서는 전체화면 요소 안에 띄워야 보인다 (body 에 붙으면 가려짐)
+                getPopupContainer={() => (isFullscreen && wrapRef.current) || document.body}
+                content={
+                  <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 8px', alignItems: 'center', fontSize: 12 }}>
+                    {hotkeyRows.map(([k, label]) => (
+                      <React.Fragment key={k}>
+                        <span className="vt-key" style={{ justifySelf: 'start' }}>{k}</span>
+                        <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                }
+              >
+                <Button
+                  size="small"
+                  type="text"
+                  title={t('webcam.hotkeys')}
+                  aria-label={t('webcam.hotkeys')}
+                  disabled={disabled}
+                  onMouseDown={noFocus}
+                  icon={<KeyboardIcon />}
+                />
+              </Popover>
+            )}
           </div>
         </div>
       </div>
-      {hotkeys && (
-        <div style={{
-          marginTop: 4, padding: '4px 6px', borderRadius: 4, fontSize: 11,
-          background: 'rgba(128,128,128,0.08)', border: '1px dashed rgba(128,128,128,0.3)',
-        }}>
-          <div style={{ fontWeight: 600, marginBottom: 2 }}>⌨ {t('webcam.hotkeys')}</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '2px 8px' }}>
-            {hotkeyRows.map(([k, label]) => (
-              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', overflow: 'hidden' }}>
-                <span className="vt-key">{k}</span>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }} title={label}>{label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

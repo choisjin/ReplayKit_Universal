@@ -1917,6 +1917,67 @@ export default function ResultsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stepFilters, hiddenStepCols]);
 
+  // 웹캠 컨트롤러의 전체화면 버튼 오른쪽 아이콘 — 현재 회차 녹화 구간 저장 / 삭제.
+  // 구간 저장 모달·삭제 확인창은 전체화면 요소 밖(body)에 뜨므로 먼저 전체화면을 해제한다.
+  const activeRecording = recordings.find(r => r.url === activeRecUrl) || recordings[0];
+  const exitVideoFullscreen = () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  };
+  const recordingActions = activeRecording ? (
+    <>
+      <Tooltip title={t('webcam.trimSave')} mouseEnterDelay={0.4}>
+        <Button
+          size="small"
+          type="text"
+          icon={<ScissorOutlined />}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            exitVideoFullscreen();
+            const rec = activeRecording;
+            setTrimFile(rec.rel_path || rec.filename);
+            setTrimStart(0);
+            // 비디오 길이를 임시 video 요소로 가져와 trimEnd 초기화.
+            // 서빙 URL(rec.url)을 그대로 써야 한다 — 레거시 /recordings/ 는
+            // 런 폴더 녹화에 존재하지 않아 항상 onerror 로 빠졌다.
+            const tmpVideo = document.createElement('video');
+            tmpVideo.src = rec.url;
+            tmpVideo.onloadedmetadata = () => {
+              setTrimEnd(Math.round(tmpVideo.duration * 10) / 10);
+              tmpVideo.src = '';
+            };
+            tmpVideo.onerror = () => setTrimEnd(0);
+          }}
+        />
+      </Tooltip>
+      <Tooltip title={t('common.delete')} mouseEnterDelay={0.4}>
+        <Button
+          size="small"
+          type="text"
+          danger
+          icon={<DeleteOutlined />}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            exitVideoFullscreen();
+            const rec = activeRecording;
+            Modal.confirm({
+              title: t('webcam.deleteConfirm'), okType: 'danger',
+              onOk: async () => {
+                try {
+                  await resultsApi.deleteRecording(rec.rel_path || rec.filename);
+                  message.success(t('webcam.deleteSuccess'));
+                  if (rec.url === activeRecUrl) setActiveRecUrl('');
+                  fetchRecordings(detailFilename);
+                } catch (e: any) {
+                  message.error(e?.response?.data?.detail || t('webcam.deleteFailed'));
+                }
+              },
+            });
+          }}
+        />
+      </Tooltip>
+    </>
+  ) : null;
+
   // 웹캠 패널 아래 빈 공간 — 영상 현재 위치 스텝의 비교 이미지(기대/실제). 이미지가 있는 스텝일 때만 보인다.
   // 클릭하면 기존 비교 모달을 연다.
   const renderPlayingStepImages = () => {
@@ -2436,8 +2497,8 @@ export default function ResultsPage() {
                       }
                       bodyStyle={{ padding: 5 }}
                     >
-                      <div style={{ marginBottom: 5 }}>
-                        <VideoTransport video={detailVideoEl} onSwitchRecording={switchRecording}>
+                      <div>
+                        <VideoTransport video={detailVideoEl} onSwitchRecording={switchRecording} extraActions={recordingActions}>
                           <video
                             key={activeRecBlobUrl}
                             ref={bindDetailVideo}
@@ -2451,75 +2512,6 @@ export default function ResultsPage() {
                           />
                         </VideoTransport>
                       </div>
-                      {/* 회차 선택은 드롭다운 하나로 충분하다 (예전의 R1/R2 목록은 제거).
-                          편집/삭제는 아래에 별도 버튼으로 분리 — 선택된 회차에 적용된다. */}
-                      {recordings.length > 0 && (() => {
-                        const selectedRec = recordings.find(r => r.url === activeRecUrl) || recordings[0];
-                        const recPath = (r: RecordingItem) => r.rel_path || r.filename;
-                        return (
-                          <>
-                            <Select
-                              size="small"
-                              value={activeRecRepeat}
-                              onChange={(v) => {
-                                const rec = recordings.find(r => cycleIndexOf(r.filename) === v);
-                                if (rec) { setActiveRecUrl(rec.url); setActiveRecRepeat(v); if (detailPagerCyclesRef.current.includes(v)) setDetailCycle(v); }
-                              }}
-                              style={{ width: '100%', marginBottom: 5 }}
-                              options={recordings.map(r => {
-                                const ri = cycleIndexOf(r.filename);
-                                const label = ri === Number.MAX_SAFE_INTEGER ? r.filename : `${t('webcam.repeat')} ${ri}`;
-                                return { value: ri, label: `${label}  (${(r.size / 1024 / 1024).toFixed(1)} MB)` };
-                              })}
-                            />
-                            <Space size={4} style={{ width: '100%' }}>
-                              <Button
-                                size="small"
-                                icon={<ScissorOutlined />}
-                                disabled={!selectedRec}
-                                onClick={() => {
-                                  if (!selectedRec) return;
-                                  setTrimFile(recPath(selectedRec));
-                                  setTrimStart(0);
-                                  // 비디오 길이를 임시 video 요소로 가져와 trimEnd 초기화.
-                                  // 서빙 URL(rec.url)을 그대로 써야 한다 — 레거시 /recordings/ 는
-                                  // 런 폴더 녹화에 존재하지 않아 항상 onerror 로 빠졌다.
-                                  const tmpVideo = document.createElement('video');
-                                  tmpVideo.src = selectedRec.url;
-                                  tmpVideo.onloadedmetadata = () => {
-                                    setTrimEnd(Math.round(tmpVideo.duration * 10) / 10);
-                                    tmpVideo.src = '';
-                                  };
-                                  tmpVideo.onerror = () => setTrimEnd(0);
-                                }}
-                              >
-                                {t('webcam.trimSave')}
-                              </Button>
-                              <Button
-                                size="small"
-                                danger
-                                icon={<DeleteOutlined />}
-                                disabled={!selectedRec}
-                                onClick={() => selectedRec && Modal.confirm({
-                                  title: t('webcam.deleteConfirm'), okType: 'danger',
-                                  onOk: async () => {
-                                    try {
-                                      await resultsApi.deleteRecording(recPath(selectedRec));
-                                      message.success(t('webcam.deleteSuccess'));
-                                      if (selectedRec.url === activeRecUrl) setActiveRecUrl('');
-                                      fetchRecordings(detailFilename);
-                                    } catch (e: any) {
-                                      message.error(e?.response?.data?.detail || t('webcam.deleteFailed'));
-                                    }
-                                  },
-                                })}
-                              >
-                                {t('common.delete')}
-                              </Button>
-                            </Space>
-                          </>
-                        );
-                      })()}
                     </Card>
                     {renderPlayingStepImages()}
                     </>
