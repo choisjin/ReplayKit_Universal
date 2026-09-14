@@ -602,9 +602,8 @@ export default function ResultsPage() {
 
     const videoDuration = video.duration;
     const hasDuration = Number.isFinite(videoDuration) && videoDuration > 0;
-    // 스텝 시점 2초 전부터 재생(맥락을 보며 들어가도록). 0 미만은 0으로 클램프.
-    const PRE_ROLL_SEC = 2;
-    const targetOffset = Math.max(0, pending.offset - PRE_ROLL_SEC);
+    // 선택한 스텝의 시작 시점부터 재생 (이전 스텝 구간 프리롤 없음). 0 미만은 0으로 클램프.
+    const targetOffset = Math.max(0, pending.offset);
     const seekTime = hasDuration
       ? Math.min(targetOffset, Math.max(0, videoDuration - 0.05))
       : targetOffset;
@@ -845,6 +844,23 @@ export default function ResultsPage() {
       setActiveRecRepeat(cycle);
     }
   }, [recordings, activeRecUrl, cancelPendingSeek]);
+
+  // 영상 현재 위치의 스텝 (재생 행 강조와 같은 판정) — 웹캠 패널 아래 비교 이미지에 쓴다
+  const playingStepInfo = React.useMemo(() => {
+    if (!playingRowKey) return null;
+    if (groupDetail && groupDetail.length > 0) {
+      const hash = playingRowKey.lastIndexOf('#');
+      const file = playingRowKey.slice(0, hash);
+      const si = Number(playingRowKey.slice(hash + 1));
+      const d = groupDetail.find(g => (g._filename ?? '') === file);
+      const step = d?.step_results[si];
+      return step ? { step, srcIndex: si, filename: d?._filename || detailFilename } : null;
+    }
+    if (!detail || !playingRowKey.startsWith('row_')) return null;
+    const i = Number(playingRowKey.slice(4));
+    const step = detail.step_results[i];
+    return step ? { step, srcIndex: i, filename: detailFilename } : null;
+  }, [playingRowKey, detail, groupDetail, detailFilename]);
 
   // 녹화(회차)가 바뀌면 이전 영상 기준 하이라이트는 무효
   useEffect(() => {
@@ -1901,6 +1917,48 @@ export default function ResultsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stepFilters, hiddenStepCols]);
 
+  // 웹캠 패널 아래 빈 공간 — 영상 현재 위치 스텝의 비교 이미지(기대/실제). 이미지가 있는 스텝일 때만 보인다.
+  // 클릭하면 기존 비교 모달을 연다.
+  const renderPlayingStepImages = () => {
+    const info = playingStepInfo;
+    const s = info?.step;
+    if (!info || !s || !(s.expected_image || s.actual_image)) return null;
+    const images = [
+      { key: 'expected', label: t('results.expectedImage'), src: imageUrl(s.expected_annotated_image || s.expected_image) },
+      { key: 'actual', label: t('results.actualImage'), src: imageUrl(s.actual_annotated_image || s.actual_image) },
+    ].filter(img => !!img.src);
+    const open = () => openCompare({ ...s, _srcIndex: info.srcIndex, _filename: info.filename }, info.srcIndex);
+    return (
+      <Card
+        size="small"
+        style={{ marginTop: 6 }}
+        styles={{ body: { padding: 5 } }}
+        title={
+          <Space size={4} wrap>
+            <span>Step {s.step_id}</span>
+            <Tag color={statusColor(effStatus(s))} style={{ margin: 0 }}>{statusText(effStatus(s), t)}</Tag>
+            {s.similarity_score != null && (
+              <span style={{ fontSize: 11, color: '#888' }}>{(s.similarity_score * 100).toFixed(1)}%</span>
+            )}
+          </Space>
+        }
+      >
+        {s.description && <div style={{ fontSize: 11, marginBottom: 4 }}>{s.description}</div>}
+        {images.map(img => (
+          <div
+            key={img.key}
+            style={{ marginBottom: 4, cursor: 'pointer' }}
+            onClick={open}
+            title={t('results.stepCompare', { id: String(s.step_id) })}
+          >
+            <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>{img.label}</div>
+            <img src={img.src!} alt={img.label} style={{ width: '100%', display: 'block', borderRadius: 3, background: '#000' }} />
+          </div>
+        ))}
+      </Card>
+    );
+  };
+
   const renderCyclePager = (isStopped: (cycle: number) => boolean) => {
     const cycles = detailPagerCycles;
     if (cycles.length === 0) {
@@ -2365,6 +2423,7 @@ export default function ResultsPage() {
               {recordings.length > 0 && (
                 <div style={{ width: webcamPanelOpen ? (webcamExpanded ? '60%' : 380) : 36, flexShrink: 0, transition: 'width 0.2s', overflowY: 'auto' }}>
                   {webcamPanelOpen ? (
+                    <>
                     <Card
                       size="small"
                       title={<Space size={4}><VideoCameraOutlined />{t('webcam.recordings')}</Space>}
@@ -2462,6 +2521,8 @@ export default function ResultsPage() {
                         );
                       })()}
                     </Card>
+                    {renderPlayingStepImages()}
+                    </>
                   ) : (
                     <Tooltip title={t('webcam.recordings')} placement="right">
                       <Button
