@@ -6,6 +6,7 @@ import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
 import type { TranslationKey } from '../i18n';
 import VideoTransport from '../components/VideoTransport';
+import type { TableRef } from 'antd/es/table';
 
 interface ResultSummary {
   filename: string;
@@ -271,6 +272,9 @@ const ExportProgressButton: React.FC<{
   );
 };
 
+// 그룹 상세 행 키 — 결과 파일 + 그 파일 step_results 내 원본 인덱스 (step_id 는 반복/점프로 중복됨)
+const groupRowKey = (filename: string | undefined, srcIndex: number | undefined) => `${filename ?? ''}#${srcIndex ?? -1}`;
+
 export default function ResultsPage() {
   const { settings } = useSettings();
   const { t, lang } = useTranslation();
@@ -299,10 +303,17 @@ export default function ResultsPage() {
     tableBoxObserverRef.current?.disconnect();
     tableBoxObserverRef.current = null;
     if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const h = entries[0]?.contentRect.height ?? 0;
-      // 헤더 행(small ≈ 37px) + 가로 스크롤바 여유
-      setDetailTableY(Math.max(200, Math.floor(h - 52)));
+    // 헤더 높이는 고정값으로 가정하면 안 된다 — 컬럼 제목이 줄바꿈되면 100px 을 넘기고,
+    // 그만큼 본문 아래쪽이 박스(overflow:hidden) 밖으로 잘려 '보이는 행'이 실제로는 가려진다.
+    // 표 래퍼도 관찰해 헤더 높이 변화(컬럼 접기 등)에 다시 맞춘다. y 가 바뀌어도 헤더 높이는
+    // 그대로라 한 번 더 호출된 뒤 수렴한다.
+    const ro = new ResizeObserver(() => {
+      const wrapper = el.querySelector('.ant-table-wrapper');
+      if (wrapper) ro.observe(wrapper);
+      const header = el.querySelector('.ant-table-header') as HTMLElement | null;
+      const headerH = header ? header.offsetHeight : 40;
+      // 가로 스크롤바 여유
+      setDetailTableY(Math.max(120, Math.floor(el.clientHeight - headerH - 12)));
     });
     ro.observe(el);
     tableBoxObserverRef.current = ro;
@@ -395,7 +406,12 @@ export default function ResultsPage() {
   const pendingSeekRef = useRef<{ offset: number; recUrl: string; applied: boolean } | null>(null);
   // 새 seek 요청이 발생할 때마다 증가시켜 useEffect를 트리거한다.
   const [pendingSeekTick, setPendingSeekTick] = useState(0);
-  const [currentPlayingStepId, setCurrentPlayingStepId] = useState<number | null>(null);
+  // 영상 현재 위치에 해당하는 스텝 결과 행 키 (단일: row_{원본인덱스}, 그룹: groupRowKey)
+  const [playingRowKey, setPlayingRowKey] = useState<string | null>(null);
+  const detailTableRef = useRef<TableRef>(null);
+  // 컬럼 필터가 걸린 동안 표에 보이는 행 키 (null = 필터 없음). 숨겨진 행으로 scrollTo 하면
+  // rc-virtual-list 가 index -1 로 맨 위로 튀므로 따라가기 전에 확인한다.
+  const filteredRowKeysRef = useRef<Set<string> | null>(null);
   const [trimFile, setTrimFile] = useState<string | null>(null);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
@@ -728,52 +744,80 @@ export default function ResultsPage() {
     }
   }, []);
 
-  // 비디오 재생 시 현재 스텝 실시간 하이라이트.
-  // started_at 사이드카가 있으면 video time → wall-clock으로 직접 변환하여 정확히 매칭.
-  // 없으면 첫 스텝 timestamp를 비디오 0초로 가정하는 레거시 휴리스틱으로 폴백.
+  // 영상 위치 → 스텝 결과 행 하이라이트 ("지금 어느 동작의 영상인가").
+  // 스텝 timestamp 는 스텝 '시작' 시각이므로, 현재 영상 시각 이전에 시작한 마지막 스텝이 보이는 동작이다.
+  // started_at 사이드카가 있으면 video time → wall-clock 으로 직접 변환하여 매칭하고,
+  // 없으면 첫 스텝 timestamp 를 비디오 0초로 가정하는 레거시 휴리스틱으로 폴백.
+  // 행은 step_id 가 아니라 원본 위치로 식별한다 — 반복/조건부이동 재실행으로 step_id 가 중복된다.
+  // 일시정지·프레임 이동 중에도 유지해야 멈춰 둔 화면이 어느 동작인지 알 수 있다 (seek 도 timeupdate 발생).
   const handleVideoTimeUpdate = useCallback(() => {
     const video = detailVideoRef.current;
     if (!video || (!detail && !groupDetail)) return;
     const currentTime = video.currentTime;
-    const sameRepeatSteps = getAllStepsForRepeat(activeRecRepeat);
-    if (sameRepeatSteps.length === 0) return;
 
-    // 활성 녹화 메타에서 started_at 조회 (1순위)
+    // 현재 녹화 회차의 스텝을 실행 순서대로 행 키와 함께 수집
+    const candidates: { key: string; ts: number }[] = [];
+    const collect = (s: StepResultDetail, key: string) => {
+      if ((s.repeat_index || 1) !== activeRecRepeat || !s.timestamp) return;
+      const ts = new Date(s.timestamp).getTime();
+      if (Number.isFinite(ts)) candidates.push({ key, ts });
+    };
+    if (groupDetail && groupDetail.length > 0) {
+      for (const d of groupDetail) d.step_results.forEach((s, si) => collect(s, groupRowKey(d._filename, si)));
+    } else if (detail) {
+      detail.step_results.forEach((s, i) => collect(s, `row_${i}`));
+    }
+    if (candidates.length === 0) {
+      setPlayingRowKey(null);
+      return;
+    }
+
     const activeRec = recordings.find(r => r.url === activeRecUrl);
-    const recStartIso = activeRec?.started_at || null;
-    const recStartMs = recStartIso ? new Date(recStartIso).getTime() : NaN;
-    const hasRecStart = Number.isFinite(recStartMs);
+    const recStartMs = activeRec?.started_at ? new Date(activeRec.started_at).getTime() : NaN;
+    const baseMs = Number.isFinite(recStartMs) ? recStartMs : candidates[0].ts;
 
-    // 폴백 기준점: 첫 스텝 timestamp (구 데이터 호환)
-    const firstStep = sameRepeatSteps[0];
-    if (!firstStep?.timestamp) return;
-    const firstTime = new Date(firstStep.timestamp).getTime();
-
-    // 현재 video 시간을 wall-clock(ms) 또는 첫 스텝 기준 오프셋(sec)으로 변환
-    let matchedStep: StepResultDetail | null = null;
-    for (let i = sameRepeatSteps.length - 1; i >= 0; i--) {
-      const s = sameRepeatSteps[i];
-      if (!s.timestamp) continue;
-      if (hasRecStart) {
-        const stepOffset = (new Date(s.timestamp).getTime() - recStartMs) / 1000;
-        if (currentTime >= stepOffset - 0.5) {
-          matchedStep = s;
-          break;
-        }
-      } else {
-        const stepOffset = (new Date(s.timestamp).getTime() - firstTime) / 1000;
-        if (currentTime >= stepOffset - 0.5) {
-          matchedStep = s;
-          break;
-        }
+    let matched: string | null = null;
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      if (currentTime >= (candidates[i].ts - baseMs) / 1000 - 0.5) {
+        matched = candidates[i].key;
+        break;
       }
     }
-    setCurrentPlayingStepId(matchedStep?.step_id ?? null);
-  }, [detail, groupDetail, activeRecRepeat, getAllStepsForRepeat, recordings, activeRecUrl]);
+    // 같은 키면 React 가 리렌더를 건너뛰므로 timeupdate(≈4Hz)마다 호출해도 부담 없음
+    setPlayingRowKey(matched);
+  }, [detail, groupDetail, activeRecRepeat, recordings, activeRecUrl]);
 
-  const handleVideoPauseOrEnd = useCallback(() => {
-    setCurrentPlayingStepId(null);
-  }, []);
+  // 녹화(회차)가 바뀌면 이전 영상 기준 하이라이트는 무효
+  useEffect(() => {
+    setPlayingRowKey(null);
+  }, [activeRecUrl]);
+
+  // 재생 위치의 행을 따라간다. 행이 이미 보이면 스크롤하지 않는다
+  // (rc-virtual-list scrollTo 는 align 미지정 시 화면 밖일 때만 top/bottom 으로 맞춤).
+  // 그룹 상세는 회차별 표라 영상 회차로 전환한 뒤, 그 데이터가 렌더되고 나서 스크롤한다.
+  const lastFollowedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!playingRowKey) {
+      lastFollowedKeyRef.current = null;
+      return;
+    }
+    const isGroup = !!groupDetail && groupDetail.length > 0;
+    const follow = () => {
+      const shown = filteredRowKeysRef.current;
+      if (shown && !shown.has(playingRowKey)) return;
+      try { detailTableRef.current?.scrollTo({ key: playingRowKey }); } catch { /* ignore */ }
+    };
+    if (lastFollowedKeyRef.current !== playingRowKey) {
+      lastFollowedKeyRef.current = playingRowKey;
+      if (isGroup && groupDetailCycle !== activeRecRepeat) {
+        setGroupDetailCycle(activeRecRepeat);
+        return;  // groupDetailCycle 변경으로 이 effect 가 다시 돌며 스크롤
+      }
+      follow();
+    } else if (isGroup && groupDetailCycle === activeRecRepeat) {
+      follow();
+    }
+  }, [playingRowKey, groupDetail, groupDetailCycle, activeRecRepeat]);
 
   const fetchResults = async () => {
     setLoading(true);
@@ -833,7 +877,8 @@ export default function ResultsPage() {
     setDetailVisible(false);
     setWebcamPanelOpen(false);
     setWebcamExpanded(false);
-    setCurrentPlayingStepId(null);
+    setPlayingRowKey(null);
+    filteredRowKeysRef.current = null;
     setGroupDetail(null);
   }, []);
 
@@ -1992,7 +2037,7 @@ export default function ResultsPage() {
                         </Space>
                         {activeRecBlobUrl && (
                           <VideoTransport video={detailVideoEl}>
-                            <video key={activeRecBlobUrl} ref={bindDetailVideo} src={activeRecBlobUrl} preload="auto" onLoadedMetadata={handleVideoCanPlay} onCanPlay={handleVideoCanPlay} onTimeUpdate={handleVideoTimeUpdate} onPause={handleVideoPauseOrEnd} onEnded={handleVideoPauseOrEnd} onError={handleVideoError} style={{ width: '100%', maxHeight: 400, background: '#000', display: 'block' }} />
+                            <video key={activeRecBlobUrl} ref={bindDetailVideo} src={activeRecBlobUrl} preload="auto" onLoadedMetadata={handleVideoCanPlay} onCanPlay={handleVideoCanPlay} onTimeUpdate={handleVideoTimeUpdate} onError={handleVideoError} style={{ width: '100%', maxHeight: 400, background: '#000', display: 'block' }} />
                           </VideoTransport>
                         )}
                       </div>
@@ -2006,9 +2051,16 @@ export default function ResultsPage() {
               </div>
               <div ref={bindTableBox} style={{ flex: 1, minHeight: 250, overflow: 'hidden' }}>
               <Table
+                ref={detailTableRef}
                 columns={stepColumns as any}
                 dataSource={cycleSteps}
-                rowKey={(r: any) => `${r._seq || r.step_id}_${r.repeat_index}_${r.device_id}`}
+                rowKey={(r: any) => groupRowKey(r._filename, r._srcIndex)}
+                onChange={(_p, filters, _s, extra) => {
+                  const active = Object.values(filters || {}).some(v => v && v.length);
+                  filteredRowKeysRef.current = active
+                    ? new Set((extra.currentDataSource as any[]).map(r => groupRowKey(r._filename, r._srcIndex)))
+                    : null;
+                }}
                 size="small"
                 virtual
                 pagination={false}
@@ -2018,7 +2070,8 @@ export default function ResultsPage() {
                   // 시나리오 경계 (이전 스텝과 시나리오명 다르면)
                   const prevScenario = idx > 0 ? (cycleSteps[idx - 1] as any)?._scenarioName : null;
                   const boundary = prevScenario && prevScenario !== r._scenarioName ? 'scenario-boundary' : '';
-                  return `${statusCls} ${boundary}`.trim();
+                  const playing = playingRowKey === groupRowKey(r._filename, r._srcIndex) ? 'result-row-playing' : '';
+                  return `${statusCls} ${boundary} ${playing}`.trim();
                 }}
               />
               </div>
@@ -2175,8 +2228,6 @@ export default function ResultsPage() {
                             onLoadedMetadata={handleVideoCanPlay}
                             onCanPlay={handleVideoCanPlay}
                             onTimeUpdate={handleVideoTimeUpdate}
-                            onPause={handleVideoPauseOrEnd}
-                            onEnded={handleVideoPauseOrEnd}
                             onError={handleVideoError}
                             style={{ width: '100%', borderRadius: 4, background: '#000', display: 'block' }}
                           />
@@ -2275,10 +2326,18 @@ export default function ResultsPage() {
                 </div>
                 <div ref={bindTableBox} style={{ flex: 1, minHeight: 250, overflow: 'hidden' }}>
                 <Table
+                  ref={detailTableRef}
                   columns={stepColumns}
                   dataSource={detail.step_results}
-                  // step_id는 반복/조건부이동 재실행 시 중복되므로 행 위치로 키 부여
-                  rowKey={(_r: StepResultDetail, idx?: number) => `row_${idx}`}
+                  // step_id는 반복/조건부이동 재실행 시 중복되므로 원본 위치로 키 부여
+                  // (render index 는 컬럼 필터 적용 후 기준이라 쓰지 않는다)
+                  rowKey={(r: StepResultDetail) => `row_${stepIndexMap.get(r)}`}
+                  onChange={(_p, filters, _s, extra) => {
+                    const active = Object.values(filters || {}).some(v => v && v.length);
+                    filteredRowKeysRef.current = active
+                      ? new Set(extra.currentDataSource.map(r => `row_${stepIndexMap.get(r)}`))
+                      : null;
+                  }}
                   size="small"
                   virtual
                   // 고정폭 합계 + Remark 최소폭. 컬럼을 접으면 x 가 줄어 Remark 가 그만큼 넓어진다.
@@ -2289,7 +2348,7 @@ export default function ResultsPage() {
                       r.status === 'fail' ? 'result-row-fail' :
                       r.status === 'error' ? 'result-row-error' :
                       r.status === 'warning' ? 'result-row-warning' : '';
-                    const playingCls = currentPlayingStepId === r.step_id && (r.repeat_index || 1) === activeRecRepeat ? 'result-row-playing' : '';
+                    const playingCls = playingRowKey === `row_${stepIndexMap.get(r)}` ? 'result-row-playing' : '';
                     return [statusCls, playingCls].filter(Boolean).join(' ');
                   }}
                   onRow={(r) => ({
@@ -2537,9 +2596,17 @@ export default function ResultsPage() {
         .result-row-fail td { background: rgba(255, 77, 79, 0.08) !important; }
         .result-row-error td { background: rgba(255, 122, 69, 0.08) !important; }
         .result-row-warning td { background: rgba(250, 173, 20, 0.08) !important; }
-        .result-row-playing td { background: rgba(22, 119, 255, 0.18) !important; box-shadow: inset 3px 0 0 #1677ff; }
-        @keyframes playingPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
-        .result-row-playing td:first-child { animation: playingPulse 1.5s infinite; }
+        /* 재생 중인 동작 행. 가상 스크롤 테이블은 행/셀이 div(.ant-table-cell)라 td 선택자로는 안 잡힌다.
+           행 높이가 고정이라 border 대신 inset box-shadow 로 테두리를 그린다. */
+        .result-row-playing td, .result-row-playing > .ant-table-cell {
+          background: rgba(22, 119, 255, 0.22) !important;
+          box-shadow: inset 0 1px 0 #1677ff, inset 0 -1px 0 #1677ff;
+        }
+        @keyframes playingPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+        .result-row-playing td:first-child, .result-row-playing > .ant-table-cell:first-child {
+          box-shadow: inset 4px 0 0 #1677ff, inset 0 1px 0 #1677ff, inset 0 -1px 0 #1677ff;
+          animation: playingPulse 1.5s infinite;
+        }
         .scenario-boundary td { border-top: 2px solid #1677ff !important; }
       `}</style>
     </div>
