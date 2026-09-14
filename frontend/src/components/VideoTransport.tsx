@@ -27,16 +27,6 @@ const formatTime = (sec: number): string => {
 
 const formatRate = (r: number) => `x${r}`;
 
-// 키보드 아이콘 — antd 아이콘 세트에 없고, ⌨ 문자는 글꼴에 따라 네모(tofu)로 보여 SVG 로 그린다
-const KeyboardIcon = () => (
-  <span className="anticon" role="img" aria-hidden>
-    <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-      <rect x="2.5" y="6" width="19" height="12" rx="2" />
-      <path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M6.5 13.5h.01M17 13.5h.01M9.5 14h5" />
-    </svg>
-  </span>
-);
-
 // 모달/이미지 미리보기가 떠 있으면 단축키를 양보한다.
 const overlayOpen = (): boolean =>
   Array.from(document.querySelectorAll('.ant-modal-wrap, .ant-image-preview-wrap'))
@@ -449,8 +439,10 @@ export default function VideoTransport({ video, children, hotkeys = true, onSwit
                   aria-label={t('webcam.hotkeys')}
                   disabled={disabled}
                   onMouseDown={noFocus}
-                  icon={<KeyboardIcon />}
-                />
+                  style={{ fontSize: 12, paddingInline: 4 }}
+                >
+                  {t('webcam.hotkeysShort')}
+                </Button>
               </Popover>
             )}
           </div>

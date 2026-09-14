@@ -1992,8 +1992,9 @@ export default function ResultsPage() {
     return (
       <Card
         size="small"
-        style={{ marginTop: 6 }}
-        styles={{ body: { padding: 5 } }}
+        // 남은 높이를 채우고, 이미지는 그 안에서 비율 유지로 축소 (패널에 스크롤바가 생기지 않게)
+        style={{ marginTop: 6, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+        styles={{ body: { padding: 5, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 4 } }}
         title={
           <Space size={4} wrap>
             <span>Step {s.step_id}</span>
@@ -2004,16 +2005,21 @@ export default function ResultsPage() {
           </Space>
         }
       >
-        {s.description && <div style={{ fontSize: 11, marginBottom: 4 }}>{s.description}</div>}
         {images.map(img => (
           <div
             key={img.key}
-            style={{ marginBottom: 4, cursor: 'pointer' }}
+            style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', cursor: 'pointer' }}
             onClick={open}
             title={t('results.stepCompare', { id: String(s.step_id) })}
           >
-            <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>{img.label}</div>
-            <img src={img.src!} alt={img.label} style={{ width: '100%', display: 'block', borderRadius: 3, background: '#000' }} />
+            <div style={{ fontSize: 11, color: '#888', marginBottom: 2, flexShrink: 0 }}>{img.label}</div>
+            <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+              <img
+                src={img.src!}
+                alt={img.label}
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }}
+              />
+            </div>
           </div>
         ))}
       </Card>
@@ -2482,11 +2488,16 @@ export default function ResultsPage() {
             <div style={{ display: 'flex', gap: 6, flex: 1, minHeight: 300, overflow: 'hidden' }}>
               {/* 좌측: 웹캠 녹화 패널 (접힘/펼침) */}
               {recordings.length > 0 && (
-                <div style={{ width: webcamPanelOpen ? (webcamExpanded ? '60%' : 380) : 36, flexShrink: 0, transition: 'width 0.2s', overflowY: 'auto' }}>
+                <div style={{
+                  width: webcamPanelOpen ? (webcamExpanded ? '60%' : 380) : 36, flexShrink: 0, transition: 'width 0.2s',
+                  // 스크롤 없이 한 화면에 — 웹캠 카드는 제 높이, 비교 이미지 카드가 남은 높이를 채운다
+                  display: 'flex', flexDirection: 'column', overflow: 'hidden',
+                }}>
                   {webcamPanelOpen ? (
                     <>
                     <Card
                       size="small"
+                      style={{ flexShrink: 0 }}
                       title={<Space size={4}><VideoCameraOutlined />{t('webcam.recordings')}</Space>}
                       extra={
                         <Space size={0}>
