@@ -123,6 +123,7 @@ interface SubResultData {
 
 interface StepResultData {
   step_id: number;
+  capture_video?: string | null;  // Webcam.Capture 영상 → Status 'Capture' 표기
   repeat_index: number;
   // 백엔드가 보내는 실행 단위 고유 ID. 조건부이동으로 같은 step_id를 다시 방문하면
   // 매 실행마다 새 값이 부여되어 dedup이 revisit 행을 누락시키지 않음.
@@ -200,11 +201,11 @@ interface GroupEntry {
 }
 
 const statusColor = (s: string) =>
-  s === 'pass' ? 'green' : s === 'warning' ? 'orange' : s === 'error' ? 'volcano' : s === 'branch' ? 'purple' : 'red';
+  s === 'pass' ? 'green' : s === 'warning' ? 'orange' : s === 'error' ? 'volcano' : s === 'branch' ? 'purple' : s === 'capture' ? 'cyan' : 'red';
 
-// 'branch'(조건부이동 결과 미반영)는 '분기'로, 그 외는 대문자 그대로 표기
+// 'branch'(조건부이동 결과 미반영)는 '분기', 'capture'(Webcam.Capture)는 'Capture', 그 외는 대문자 그대로 표기
 const statusLabel = (s: string, t: (k: TranslationKey) => string) =>
-  s === 'branch' ? t('results.statusBranch') : s.toUpperCase();
+  s === 'branch' ? t('results.statusBranch') : s === 'capture' ? t('results.statusCapture') : s.toUpperCase();
 
 // Branch Mode(조건부이동 결과 미반영) UI 노출 여부 — 요청 시 true로 전환하면 다시 노출됨.
 // 백엔드 로직·결과 표시는 그대로 유지되며 설정 체크박스만 숨긴다.
@@ -214,13 +215,14 @@ const BRANCH_MODE_ENABLED = true;
  *  step.id 는 스텝 삽입/삭제 때마다 재부여되므로 선택 상태의 키로 쓰면 안 된다. */
 const stepSkipKey = (s: any): string => String(s?.uid ?? s?.id ?? '');
 
-// 결과 미반영 스텝은 status(실제 pass/fail)와 무관하게 '분기'로 표시
-const effStatus = (r: { status: string; excluded_from_result?: boolean }) =>
-  r.excluded_from_result ? 'branch' : r.status;
+// 결과 미반영 스텝은 status(실제 pass/fail)와 무관하게 '분기'로 표시.
+// Webcam.Capture(판정 없음) 스텝은 성공 시 PASS 대신 'Capture' — 실패(FAIL/ERROR)는 그대로.
+const effStatus = (r: { status: string; excluded_from_result?: boolean; capture_video?: string | null }) =>
+  r.excluded_from_result ? 'branch' : (r.capture_video && r.status === 'pass') ? 'capture' : r.status;
 
 // 상세 보기용 — 분기 스텝은 어느 조건(Pass/Fail)으로 분기됐는지까지 표기
-const statusDetail = (r: { status: string; excluded_from_result?: boolean }, t: (k: TranslationKey) => string) =>
-  r.excluded_from_result ? `${t('results.statusBranch')} (${r.status === 'pass' ? 'PASS' : 'FAIL'})` : statusLabel(r.status, t);
+const statusDetail = (r: { status: string; excluded_from_result?: boolean; capture_video?: string | null }, t: (k: TranslationKey) => string) =>
+  r.excluded_from_result ? `${t('results.statusBranch')} (${r.status === 'pass' ? 'PASS' : 'FAIL'})` : statusLabel(effStatus(r), t);
 
 const imageUrl = (path: string | null) => {
   if (!path) return null;

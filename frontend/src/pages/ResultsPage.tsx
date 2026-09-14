@@ -7,6 +7,7 @@ import { useTranslation } from '../i18n';
 import type { TranslationKey } from '../i18n';
 import VideoTransport from '../components/VideoTransport';
 import CaptureVideoViewer from '../components/CaptureVideoViewer';
+import CaptureGalleryModal, { type CaptureItem } from '../components/CaptureGalleryModal';
 import type { TableRef } from 'antd/es/table';
 
 interface ResultSummary {
@@ -146,19 +147,21 @@ const statusColor = (s: string) =>
     : s === 'error' ? 'volcano'
     : s === 'stopped' ? 'default'
     : s === 'branch' ? 'purple'
+    : s === 'capture' ? 'cyan'
     : 'red';
 
-// 'branch'(조건부이동 결과 미반영)는 '분기'로, 그 외는 대문자 그대로 표기
+// 'branch'(조건부이동 결과 미반영)는 '분기', 'capture'(Webcam.Capture)는 'Capture', 그 외는 대문자 그대로 표기
 const statusText = (s: string, t: (k: TranslationKey) => string) =>
-  s === 'branch' ? t('results.statusBranch') : s.toUpperCase();
+  s === 'branch' ? t('results.statusBranch') : s === 'capture' ? t('results.statusCapture') : s.toUpperCase();
 
-// 결과 미반영 스텝은 status(실제 pass/fail)와 무관하게 '분기'로 표시
-const effStatus = (r: { status: string; excluded_from_result?: boolean }) =>
-  r.excluded_from_result ? 'branch' : r.status;
+// 결과 미반영 스텝은 status(실제 pass/fail)와 무관하게 '분기'로 표시.
+// Webcam.Capture(판정 없음) 스텝은 성공 시 PASS 대신 'Capture' — 실패(FAIL/ERROR)는 그대로. 필터도 이 값 기준.
+const effStatus = (r: { status: string; excluded_from_result?: boolean; capture_video?: string | null }) =>
+  r.excluded_from_result ? 'branch' : (r.capture_video && r.status === 'pass') ? 'capture' : r.status;
 
 // 상세 보기용 — 분기 스텝은 어느 조건(Pass/Fail)으로 분기됐는지까지 표기
-const statusDetail = (r: { status: string; excluded_from_result?: boolean }, t: (k: TranslationKey) => string) =>
-  r.excluded_from_result ? `${t('results.statusBranch')} (${r.status === 'pass' ? 'PASS' : 'FAIL'})` : statusText(r.status, t);
+const statusDetail = (r: { status: string; excluded_from_result?: boolean; capture_video?: string | null }, t: (k: TranslationKey) => string) =>
+  r.excluded_from_result ? `${t('results.statusBranch')} (${r.status === 'pass' ? 'PASS' : 'FAIL'})` : statusText(effStatus(r), t);
 
 // 경로 세그먼트를 URL 인코딩. 시나리오 이름의 sanitize는 `\/:*?"<>|→`와 공백만
 // 제거하므로 `#`, `%`, `?` 같은 문자가 폴더명에 그대로 남을 수 있다. 인코딩하지 않으면
@@ -324,6 +327,8 @@ export default function ResultsPage() {
 
   // 그룹 상세 뷰 (사이클별 통합)
   const [groupDetail, setGroupDetail] = useState<ResultDetail[] | null>(null);
+  // Capture 일괄보기 (전체화면) — 전 사이클 Webcam.Capture 영상
+  const [captureGalleryOpen, setCaptureGalleryOpen] = useState(false);
   // 상세 표에 보이는 회차 (단일/그룹 공통 — 회차별 페이지네이션)
   const [detailCycle, setDetailCycle] = useState(1);
 
@@ -1873,6 +1878,38 @@ export default function ResultsPage() {
     </Dropdown>
   );
 
+  // Capture 일괄보기 대상 — 단일/그룹 결과의 전 사이클 Webcam.Capture 스텝 (사이클 → 실행 시각 순)
+  const captureItems = React.useMemo<CaptureItem[]>(() => {
+    const isGroup = !!(groupDetail && groupDetail.length > 0);
+    const sources = isGroup ? groupDetail! : detail ? [detail] : [];
+    const items: CaptureItem[] = [];
+    for (const d of sources) {
+      for (const s of d.step_results) {
+        if (!s.capture_video) continue;
+        items.push({
+          path: s.capture_video,
+          cycle: s.repeat_index || 1,
+          stepId: s.step_id,
+          description: s.description,
+          command: s.command,
+          timestamp: s.timestamp,
+          status: s.status,
+          scenario: isGroup ? d.scenario_name : undefined,
+        });
+      }
+    }
+    return items
+      .map((it, i) => ({ it, i }))
+      .sort((a, b) => a.it.cycle - b.it.cycle
+        || (a.it.timestamp || '').localeCompare(b.it.timestamp || '') || a.i - b.i)
+      .map(x => x.it);
+  }, [detail, groupDetail]);
+  const captureBulkButton = captureItems.length > 0 ? (
+    <Button size="small" icon={<VideoCameraOutlined />} onClick={() => setCaptureGalleryOpen(true)}>
+      {t('capture.bulkView')} ({captureItems.length})
+    </Button>
+  ) : null;
+
   // 회차 페이지네이션 — 에이징 결과는 회차가 수백 개라 한 표에 몰아넣지 않고 회차별로 나눠 보여준다.
   // 페이지 수는 계획 반복수(total_repeat)가 아니라 실제 실행된 최대 회차 (중단된 실행의 빈 페이지 방지).
   const detailCycleCount = React.useMemo(() => {
@@ -2337,7 +2374,7 @@ export default function ResultsPage() {
                 />
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginBottom: 6 }}>
-                {replaceExpectedBulk}
+                {replaceExpectedBulk}{captureBulkButton}
                 {stepColumnToggle}
               </div>
               <div ref={bindTableBox} style={{ flex: 1, minHeight: 250, overflow: 'hidden' }}>
@@ -2554,7 +2591,7 @@ export default function ResultsPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
                   {renderCyclePager(c => detail.status === 'stopped' && detail.stopped_at_iteration === c)}
                   <span style={{ flex: 1 }} />
-                  {replaceExpectedBulk}
+                  {replaceExpectedBulk}{captureBulkButton}
                   {stepColumnToggle}
                 </div>
                 <div ref={bindTableBox} style={{ flex: 1, minHeight: 250, overflow: 'hidden' }}>
@@ -2598,6 +2635,14 @@ export default function ResultsPage() {
         </div>
       </div>
       )}
+
+      {/* Capture 일괄보기 (전체화면) */}
+      <CaptureGalleryModal
+        open={captureGalleryOpen}
+        items={captureItems}
+        initialCycle={detailCycle}
+        onClose={() => setCaptureGalleryOpen(false)}
+      />
 
       {/* Trim modal */}
       <Modal
