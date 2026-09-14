@@ -1651,6 +1651,97 @@ def stream_recording(rel_path: str, request: Request):
     )
 
 
+_capture_frame_locks: dict[str, threading.Lock] = {}
+_capture_frame_locks_guard = threading.Lock()
+_FRAME_DIGITS = 5
+
+
+@router.get("/capture-frames/{rel_path:path}")
+def capture_frames(rel_path: str):
+    """Webcam.Capture 영상을 전 프레임 JPEG 로 분해해 목록 정보를 돌려준다 ('Frame으로 보기').
+
+    결과: {count, fps, width, height, url_prefix, start, digits} — 프레임 i(0-based)의 URL 은
+    url_prefix + zero-pad(i + start, digits) + ".jpg". 추출물은 영상 옆 `{stem}_frames/` 에
+    캐시하고(frames.json 의 영상 size/mtime 가 같으면 재사용), 결과 폴더 삭제 시 함께 지워진다.
+    추출은 ffmpeg(-vsync 0 = 프레임 1:1) — cv2 는 Windows 비ASCII 경로를 못 연다.
+    sync def 라 스레드풀에서 실행된다.
+    """
+    video = _resolve_recording(rel_path)
+    results_root = RESULTS_DIR.resolve()
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    try:
+        video.relative_to(results_root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Video is not under results dir")
+
+    frames_dir = video.with_name(video.stem + "_frames")
+    meta_path = frames_dir / "frames.json"
+    st = video.stat()
+    sig = {"source_size": st.st_size, "source_mtime": int(st.st_mtime)}
+
+    with _capture_frame_locks_guard:
+        lock = _capture_frame_locks.setdefault(str(video), threading.Lock())
+    with lock:
+        meta = None
+        try:
+            cached = json.loads(meta_path.read_text(encoding="utf-8"))
+            if all(cached.get(k) == v for k, v in sig.items()) and cached.get("count"):
+                meta = cached
+        except (OSError, ValueError):
+            pass
+
+        if meta is None:
+            ffmpeg = _find_ffmpeg()
+            if not ffmpeg:
+                raise HTTPException(status_code=500, detail="ffmpeg not found — 프레임 추출 불가")
+            tmp_dir = video.with_name(video.stem + "_frames.tmp")
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            tmp_dir.mkdir(parents=True)
+            # 프레임 1:1 추출 옵션 — ffmpeg 5.1+ 는 -fps_mode, 7.x 이후 -vsync 제거. 구버전은 -vsync 0.
+            proc = None
+            err = ""
+            for passthrough in (["-fps_mode", "passthrough"], ["-vsync", "0"]):
+                cmd = [ffmpeg, "-hide_banner", "-nostdin", "-i", str(video), *passthrough,
+                       "-q:v", "3", str(tmp_dir / f"%0{_FRAME_DIGITS}d.jpg")]
+                try:
+                    proc = subprocess.run(
+                        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=900,
+                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                    )
+                except subprocess.TimeoutExpired:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    raise HTTPException(status_code=500, detail="frame extraction timeout")
+                err = proc.stderr.decode(errors="replace")
+                if "Unrecognized option" not in err:
+                    break
+            count = len(list(tmp_dir.glob("*.jpg")))
+            if proc.returncode != 0 or count == 0:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                logger.warning("capture-frames: ffmpeg failed rc=%s for %s: %s",
+                               proc.returncode, video, err[-500:])
+                raise HTTPException(status_code=500, detail=f"frame extraction failed (rc={proc.returncode})")
+            m_fps = re.search(r"Video:.*?,\s*([\d.]+)\s*fps", err)
+            m_res = re.search(r"Video:.*?,\s*(\d{2,5})x(\d{2,5})", err)
+            fps = float(m_fps.group(1)) if m_fps else 30.0
+            meta = {
+                **sig,
+                "count": count,
+                "fps": fps,
+                "width": int(m_res.group(1)) if m_res else 0,
+                "height": int(m_res.group(2)) if m_res else 0,
+                "start": 1,
+                "digits": _FRAME_DIGITS,
+            }
+            (tmp_dir / "frames.json").write_text(json.dumps(meta), encoding="utf-8")
+            shutil.rmtree(frames_dir, ignore_errors=True)
+            tmp_dir.rename(frames_dir)
+            logger.info("capture-frames: extracted %d frames (%.2ffps) → %s", count, fps, frames_dir)
+
+    rel_dir = frames_dir.relative_to(results_root).as_posix()
+    return {**meta, "url_prefix": f"/results-files/{quote(rel_dir)}/"}
+
+
 @router.delete("/recordings/{filename:path}")
 async def delete_recording(filename: str):
     """Delete a webcam recording (and its sidecar .meta.json if any).

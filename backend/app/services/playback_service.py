@@ -195,8 +195,29 @@ def clear_event_buffer() -> None:
     _event_buffer.clear()
 
 
+_CAPTURE_VIDEO_RE = re.compile(r"^video=(.+)$", re.MULTILINE)
+
+
+def _capture_video_rel(step, mod_result: str) -> Optional[str]:
+    """Webcam.Capture 결과 문자열의 `video=<절대경로>` → results/ 기준 상대경로(posix)."""
+    if (step.params or {}).get("module") != "Webcam":
+        return None
+    m = _CAPTURE_VIDEO_RE.search(mod_result or "")
+    if not m:
+        return None
+    try:
+        return Path(m.group(1).strip()).resolve().relative_to(RESULTS_DIR.resolve()).as_posix()
+    except (ValueError, OSError):
+        logger.warning("Webcam capture path outside results dir: %s", m.group(1))
+        return None
+
+
 def _build_ctor_kwargs(dev) -> dict | None:
     """Build constructor kwargs from device info for module instantiation."""
+    if dev.type == "webcam":
+        # 주 디바이스 웹캠 → Webcam 캡처 모듈: 그 디바이스의 카메라 프레임을 공유받도록 바인딩.
+        # device_index 가 인스턴스 키에 들어가 웹캠마다 인스턴스가 분리된다.
+        return {"device_index": str(dev.info.get("device_index", 0)), "device_id": dev.id}
     ct = dev.info.get("connect_type", "serial" if dev.type == "serial" else "none")
     if ct == "serial":
         return {"port": dev.address, "bps": dev.info.get("baudrate", 115200)}
@@ -954,6 +975,7 @@ class PlaybackService:
                 mod_result = str(self._last_module_result)
                 del self._last_module_result
                 step_result.message = mod_result
+                step_result.capture_video = _capture_video_rel(step, mod_result)
                 has_expected = step.expected_image or (step.compare_mode == CompareMode.MULTI_CROP and step.expected_images)
                 if not has_expected and mod_result.startswith("FAIL:"):
                     step_result.status = "fail"
@@ -2985,6 +3007,12 @@ class PlaybackService:
                         d for d in self.dm.list_all() if d.type == "hkmc_agent"
                     ]
                     is_correct_dev = bool(dev and dev.type == "hkmc_agent")
+                elif module_name == "Webcam":
+                    # Webcam 캡처 모듈은 주 디바이스 웹캠에 붙는다 (보조 디바이스 없음)
+                    candidates = [
+                        d for d in self.dm.list_primary() if d.type == "webcam"
+                    ]
+                    is_correct_dev = bool(dev and dev.type == "webcam")
                 else:
                     candidates = [
                         d for d in self.dm.list_auxiliary()

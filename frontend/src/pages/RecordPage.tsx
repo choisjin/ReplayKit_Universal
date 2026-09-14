@@ -14,6 +14,7 @@ import { findInvalidNameChars, INVALID_NAME_CHARS_DISPLAY } from '../utils/entit
 import DLTViewer from '../components/DLTViewer';
 import ParamDbButtons from '../components/ParamDbModal';
 import SerialViewer from '../components/SerialViewer';
+import CaptureVideoViewer from '../components/CaptureVideoViewer';
 import { useDLTSessions } from '../hooks/useDLTSessions';
 import { useSerialSessions, useLogcatSessions } from '../hooks/useSerialSessions';
 
@@ -1238,6 +1239,11 @@ export default function RecordPage() {
     ...primaryDevices
       .filter(d => d.type === 'hkmc5th_wide_agent' && isDeviceConnected(d))
       .map(d => ({ ...d, info: { ...d.info, module: 'HKMC5thWide' } })),
+    // 웹캠 주 디바이스 → Webcam 캡처 모듈 (지정 시간 영상 저장)
+    // ⚠️ backend module_service.PRIMARY_VIRTUAL_MODULES 와 1:1
+    ...primaryDevices
+      .filter(d => d.type === 'webcam' && isDeviceConnected(d))
+      .map(d => ({ ...d, info: { ...d.info, module: 'Webcam' } })),
   ];
 
   // 선택된 디바이스에서 모듈 이름 derive
@@ -8432,6 +8438,11 @@ export default function RecordPage() {
                 whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 400, overflow: 'auto',
               }}>{testResult.message}</div>
             )}
+            {testResult.capture_video && (
+              <div style={{ marginBottom: 10 }}>
+                <CaptureVideoViewer videoPath={testResult.capture_video} maxHeight={420} />
+              </div>
+            )}
             <Row gutter={12}>
               {testResult.expected_image && (
                 <Col span={testResult.actual_image ? 12 : 24}>
@@ -8506,7 +8517,7 @@ export default function RecordPage() {
                 </table>
               </div>
             )}
-            {!testResult.expected_image && !testResult.actual_image && (
+            {!testResult.expected_image && !testResult.actual_image && !testResult.capture_video && (
               <div style={{ color: subTextColor, textAlign: 'center', padding: 19 }}>
                 {t('record.noExpectedImage')}
               </div>

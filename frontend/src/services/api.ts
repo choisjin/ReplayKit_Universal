@@ -286,6 +286,9 @@ export const resultsApi = {
   delete: (filename: string) => api.delete(`/results/${filename}`),
   exportExcel: (filename: string) =>
     api.get(`/results/export/${filename}`, { responseType: 'blob' }),
+  // Webcam.Capture 영상 → 전 프레임 JPEG 분해 정보 (Frame으로 보기)
+  captureFrames: (relPath: string) =>
+    api.get(`/results/capture-frames/${encodePathSegments(relPath)}`),
   // Webcam recordings
   uploadRecording: (blob: Blob, resultFilename: string, repeatIndex: number) => {
     const form = new FormData();

@@ -228,6 +228,8 @@ class StepResult(BaseModel):
     execution_time_ms: int = 0  # actual duration
     compare_mode: Optional[str] = None
     sub_results: list[SubResult] = Field(default_factory=list)  # per-crop details for multi_crop
+    # Webcam.Capture 로 저장한 영상 — results/ 기준 상대경로(posix). 결과창 영상/프레임 보기용.
+    capture_video: Optional[str] = None
 
 
 class ScenarioResult(BaseModel):

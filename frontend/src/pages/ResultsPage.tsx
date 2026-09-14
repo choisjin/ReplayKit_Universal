@@ -6,6 +6,7 @@ import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
 import type { TranslationKey } from '../i18n';
 import VideoTransport from '../components/VideoTransport';
+import CaptureVideoViewer from '../components/CaptureVideoViewer';
 import type { TableRef } from 'antd/es/table';
 
 interface ResultSummary {
@@ -81,6 +82,7 @@ interface StepResultDetail {
   parent_step_id?: number | null;  // sync 모드 fail_on_keyword가 trigger한 인라인 fail의 parent
   fail_index?: number | null;       // 같은 parent 내 1-based 순번 (Fail_Count_N)
   excluded_from_result?: boolean;   // 조건부이동 결과 미반영 → Status를 '분기'로 표시
+  capture_video?: string | null;    // Webcam.Capture 영상 (results/ 기준 상대경로)
 }
 
 // Frame_Check 모듈 측정 결과 1건 — 시나리오 종료 후 녹화 영상 프레임 분석 산출물
@@ -1761,11 +1763,17 @@ export default function ResultsPage() {
         const isRandMsg = !!r.message && r.message.startsWith('[RAND]');
         const hasMsg = (isModuleMsg && !!r.message) || isRandMsg;
         const hasImage = !!(r.expected_image || r.actual_image);
-        if (!hasMsg && !hasImage) return '-';
+        const hasVideo = !!r.capture_video;
+        if (!hasMsg && !hasImage && !hasVideo) return '-';
         return (
           <Space size={4}>
             {hasImage && <Button size="small" onClick={() => openCompare(r, idx)}>{t('scenario.compare')}</Button>}
-            {hasMsg && <Button size="small" onClick={() => openCompare(r, idx)}>LOG</Button>}
+            {hasVideo && (
+              <Tooltip title={t('capture.title')}>
+                <Button size="small" icon={<VideoCameraOutlined />} onClick={() => openCompare(r, idx)} />
+              </Tooltip>
+            )}
+            {hasMsg && !hasVideo && <Button size="small" onClick={() => openCompare(r, idx)}>LOG</Button>}
           </Space>
         );
       },
@@ -2700,6 +2708,16 @@ export default function ResultsPage() {
               <span style={{ color: '#888' }}>Duration: {formatDuration(compareStep.execution_time_ms)}</span>
             </Space>
             {_showLog && renderLogBlock()}
+            {compareStep.capture_video && (
+              <Card
+                size="small"
+                title={<Space size={4}><VideoCameraOutlined />{t('capture.title')}</Space>}
+                style={{ marginBottom: 10 }}
+                bodyStyle={{ padding: 6 }}
+              >
+                <CaptureVideoViewer videoPath={compareStep.capture_video} maxHeight={520} />
+              </Card>
+            )}
             {_hasImage && (
             <Row gutter={16}>
               <Col span={12}>

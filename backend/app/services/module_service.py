@@ -313,6 +313,8 @@ PRIMARY_VIRTUAL_MODULES: dict[str, str] = {
     "adb": "Android",
     "hkmc_agent": "HKMC6th",
     "hkmc5th_wide_agent": "HKMC5thWide",
+    # 주 디바이스 웹캠 → Webcam 캡처 모듈 (plugins/Webcam.py, 카메라는 WebcamDevice 프레임 공유)
+    "webcam": "Webcam",
 }
 
 # URL hash `#test` 모드에서만 UI 에 노출되는 실험 모듈 —
@@ -364,6 +366,8 @@ def _list_plugin_modules() -> list[dict]:
         _hidden_modules = {"SHELL"}
     else:
         _hidden_modules = {"CMD"}
+    # Webcam 은 주 디바이스 웹캠에 자동으로 붙는 가상 모듈 — 보조 디바이스 등록 목록엔 노출하지 않는다.
+    _hidden_modules.add("Webcam")
     # 플랫폼 전용 서브폴더 — 현재 OS 와 매칭되는 것만 탐색에 포함.
     # plugins/linux/*.py 는 Linux 에서만, plugins/windows/*.py 는 Windows 에서만 노출.
     _plat_subdirs: list[Path] = []
@@ -1191,6 +1195,8 @@ def get_module_functions(module_name: str) -> list[dict]:
         "Acroname": {"Connect", "Disconnect", "IsConnected"},
         # AudioMonitor: 마이크 연결은 디바이스 등록이 자동 관리 — 스텝엔 녹음/판정만 노출.
         "AudioMonitor": {"Connect", "Disconnect", "IsConnected"},
+        # Webcam: 카메라 확보는 디바이스 등록이 자동 관리 — 스텝엔 Capture 만 노출.
+        "Webcam": {"Connect", "Disconnect", "IsConnected"},
         # ODAPowerSupply: 시리얼 연결/해제는 디바이스 등록이 자동 관리 — 스텝엔 전원 제어만 노출.
         "ODAPowerSupply": {"Connect", "Disconnect", "IsConnected"},
         # POWER: Connect(port, bps)/DisConnect 는 디바이스 연결/해제가 자동 수행

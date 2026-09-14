@@ -267,6 +267,9 @@ def _build_constructor_kwargs(dev) -> dict | None:
     """Build constructor kwargs from device info for module instantiation."""
     if not dev:
         return None
+    if dev.type == "webcam":
+        # 주 디바이스 웹캠 → Webcam 캡처 모듈 바인딩 (playback_service._build_ctor_kwargs 와 동일)
+        return {"device_index": str(dev.info.get("device_index", 0)), "device_id": dev.id}
     connect_type = dev.info.get("connect_type", "serial" if dev.type == "serial" else "none")
     if connect_type == "serial":
         kwargs = {"port": dev.address, "bps": dev.info.get("baudrate", 115200)}

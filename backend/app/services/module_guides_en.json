@@ -2602,6 +2602,17 @@
       }
     }
   },
+  "Webcam": {
+    "_description": "Webcam video capture module (no pass/fail judgement). The Capture step saves webcam video for the configured number of seconds as an mp4 at the camera's configured fps (constant frame rate). During playback it is saved to Capture/c{cycle}/ in the result folder; for step tests to results/Temp_logs/Capture/ (only the latest 30 step-test captures are kept). The step test result window and the scenario result detail (video button) play it in the video player, and 'View as Frames' splits the video into every frame, shown as a slide or a grid. No separate registration: once a webcam is connected as a primary device, this module appears automatically in the module selection when adding a step (with several webcams, pick the device). It does not reopen the camera — it shares the frames that primary device is already receiving, so it can run alongside that device's screen view and image comparison without conflict.",
+    "functions": {
+      "Capture": {
+        "description": "Save webcam video for `time` seconds at the camera fps. No judgement is made (FAIL only if no camera frame arrives or encoding fails); the video length equals the configured time and the frame count is time × fps. If the camera actually delivers fewer frames than its fps, the previous frame is repeated (the result message shows the delivered fps). Stopping playback saves what was captured so far.",
+        "params": {
+          "time": "Capture time in seconds. e.g. 5 → 150 frames on a 30fps camera. Decimals allowed (e.g. 0.5)."
+        }
+      }
+    }
+  },
   "Frame_Check": {
     "_description": "Operation-time measurement tool based on the test recording video (webcam). Add a Frame_Measure step to the scenario; when the scenario ends, webcam recording stops automatically and the video is analyzed frame by frame to report the elapsed time (ms) from the measurement start point to the first appearance of the target image, along with a clip of the measured section (5s before start to 5s after end). The PIP webcam must be open before playback for recording/measurement.",
     "functions": {

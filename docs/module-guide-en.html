@@ -155,6 +155,7 @@
       <a href="#mod-AudioMonitor" class="toc-h3">AudioMonitor</a>
       <a href="#mod-SHELL" class="toc-h3">SHELL</a>
       <a href="#mod-HKMC6th" class="toc-h3">HKMC6th</a>
+      <a href="#mod-Webcam" class="toc-h3">Webcam</a>
       <a href="#mod-Frame_Check" class="toc-h3">Frame_Check</a>
     </nav>
   </aside>
@@ -170,7 +171,7 @@
     </div>
 
     <h2 id="overview">All Modules</h2>
-    <p>Total <strong>18</strong> modules, <strong>189</strong> functions registered.</p>
+    <p>Total <strong>19</strong> modules, <strong>190</strong> functions registered.</p>
     <table>
       <thead><tr><th>Module</th><th>Description</th><th>Functions</th></tr></thead>
       <tbody>
@@ -202,6 +203,7 @@ Standard usage pattern:
 <tr><td><a href="#mod-SHELL"><strong>SHELL</strong></a></td><td>Executes Linux/macOS bash commands. Linux counterpart of CMD. Used for running external programs or system commands.</td><td style="text-align:center">4</td></tr>
 <tr><td><a href="#mod-HKMC6th"><strong>HKMC6th</strong></a></td><td>Screen capture / touch / swipe / HW key control over a TCP socket protocol. Calls the HKMC6thService functions of the connected hkmc_agent device directly.</td><td style="text-align:center">4</td></tr>
 <tr><td><a href="#mod-Android"><strong>Android</strong></a></td><td></td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-Webcam"><strong>Webcam</strong></a></td><td>it shares the frames that primary device is already receiving, so it can run alongside that device&#x27;s screen view and image comparison without conflict.</td><td style="text-align:center">1</td></tr>
 <tr><td><a href="#mod-Frame_Check"><strong>Frame_Check</strong></a></td><td>Operation-time measurement tool based on the test recording video (webcam). Add a Frame_Measure step to the scenario; when the scenario ends, webcam recording stops automatically and the video is analyzed frame by frame to report the elapsed time (ms) from the measurement start point to the first appearance of the target image, along with a clip of the measured section (5s before start to 5s after end). The PIP webcam must be open before playback for recording/measurement.</td><td style="text-align:center">1</td></tr>
 <tr><td><a href="#mod-ODAPowerSupply"><strong>ODAPowerSupply</strong></a></td><td>Controls voltage, current limit, and output switch, and measures actual output voltage/current via RS-232 serial SCPI commands. Connection lifecycle is managed automatically by the scenario.</td><td style="text-align:center">29</td></tr>
       </tbody>
@@ -1318,6 +1320,19 @@ Even if the file-save step throws, the finally block guarantees the capture is t
 <td><code>send_shell_cmd</code></td>
 <td>Sends a simple shell string command to the device.</td>
 <td style="font-size:12px"><code>str_data</code>: Command string to send</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-Webcam">Webcam</h3>
+<div class="callout callout-info">Webcam video capture module (no pass/fail judgement). The Capture step saves webcam video for the configured number of seconds as an mp4 at the camera&#x27;s configured fps (constant frame rate). During playback it is saved to Capture/c{cycle}/ in the result folder; for step tests to results/Temp_logs/Capture/ (only the latest 30 step-test captures are kept). The step test result window and the scenario result detail (video button) play it in the video player, and &#x27;View as Frames&#x27; splits the video into every frame, shown as a slide or a grid. No separate registration: once a webcam is connected as a primary device, this module appears automatically in the module selection when adding a step (with several webcams, pick the device). It does not reopen the camera — it shares the frames that primary device is already receiving, so it can run alongside that device&#x27;s screen view and image comparison without conflict.</div>
+<table>
+<thead><tr><th style="width:220px">Function</th><th>Description</th><th style="width:40%">Parameters</th></tr></thead>
+<tbody>
+<tr>
+<td><code>Capture</code></td>
+<td>Save webcam video for `time` seconds at the camera fps. No judgement is made (FAIL only if no camera frame arrives or encoding fails); the video length equals the configured time and the frame count is time × fps. If the camera actually delivers fewer frames than its fps, the previous frame is repeated (the result message shows the delivered fps). Stopping playback saves what was captured so far.</td>
+<td style="font-size:12px"><code>time</code>: Capture time in seconds. e.g. 5 → 150 frames on a 30fps camera. Decimals allowed (e.g. 0.5).</td>
 </tr>
 </tbody>
 </table>

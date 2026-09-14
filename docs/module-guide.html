@@ -155,6 +155,7 @@
       <a href="#mod-AudioMonitor" class="toc-h3">AudioMonitor</a>
       <a href="#mod-SHELL" class="toc-h3">SHELL</a>
       <a href="#mod-HKMC6th" class="toc-h3">HKMC6th</a>
+      <a href="#mod-Webcam" class="toc-h3">Webcam</a>
       <a href="#mod-Frame_Check" class="toc-h3">Frame_Check</a>
     </nav>
   </aside>
@@ -170,7 +171,7 @@
     </div>
 
     <h2 id="overview">전체 모듈 목록</h2>
-    <p>총 <strong>18개</strong> 모듈, <strong>189개</strong> 함수가 등록되어 있습니다.</p>
+    <p>총 <strong>19개</strong> 모듈, <strong>190개</strong> 함수가 등록되어 있습니다.</p>
     <table>
       <thead><tr><th>모듈</th><th>설명</th><th>함수 수</th></tr></thead>
       <tbody>
@@ -202,6 +203,7 @@
 <tr><td><a href="#mod-SHELL"><strong>SHELL</strong></a></td><td>Linux/macOS bash 명령을 실행하는 모듈. CMD 의 Linux 대응. 외부 프로그램 실행이나 시스템 명령에 사용</td><td style="text-align:center">4</td></tr>
 <tr><td><a href="#mod-HKMC6th"><strong>HKMC6th</strong></a></td><td>TCP 소켓 프로토콜로 화면 캡처/터치/스와이프/HW 키 제어. 연결된 hkmc_agent 디바이스의 HKMC6thService 함수를 그대로 호출합니다.</td><td style="text-align:center">4</td></tr>
 <tr><td><a href="#mod-Android"><strong>Android</strong></a></td><td></td><td style="text-align:center">7</td></tr>
+<tr><td><a href="#mod-Webcam"><strong>Webcam</strong></a></td><td>웹캠 영상 캡처 모듈 (판정 없음). Capture 스텝이 설정한 시간(초)만큼 웹캠 영상을 카메라에 설정된 fps 그대로(고정 프레임레이트) mp4 로 저장한다. 재생 중이면 결과 폴더의 Capture/c{사이클}/ 에, 스텝 테스트면 results/Temp_logs/Capture/ 에 저장된다(스텝 테스트 캡처는 최근 30개만 유지). 스텝 테스트 결과창과 시나리오 결과 상세(영상 버튼)에서 영상 플레이어로 재생되고, &#x27;Frame으로 보기&#x27;를 누르면 영상을 모든 프레임으로 나눠 슬라이드/그리드로 볼 수 있다. 별도 등록 없이, 주 디바이스로 웹캠을 연결하면 스텝 추가의 모듈 선택에 자동으로 나타난다(웹캠 여러 대면 디바이스별 선택). 카메라를 새로 열지 않고 그 주 디바이스가 받고 있는 영상을 공유받아 캡처하므로 주 디바이스의 화면/이미지 비교와 동시에 사용해도 충돌하지 않는다.</td><td style="text-align:center">1</td></tr>
 <tr><td><a href="#mod-Frame_Check"><strong>Frame_Check</strong></a></td><td>테스트 녹화 영상(웹캠)을 이용한 동작 시간 측정 도구. 시나리오에 Frame_Measure 스텝을 추가하면, 시나리오 종료 시 웹캠 녹화가 자동 종료된 후 해당 영상을 프레임 단위로 분석하여 측정 시작점→타겟 이미지 최초 등장까지의 경과 시간(ms)을 결과에 표기하고, 측정 구간 클립(시작 5초 전~종료 5초 후)도 함께 제공합니다. 재생 전 PIP 웹캠이 열려 있어야 녹화/측정이 가능합니다.</td><td style="text-align:center">1</td></tr>
 <tr><td><a href="#mod-ODAPowerSupply"><strong>ODAPowerSupply</strong></a></td><td>RS-232 시리얼 SCPI 명령으로 전압·전류·출력 스위치를 제어하고 실제 출력 전압/전류를 측정하는 모듈. 연결/해제는 시나리오가 자동 관리합니다.</td><td style="text-align:center">29</td></tr>
       </tbody>
@@ -1319,6 +1321,19 @@
 <td><code>send_shell_cmd</code></td>
 <td>단순 shell 문자열 명령을 디바이스에 전달합니다.</td>
 <td style="font-size:12px"><code>str_data</code>: 전송할 명령 문자열</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="mod-Webcam">Webcam</h3>
+<div class="callout callout-info">웹캠 영상 캡처 모듈 (판정 없음). Capture 스텝이 설정한 시간(초)만큼 웹캠 영상을 카메라에 설정된 fps 그대로(고정 프레임레이트) mp4 로 저장한다. 재생 중이면 결과 폴더의 Capture/c{사이클}/ 에, 스텝 테스트면 results/Temp_logs/Capture/ 에 저장된다(스텝 테스트 캡처는 최근 30개만 유지). 스텝 테스트 결과창과 시나리오 결과 상세(영상 버튼)에서 영상 플레이어로 재생되고, &#x27;Frame으로 보기&#x27;를 누르면 영상을 모든 프레임으로 나눠 슬라이드/그리드로 볼 수 있다. 별도 등록 없이, 주 디바이스로 웹캠을 연결하면 스텝 추가의 모듈 선택에 자동으로 나타난다(웹캠 여러 대면 디바이스별 선택). 카메라를 새로 열지 않고 그 주 디바이스가 받고 있는 영상을 공유받아 캡처하므로 주 디바이스의 화면/이미지 비교와 동시에 사용해도 충돌하지 않는다.</div>
+<table>
+<thead><tr><th style="width:220px">함수</th><th>설명</th><th style="width:40%">파라미터</th></tr></thead>
+<tbody>
+<tr>
+<td><code>Capture</code></td>
+<td>time 초 동안 웹캠 영상을 카메라 fps 로 저장한다. 판정은 하지 않으며(카메라 프레임을 못 받거나 인코딩 실패 시에만 FAIL), 영상 길이는 설정 시간, 프레임 수는 time × fps 로 맞춰진다. 카메라가 실제로 fps 보다 느리게 주면 직전 프레임이 반복된다(결과 메시지에 실제 수신 fps 표기). 재생 중지 시 그 시점까지 저장한다.</td>
+<td style="font-size:12px"><code>time</code>: 캡처 시간(초). 예: 5 → 30fps 카메라면 150프레임. 소수 가능(예: 0.5).</td>
 </tr>
 </tbody>
 </table>

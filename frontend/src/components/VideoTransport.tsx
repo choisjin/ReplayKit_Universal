@@ -285,7 +285,9 @@ export default function VideoTransport({ video, children, hotkeys = true, onSwit
     if (!hotkeys || !video) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
-      if (isEditableTarget(e.target) || overlayOpen()) return;
+      if (isEditableTarget(e.target)) return;
+      // 모달이 떠 있으면 양보하되, 이 영상 자체가 모달 안(스텝 캡처 영상 등)이면 그대로 받는다
+      if (overlayOpen() && !video.closest('.ant-modal-wrap, .ant-image-preview-wrap')) return;
       // 접힌 패널/숨겨진 페이지의 영상은 조작하지 않는다
       if (!document.fullscreenElement && video.getClientRects().length === 0) return;
       let handled = true;
