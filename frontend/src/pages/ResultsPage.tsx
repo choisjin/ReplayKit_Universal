@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, Checkbox, Collapse, Col, Descriptions, Dropdown, Image, Input, InputNumber, Modal, Popover, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message, notification } from 'antd';
-import { DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileExcelOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, SettingOutlined, ShrinkOutlined, SwapOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import { Button, Card, Checkbox, Collapse, Col, Descriptions, Dropdown, Image, Input, InputNumber, Modal, Popover, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message, notification, theme } from 'antd';
+import { ArrowLeftOutlined, DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileExcelOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, SettingOutlined, ShrinkOutlined, SwapOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { resultsApi, scenarioApi } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
 import type { TranslationKey } from '../i18n';
+import VideoTransport from '../components/VideoTransport';
 
 interface ResultSummary {
   filename: string;
@@ -289,15 +290,24 @@ export default function ResultsPage() {
   const [compareRef, setCompareRef] = useState<ReplaceTarget | null>(null);
   const [replacing, setReplacing] = useState(false);
 
-  // 가상 스크롤 테이블 높이 (모달은 top:20 으로 윈도우에 고정 → innerHeight 기반 계산).
+  // 가상 스크롤 테이블 높이. 상세는 전체화면 페이지라 테이블이 남은 영역(flex:1)을 채운다 —
+  // 그 박스 높이를 ResizeObserver 로 재서 scroll.y 로 넘긴다.
   // 수천 스텝도 보이는 행만 렌더하도록 virtual Table 에 numeric scroll.y 필요.
-  const [detailTableY, setDetailTableY] = useState(() =>
-    typeof window !== 'undefined' ? Math.max(240, window.innerHeight - 320) : 480);
-  useEffect(() => {
-    const onResize = () => setDetailTableY(Math.max(240, window.innerHeight - 320));
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+  const [detailTableY, setDetailTableY] = useState(400);
+  const tableBoxObserverRef = useRef<ResizeObserver | null>(null);
+  const bindTableBox = useCallback((el: HTMLDivElement | null) => {
+    tableBoxObserverRef.current?.disconnect();
+    tableBoxObserverRef.current = null;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect.height ?? 0;
+      // 헤더 행(small ≈ 37px) + 가로 스크롤바 여유
+      setDetailTableY(Math.max(200, Math.floor(h - 52)));
+    });
+    ro.observe(el);
+    tableBoxObserverRef.current = ro;
   }, []);
+  const { token } = theme.useToken();
 
   // 그룹 상세 뷰 (사이클별 통합)
   const [groupDetail, setGroupDetail] = useState<ResultDetail[] | null>(null);
@@ -371,7 +381,13 @@ export default function ResultsPage() {
   const [activeRecBlobUrl, setActiveRecBlobUrl] = useState('');
   const blobUrlMapRef = useRef<Map<string, string>>(new Map());
   const [activeRecRepeat, setActiveRecRepeat] = useState(1);
-  const detailVideoRef = useRef<HTMLVideoElement>(null);
+  const detailVideoRef = useRef<HTMLVideoElement | null>(null);
+  // 컨트롤러가 현재 <video> 를 따라가도록 callback ref 로 엘리먼트도 상태에 보관 (회차 전환 시 key 로 재마운트됨)
+  const [detailVideoEl, setDetailVideoEl] = useState<HTMLVideoElement | null>(null);
+  const bindDetailVideo = useCallback((el: HTMLVideoElement | null) => {
+    detailVideoRef.current = el;
+    setDetailVideoEl(el);
+  }, []);
   // 보류 중인 seek 요청. seekToStep이 항상 여기에 기록하고,
   // (1) 비디오 onCanPlay/onLoadedMetadata 핸들러, (2) useEffect 후속 처리에서 적용.
   // URL 전환·패널 마운트·readyState 지연 등의 race를 모두 흡수한다.
@@ -811,6 +827,28 @@ export default function ResultsPage() {
     }
     setDetailLoading(false);
   };
+
+  const closeDetail = useCallback(() => {
+    detailVideoRef.current?.pause();
+    setDetailVisible(false);
+    setWebcamPanelOpen(false);
+    setWebcamExpanded(false);
+    setCurrentPlayingStepId(null);
+    setGroupDetail(null);
+  }, []);
+
+  // 상세 페이지: Esc 로 닫기 (모달/이미지 미리보기가 떠 있으면 그쪽이 먼저 처리)
+  useEffect(() => {
+    if (!detailVisible) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || document.fullscreenElement) return;
+      const overlay = Array.from(document.querySelectorAll('.ant-modal-wrap, .ant-image-preview-wrap'))
+        .some(el => getComputedStyle(el).display !== 'none');
+      if (!overlay) closeDetail();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [detailVisible, closeDetail]);
 
   const viewDetail = async (filename: string) => {
     setDetailLoading(true);
@@ -1792,20 +1830,29 @@ export default function ResultsPage() {
         />
       </Card>
 
-      {/* Detail report modal */}
-      <Modal
-        title={
-          <Space>
-            <span>{detail?.scenario_name || t('scenario.resultDetail')}</span>
-            {detail && <Tag color={statusColor(detail.status)}>{detail.status.toUpperCase()}</Tag>}
-          </Space>
-        }
-        open={detailVisible}
-        onCancel={() => { setDetailVisible(false); setWebcamPanelOpen(false); setWebcamExpanded(false); setCurrentPlayingStepId(null); setGroupDetail(null); }}
-        width="90vw"
-        style={{ top: 20 }}
-        footer={
-          <Space>
+      {/* Detail report — 전체화면 페이지 (z-index 는 antd 모달(1000) 아래라 비교/구간저장 모달이 위로 뜬다) */}
+      {detailVisible && (
+      <div
+        style={{
+          position: 'fixed', inset: 0, zIndex: 900, background: token.colorBgContainer,
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0,
+          padding: '8px 16px', borderBottom: `1px solid ${token.colorBorderSecondary}`,
+        }}>
+          <Tooltip title={`${t('common.back')} (Esc)`}>
+            <Button icon={<ArrowLeftOutlined />} onClick={closeDetail} />
+          </Tooltip>
+          <span style={{ fontSize: 16, fontWeight: 600 }}>
+            {detail?.scenario_name || (groupDetail && groupDetail.length > 0
+              ? groupDetail.map(d => d.scenario_name).join(' → ')
+              : t('scenario.resultDetail'))}
+          </span>
+          {detail && <Tag color={statusColor(detail.status)}>{detail.status.toUpperCase()}</Tag>}
+          <span style={{ flex: 1 }} />
+          <Space wrap>
             <Button
               icon={<FolderOpenOutlined />}
               onClick={() => detailFilename && openFolder(detailFilename)}
@@ -1846,8 +1893,8 @@ export default function ResultsPage() {
               {t('common.delete')}
             </Button>
           </Space>
-        }
-      >
+        </div>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '10px 16px', overflow: 'auto' }}>
         {detailLoading && !detail && !groupDetail && (
           <div style={{ textAlign: 'center', padding: '60px 0' }}>
             <Spin size="large" tip={t('results.loading')} />
@@ -1943,7 +1990,11 @@ export default function ResultsPage() {
                             );
                           })}
                         </Space>
-                        {activeRecBlobUrl && <video key={activeRecBlobUrl} ref={detailVideoRef} src={activeRecBlobUrl} controls preload="auto" onLoadedMetadata={handleVideoCanPlay} onCanPlay={handleVideoCanPlay} onTimeUpdate={handleVideoTimeUpdate} onPause={handleVideoPauseOrEnd} onEnded={handleVideoPauseOrEnd} onError={handleVideoError} style={{ width: '100%', maxHeight: 400 }} />}
+                        {activeRecBlobUrl && (
+                          <VideoTransport video={detailVideoEl}>
+                            <video key={activeRecBlobUrl} ref={bindDetailVideo} src={activeRecBlobUrl} preload="auto" onLoadedMetadata={handleVideoCanPlay} onCanPlay={handleVideoCanPlay} onTimeUpdate={handleVideoTimeUpdate} onPause={handleVideoPauseOrEnd} onEnded={handleVideoPauseOrEnd} onError={handleVideoError} style={{ width: '100%', maxHeight: 400, background: '#000', display: 'block' }} />
+                          </VideoTransport>
+                        )}
                       </div>
                     ),
                   }]}
@@ -1953,6 +2004,7 @@ export default function ResultsPage() {
                 {replaceExpectedBulk}
                 {stepColumnToggle}
               </div>
+              <div ref={bindTableBox} style={{ flex: 1, minHeight: 250, overflow: 'hidden' }}>
               <Table
                 columns={stepColumns as any}
                 dataSource={cycleSteps}
@@ -1969,6 +2021,7 @@ export default function ResultsPage() {
                   return `${statusCls} ${boundary}`.trim();
                 }}
               />
+              </div>
             </>
           );
         })()}
@@ -2095,10 +2148,10 @@ export default function ResultsPage() {
               </Card>
             )}
 
-            <div style={{ display: 'flex', gap: 6, maxHeight: 'calc(90vh - 200px)', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', gap: 6, flex: 1, minHeight: 300, overflow: 'hidden' }}>
               {/* 좌측: 웹캠 녹화 패널 (접힘/펼침) */}
               {recordings.length > 0 && (
-                <div style={{ width: webcamPanelOpen ? (webcamExpanded ? '60%' : 300) : 36, flexShrink: 0, transition: 'width 0.2s' }}>
+                <div style={{ width: webcamPanelOpen ? (webcamExpanded ? '60%' : 380) : 36, flexShrink: 0, transition: 'width 0.2s', overflowY: 'auto' }}>
                   {webcamPanelOpen ? (
                     <Card
                       size="small"
@@ -2112,20 +2165,23 @@ export default function ResultsPage() {
                       }
                       bodyStyle={{ padding: 5 }}
                     >
-                      <video
-                        key={activeRecBlobUrl}
-                        ref={detailVideoRef}
-                        src={activeRecBlobUrl}
-                        controls
-                        preload="auto"
-                        onLoadedMetadata={handleVideoCanPlay}
-                        onCanPlay={handleVideoCanPlay}
-                        onTimeUpdate={handleVideoTimeUpdate}
-                        onPause={handleVideoPauseOrEnd}
-                        onEnded={handleVideoPauseOrEnd}
-                        onError={handleVideoError}
-                        style={{ width: '100%', borderRadius: 4, background: '#000', display: 'block', marginBottom: 5 }}
-                      />
+                      <div style={{ marginBottom: 5 }}>
+                        <VideoTransport video={detailVideoEl}>
+                          <video
+                            key={activeRecBlobUrl}
+                            ref={bindDetailVideo}
+                            src={activeRecBlobUrl}
+                            preload="auto"
+                            onLoadedMetadata={handleVideoCanPlay}
+                            onCanPlay={handleVideoCanPlay}
+                            onTimeUpdate={handleVideoTimeUpdate}
+                            onPause={handleVideoPauseOrEnd}
+                            onEnded={handleVideoPauseOrEnd}
+                            onError={handleVideoError}
+                            style={{ width: '100%', borderRadius: 4, background: '#000', display: 'block' }}
+                          />
+                        </VideoTransport>
+                      </div>
                       {/* 회차 선택은 드롭다운 하나로 충분하다 (예전의 R1/R2 목록은 제거).
                           편집/삭제는 아래에 별도 버튼으로 분리 — 선택된 회차에 적용된다. */}
                       {recordings.length > 0 && (() => {
@@ -2212,11 +2268,12 @@ export default function ResultsPage() {
               )}
 
               {/* 우측: 스텝 결과 테이블 (스크롤) */}
-              <div style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>
+              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginBottom: 6 }}>
                   {replaceExpectedBulk}
                   {stepColumnToggle}
                 </div>
+                <div ref={bindTableBox} style={{ flex: 1, minHeight: 250, overflow: 'hidden' }}>
                 <Table
                   columns={stepColumns}
                   dataSource={detail.step_results}
@@ -2240,11 +2297,14 @@ export default function ResultsPage() {
                     style: recordings.length > 0 ? { cursor: 'pointer' } : undefined,
                   })}
                 />
+                </div>
               </div>
             </div>
           </>
         )}
-      </Modal>
+        </div>
+      </div>
+      )}
 
       {/* Trim modal */}
       <Modal
