@@ -2809,6 +2809,48 @@ export default function RecordPage() {
     }
   }, [t]);
 
+  // 녹화 중이면 방금 한 캡처를 `capture` 스텝으로 기록 — 재생 시 같은 디바이스의 현재 프레임을
+  // (crop 이 있으면 그 영역만) {run}/Capture/c{N}/ 에 저장한다. 캡처 자체는 이미 했으므로 skip_execute.
+  const recordCaptureStep = useCallback(async (crop?: { x: number; y: number; width: number; height: number }) => {
+    if (!recording || !screenshotDeviceId) return;
+    const params: Record<string, any> = crop ? { crop } : {};
+    const desc = crop ? `capture roi (${crop.x},${crop.y} ${crop.width}×${crop.height})` : 'capture full';
+    const local: Step = {
+      uid: newStepUid(),
+      id: 0,
+      type: 'capture',
+      device_id: screenshotDeviceId,
+      params,
+      delay_after_ms: delayMs,
+      description: desc,
+      expected_image: null,
+    };
+    setSteps((prev) => [...prev, local]);
+    pendingStepsRef.current += 1;
+    setHasPendingSteps(true);
+    try {
+      const res = await scenarioApi.addStep({
+        type: 'capture',
+        device_id: screenshotDeviceId,
+        params,
+        description: desc,
+        delay_after_ms: delayMs,
+        skip_execute: true,
+      });
+      setSteps((prev) => prev.map(st => st === local ? { ...res.data.step, id: st.id } : st));
+      message.success(t('capture.stepRecorded', { id: String(res.data.step?.id ?? '') }));
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || t('capture.stepAddFailed'));
+      setSteps((prev) => prev.filter(st => st !== local));
+    } finally {
+      pendingStepsRef.current -= 1;
+      if (pendingStepsRef.current <= 0) {
+        pendingStepsRef.current = 0;
+        setHasPendingSteps(false);
+      }
+    }
+  }, [recording, screenshotDeviceId, delayMs, t]);
+
   const runFullCapture = useCallback(async () => {
     if (!screenshotDeviceId) {
       message.warning(t('record.deviceRequired'));
@@ -2818,13 +2860,14 @@ export default function RecordPage() {
     try {
       const res = await resultsApi.captureSnapshot(screenshotDeviceId, { screenType: screenTypeArgForDevice(screenshotDeviceId) });
       notifyCaptureSaved(res.data);
+      await recordCaptureStep();
     } catch (e: any) {
       const detail = e.response?.data?.detail;
       message.error(typeof detail === 'string' ? detail : t('capture.failed'));
     } finally {
       setCaptureBusy(false);
     }
-  }, [screenshotDeviceId, screenTypeArgForDevice, notifyCaptureSaved, t]);
+  }, [screenshotDeviceId, screenTypeArgForDevice, notifyCaptureSaved, recordCaptureStep, t]);
 
   const openCaptureRoi = useCallback(async () => {
     if (!screenshotDeviceId) {
@@ -2917,6 +2960,7 @@ export default function RecordPage() {
       const res = await resultsApi.captureSnapshot(screenshotDeviceId, { image, crop });
       notifyCaptureSaved(res.data);
       setCaptureRoiOpen(false);
+      await recordCaptureStep(crop);
     } catch (e: any) {
       const detail = e.response?.data?.detail;
       message.error(typeof detail === 'string' ? detail : t('capture.failed'));
@@ -2924,7 +2968,7 @@ export default function RecordPage() {
     } finally {
       setCaptureBusy(false);
     }
-  }, [screenshotDeviceId, notifyCaptureSaved, drawCaptureRoiCanvas, t]);
+  }, [screenshotDeviceId, notifyCaptureSaved, recordCaptureStep, drawCaptureRoiCanvas, t]);
 
   useEffect(() => {
     if (captureRoiOpen) setTimeout(() => drawCaptureRoiCanvas(), 50);
@@ -5730,6 +5774,10 @@ export default function RecordPage() {
                     ? <><Tag color="volcano" style={{ margin: 0 }}>KEY</Tag> {s.params.key_name || `cmd:${s.params.cmd}`}</>
                     : s.type === 'all_random'
                     ? <><Tag color="magenta" style={{ margin: 0 }}>RAND</Tag> ×{s.params.repeat_count ?? 1} @{s.params.interval_ms ?? 0}ms (HK:{(s.params.hk_keys || []).length}{s.params.sk_region ? ' SK▣' : ''}{s.params.drag_region ? ' DRAG▣' : ''})</>
+                    : s.type === 'capture'
+                    ? <><Tag color="cyan" style={{ margin: 0 }}>CAP</Tag> {s.params.crop
+                        ? `roi (${s.params.crop.x},${s.params.crop.y} ${s.params.crop.width}×${s.params.crop.height})`
+                        : 'full'}</>
                     : s.type === 'image_tap'
                     ? <><Tag
                         color="purple"
@@ -6380,9 +6428,11 @@ export default function RecordPage() {
                           onClick: ({ key }) => { if (key === 'full') runFullCapture(); else openCaptureRoi(); },
                         }}
                       >
-                        <Button size="small" type="primary" ghost icon={<CameraOutlined />} loading={captureBusy}>
-                          {t('capture.button')}
-                        </Button>
+                        <Tooltip title={recording ? t('record.gestureRecord') : t('record.directExec')}>
+                          <Button size="small" type="primary" ghost icon={<CameraOutlined />} loading={captureBusy}>
+                            {t('capture.button')}
+                          </Button>
+                        </Tooltip>
                       </Dropdown>
                     )}
                     {/* 이미지 탭 — 매칭 후 실제 탭이 필요하므로 조작 불가 디바이스에는 숨김 */}

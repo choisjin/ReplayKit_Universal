@@ -970,6 +970,12 @@ class PlaybackService:
             await self._run_action(step)
             t2 = time.time()
 
+            # capture 스텝 — 저장한 사진 경로를 결과에 기록 (판정 없음, 프론트는 'Capture' 상태로 표시)
+            if step.type == StepType.CAPTURE and hasattr(self, '_last_capture_image'):
+                step_result.capture_image = self._last_capture_image
+                step_result.message = f"saved: {self._last_capture_image}"
+                del self._last_capture_image
+
             # Module command 결과 반영 (이미지 비교가 없을 때만 PASS/FAIL 판정)
             if step.type == StepType.MODULE_COMMAND and hasattr(self, '_last_module_result'):
                 mod_result = str(self._last_module_result)
@@ -1687,6 +1693,11 @@ class PlaybackService:
             if p.get("long_press"):
                 return f"image_long_press [{tpl}] @sim≥{sim:.2f} {p.get('duration_ms', 3000)}ms"
             return f"image_tap [{tpl}] @sim≥{sim:.2f}"
+        elif step.type == StepType.CAPTURE:
+            c = p.get("crop") or {}
+            if c:
+                return f"capture roi ({c.get('x', 0)},{c.get('y', 0)} {c.get('width', 0)}×{c.get('height', 0)})"
+            return "capture full"
         elif step.type == StepType.REPEAT_TAP:
             return f"repeat_tap ({p.get('x', 0)}, {p.get('y', 0)}) ×{p.get('count', 5)} @{p.get('interval_ms', 100)}ms"
         elif step.type == StepType.LONG_PRESS:
@@ -2969,6 +2980,44 @@ class PlaybackService:
             logger.info("Module arg templates substituted (cycle=%d): %s", cycle, out)
         return out
 
+    async def _run_capture(self, step: Step, real_id: Optional[str]) -> str:
+        """`capture` 스텝 — 대상 디바이스의 현재 프레임을 Capture 폴더에 PNG 로 저장.
+
+        웹캠/비전카메라는 디바이스 객체에서 직접 프레임을 받고, 그 외 주 디바이스는 device
+        라우터의 screenshot 경로를 재사용한다. 저장 위치/파일명 규칙은 미러 Capture 버튼과
+        같다(services/capture_snapshot): 재생 중 {run}/Capture/c{N}/step{id}_{시각}_{full|roi}.png,
+        스텝 테스트는 Temp_logs/Capture/. 반환: results/ 기준 상대경로.
+        """
+        from .capture_snapshot import save_capture_snapshot
+
+        dev_id = real_id or step.screenshot_device_id or ""
+        dev = self.dm.get_device(dev_id) if dev_id else None
+        if dev is None:
+            raise ValueError(f"capture: device '{dev_id}' not found")
+        loop = asyncio.get_event_loop()
+        if dev.type == "webcam":
+            cam = self.dm.get_webcam_device(dev_id)
+            if not cam or not cam.IsConnected():
+                raise RuntimeError(f"Webcam device {dev_id} not connected")
+            png_bytes = await loop.run_in_executor(None, cam.CaptureBytes, "png")
+        elif dev.type == "vision_camera":
+            cam = self.dm.get_vision_camera(dev_id)
+            if not cam or not cam.IsConnected():
+                raise RuntimeError(f"VisionCamera {dev_id} not connected")
+            png_bytes = await loop.run_in_executor(None, cam.CaptureBytes, "png")
+        else:
+            from ..routers.device import get_screenshot
+            res = await get_screenshot(dev_id, "png", step.screen_type or "front_center")
+            b64 = (res or {}).get("image") if isinstance(res, dict) else None
+            if not b64:
+                raise RuntimeError(f"capture: no frame from device {dev_id}")
+            import base64 as _b64
+            png_bytes = _b64.b64decode(b64)
+        crop = (step.params or {}).get("crop") or None
+        info = await asyncio.to_thread(save_capture_snapshot, png_bytes, crop, f"step{int(step.id):03d}_")
+        logger.info("Step %d capture saved: %s", step.id, info["rel_path"])
+        return info["rel_path"]
+
     async def _run_action(self, step: Step) -> None:
         """Execute step action on the appropriate device."""
         params = step.params
@@ -2979,6 +3028,12 @@ class PlaybackService:
         # 구한 뒤, 디바이스 종류에 따라 적절한 tap 으로 디스패치한다. 매칭 실패 시 RuntimeError.
         if step.type == StepType.IMAGE_TAP:
             await self._run_image_tap(step, real_id)
+            return
+
+        # CAPTURE — 현재 프레임을 Capture 폴더에 저장 (판정 없음). 결과는 _execute_step 이
+        # _last_capture_image 로 받아 StepResult.capture_image 에 기록한다.
+        if step.type == StepType.CAPTURE:
+            self._last_capture_image = await self._run_capture(step, real_id)
             return
 
         if step.type == StepType.MODULE_COMMAND:

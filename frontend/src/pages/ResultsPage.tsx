@@ -86,6 +86,7 @@ interface StepResultDetail {
   fail_index?: number | null;       // 같은 parent 내 1-based 순번 (Fail_Count_N)
   excluded_from_result?: boolean;   // 조건부이동 결과 미반영 → Status를 '분기'로 표시
   capture_video?: string | null;    // Webcam.Capture 영상 (results/ 기준 상대경로)
+  capture_image?: string | null;    // capture 스텝 사진 (results/ 기준 상대경로)
 }
 
 // Frame_Check 모듈 측정 결과 1건 — 시나리오 종료 후 녹화 영상 프레임 분석 산출물
@@ -158,11 +159,11 @@ const statusText = (s: string, t: (k: TranslationKey) => string) =>
 
 // 결과 미반영 스텝은 status(실제 pass/fail)와 무관하게 '분기'로 표시.
 // Webcam.Capture(판정 없음) 스텝은 성공 시 PASS 대신 'Capture' — 실패(FAIL/ERROR)는 그대로. 필터도 이 값 기준.
-const effStatus = (r: { status: string; excluded_from_result?: boolean; capture_video?: string | null }) =>
-  r.excluded_from_result ? 'branch' : (r.capture_video && r.status === 'pass') ? 'capture' : r.status;
+const effStatus = (r: { status: string; excluded_from_result?: boolean; capture_video?: string | null; capture_image?: string | null }) =>
+  r.excluded_from_result ? 'branch' : ((r.capture_video || r.capture_image) && r.status === 'pass') ? 'capture' : r.status;
 
 // 상세 보기용 — 분기 스텝은 어느 조건(Pass/Fail)으로 분기됐는지까지 표기
-const statusDetail = (r: { status: string; excluded_from_result?: boolean; capture_video?: string | null }, t: (k: TranslationKey) => string) =>
+const statusDetail = (r: { status: string; excluded_from_result?: boolean; capture_video?: string | null; capture_image?: string | null }, t: (k: TranslationKey) => string) =>
   r.excluded_from_result ? `${t('results.statusBranch')} (${r.status === 'pass' ? 'PASS' : 'FAIL'})` : statusText(effStatus(r), t);
 
 // 경로 세그먼트를 URL 인코딩. 시나리오 이름의 sanitize는 `\/:*?"<>|→`와 공백만
@@ -1793,16 +1794,22 @@ export default function ResultsPage() {
         const hasMsg = (isModuleMsg && !!r.message) || isRandMsg;
         const hasImage = !!(r.expected_image || r.actual_image);
         const hasVideo = testMode && !!r.capture_video;  // Webcam.Capture 영상 뷰어 — `#test` 전용
-        if (!hasMsg && !hasImage && !hasVideo) return '-';
+        const hasCapture = !!r.capture_image;             // capture 스텝 사진
+        if (!hasMsg && !hasImage && !hasVideo && !hasCapture) return '-';
         return (
           <Space size={4}>
             {hasImage && <Button size="small" onClick={() => openCompare(r, idx)}>{t('scenario.compare')}</Button>}
+            {hasCapture && !hasImage && (
+              <Tooltip title={t('capture.image')}>
+                <Button size="small" icon={<CameraOutlined />} onClick={() => openCompare(r, idx)} />
+              </Tooltip>
+            )}
             {hasVideo && (
               <Tooltip title={t('capture.title')}>
                 <Button size="small" icon={<VideoCameraOutlined />} onClick={() => openCompare(r, idx)} />
               </Tooltip>
             )}
-            {hasMsg && !hasVideo && <Button size="small" onClick={() => openCompare(r, idx)}>LOG</Button>}
+            {hasMsg && !hasVideo && !hasCapture && <Button size="small" onClick={() => openCompare(r, idx)}>LOG</Button>}
           </Space>
         );
       },
@@ -2795,6 +2802,21 @@ export default function ResultsPage() {
               <span style={{ color: '#888' }}>Duration: {formatDuration(compareStep.execution_time_ms)}</span>
             </Space>
             {_showLog && renderLogBlock()}
+            {compareStep.capture_image && (
+              <Card
+                size="small"
+                title={<Space size={4}><CameraOutlined />{t('capture.image')}</Space>}
+                style={{ marginBottom: 10 }}
+                bodyStyle={{ padding: 6, textAlign: 'center' }}
+              >
+                <Image
+                  src={imageUrl(compareStep.capture_image) || undefined}
+                  alt="capture"
+                  style={{ maxHeight: 520, objectFit: 'contain' }}
+                />
+                <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>{compareStep.capture_image}</div>
+              </Card>
+            )}
             {testMode && compareStep.capture_video && (
               <Card
                 size="small"

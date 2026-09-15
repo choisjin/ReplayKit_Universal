@@ -124,6 +124,7 @@ interface SubResultData {
 interface StepResultData {
   step_id: number;
   capture_video?: string | null;  // Webcam.Capture 영상 → Status 'Capture' 표기
+  capture_image?: string | null;  // capture 스텝 사진 → Status 'Capture' 표기
   repeat_index: number;
   // 백엔드가 보내는 실행 단위 고유 ID. 조건부이동으로 같은 step_id를 다시 방문하면
   // 매 실행마다 새 값이 부여되어 dedup이 revisit 행을 누락시키지 않음.
@@ -217,11 +218,11 @@ const stepSkipKey = (s: any): string => String(s?.uid ?? s?.id ?? '');
 
 // 결과 미반영 스텝은 status(실제 pass/fail)와 무관하게 '분기'로 표시.
 // Webcam.Capture(판정 없음) 스텝은 성공 시 PASS 대신 'Capture' — 실패(FAIL/ERROR)는 그대로.
-const effStatus = (r: { status: string; excluded_from_result?: boolean; capture_video?: string | null }) =>
-  r.excluded_from_result ? 'branch' : (r.capture_video && r.status === 'pass') ? 'capture' : r.status;
+const effStatus = (r: { status: string; excluded_from_result?: boolean; capture_video?: string | null; capture_image?: string | null }) =>
+  r.excluded_from_result ? 'branch' : ((r.capture_video || r.capture_image) && r.status === 'pass') ? 'capture' : r.status;
 
 // 상세 보기용 — 분기 스텝은 어느 조건(Pass/Fail)으로 분기됐는지까지 표기
-const statusDetail = (r: { status: string; excluded_from_result?: boolean; capture_video?: string | null }, t: (k: TranslationKey) => string) =>
+const statusDetail = (r: { status: string; excluded_from_result?: boolean; capture_video?: string | null; capture_image?: string | null }, t: (k: TranslationKey) => string) =>
   r.excluded_from_result ? `${t('results.statusBranch')} (${r.status === 'pass' ? 'PASS' : 'FAIL'})` : statusLabel(effStatus(r), t);
 
 const imageUrl = (path: string | null) => {

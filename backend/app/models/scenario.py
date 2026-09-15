@@ -30,6 +30,9 @@ class StepType(str, Enum):
     REPEAT_TAP = "repeat_tap"    # 같은 위치 연속 터치
     ALL_RANDOM = "all_random"    # 랜덤 스트레스 (HK/SK/DRAG 가중 선택)
     IMAGE_TAP = "image_tap"      # 템플릿 매칭으로 위치를 찾아 중심 클릭 (좌표 비-종속)
+    # 현재 화면(주로 웹캠 미러) 프레임을 Capture/c{N}/ 에 PNG 로 저장 (판정 없음).
+    # params: {crop?: {x,y,width,height}} — crop 없으면 전체, 있으면 그 영역만.
+    CAPTURE = "capture"
     # WinControl 스텝 (Windows 임베드 프로세스 조작)
     WIN_TAP = "win_tap"
     WIN_DOUBLE_CLICK = "win_double_click"
@@ -230,6 +233,8 @@ class StepResult(BaseModel):
     sub_results: list[SubResult] = Field(default_factory=list)  # per-crop details for multi_crop
     # Webcam.Capture 로 저장한 영상 — results/ 기준 상대경로(posix). 결과창 영상/프레임 보기용.
     capture_video: Optional[str] = None
+    # `capture` 스텝이 저장한 사진 — results/ 기준 상대경로(posix). 결과창 미리보기/리포트 썸네일용.
+    capture_image: Optional[str] = None
 
 
 class ScenarioResult(BaseModel):

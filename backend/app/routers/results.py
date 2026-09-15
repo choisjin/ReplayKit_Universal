@@ -560,7 +560,7 @@ def _build_html_report(data: dict, output_path: Path, steps_iter=None) -> str:
         delay_str = f"{delay_ms}ms" if delay_ms else "-"
         exp_src = _html_image_src(sr.get("expected_image"), html_dir)
         act_src = _html_image_src(
-            sr.get("actual_annotated_image") or sr.get("actual_image"), html_dir
+            sr.get("actual_annotated_image") or sr.get("actual_image") or sr.get("capture_image"), html_dir
         )
         return {
             "timestamp": _fmt_ts(sr.get("timestamp", started_at)),
@@ -901,7 +901,7 @@ def _build_excel_workbook(data: dict, filepath: Path = None, progress=None):
             else:
                 ws.cell(row=ri, column=12, value=str(sr.get("expected_image", "")))
 
-        act_img_path = sr.get("actual_annotated_image") or sr.get("actual_image")
+        act_img_path = sr.get("actual_annotated_image") or sr.get("actual_image") or sr.get("capture_image")
         act_path = _resolve_image_path(act_img_path)
         ws.cell(row=ri, column=13).border = thin_border
         ws.cell(row=ri, column=13).alignment = center
@@ -1743,77 +1743,20 @@ def capture_frames(rel_path: str):
 
 
 # ── Capture 스냅샷 (미러 화면 아래 Capture 버튼) ─────────────────────────────
-# 재생 중이면 {run}/Capture/c{사이클}/ 에, 아니면 results/Temp_logs/Capture/ 에 현재 프레임을
-# PNG 로 저장한다 (Webcam.Capture 영상과 같은 폴더 규칙). 결과 상세 'Capture 일괄보기'가
+# 저장 규칙/구현은 services/capture_snapshot.py (`capture` 스텝과 공용). 결과 상세 'Capture 일괄보기'가
 # /captures-for 로 이 폴더의 사진을 전부 모아 그리드로 보여준다.
-_CAPTURE_TEMP_KEEP = 100
-_CAPTURE_IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
+from ..services.capture_snapshot import IMAGE_EXTS as _CAPTURE_IMAGE_EXTS, CaptureError, save_capture_snapshot
+
 _CAPTURE_CYCLE_DIR_RE = re.compile(r"^c(\d+)$")
 
 
-def _capture_output_dir() -> tuple[Path, int, bool]:
-    """(저장 폴더, 사이클, 재생 중 여부)."""
-    from ..services.playback_service import get_current_step_context, get_run_output_dir
-    run_dir = get_run_output_dir()
-    if run_dir:
-        _, cycle = get_current_step_context()
-        cycle = int(cycle or 1)
-        return run_dir / "Capture" / f"c{cycle}", cycle, True
-    return RESULTS_DIR / "Temp_logs" / "Capture", 0, False
-
-
-def _prune_capture_temp(out_dir: Path) -> None:
-    try:
-        files = sorted(
-            (p for p in out_dir.iterdir() if p.is_file() and p.suffix.lower() in _CAPTURE_IMAGE_EXTS),
-            key=lambda p: p.stat().st_mtime,
-        )
-        for old in files[:max(0, len(files) - (_CAPTURE_TEMP_KEEP - 1))]:
-            old.unlink(missing_ok=True)
-    except Exception as e:
-        logger.debug("capture temp prune failed: %s", e)
-
-
 def _save_capture_snapshot(png_bytes: bytes, crop: dict | None) -> dict:
-    from ..utils.cv2_loader import cv2
-    from ..utils.cv_io import safe_imwrite
-    import numpy as np
-
-    img = cv2.imdecode(np.frombuffer(png_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        raise HTTPException(status_code=400, detail="Cannot decode captured image")
-    h, w = img.shape[:2]
-    roi = None
-    if crop:
-        x = max(0, min(int(crop.get("x", 0)), w))
-        y = max(0, min(int(crop.get("y", 0)), h))
-        x2 = max(x, min(x + int(crop.get("width", 0)), w))
-        y2 = max(y, min(y + int(crop.get("height", 0)), h))
-        if x2 - x < 1 or y2 - y < 1:
-            raise HTTPException(status_code=400, detail="Crop region is empty")
-        img = img[y:y2, x:x2]
-        roi = {"x": x, "y": y, "width": x2 - x, "height": y2 - y}
-
-    out_dir, cycle, in_run = _capture_output_dir()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    if not in_run:
-        _prune_capture_temp(out_dir)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-    filename = f"{ts}_{'roi' if roi else 'full'}.png"
-    target = out_dir / filename
-    if not safe_imwrite(str(target), img):
-        raise HTTPException(status_code=500, detail=f"Failed to write image: {target}")
-    rel = target.resolve().relative_to(RESULTS_DIR.resolve()).as_posix()
-    return {
-        "filename": filename,
-        "rel_path": rel,
-        "url": "/results-files/" + "/".join(quote(seg) for seg in rel.split("/")),
-        "cycle": cycle,
-        "in_run": in_run,
-        "width": int(img.shape[1]),
-        "height": int(img.shape[0]),
-        "roi": roi,
-    }
+    try:
+        return save_capture_snapshot(png_bytes, crop)
+    except CaptureError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/capture-snapshot")
