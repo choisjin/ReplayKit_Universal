@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Button, Card, Checkbox, Col, Image, Input, Modal, Radio, Row, Segmented, Select, Slider, Space, InputNumber, message, List, Tabs, Tag, Popover, Tooltip, Splitter } from 'antd';
+import { Button, Card, Checkbox, Col, Dropdown, Image, Input, Modal, Radio, Row, Segmented, Select, Slider, Space, InputNumber, message, List, Tabs, Tag, Popover, Tooltip, Splitter } from 'antd';
 import { PlayCircleOutlined, PauseOutlined, PlusOutlined, SwapOutlined, FolderOpenOutlined, SaveOutlined, DeleteOutlined, BranchesOutlined, ScissorOutlined, CameraOutlined, ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined, EditOutlined, CopyOutlined, ZoomInOutlined, ZoomOutOutlined, HolderOutlined, SettingOutlined, StopOutlined, QuestionCircleOutlined, FundProjectionScreenOutlined, ReloadOutlined, FieldTimeOutlined, SearchOutlined, RetweetOutlined } from '@ant-design/icons';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
@@ -1241,9 +1241,11 @@ export default function RecordPage() {
       .map(d => ({ ...d, info: { ...d.info, module: 'HKMC5thWide' } })),
     // 웹캠 주 디바이스 → Webcam 캡처 모듈 (지정 시간 영상 저장)
     // ⚠️ backend module_service.PRIMARY_VIRTUAL_MODULES 와 1:1
-    ...primaryDevices
+    // 보관 중인 실험 기능 — `#test` 모드에서만 스텝 대상으로 노출한다. 일반 사용은 미러 화면 아래
+    // Capture 버튼(현재 프레임 저장 → Capture 폴더)으로 대체.
+    ...(testMode ? primaryDevices
       .filter(d => d.type === 'webcam' && isDeviceConnected(d))
-      .map(d => ({ ...d, info: { ...d.info, module: 'Webcam' } })),
+      .map(d => ({ ...d, info: { ...d.info, module: 'Webcam' } })) : []),
   ];
 
   // 선택된 디바이스에서 모듈 이름 derive
@@ -2786,6 +2788,147 @@ export default function RecordPage() {
   useEffect(() => {
     if (imageTapModalOpen) setTimeout(() => drawImageTapCanvas(), 50);
   }, [imageTapModalOpen, drawImageTapCanvas]);
+
+  // ── 미러 Capture 버튼 (웹캠 주 디바이스) ───────────────────────────────────
+  // 현재 프레임을 Capture 폴더에 PNG 로 저장한다 — 재생 중이면 {run}/Capture/c{사이클}/,
+  // 아니면 results/Temp_logs/Capture/. 전체 캡처는 서버가 지금 프레임을 새로 캡처하고,
+  // 부분 캡처는 스냅샷을 모달에 띄워 ROI 를 드래그하면 그 화면의 그 영역을 저장한다
+  // (이미지 탭 모달과 같은 캔버스 드래그 패턴).
+  const [captureRoiOpen, setCaptureRoiOpen] = useState(false);
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const captureRoiCanvasRef = useRef<HTMLCanvasElement>(null);
+  const captureRoiScreenshotRef = useRef<string>('');
+  const captureRoiDragRef = useRef({ startX: 0, startY: 0, curX: 0, curY: 0, active: false });
+
+  const notifyCaptureSaved = useCallback((data: any) => {
+    const path = data?.rel_path || data?.filename || '';
+    if (data?.in_run && data?.cycle) {
+      message.success(t('capture.savedCycle', { cycle: String(data.cycle), path }));
+    } else {
+      message.success(t('capture.saved', { path }));
+    }
+  }, [t]);
+
+  const runFullCapture = useCallback(async () => {
+    if (!screenshotDeviceId) {
+      message.warning(t('record.deviceRequired'));
+      return;
+    }
+    setCaptureBusy(true);
+    try {
+      const res = await resultsApi.captureSnapshot(screenshotDeviceId, { screenType: screenTypeArgForDevice(screenshotDeviceId) });
+      notifyCaptureSaved(res.data);
+    } catch (e: any) {
+      const detail = e.response?.data?.detail;
+      message.error(typeof detail === 'string' ? detail : t('capture.failed'));
+    } finally {
+      setCaptureBusy(false);
+    }
+  }, [screenshotDeviceId, screenTypeArgForDevice, notifyCaptureSaved, t]);
+
+  const openCaptureRoi = useCallback(async () => {
+    if (!screenshotDeviceId) {
+      message.warning(t('record.deviceRequired'));
+      return;
+    }
+    setCaptureBusy(true);
+    try {
+      captureRoiScreenshotRef.current = await snapshotScreenshot(screenshotDeviceId);
+    } finally {
+      setCaptureBusy(false);
+    }
+    if (!captureRoiScreenshotRef.current) {
+      message.error(t('record.screenshotFailed'));
+      return;
+    }
+    setCaptureRoiOpen(true);
+  }, [screenshotDeviceId, snapshotScreenshot, t]);
+
+  const drawCaptureRoiCanvas = useCallback((dragRect?: { x: number; y: number; w: number; h: number }) => {
+    const canvas = captureRoiCanvasRef.current;
+    const src = captureRoiScreenshotRef.current;
+    if (!canvas || !src) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const img = new window.Image();
+    img.onload = () => {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      ctx.drawImage(img, 0, 0);
+      if (dragRect && dragRect.w > 5 && dragRect.h > 5) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(dragRect.x, dragRect.y, dragRect.w, dragRect.h);
+        ctx.drawImage(img, dragRect.x, dragRect.y, dragRect.w, dragRect.h, dragRect.x, dragRect.y, dragRect.w, dragRect.h);
+        ctx.strokeStyle = '#52c41a';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(dragRect.x, dragRect.y, dragRect.w, dragRect.h);
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#52c41a';
+        ctx.font = '28px sans-serif';
+        ctx.fillText(`${dragRect.w}×${dragRect.h}`, dragRect.x + 6, dragRect.y - 10);
+      }
+    };
+    img.src = src;
+  }, []);
+
+  const captureRoiPoint = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = captureRoiCanvasRef.current!;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: Math.round((e.clientX - rect.left) * (canvas.width / rect.width)),
+      y: Math.round((e.clientY - rect.top) * (canvas.height / rect.height)),
+    };
+  };
+
+  const captureRoiMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!captureRoiCanvasRef.current) return;
+    const { x, y } = captureRoiPoint(e);
+    captureRoiDragRef.current = { startX: x, startY: y, curX: x, curY: y, active: true };
+  }, []);
+
+  const captureRoiMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!captureRoiDragRef.current.active || !captureRoiCanvasRef.current) return;
+    const { x, y } = captureRoiPoint(e);
+    captureRoiDragRef.current.curX = x;
+    captureRoiDragRef.current.curY = y;
+    const { startX, startY } = captureRoiDragRef.current;
+    drawCaptureRoiCanvas({
+      x: Math.min(startX, x), y: Math.min(startY, y),
+      w: Math.abs(x - startX), h: Math.abs(y - startY),
+    });
+  }, [drawCaptureRoiCanvas]);
+
+  // 드래그 확정 → 그 스냅샷의 그 영역을 저장
+  const captureRoiMouseUp = useCallback(async () => {
+    if (!captureRoiDragRef.current.active) return;
+    captureRoiDragRef.current.active = false;
+    const { startX, startY, curX, curY } = captureRoiDragRef.current;
+    const crop = {
+      x: Math.min(startX, curX), y: Math.min(startY, curY),
+      width: Math.abs(curX - startX), height: Math.abs(curY - startY),
+    };
+    if (crop.width < 10 || crop.height < 10) return;  // 너무 작은 영역은 무시 (오작동 방지)
+    const image = captureRoiScreenshotRef.current;
+    if (!image || !screenshotDeviceId) return;
+    setCaptureBusy(true);
+    try {
+      const res = await resultsApi.captureSnapshot(screenshotDeviceId, { image, crop });
+      notifyCaptureSaved(res.data);
+      setCaptureRoiOpen(false);
+    } catch (e: any) {
+      const detail = e.response?.data?.detail;
+      message.error(typeof detail === 'string' ? detail : t('capture.failed'));
+      drawCaptureRoiCanvas();
+    } finally {
+      setCaptureBusy(false);
+    }
+  }, [screenshotDeviceId, notifyCaptureSaved, drawCaptureRoiCanvas, t]);
+
+  useEffect(() => {
+    if (captureRoiOpen) setTimeout(() => drawCaptureRoiCanvas(), 50);
+  }, [captureRoiOpen, drawCaptureRoiCanvas]);
 
   // ── OCR ExtractRegion 크롭 모달 ─────────────────────────────────────────
 
@@ -6223,6 +6366,25 @@ export default function RecordPage() {
                     </span>
                   </div>
                   <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {/* 웹캠 미러 Capture — 현재 프레임을 Capture 폴더에 저장 (전체 / 부분 ROI) */}
+                    {screenDevice?.type === 'webcam' && (
+                      <Dropdown
+                        trigger={['click']}
+                        placement="topRight"
+                        disabled={captureBusy}
+                        menu={{
+                          items: [
+                            { key: 'full', icon: <CameraOutlined />, label: t('capture.full') },
+                            { key: 'roi', icon: <ScissorOutlined />, label: t('capture.partial') },
+                          ],
+                          onClick: ({ key }) => { if (key === 'full') runFullCapture(); else openCaptureRoi(); },
+                        }}
+                      >
+                        <Button size="small" type="primary" ghost icon={<CameraOutlined />} loading={captureBusy}>
+                          {t('capture.button')}
+                        </Button>
+                      </Dropdown>
+                    )}
                     {/* 이미지 탭 — 매칭 후 실제 탭이 필요하므로 조작 불가 디바이스에는 숨김 */}
                     {!isScreenReadonly && (
                       <Tooltip title={recording ? t('record.imageTapTooltip') : t('record.imageTapDisabled')}>
@@ -7618,6 +7780,35 @@ export default function RecordPage() {
         </div>
         <div style={{ marginTop: 6, color: subTextColor, fontSize: 11, textAlign: 'center' }}>
           {t('record.imageTapModalHint')}
+        </div>
+      </Modal>
+
+      {/* 미러 Capture — 부분 캡처(ROI) 모달 */}
+      <Modal
+        title={t('capture.roiTitle')}
+        open={captureRoiOpen}
+        onCancel={() => setCaptureRoiOpen(false)}
+        width="90vw"
+        style={{ top: 20 }}
+        maskClosable={!captureBusy}
+        closable={!captureBusy}
+        footer={
+          <Button disabled={captureBusy} onClick={() => setCaptureRoiOpen(false)}>
+            {t('common.cancel')}
+          </Button>
+        }
+      >
+        <div style={{ overflow: 'auto', maxHeight: '75vh', textAlign: 'center' }}>
+          <canvas
+            ref={captureRoiCanvasRef}
+            onMouseDown={captureBusy ? undefined : captureRoiMouseDown}
+            onMouseMove={captureBusy ? undefined : captureRoiMouseMove}
+            onMouseUp={captureBusy ? undefined : captureRoiMouseUp}
+            style={{ cursor: captureBusy ? 'wait' : 'crosshair', maxWidth: '100%' }}
+          />
+        </div>
+        <div style={{ marginTop: 6, color: subTextColor, fontSize: 11, textAlign: 'center' }}>
+          {t('capture.roiHint')}
         </div>
       </Modal>
 

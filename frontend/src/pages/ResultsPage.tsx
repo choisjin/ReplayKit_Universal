@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card, Checkbox, Collapse, Col, Descriptions, Dropdown, Image, Input, InputNumber, Modal, Pagination, Popover, Progress, Row, Select, Space, Spin, Table, Tag, Tooltip, message, notification, theme } from 'antd';
-import { ArrowLeftOutlined, DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileExcelOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, SettingOutlined, ShrinkOutlined, SwapOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, CameraOutlined, DeleteOutlined, DownloadOutlined, ExpandOutlined, EyeOutlined, FileExcelOutlined, FileTextOutlined, FolderOpenOutlined, PlayCircleOutlined, ReloadOutlined, ScissorOutlined, SearchOutlined, SettingOutlined, ShrinkOutlined, SwapOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { resultsApi, scenarioApi } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
 import { useTranslation } from '../i18n';
@@ -8,6 +8,8 @@ import type { TranslationKey } from '../i18n';
 import VideoTransport from '../components/VideoTransport';
 import CaptureVideoViewer from '../components/CaptureVideoViewer';
 import CaptureGalleryModal, { type CaptureItem } from '../components/CaptureGalleryModal';
+import CapturePhotoGallery, { type CapturePhoto } from '../components/CapturePhotoGallery';
+import { useTestMode } from '../hooks/useTestMode';
 import type { TableRef } from 'antd/es/table';
 
 interface ResultSummary {
@@ -327,7 +329,11 @@ export default function ResultsPage() {
 
   // 그룹 상세 뷰 (사이클별 통합)
   const [groupDetail, setGroupDetail] = useState<ResultDetail[] | null>(null);
-  // Capture 일괄보기 (전체화면) — 전 사이클 Webcam.Capture 영상
+  // Capture 일괄보기 (전체화면) — 런 폴더 Capture/ 아래 사진 그리드 (미러 Capture 버튼 저장물)
+  const [capturePhotos, setCapturePhotos] = useState<CapturePhoto[]>([]);
+  const [capturePhotoGalleryOpen, setCapturePhotoGalleryOpen] = useState(false);
+  // Webcam.Capture 영상 일괄보기/프레임 뷰어 — 보관 중인 실험 기능, `#test` 모드에서만 노출
+  const testMode = useTestMode();
   const [captureGalleryOpen, setCaptureGalleryOpen] = useState(false);
   // 상세 표에 보이는 회차 (단일/그룹 공통 — 회차별 페이지네이션)
   const [detailCycle, setDetailCycle] = useState(1);
@@ -437,6 +443,22 @@ export default function ResultsPage() {
   };
   const sortRecordingsByCycle = (recs: RecordingItem[]): RecordingItem[] =>
     [...recs].sort((a, b) => cycleIndexOf(a.filename) - cycleIndexOf(b.filename));
+
+  // 결과(단일/그룹 멤버)의 Capture/ 사진 목록 — 사이클 → 시각 순으로 합친다
+  const fetchCaptures = async (sources: { filename: string; scenario?: string }[]) => {
+    setCapturePhotos([]);
+    const all: CapturePhoto[] = [];
+    for (const src of sources) {
+      try {
+        const res = await resultsApi.listCaptures(src.filename);
+        for (const it of (res.data.captures || []) as CapturePhoto[]) {
+          all.push(src.scenario ? { ...it, scenario: src.scenario } : it);
+        }
+      } catch { /* Capture 폴더 없음 등 — 무시 */ }
+    }
+    all.sort((a, b) => a.cycle - b.cycle || a.mtime.localeCompare(b.mtime) || a.name.localeCompare(b.name));
+    setCapturePhotos(all);
+  };
 
   const fetchRecordings = async (resultFilename: string) => {
     try {
@@ -929,6 +951,7 @@ export default function ResultsPage() {
         details.push({ ...res.data, _filename: item.filename });
       }
       setGroupDetail(details);
+      fetchCaptures(group.items.map(it => ({ filename: it.filename, scenario: it.scenario_name })));
       // 모든 시나리오의 녹화 파일을 합쳐서 로드
       const allRecs: any[] = [];
       for (const item of group.items) {
@@ -992,6 +1015,7 @@ export default function ResultsPage() {
       const res = await resultsApi.get(filename);
       setDetail(res.data);
       fetchRecordings(filename);
+      fetchCaptures([{ filename }]);
     } catch {
       message.error(t('results.detailFailed'));
     }
@@ -1768,7 +1792,7 @@ export default function ResultsPage() {
         const isRandMsg = !!r.message && r.message.startsWith('[RAND]');
         const hasMsg = (isModuleMsg && !!r.message) || isRandMsg;
         const hasImage = !!(r.expected_image || r.actual_image);
-        const hasVideo = !!r.capture_video;
+        const hasVideo = testMode && !!r.capture_video;  // Webcam.Capture 영상 뷰어 — `#test` 전용
         if (!hasMsg && !hasImage && !hasVideo) return '-';
         return (
           <Space size={4}>
@@ -1904,11 +1928,21 @@ export default function ResultsPage() {
         || (a.it.timestamp || '').localeCompare(b.it.timestamp || '') || a.i - b.i)
       .map(x => x.it);
   }, [detail, groupDetail]);
-  const captureBulkButton = captureItems.length > 0 ? (
-    <Button size="small" icon={<VideoCameraOutlined />} onClick={() => setCaptureGalleryOpen(true)}>
-      {t('capture.bulkView')} ({captureItems.length})
-    </Button>
-  ) : null;
+  // Capture 일괄보기 = Capture/ 폴더 사진 그리드. 영상 일괄보기는 `#test` 에서만.
+  const captureBulkButton = (
+    <>
+      {capturePhotos.length > 0 && (
+        <Button size="small" icon={<CameraOutlined />} onClick={() => setCapturePhotoGalleryOpen(true)}>
+          {t('capture.bulkView')} ({capturePhotos.length})
+        </Button>
+      )}
+      {testMode && captureItems.length > 0 && (
+        <Button size="small" icon={<VideoCameraOutlined />} onClick={() => setCaptureGalleryOpen(true)}>
+          {t('capture.videoBulkView')} ({captureItems.length})
+        </Button>
+      )}
+    </>
+  );
 
   // 회차 페이지네이션 — 에이징 결과는 회차가 수백 개라 한 표에 몰아넣지 않고 회차별로 나눠 보여준다.
   // 페이지 수는 계획 반복수(total_repeat)가 아니라 실제 실행된 최대 회차 (중단된 실행의 빈 페이지 방지).
@@ -2636,7 +2670,15 @@ export default function ResultsPage() {
       </div>
       )}
 
-      {/* Capture 일괄보기 (전체화면) */}
+      {/* Capture 일괄보기 (전체화면) — Capture/ 폴더 사진 그리드 */}
+      <CapturePhotoGallery
+        open={capturePhotoGalleryOpen}
+        items={capturePhotos}
+        initialCycle={detailCycle}
+        onClose={() => setCapturePhotoGalleryOpen(false)}
+      />
+
+      {/* Capture 영상 일괄보기 (전체화면, `#test` 전용) */}
       <CaptureGalleryModal
         open={captureGalleryOpen}
         items={captureItems}
@@ -2753,7 +2795,7 @@ export default function ResultsPage() {
               <span style={{ color: '#888' }}>Duration: {formatDuration(compareStep.execution_time_ms)}</span>
             </Space>
             {_showLog && renderLogBlock()}
-            {compareStep.capture_video && (
+            {testMode && compareStep.capture_video && (
               <Card
                 size="small"
                 title={<Space size={4}><VideoCameraOutlined />{t('capture.title')}</Space>}

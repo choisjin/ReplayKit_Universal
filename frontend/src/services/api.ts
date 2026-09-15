@@ -297,6 +297,13 @@ export const resultsApi = {
   },
   listRecordings: (resultFilename: string) =>
     api.get(`/results/recordings-for/${encodeURIComponent(resultFilename)}`),
+  // 결과 런 폴더 Capture/ 아래 사진 목록 (미러 Capture 버튼 저장물, 사이클 폴더 c{N} 포함)
+  listCaptures: (resultFilename: string) =>
+    api.get(`/results/captures-for/${encodeURIComponent(resultFilename)}`),
+  // 미러 화면 현재 프레임 저장 — image 를 주면 그 이미지(부분 캡처: ROI 를 그린 화면)를,
+  // 없으면 디바이스에서 새로 캡처해 저장. 재생 중이면 {run}/Capture/c{N}/, 아니면 Temp_logs/Capture/
+  captureSnapshot: (deviceId: string, opts: { image?: string; crop?: { x: number; y: number; width: number; height: number }; screenType?: string } = {}) =>
+    api.post('/results/capture-snapshot', { device_id: deviceId, image: opts.image, crop: opts.crop, screen_type: opts.screenType }),
   // filename 은 `{run}/recordings/x.mp4` 같은 상대경로일 수 있으므로 세그먼트 단위로 인코딩
   // (encodeURIComponent 를 통째로 쓰면 슬래시까지 %2F 가 되어 경로가 깨진다).
   deleteRecording: (filename: string) =>

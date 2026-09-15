@@ -1742,6 +1742,146 @@ def capture_frames(rel_path: str):
     return {**meta, "url_prefix": f"/results-files/{quote(rel_dir)}/"}
 
 
+# ── Capture 스냅샷 (미러 화면 아래 Capture 버튼) ─────────────────────────────
+# 재생 중이면 {run}/Capture/c{사이클}/ 에, 아니면 results/Temp_logs/Capture/ 에 현재 프레임을
+# PNG 로 저장한다 (Webcam.Capture 영상과 같은 폴더 규칙). 결과 상세 'Capture 일괄보기'가
+# /captures-for 로 이 폴더의 사진을 전부 모아 그리드로 보여준다.
+_CAPTURE_TEMP_KEEP = 100
+_CAPTURE_IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
+_CAPTURE_CYCLE_DIR_RE = re.compile(r"^c(\d+)$")
+
+
+def _capture_output_dir() -> tuple[Path, int, bool]:
+    """(저장 폴더, 사이클, 재생 중 여부)."""
+    from ..services.playback_service import get_current_step_context, get_run_output_dir
+    run_dir = get_run_output_dir()
+    if run_dir:
+        _, cycle = get_current_step_context()
+        cycle = int(cycle or 1)
+        return run_dir / "Capture" / f"c{cycle}", cycle, True
+    return RESULTS_DIR / "Temp_logs" / "Capture", 0, False
+
+
+def _prune_capture_temp(out_dir: Path) -> None:
+    try:
+        files = sorted(
+            (p for p in out_dir.iterdir() if p.is_file() and p.suffix.lower() in _CAPTURE_IMAGE_EXTS),
+            key=lambda p: p.stat().st_mtime,
+        )
+        for old in files[:max(0, len(files) - (_CAPTURE_TEMP_KEEP - 1))]:
+            old.unlink(missing_ok=True)
+    except Exception as e:
+        logger.debug("capture temp prune failed: %s", e)
+
+
+def _save_capture_snapshot(png_bytes: bytes, crop: dict | None) -> dict:
+    from ..utils.cv2_loader import cv2
+    from ..utils.cv_io import safe_imwrite
+    import numpy as np
+
+    img = cv2.imdecode(np.frombuffer(png_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="Cannot decode captured image")
+    h, w = img.shape[:2]
+    roi = None
+    if crop:
+        x = max(0, min(int(crop.get("x", 0)), w))
+        y = max(0, min(int(crop.get("y", 0)), h))
+        x2 = max(x, min(x + int(crop.get("width", 0)), w))
+        y2 = max(y, min(y + int(crop.get("height", 0)), h))
+        if x2 - x < 1 or y2 - y < 1:
+            raise HTTPException(status_code=400, detail="Crop region is empty")
+        img = img[y:y2, x:x2]
+        roi = {"x": x, "y": y, "width": x2 - x, "height": y2 - y}
+
+    out_dir, cycle, in_run = _capture_output_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not in_run:
+        _prune_capture_temp(out_dir)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    filename = f"{ts}_{'roi' if roi else 'full'}.png"
+    target = out_dir / filename
+    if not safe_imwrite(str(target), img):
+        raise HTTPException(status_code=500, detail=f"Failed to write image: {target}")
+    rel = target.resolve().relative_to(RESULTS_DIR.resolve()).as_posix()
+    return {
+        "filename": filename,
+        "rel_path": rel,
+        "url": "/results-files/" + "/".join(quote(seg) for seg in rel.split("/")),
+        "cycle": cycle,
+        "in_run": in_run,
+        "width": int(img.shape[1]),
+        "height": int(img.shape[0]),
+        "roi": roi,
+    }
+
+
+@router.post("/capture-snapshot")
+async def capture_snapshot(body: dict):
+    """미러 화면의 현재 프레임을 Capture 폴더에 PNG 로 저장한다.
+
+    body: {device_id, image?: dataURL/base64, crop?: {x,y,width,height}, screen_type?}
+    - image 가 있으면 그 이미지를(부분 캡처: 사용자가 ROI 를 그린 바로 그 화면) 저장하고,
+      없으면 디바이스에서 지금 프레임을 새로 캡처한다(전체 캡처).
+    """
+    image = body.get("image")
+    if image:
+        if isinstance(image, str) and image.startswith("data:"):
+            image = image.split(",", 1)[-1]
+        try:
+            png_bytes = base64.b64decode(image)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+    else:
+        device_id = str(body.get("device_id") or "").strip()
+        if not device_id:
+            raise HTTPException(status_code=400, detail="device_id required")
+        from .device import get_screenshot
+        res = await get_screenshot(device_id, "png", body.get("screen_type") or "front_center")
+        b64 = (res or {}).get("image") if isinstance(res, dict) else None
+        if not b64:
+            raise HTTPException(status_code=502, detail="Screenshot failed — no frame from device")
+        png_bytes = base64.b64decode(b64)
+    return await asyncio.to_thread(_save_capture_snapshot, png_bytes, body.get("crop"))
+
+
+def _list_captures_sync(result_filename: str) -> list[dict]:
+    base = result_filename.replace(".json", "").replace("/result", "")
+    cap_dir = RESULTS_DIR / base / "Capture"
+    items: list[dict] = []
+    if not cap_dir.is_dir():
+        return items
+    results_root = RESULTS_DIR.resolve()
+    for f in cap_dir.rglob("*"):
+        if not f.is_file() or f.suffix.lower() not in _CAPTURE_IMAGE_EXTS:
+            continue
+        # Webcam.Capture 영상의 프레임 분해 캐시(`{stem}_frames/`)는 사진이 아니다
+        if any(p.name.endswith("_frames") or p.name.endswith("_frames.tmp") for p in f.parents):
+            continue
+        try:
+            st = f.stat()
+            rel = f.resolve().relative_to(results_root).as_posix()
+        except (OSError, ValueError):
+            continue
+        m = _CAPTURE_CYCLE_DIR_RE.match(f.parent.name)
+        items.append({
+            "name": f.name,
+            "rel_path": rel,
+            "url": "/results-files/" + "/".join(quote(seg) for seg in rel.split("/")),
+            "cycle": int(m.group(1)) if m else 0,
+            "size": st.st_size,
+            "mtime": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
+        })
+    items.sort(key=lambda it: (it["cycle"], it["mtime"], it["name"]))
+    return items
+
+
+@router.get("/captures-for/{result_filename:path}")
+async def list_captures_for_result(result_filename: str):
+    """결과 런 폴더 Capture/ 아래의 모든 사진(사이클 폴더 c{N} 포함) — 'Capture 일괄보기' 그리드."""
+    return {"captures": await asyncio.to_thread(_list_captures_sync, result_filename)}
+
+
 @router.delete("/recordings/{filename:path}")
 async def delete_recording(filename: str):
     """Delete a webcam recording (and its sidecar .meta.json if any).
