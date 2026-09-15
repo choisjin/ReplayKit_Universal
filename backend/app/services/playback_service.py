@@ -895,7 +895,7 @@ class PlaybackService:
             delay_ms=step.delay_after_ms,
         )
 
-        # File prefix includes cycle number to avoid overwriting across repeats
+        # 스크린샷 파일 prefix — 캡처 직전에 캡처 시각이 덧붙어 실행마다 고유해진다.
         file_prefix = f"c{repeat_index}_step_{step.id:03d}"
 
         # 일시정지 상태면 재개될 때까지 대기
@@ -1022,6 +1022,11 @@ class PlaybackService:
                     actual_subdir = f"actual_{self._result_timestamp}" if self._result_timestamp else "actual"
                     actual_dir = SCREENSHOTS_DIR / scenario_name / actual_subdir
                 actual_dir.mkdir(parents=True, exist_ok=True)
+                # 캡처 시각(로컬, ms)을 파일명에 포함 — 조건부 분기 재방문·구간반복으로 같은
+                # 사이클에서 같은 스텝이 여러 번 실행돼도 덮어쓰지 않고 회차별로 보존한다.
+                # (과거: c1_step_180.png 하나를 2,621회 덮어써 언제 무엇이 캡처됐는지 추적 불가)
+                # 파생 파일(_annotated/_roi/diff_/_expected_annotated)도 이 prefix 를 공유.
+                file_prefix = f"{file_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]}"
                 actual_path = str(actual_dir / f"{file_prefix}.png")
 
                 if ss_device["type"] == "adb":
