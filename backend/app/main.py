@@ -1076,7 +1076,7 @@ async def websocket_screen_mirror(websocket: WebSocket):
             if getattr(svc, "last_input_ts", 0.0) > _ssh_seen_input_ts:
                 return  # 새 입력 → 즉시 다음 캡처로 (다음 호출에서 burst 재시작)
 
-    # ── 재생 배타 모드(#test): 재생 중 미러링 전면 중단 ──
+    # ── 재생 중 미러링 전면 중단 (서버 측 단일 게이트) ──
     # 재생이 시작되면 프레임 생성을 멈추고, 미러가 붙잡고 있던 장기 세션(라이브 스트리머·
     # adb screencap 스트리머)을 회수한다. WS 는 그대로 유지하므로 재생이 끝나면 아래
     # 루프가 스스로 재개된다 — 각 분기가 스트림이 죽어 있으면 다시 띄우는 구조라 별도 복구 코드가 필요 없다.
@@ -1115,7 +1115,9 @@ async def websocket_screen_mirror(websocket: WebSocket):
                 logger.info("Screen mirror client disconnected (recv watcher)")
                 break
             # 재생 배타 모드: 디바이스로 나가는 건 스텝이 지시한 동작뿐이어야 한다.
-            if _adb_quiet_gate():
+            # 재생 중이면 클라이언트(프론트)의 중단 여부와 무관하게 서버가 직접 멈춘다 —
+            # 다른 탭/다른 PC/구버전 프론트가 붙어 있어도 미러가 장치를 건드리지 못하게.
+            if _adb_quiet_gate() or playback_service.is_running:
                 if not quiet_paused:
                     quiet_paused = True
                     await _release_mirror_resources()
