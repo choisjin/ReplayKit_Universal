@@ -162,7 +162,8 @@ async def stop_recording():
 
 
 class DeleteStepRequest(BaseModel):
-    step_index: int  # 0-based
+    step_uid: Optional[str] = None  # 정본 식별자
+    step_index: int = -1  # 0-based (레거시 폴백)
 
 
 def _prune_device_map(scenario) -> None:
@@ -189,9 +190,8 @@ async def delete_step(req: DeleteStepRequest):
     if not recording_svc.is_recording or not recording_svc._current_scenario:
         raise HTTPException(status_code=400, detail="Not recording")
     scenario = recording_svc._current_scenario
-    if req.step_index < 0 or req.step_index >= len(scenario.steps):
-        raise HTTPException(status_code=400, detail=f"Invalid step index: {req.step_index}")
-    removed = scenario.steps.pop(req.step_index)
+    _, idx = _resolve_step(scenario, req.step_uid, req.step_index)
+    removed = scenario.steps.pop(idx)
     # Re-number step IDs sequentially
     for i, step in enumerate(scenario.steps):
         step.id = i + 1
@@ -203,7 +203,8 @@ async def delete_step(req: DeleteStepRequest):
 
 class UpdateStepRequest(BaseModel):
     scenario_name: str
-    step_index: int
+    step_uid: Optional[str] = None
+    step_index: int = -1
     updates: dict  # e.g. {"delay_after_ms": 5000}
 
 
@@ -211,9 +212,7 @@ class UpdateStepRequest(BaseModel):
 async def update_step(req: UpdateStepRequest):
     """시나리오 스텝의 속성을 업데이트 (딜레이 등)."""
     scenario = await _resolve_scenario(req.scenario_name)
-    if req.step_index < 0 or req.step_index >= len(scenario.steps):
-        raise HTTPException(status_code=400, detail=f"Invalid step index: {req.step_index}")
-    step = scenario.steps[req.step_index]
+    step, _ = _resolve_step(scenario, req.step_uid, req.step_index)
     for k, v in req.updates.items():
         if hasattr(step, k):
             setattr(step, k, v)
@@ -270,7 +269,8 @@ async def sync_steps(req: SyncStepsRequest):
 
 class SaveExpectedImageRequest(BaseModel):
     scenario_name: str
-    step_index: int  # 0-based
+    step_uid: Optional[str] = None  # 정본 식별자 (없으면 step_index 폴백)
+    step_index: int = -1  # 0-based (레거시)
     image_base64: str  # PNG base64 data (without data:image/png;base64, prefix)
     crop: Optional[dict] = None  # {x, y, width, height} in image pixels
     compare_mode: Optional[str] = None  # 분기/저장 모드 — "multi_crop"이면 추가, "match_crop"이면 step.compare_mode 보존
@@ -294,15 +294,36 @@ async def _resolve_scenario(scenario_name: str):
         raise HTTPException(status_code=404, detail=f"Scenario '{scenario_name}' not found")
 
 
+def _resolve_step(scenario, step_uid: Optional[str], step_index: int):
+    """스텝을 uid(정본)로 찾고, 없으면 레거시 위치(step_index)로 폴백한다.
+
+    step_index 는 프론트 배열의 위치라 스텝 삭제/이동 직후 백엔드 상태와 어긋날 수
+    있고, 그러면 엉뚱한 스텝에 기대이미지/ROI 가 조용히 기록된다(실제 사고 사례).
+    uid 는 로드 시 _migrate_step_identity 가 부여·중복제거해 영속화하므로 안전하다.
+
+    인덱스 폴백은 구버전 프론트(uid 미전송) 호환용이다. 배포 스큐가 정리되면 제거.
+    반환: (step, index)
+    """
+    if step_uid:
+        for i, s in enumerate(scenario.steps):
+            if s.uid == step_uid:
+                return s, i
+        raise HTTPException(status_code=400, detail=f"Step not found: uid={step_uid}")
+    if 0 <= step_index < len(scenario.steps):
+        logger.warning(
+            "legacy step_index 경로 사용 (step_uid 없음 — 구버전 프론트): scenario=%s index=%d",
+            getattr(scenario, "name", "?"), step_index,
+        )
+        return scenario.steps[step_index], step_index
+    raise HTTPException(status_code=400, detail=f"Invalid step index: {step_index}")
+
+
 @router.post("/record/save-expected-image")
 async def save_expected_image(req: SaveExpectedImageRequest):
     """Manually save an expected image for a step."""
     scenario = await _resolve_scenario(req.scenario_name)
 
-    if req.step_index < 0 or req.step_index >= len(scenario.steps):
-        raise HTTPException(status_code=400, detail=f"Invalid step index: {req.step_index}")
-
-    step = scenario.steps[req.step_index]
+    step, _ = _resolve_step(scenario, req.step_uid, req.step_index)
 
     # Decode base64 PNG
     try:
@@ -383,7 +404,8 @@ async def save_expected_image(req: SaveExpectedImageRequest):
 
 class CaptureExpectedImageRequest(BaseModel):
     scenario_name: str
-    step_index: int  # 0-based
+    step_uid: Optional[str] = None
+    step_index: int = -1  # 0-based (레거시 폴백)
     device_id: str  # ADB serial or HKMC device ID to take screenshot from
     screen_type: str = "front_center"  # HKMC screen type
     crop: Optional[dict] = None  # {x, y, width, height} in device pixels
@@ -397,10 +419,7 @@ async def capture_expected_image(req: CaptureExpectedImageRequest):
     """Capture a screenshot from the device and save as expected image."""
     scenario = await _resolve_scenario(req.scenario_name)
 
-    if req.step_index < 0 or req.step_index >= len(scenario.steps):
-        raise HTTPException(status_code=400, detail=f"Invalid step index: {req.step_index}")
-
-    step = scenario.steps[req.step_index]
+    step, _ = _resolve_step(scenario, req.step_uid, req.step_index)
 
     # Resolve device and take screenshot
     dev = dm.get_device(req.device_id)
@@ -580,17 +599,15 @@ async def capture_expected_image(req: CaptureExpectedImageRequest):
 
 class RemoveExpectedImageRequest(BaseModel):
     scenario_name: str
-    step_index: int
+    step_uid: Optional[str] = None
+    step_index: int = -1
 
 
 @router.post("/record/remove-expected-image")
 async def remove_expected_image(req: RemoveExpectedImageRequest):
     """Remove expected image and crop files from a step."""
     scenario = await _resolve_scenario(req.scenario_name)
-    if req.step_index < 0 or req.step_index >= len(scenario.steps):
-        raise HTTPException(status_code=400, detail=f"Invalid step index: {req.step_index}")
-
-    step = scenario.steps[req.step_index]
+    step, _ = _resolve_step(scenario, req.step_uid, req.step_index)
     save_dir = SCREENSHOTS_DIR / scenario.name
 
     # 기대이미지 파일 삭제
@@ -833,7 +850,8 @@ class UpdateImageTapRequest(BaseModel):
     실제 디바이스에 tap을 실행하지는 않는다 (편집 중 의도치 않은 입력 방지).
     """
     scenario_name: str
-    step_index: int
+    step_uid: Optional[str] = None
+    step_index: int = -1
     image_base64: str
     crop: dict
     similarity: float = 0.85
@@ -850,9 +868,7 @@ async def update_image_tap(req: UpdateImageTapRequest):
     import time as _time
 
     scenario = await _resolve_scenario(req.scenario_name)
-    if req.step_index < 0 or req.step_index >= len(scenario.steps):
-        raise HTTPException(status_code=400, detail=f"Invalid step index: {req.step_index}")
-    step = scenario.steps[req.step_index]
+    step, _ = _resolve_step(scenario, req.step_uid, req.step_index)
     if step.type != StepType.IMAGE_TAP:
         raise HTTPException(status_code=400, detail="Step is not IMAGE_TAP")
 
@@ -1149,7 +1165,8 @@ async def import_steps(req: ImportStepsRequest):
 
 class RemoveCropRequest(BaseModel):
     scenario_name: str
-    step_index: int
+    step_uid: Optional[str] = None
+    step_index: int = -1
     crop_index: int
 
 
@@ -1158,10 +1175,7 @@ async def remove_crop(req: RemoveCropRequest):
     """Remove a crop item from a multi-crop step."""
     scenario = await _resolve_scenario(req.scenario_name)
 
-    if req.step_index < 0 or req.step_index >= len(scenario.steps):
-        raise HTTPException(status_code=400, detail=f"Invalid step index: {req.step_index}")
-
-    step = scenario.steps[req.step_index]
+    step, _ = _resolve_step(scenario, req.step_uid, req.step_index)
     if req.crop_index < 0 or req.crop_index >= len(step.expected_images):
         raise HTTPException(status_code=400, detail=f"Invalid crop index: {req.crop_index}")
 
@@ -1175,7 +1189,8 @@ async def remove_crop(req: RemoveCropRequest):
 
 class CropFromExpectedRequest(BaseModel):
     scenario_name: str
-    step_index: int
+    step_uid: Optional[str] = None
+    step_index: int = -1
     crop: dict  # {x, y, width, height}
     crop_label: str = ""
     replace_index: Optional[int] = None  # if set, replace existing crop at this index
@@ -1189,10 +1204,7 @@ async def crop_from_expected(req: CropFromExpectedRequest):
 
     scenario = await _resolve_scenario(req.scenario_name)
 
-    if req.step_index < 0 or req.step_index >= len(scenario.steps):
-        raise HTTPException(status_code=400, detail=f"Invalid step index: {req.step_index}")
-
-    step = scenario.steps[req.step_index]
+    step, _ = _resolve_step(scenario, req.step_uid, req.step_index)
     if not step.expected_image:
         raise HTTPException(status_code=400, detail="Step has no expected image to crop from")
 
@@ -1551,7 +1563,8 @@ async def copy_scenario(name: str, req: CopyScenarioRequest):
 
 class TestStepRequest(BaseModel):
     scenario_name: str
-    step_index: int  # 0-based
+    step_uid: Optional[str] = None  # 정본 식별자 (step_data 없이 저장본을 실행할 때 사용)
+    step_index: int = -1  # 0-based (레거시 폴백 + 스텝테스트 이력 키)
     step_data: Optional[dict] = None  # current (unsaved) step data from frontend
     # 프론트엔드 라이브 뷰가 현재 보고 있는 화면과 동일한 장면을 캡처하도록 강제하는 override.
     # 스텝에 저장된 screenshot_device_id/screen_type이 사용자가 보고 있는 화면과 다를 때
@@ -1620,10 +1633,7 @@ async def test_step(req: TestStepRequest):
             except FileNotFoundError:
                 raise HTTPException(status_code=404, detail=f"Scenario '{req.scenario_name}' not found")
 
-        if req.step_index < 0 or req.step_index >= len(scenario.steps):
-            raise HTTPException(status_code=400, detail=f"Invalid step index: {req.step_index}")
-
-        step = scenario.steps[req.step_index]
+        step, _ = _resolve_step(scenario, req.step_uid, req.step_index)
         scenario_name = scenario.name
         device_map = dict(scenario.device_map) if scenario.device_map else {}
 

@@ -4,7 +4,7 @@ import { PlayCircleOutlined, PauseOutlined, PlusOutlined, SwapOutlined, FolderOp
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { deviceApi, resultsApi, scenarioApi } from '../services/api';
+import { deviceApi, resultsApi, scenarioApi, type StepRef } from '../services/api';
 import { useDevice } from '../context/DeviceContext';
 import { useSettings } from '../context/SettingsContext';
 import { useTestMode, TEST_ONLY_MODULES } from '../hooks/useTestMode';
@@ -543,6 +543,9 @@ export default function RecordPage() {
   loopsRef.current = loops; // 콜백(updateStepJump)에서 최신 loops 참조용
   const stepsRef = useRef<Step[]>([]);
   stepsRef.current = steps;  // 콜백에서 uid → 현재 위치 해석용 (loopsRef 와 동일 패턴)
+  /** 백엔드에 스텝을 지정할 때 쓰는 참조 — uid 가 정본, index 는 구버전 백엔드 폴백.
+   *  stepsRef 를 읽으므로 메모된 콜백의 stale steps 스냅샷에 영향받지 않는다. */
+  const stepRef = (index: number): StepRef => ({ index, uid: stepsRef.current[index]?.uid });
   // 위치 기반 UI 로직용 파생값 — 저장은 uid, 표시/판정은 현재 위치.
   const rLoops = useMemo(() => resolveLoops(loops, steps), [loops, steps]);
   const rLoopsRef = useRef<ResolvedLoop[]>([]);
@@ -566,6 +569,8 @@ export default function RecordPage() {
 
   // 변경사항 추적 (저장된 스텝과 비교)
   const savedStepsRef = useRef<string>('[]');
+  // 백엔드 동기화 직렬화용 체인 (syncFrontendStepsToBackend)
+  const syncChainRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const saveScenarioRef = useRef<() => Promise<void>>(async () => {});
   const isDirty = useCallback(() => {
     // steps.length === 0 인 경우에도 저장된 스냅샷이 비어있지 않으면 dirty
@@ -2586,10 +2591,10 @@ export default function RecordPage() {
     const step = steps[stepIdx];
     const targetDevId = captureDeviceIdForStep(step);
     if (!scenarioName || !targetDevId) return;
-    await ensureSavedForImageOp();
+    if (!(await ensureSavedForImageOp())) return;
     try {
       const screenTypeArg = screenTypeArgForDevice(targetDevId);
-      const res = await scenarioApi.captureExpectedImage(scenarioName, stepIdx, targetDevId, undefined, undefined, undefined, screenTypeArg);
+      const res = await scenarioApi.captureExpectedImage(scenarioName, stepRef(stepIdx), targetDevId, undefined, undefined, undefined, screenTypeArg);
       setSteps(prev => prev.map((s, i) => i === stepIdx ? { ...s, expected_image: res.data.filename, screenshot_device_id: targetDevId, _imageVer: Date.now(), roi: null, exclude_rois: [], expected_images: [] } : s));
       message.success(t('record.expectedSaved', { index: stepIdx + 1 }));
     } catch (e: any) {
@@ -2716,7 +2721,7 @@ export default function RecordPage() {
       message.error(t('record.screenshotFailed'));
       return;
     }
-    await ensureSavedForImageOp();
+    if (!(await ensureSavedForImageOp())) return;
     // WinControl 은 screen_type 개념 없음 — undefined 전송. 그 외 멀티 스크린 디바이스는 현재 선택.
     // 라이브 뷰가 아니라 캡처 타깃 디바이스(targetDev) 기준으로 판단.
     const screenTypeArg = screenTypeArgForDevice(targetDev);
@@ -2727,7 +2732,7 @@ export default function RecordPage() {
         // 편집 모드 — 기존 스텝의 템플릿/디바이스/screen_type 을 현재 선택 기준으로 덮어쓴다 (tap 실행 안 함)
         const res = await scenarioApi.updateImageTap(
           scenarioName,
-          imageTapEditIndex,
+          stepRef(imageTapEditIndex),
           modalImage,
           { x: rx, y: ry, width: rw, height: rh },
           imageTapSimilarity,
@@ -3327,7 +3332,7 @@ export default function RecordPage() {
       const overrides = (!hasExplicitDevice && screenshotDeviceId)
         ? { screenshotDeviceId, screenType }
         : undefined;
-      const res = await scenarioApi.testStep(scenarioName, stepIdx, currentStep, overrides);
+      const res = await scenarioApi.testStep(scenarioName, stepRef(stepIdx), currentStep, overrides);
       // _stepIdx: 결과 모달의 기대이미지 교체가 어느 스텝을 갱신할지 알아야 한다
       const result = { ...res.data, _ts: Date.now(), _stepIdx: stepIdx };
       setTestResult(result);
@@ -3499,7 +3504,7 @@ export default function RecordPage() {
     const targetDevId = captureDeviceIdForStep(stepForCapture);
     if (rw > 10 && rh > 10 && captureStepIndex != null && scenarioName && targetDevId) {
       const crop = { x: rx, y: ry, width: rw, height: rh };
-      await ensureSavedForImageOp();
+      if (!(await ensureSavedForImageOp())) return;
       // 모달에 표시된 이미지(모달 열 때 찍어둔 스냅샷)를 그대로 사용해야 함.
       // 백엔드에서 다시 캡처하면 그사이 화면이 바뀌어(예: 팝업이 사라짐) 잘못된 영역이 크롭됨.
       const modalImage = captureScreenshotRef.current;
@@ -3513,7 +3518,7 @@ export default function RecordPage() {
       const compareModeArg = stepForCapture?.compare_mode === 'match_crop' ? 'match_crop' : undefined;
       try {
         const res = await scenarioApi.saveExpectedImage(
-          scenarioName, captureStepIndex, modalImage, crop,
+          scenarioName, stepRef(captureStepIndex), modalImage, crop,
           compareModeArg, undefined, undefined,
           screenTypeArg,
         );
@@ -3702,7 +3707,7 @@ export default function RecordPage() {
       const step = steps[excludeRoiEditingIndex];
       const targetDevId = captureDeviceIdForStep(step);
       if (!step?.expected_image && scenarioName && targetDevId) {
-        await ensureSavedForImageOp();
+        if (!(await ensureSavedForImageOp())) return;
         const modalImage = excludeRoiScreenshotRef.current;
         if (!modalImage) {
           message.error(t('record.cropSaveFailed'));
@@ -3711,7 +3716,7 @@ export default function RecordPage() {
         const screenTypeArg = screenTypeArgForDevice(targetDevId);
         try {
           const capRes = await scenarioApi.saveExpectedImage(
-            scenarioName, excludeRoiEditingIndex, modalImage,
+            scenarioName, stepRef(excludeRoiEditingIndex), modalImage,
             undefined, undefined, undefined, undefined,
             screenTypeArg,
           );
@@ -3864,7 +3869,7 @@ export default function RecordPage() {
     if (rw > 10 && rh > 10 && multiCropEditingIndex != null && scenarioName && targetDevIdMulti) {
       // 캔버스 ↔ deviceRes 비율 변환 (H.264 다운스케일 대응)
       const crop = { x: rx, y: ry, width: rw, height: rh };
-      await ensureSavedForImageOp();
+      if (!(await ensureSavedForImageOp())) return;
       // 모달에 표시된 스냅샷을 기대이미지로 저장 — 백엔드 재캡처 시 팝업 사라진 최신 화면이 들어오는 버그 회피
       const modalImage = multiCropScreenshotRef.current;
       if (!modalImage) {
@@ -3875,7 +3880,7 @@ export default function RecordPage() {
       try {
         // preserve_crops=true: 기존 multi_crop 아이템을 유지 (아래 cropFromExpected에서 추가/교체)
         const capRes = await scenarioApi.saveExpectedImage(
-          scenarioName, multiCropEditingIndex, modalImage,
+          scenarioName, stepRef(multiCropEditingIndex), modalImage,
           undefined, undefined, undefined, true,
           screenTypeArgMulti,
         );
@@ -3887,7 +3892,7 @@ export default function RecordPage() {
           _imageVer: Date.now(), roi: null, exclude_rois: [],
         } : s));
         const replaceIdx = multiCropSelectedIdx ?? undefined;
-        const res = await scenarioApi.cropFromExpected(scenarioName, multiCropEditingIndex, crop, '', replaceIdx);
+        const res = await scenarioApi.cropFromExpected(scenarioName, stepRef(multiCropEditingIndex), crop, '', replaceIdx);
         const roi: ROI = res.data.roi;
         const filename: string = res.data.filename;
         setSteps(prev => prev.map((s, i) => {
@@ -4415,6 +4420,15 @@ export default function RecordPage() {
   //  - !recording && editingExisting: 디스크 파일 저장 (PUT /scenario/:name)
   //  - explicitSteps가 주어지면 현재 state 대신 그 배열을 사용 (setSteps 직후 경합 방지)
   const syncFrontendStepsToBackend = async (explicitSteps?: Step[]): Promise<boolean> => {
+    // 동기화는 항상 직렬로 — 스텝을 연달아 지우면 PUT 이 겹치고, 먼저 보낸(더 오래된)
+    // 목록이 나중에 도착하면 디스크에 이전 상태가 되살아난다.
+    const run = () => syncStepsToBackendOnce(explicitSteps);
+    const next = syncChainRef.current.then(run, run);
+    syncChainRef.current = next.catch(() => false);
+    return next;
+  };
+
+  const syncStepsToBackendOnce = async (explicitSteps?: Step[]): Promise<boolean> => {
     if (!scenarioName.trim()) return true;
     const source = explicitSteps ?? steps;
     const reindexed = source.map((s, i) => {
@@ -4456,6 +4470,10 @@ export default function RecordPage() {
 
   // 이미지 작업 전 백엔드(in-memory or 디스크)를 프론트 steps로 동기화.
   // syncFrontendStepsToBackend가 recording/editingExisting 분기를 일원화 처리한다.
+  //
+  // ⚠️ 반환값을 반드시 검사할 것. false 인데 그대로 진행하면 백엔드는 동기화되지
+  //    않은(스텝이 밀린) 시나리오를 들고 있고, 이어지는 스텝 지정 API 가 엉뚱한
+  //    스텝에 기대이미지/ROI 를 쓴다. 실패 메시지는 여기서 한 번만 띄운다.
   const ensureSavedForImageOp = async (): Promise<boolean> => {
     if (!scenarioName.trim()) return true;
     // 진행 중인 addStep이 있으면 완료 대기 — backend scenario.steps가 아직 갱신되지
@@ -4468,7 +4486,9 @@ export default function RecordPage() {
     }
     // 변경사항 없고 녹화도 아니면 스킵 (최적화)
     if (!recording && !isDirty()) return true;
-    return await syncFrontendStepsToBackend();
+    const ok = await syncFrontendStepsToBackend();
+    if (!ok) message.error(t('record.syncBeforeImageOpFailed'));
+    return ok;
   };
 
   // 조건부이동은 uid 참조라 삽입/삭제/순서변경 후 재매핑이 불필요하다.
@@ -4478,37 +4498,42 @@ export default function RecordPage() {
   const deleteStep = async (index: number) => {
     // If recording, also remove from backend in-memory scenario
     if (recording) {
+      // 진행 중인 addStep 이 끝나야 낙관적 스텝의 임시 uid 가 백엔드 uid 로 교체된다.
+      // 교체 전에 삭제 요청을 보내면 백엔드가 그 uid 를 찾지 못한다.
+      const startMs = Date.now();
+      while (pendingStepsRef.current > 0 && Date.now() - startMs < 3000) {
+        await new Promise(r => setTimeout(r, 20));
+      }
       try {
-        await scenarioApi.deleteStep(index);
+        await scenarioApi.deleteStep(stepRef(index));
       } catch (e: any) {
         message.error(e.response?.data?.detail || t('record.stepDeleteFailed'));
         return;
       }
     }
-    setSteps((prev) => {
-      const filtered = prev.filter((_, i) => i !== index);
-      // Build old-index+1 → new-index+1 mapping
-      const mapping = new Map<number, number>();
-      let newIdx = 1;
-      for (let i = 0; i < prev.length; i++) {
-        if (i !== index) {
-          mapping.set(i + 1, newIdx);
-          newIdx++;
-        }
-      }
-      return filtered.map((s, i) => ({
-        ...s,
-        id: i + 1,
-      }));
-    });
+    const survivors = stepsRef.current
+      .filter((_, i) => i !== index)
+      .map((s, i) => ({ ...s, id: i + 1 }));
+    setSteps(survivors);
     // 경계 스텝이 삭제된 구간반복은 폐기 + 경고 (무엇을 반복할지 특정할 수 없으므로)
     setLoops((prev) => {
-      const survivors = stepsRef.current.filter((_, i) => i !== index);
       const { kept, dropped } = pruneLoops(prev, survivors);
       if (dropped > 0) message.warning(t('record.loopDroppedOnDelete', { count: dropped }));
       return kept;
     });
     message.success(t('record.stepDeleted', { index: index + 1 }));
+    // 비녹화(기존 편집) 모드도 즉시 디스크에 반영한다. 프론트에서만 지운 채로 두면
+    // 디스크 파일에는 지운 스텝이 남아 있어, 그 사이 호출되는 인덱스 기반 백엔드
+    // API 가 밀린 위치의 엉뚱한 스텝에 기대이미지/ROI 를 쓴다. (uid 전환 후에도
+    // "이미 지운 스텝" 참조를 조기에 드러내려면 동기화가 앞서야 한다.)
+    if (!recording && editingExisting && scenarioName.trim()) {
+      syncFrontendStepsToBackend(survivors)
+        .then((ok) => { if (!ok) message.warning(t('record.syncAfterDeleteFailed')); })
+        .catch((e: any) => {
+          console.warn('sync after delete failed:', e);
+          message.warning(t('record.syncAfterDeleteFailed'));
+        });
+    }
   };
 
   const moveStepDnD = (oldIndex: number, newIndex: number) => {
@@ -5295,7 +5320,7 @@ export default function RecordPage() {
         message.error(t('record.screenshotFailed'));
         return;
       }
-      await ensureSavedForImageOp();
+      if (!(await ensureSavedForImageOp())) return;
       imageTapTargetRef.current = target;
       imageTapScreenshotRef.current = shot;
       // 현재 스텝의 sim 값을 슬라이더에 반영
@@ -5859,8 +5884,8 @@ export default function RecordPage() {
                     <CloseCircleOutlined
                       onClick={async () => {
                         if (scenarioName) {
-                          await ensureSavedForImageOp();
-                          scenarioApi.removeExpectedImage(scenarioName, index).catch(() => {});
+                          if (!(await ensureSavedForImageOp())) return;
+                          scenarioApi.removeExpectedImage(scenarioName, stepRef(index)).catch(() => {});
                         }
                         setSteps((prev) => prev.map((st, i) => i === index ? { ...st, expected_image: null, roi: null, exclude_rois: [], expected_images: [] } : st));
                       }}

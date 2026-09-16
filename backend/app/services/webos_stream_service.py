@@ -81,6 +81,10 @@ DEV_SSH = "/data/ssh_"
 DEV_LIBSSH = "/data/libssh.so"
 DEV_ASKPASS = "/data/askpass_linux.sh"
 DEV_STREAM_BIN = "/data/linuxStream"
+# 스트림 파이프라인(ssh_ → linuxStream)의 Android 측 stderr. stdout 은 바이너리
+# 프레임 전용이라 섞을 수 없어 파일로 뺀다. 기동 실패 원인(ssh 실패/바이너리 없음)이
+# 여기에만 남으므로 /dev/null 로 버리면 안 된다.
+DEV_STREAM_ERR = "/data/webos_stream_err.log"
 
 # Linux VM(webOS) 측 경로
 REMOTE_BIN = "/tmp/linuxStream"
@@ -239,6 +243,9 @@ class WebOSStreamService:
         self._reader: Optional[threading.Thread] = None
         self._reaper: Optional[threading.Thread] = None
         self._stop = threading.Event()
+        # 리더 스레드 종료 신호 — 파이프가 즉시 죽어도 첫 프레임 타임아웃(수십 초)을
+        # 통째로 기다리지 않도록 start() 가 이 이벤트로 빠져나온다.
+        self._dead = threading.Event()
         self._lock = threading.Lock()          # start/stop 직렬화
         self._touch_lock = threading.Lock()    # 터치 이벤트 원자 송신
         self._evdev_path = ""                  # 주입 대상 터치스크린 노드(자동 탐색 캐시)
@@ -442,6 +449,7 @@ class WebOSStreamService:
             self._deploy()
 
             self._stop.clear()
+            self._dead.clear()
             self._frame_event.clear()
             self._frame_count = 0
             self._last_error = ""
@@ -457,7 +465,8 @@ class WebOSStreamService:
                 f"-fps={self.fps} -verbose 2>{REMOTE_LOG}"
             )
             cmd = self._adb_args(
-                "exec-out", "sh", "-c", self._ssh_wrap(remote) + " 2>/dev/null")
+                "exec-out", "sh", "-c",
+                self._ssh_wrap(remote) + f" 2>{DEV_STREAM_ERR}")
             logger.info("WebOS: starting stream serial=%s linux=%s scale=%d q=%d fps=%d",
                         self.adb_serial, self.linux_ip, self.scale, self.quality, self.fps)
             try:
@@ -479,11 +488,21 @@ class WebOSStreamService:
                     target=self._idle_reaper, name="webos-idle", daemon=True)
                 self._reaper.start()
 
-        # 첫 프레임 대기 — 여기서 실패하면 원인을 Linux 측 로그에서 읽어 붙인다.
-        if not self._frame_event.wait(timeout=timeout):
-            err = self._last_error or self._read_remote_log()
+        # 첫 프레임 대기. 리더가 먼저 죽으면(파이프 즉시 EOF) 남은 타임아웃을 전부
+        # 소모하지 않고 바로 실패로 끊는다 — 스텝마다 60s 를 버리던 원인.
+        deadline = time.time() + timeout
+        while not self._frame_event.is_set():
+            if self._dead.wait(timeout=0.1):
+                break
+            if time.time() >= deadline:
+                break
+        if not self._frame_event.is_set():
+            waited = timeout - max(0.0, deadline - time.time())
+            # 진단 수집(ssh) 전에 먼저 내린다 — 스트림과 동시에 두 번째 ssh 를 붙이면
+            # 살아있는 스트림이 끊기므로, 순서를 뒤집지 말 것.
             self.stop()
-            raise WebOSStreamError(f"WebOS: 첫 프레임 수신 실패({timeout:.0f}s) — {err or '원인 불명'}")
+            raise WebOSStreamError(
+                f"WebOS: 첫 프레임 수신 실패({waited:.0f}s) — {self._failure_diag()}")
         # ⚠ 여기서 geometry 를 ssh 로 읽지 않는다.
         # 스트림이 사는 ssh 세션과 **동시에** 두 번째 ssh 를 붙이면 스트림이 끊긴다
         # (첫 프레임 직후 매번 EOF). native 크기는 스트림 크기 × scale 로 역산되고
@@ -552,6 +571,37 @@ class WebOSStreamService:
             return (r.stdout or "").strip()[:400]
         except Exception:
             return ""
+
+    def _read_android_err(self) -> str:
+        """Android 측 stderr — ssh_ 가 못 붙었거나 VM 바이너리가 없을 때 여기만 남는다."""
+        try:
+            r = self._run_adb("shell", f"tail -n 5 {DEV_STREAM_ERR} 2>/dev/null", timeout=10.0)
+            return (r.stdout or "").strip()[:300]
+        except Exception:
+            return ""
+
+    def _failure_diag(self) -> str:
+        """기동 실패 원인을 모아 한 줄로. 리더 예외만으로는 아무것도 알 수 없다.
+
+        stdout 이 0바이트면 linuxStream 이 아예 뜨지 못했다는 뜻이고, 진짜 이유는
+        Linux VM 의 로그나 Android 측 stderr 에만 남는다. 예전에는 리더가 채운
+        ``_last_error``("EOFError: WebOS stream ended") 가 있으면 그 둘을 아예 읽지
+        않아서, 로그만 보고는 원인을 알 수 없었다.
+        """
+        parts: list[str] = []
+        if self._last_error:
+            parts.append(self._last_error)
+        if self._frame_count == 0:
+            # 한 프레임도 못 받았다 = 배포 상태가 깨졌을 수 있다(VM 재부팅으로 /tmp 소실 등).
+            # 다음 기동 때 배포/SSH 를 다시 검증하도록 캐시를 푼다.
+            self._deployed = False
+            remote = self._read_remote_log()
+            if remote:
+                parts.append(f"VM log: {remote}")
+            android = self._read_android_err()
+            if android:
+                parts.append(f"HU stderr: {android}")
+        return " | ".join(parts) or "원인 불명"
 
     def _probe_geometry(self) -> None:
         """linuxStream 로그에서 스트림/터치 좌표계를 읽는다.
@@ -646,6 +696,8 @@ class WebOSStreamService:
                     proc.kill()
             except Exception:
                 pass
+            # start() 가 첫 프레임 타임아웃을 다 기다리지 않고 즉시 실패하도록 알린다.
+            self._dead.set()
 
     def _on_full_frame(self, data: bytes) -> None:
         if len(data) < 2:
@@ -1081,6 +1133,9 @@ class WebOSStreamService:
             "pgrep -x linuxStream 2>/dev/null || echo NONE", timeout=20.0)))
         _step("8. VM linuxStream.log", lambda: _cap(self._ssh(
             f"tail -n 30 {REMOTE_LOG} 2>&1", timeout=20.0)) or "(로그 없음 — 아직 실행 안 됨)")
+        _step("9. HU 스트림 stderr", lambda: _cap(self._run_adb(
+            "shell", f"tail -n 10 {DEV_STREAM_ERR} 2>&1", timeout=10.0))
+            or "(비어 있음 — ssh/바이너리 오류 없음)")
 
         info = self.get_info()
         info["touch_size"] = list(self.touch_size)

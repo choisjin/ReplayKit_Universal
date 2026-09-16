@@ -2844,14 +2844,16 @@ export default function ScenarioPage() {
                             // 저장 성공 후 캐시도 동기화. 실패 시(.catch)는 캐시 갱신 안 함 —
                             // optimistic 한 previewSteps 는 다음 fetch 때 정정됨.
                             const syncCache = () => setScenarioStepsCache((prev) => ({ ...prev, [name]: updated }));
+                            // 스텝 지정은 uid 가 정본 — idx 는 구버전 백엔드 폴백으로만 함께 보낸다.
+                            const ref = { index: idx, uid: _r.uid };
                             if (isWait) {
                               updated[idx] = { ...updated[idx], params: { ..._r.params, duration_ms: val ?? 0 } };
                               setPreviewSteps(updated);
-                              scenarioApi.updateStep(name, idx, { params: { ..._r.params, duration_ms: val ?? 0 } }).then(syncCache).catch(() => {});
+                              scenarioApi.updateStep(name, ref, { params: { ..._r.params, duration_ms: val ?? 0 } }).then(syncCache).catch(() => {});
                             } else {
                               updated[idx] = { ...updated[idx], delay_after_ms: val ?? 0 };
                               setPreviewSteps(updated);
-                              scenarioApi.updateStep(name, idx, { delay_after_ms: val ?? 0 }).then(syncCache).catch(() => {});
+                              scenarioApi.updateStep(name, ref, { delay_after_ms: val ?? 0 }).then(syncCache).catch(() => {});
                             }
                           }}
                         />

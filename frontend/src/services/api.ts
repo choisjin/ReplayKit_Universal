@@ -118,6 +118,19 @@ export const paramDbApi = {
   },
 };
 
+/** 스텝 지정자 — uid 가 정본이고 index 는 구버전 백엔드 호환용이다.
+ *
+ *  백엔드가 스텝을 배열 위치로 찾으면, 프론트에서 스텝을 지우고 아직 동기화되지
+ *  않은 사이에 엉뚱한 스텝의 기대이미지/ROI 를 덮어쓴다(실제 사고 사례). uid 는
+ *  시나리오 로드 시 마이그레이션이 부여·중복제거해 영속화하므로 밀리지 않는다.
+ *  index 는 신버전 백엔드에서 폴백으로만 쓰이고, 구버전 백엔드에선 그대로 동작한다. */
+export type StepRef = { index: number; uid?: string };
+
+const stepRefBody = (step: StepRef | number) =>
+  typeof step === 'number'
+    ? { step_index: step }
+    : { step_index: step.index, step_uid: step.uid };
+
 // Scenario APIs
 export const scenarioApi = {
   list: () => api.get('/scenario/list'),
@@ -132,7 +145,7 @@ export const scenarioApi = {
   resumeRecording: (name: string) =>
     api.post('/scenario/record/resume', { name }),
   addStep: (step: any) => api.post('/scenario/record/step', step),
-  deleteStep: (stepIndex: number) => api.post('/scenario/record/delete-step', { step_index: stepIndex }),
+  deleteStep: (step: StepRef | number) => api.post('/scenario/record/delete-step', stepRefBody(step)),
   syncSteps: (scenarioName: string, steps: any[]) =>
     api.post('/scenario/record/sync-steps', { scenario_name: scenarioName, steps }),
   stopRecording: () => api.post('/scenario/record/stop'),
@@ -141,27 +154,27 @@ export const scenarioApi = {
     api.post(`/scenario/${encodeURIComponent(name)}/play`, { verify }),
   stopPlayback: () => api.post('/scenario/playback/stop'),
   playbackStatus: () => api.get('/scenario/playback/status'),
-  saveExpectedImage: (scenarioName: string, stepIndex: number, imageBase64: string, crop?: { x: number; y: number; width: number; height: number }, compareMode?: string, cropLabel?: string, preserveCrops?: boolean, screenType?: string) =>
-    api.post('/scenario/record/save-expected-image', { scenario_name: scenarioName, step_index: stepIndex, image_base64: imageBase64, crop, compare_mode: compareMode, crop_label: cropLabel, preserve_crops: preserveCrops || false, screen_type: screenType }),
-  captureExpectedImage: (scenarioName: string, stepIndex: number, deviceId: string, crop?: { x: number; y: number; width: number; height: number }, compareMode?: string, cropLabel?: string, screenType?: string, preserveCrops?: boolean) =>
-    api.post('/scenario/record/capture-expected-image', { scenario_name: scenarioName, step_index: stepIndex, device_id: deviceId, crop, compare_mode: compareMode, crop_label: cropLabel, screen_type: screenType || 'front_center', preserve_crops: preserveCrops || false }),
-  removeExpectedImage: (scenarioName: string, stepIndex: number) =>
-    api.post('/scenario/record/remove-expected-image', { scenario_name: scenarioName, step_index: stepIndex }),
+  saveExpectedImage: (scenarioName: string, step: StepRef | number, imageBase64: string, crop?: { x: number; y: number; width: number; height: number }, compareMode?: string, cropLabel?: string, preserveCrops?: boolean, screenType?: string) =>
+    api.post('/scenario/record/save-expected-image', { scenario_name: scenarioName, ...stepRefBody(step), image_base64: imageBase64, crop, compare_mode: compareMode, crop_label: cropLabel, preserve_crops: preserveCrops || false, screen_type: screenType }),
+  captureExpectedImage: (scenarioName: string, step: StepRef | number, deviceId: string, crop?: { x: number; y: number; width: number; height: number }, compareMode?: string, cropLabel?: string, screenType?: string, preserveCrops?: boolean) =>
+    api.post('/scenario/record/capture-expected-image', { scenario_name: scenarioName, ...stepRefBody(step), device_id: deviceId, crop, compare_mode: compareMode, crop_label: cropLabel, screen_type: screenType || 'front_center', preserve_crops: preserveCrops || false }),
+  removeExpectedImage: (scenarioName: string, step: StepRef | number) =>
+    api.post('/scenario/record/remove-expected-image', { scenario_name: scenarioName, ...stepRefBody(step) }),
   importSteps: (targetName: string, sourceName: string, stepIndices: number[], move: boolean = false) =>
     api.post('/scenario/record/import-steps', { target_name: targetName, source_name: sourceName, step_indices: stepIndices, move }),
-  removeCrop: (scenarioName: string, stepIndex: number, cropIndex: number) =>
-    api.post('/scenario/record/remove-crop', { scenario_name: scenarioName, step_index: stepIndex, crop_index: cropIndex }),
-  cropFromExpected: (scenarioName: string, stepIndex: number, crop: { x: number; y: number; width: number; height: number }, cropLabel?: string, replaceIndex?: number) =>
-    api.post('/scenario/record/crop-from-expected', { scenario_name: scenarioName, step_index: stepIndex, crop, crop_label: cropLabel || '', replace_index: replaceIndex }),
-  updateStep: (scenarioName: string, stepIndex: number, updates: Record<string, any>) =>
-    api.post('/scenario/record/update-step', { scenario_name: scenarioName, step_index: stepIndex, updates }),
+  removeCrop: (scenarioName: string, step: StepRef | number, cropIndex: number) =>
+    api.post('/scenario/record/remove-crop', { scenario_name: scenarioName, ...stepRefBody(step), crop_index: cropIndex }),
+  cropFromExpected: (scenarioName: string, step: StepRef | number, crop: { x: number; y: number; width: number; height: number }, cropLabel?: string, replaceIndex?: number) =>
+    api.post('/scenario/record/crop-from-expected', { scenario_name: scenarioName, ...stepRefBody(step), crop, crop_label: cropLabel || '', replace_index: replaceIndex }),
+  updateStep: (scenarioName: string, step: StepRef | number, updates: Record<string, any>) =>
+    api.post('/scenario/record/update-step', { scenario_name: scenarioName, ...stepRefBody(step), updates }),
   // BG_TASK 상태 일괄 조회 — 수백 개를 개별 GET 하지 않기 위함 (없으면 null)
   getCmdResultsBatch: (taskIds: string[]) =>
     api.post('/scenario/cmd-results/batch', { task_ids: taskIds }),
-  testStep: (scenarioName: string, stepIndex: number, stepData?: any, overrides?: { screenshotDeviceId?: string; screenType?: string }) =>
+  testStep: (scenarioName: string, step: StepRef | number, stepData?: any, overrides?: { screenshotDeviceId?: string; screenType?: string }) =>
     api.post('/scenario/test-step', {
       scenario_name: scenarioName,
-      step_index: stepIndex,
+      ...stepRefBody(step),
       step_data: stepData,
       screenshot_device_id_override: overrides?.screenshotDeviceId,
       screen_type_override: overrides?.screenType,
@@ -198,7 +211,7 @@ export const scenarioApi = {
   }),
   updateImageTap: (
     scenarioName: string,
-    stepIndex: number,
+    step: StepRef | number,
     imageBase64: string,
     crop: { x: number; y: number; width: number; height: number },
     similarity: number,
@@ -207,7 +220,7 @@ export const scenarioApi = {
     xOffset?: number,
   ) => api.post('/scenario/record/update-image-tap', {
     scenario_name: scenarioName,
-    step_index: stepIndex,
+    ...stepRefBody(step),
     image_base64: imageBase64,
     crop,
     similarity,
