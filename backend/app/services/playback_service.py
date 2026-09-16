@@ -1073,8 +1073,10 @@ class PlaybackService:
                 elif ss_device["type"] == "isap_agent":
                     isap_svc = self.dm.get_isap_service(ss_device["id"])
                     if isap_svc:
-                        img_bytes = await isap_svc.async_screencap_bytes(
-                            screen_type=ss_device.get("screen_type", "front_center"), fmt="png"
+                        img_bytes = await self._capture_with_retry(
+                            lambda: isap_svc.async_screencap_bytes(
+                                screen_type=ss_device.get("screen_type", "front_center"), fmt="png"
+                            ), ss_device["id"],
                         )
                         with open(actual_path, "wb") as f:
                             f.write(img_bytes)
@@ -1083,8 +1085,10 @@ class PlaybackService:
                 elif ss_device["type"] == "hkmc_agent":
                     hkmc_svc = self.dm.get_hkmc_service(ss_device["id"])
                     if hkmc_svc:
-                        img_bytes = await hkmc_svc.async_screencap_bytes(
-                            screen_type=ss_device.get("screen_type", "front_center"), fmt="png"
+                        img_bytes = await self._capture_with_retry(
+                            lambda: hkmc_svc.async_screencap_bytes(
+                                screen_type=ss_device.get("screen_type", "front_center"), fmt="png"
+                            ), ss_device["id"],
                         )
                         Path(actual_path).write_bytes(img_bytes)
                     else:
@@ -1092,8 +1096,10 @@ class PlaybackService:
                 elif ss_device["type"] == "hkmc5th_wide_agent":
                     hkmc5_svc = self.dm.get_hkmc5th_wide_service(ss_device["id"])
                     if hkmc5_svc:
-                        img_bytes = await hkmc5_svc.async_screencap_bytes(
-                            screen_type=ss_device.get("screen_type", "front_center"), fmt="png"
+                        img_bytes = await self._capture_with_retry(
+                            lambda: hkmc5_svc.async_screencap_bytes(
+                                screen_type=ss_device.get("screen_type", "front_center"), fmt="png"
+                            ), ss_device["id"],
                         )
                         Path(actual_path).write_bytes(img_bytes)
                     else:
@@ -1562,7 +1568,10 @@ class PlaybackService:
                 or bool(step.expected_image)
                 or (step.compare_mode == CompareMode.MULTI_CROP and bool(step.expected_images))
             )
-            step_result.status = "fail" if is_image_step else "error"
+            # 단, 캡처 자체가 안 된 경우(에이전트 타임아웃·연결 끊김)는 화면 불일치가 아니다.
+            # 이걸 fail 로 적으면 "동작은 정상인데 실패"가 리포트에 남아 판독을 망친다 → error.
+            is_capture_infra = isinstance(e, (TimeoutError, asyncio.TimeoutError, ConnectionError))
+            step_result.status = "fail" if (is_image_step and not is_capture_infra) else "error"
             step_result.message = str(e)
             logger.error(
                 "Step %d execution %s: %s",
@@ -2374,6 +2383,21 @@ class PlaybackService:
         if dev.type == "gm_info_agent":
             return self.dm.get_gm_info_service(device_id), "icas"
         return None, None
+
+    @staticmethod
+    async def _capture_with_retry(capture, label: str):
+        """에이전트 캡처 1회 재시도.
+
+        에이전트 캡처는 미러·입력과 같은 TCP 소켓/캡처 lock 을 공유하므로 일시적인
+        경합으로 타임아웃할 수 있다. 그 한 번으로 스텝을 실패 처리하면 "동작은 정상인데
+        실패"가 남는다 — 짧게 쉬고 한 번 더 시도하고, 그래도 안 되면 그대로 올린다.
+        """
+        try:
+            return await capture()
+        except (TimeoutError, asyncio.TimeoutError, ConnectionError) as e:
+            logger.warning("Screenshot capture retry (device=%s): %s", label, e)
+            await asyncio.sleep(0.5)
+            return await capture()
 
     # ── OCR 가상 모듈 헬퍼 ─────────────────────────────────────────────────
 

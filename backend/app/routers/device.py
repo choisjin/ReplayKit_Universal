@@ -11,7 +11,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-from ..dependencies import adb_service as adb, device_manager as dm
+from ..dependencies import adb_service as adb, device_manager as dm, playback_service as _playback
 from ..services.adb_service import (
     resolve_sf_display_id, resolve_input_display_id,
     is_quiet_gate as _adb_quiet_gate, mark_background_context as _adb_mark_background,
@@ -328,11 +328,12 @@ async def list_devices():
     """List all managed devices, split by category."""
     import time
     global _last_full_refresh
-    # 재생 배타 모드(#test): 재생 중에는 UI 표시용 갱신을 아예 돌리지 않는다.
+    # 재생 중에는 UI 표시용 갱신을 아예 돌리지 않는다.
     # refresh_adb 는 디바이스당 adb 5회(getprop×2/wm size/dumpsys)를 띄워 재생 스텝과
     # 정면으로 경합한다. 마지막으로 알던 상태를 그대로 반환하고, 진행 상황은 재생 화면이 보여준다.
+    # quiet gate(#test) 뿐 아니라 일반 재생에서도 막는다 — 프론트는 재생 중에도 목록을 폴링한다.
     _adb_mark_background()
-    if _adb_quiet_gate():
+    if _adb_quiet_gate() or _playback.is_running:
         return {
             "primary": _with_protected_flag(dm.list_primary()),
             "auxiliary": _with_protected_flag(dm.list_auxiliary()),

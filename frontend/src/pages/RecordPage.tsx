@@ -1356,6 +1356,10 @@ export default function RecordPage() {
 
   // Fetch hardware keys — HKMC/iSAP 모두 선택된 디바이스별로 재조회
   // (각 디바이스의 info에 저장된 per-device override가 병합되어 반환됨)
+  // deps 에 primaryDevices 배열을 넣으면 디바이스 목록 폴링마다(새 배열 identity)
+  // 키 목록을 다시 받아 재생 중에도 백엔드를 계속 두드린다 — 실제로 의미 있는
+  // 변화(선택 디바이스 id/type)에만 재조회하도록 파생값을 deps 로 쓴다.
+  const keysDevType = primaryDevices.find(d => d.id === screenshotDeviceId)?.type;
   useEffect(() => {
     const dev = primaryDevices.find(d => d.id === screenshotDeviceId);
     if (dev?.type === 'isap_agent') {
@@ -1392,7 +1396,7 @@ export default function RecordPage() {
       setHkmcKeys([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screenshotDeviceId, primaryDevices]);
+  }, [screenshotDeviceId, keysDevType]);
 
   // Connect Wide (ADB) 하드키 목록 조회 — ADB 연결 + 모델이 Connect Wide 인 경우만
   useEffect(() => {

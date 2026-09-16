@@ -903,6 +903,25 @@ def _webos_client_size(isap, screen_type, auto: bool):
         return None
 
 
+def _mirror_env_float(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(_os.environ.get(name, "") or default))
+    except (TypeError, ValueError):
+        return default
+
+
+# HKMC/HKMC5thWide 미러 페이싱.
+# 이 계열 캡처는 전화면 BMP(2560x720 이면 ~5.5MB)를 TCP 로 받아 디코드/JPEG 인코드까지
+# 하므로 프레임 하나가 수백 ms~수 초다. 페이싱 없이 돌리면 프로세스가 한 코어를 상시
+# 점유해 이벤트 루프까지 굶고(= "서버 연결 중" 배너), 캡처 lock 을 놓지 않아 탭/하드키가
+# 밀린다(_input_priority 우회가 필요했던 이유).
+#   MIN_GAP   : 가벼운 화면에서 루프가 전속력으로 도는 것을 막는 하한
+#   REST_RATIO: 직전 프레임 소요시간에 비례한 휴식 — 무거운 화면일수록 더 쉰다
+# 둘 중 큰 값만큼 쉰다. 기본값 기준 체감 fps 손실은 약 20%, 그만큼 CPU/lock 을 돌려준다.
+_MIRROR_MIN_GAP_S = _mirror_env_float("REPLAYKIT_MIRROR_MIN_GAP", 0.15)
+_MIRROR_REST_RATIO = _mirror_env_float("REPLAYKIT_MIRROR_REST_RATIO", 0.25)
+
+
 @app.websocket("/ws/screen")
 async def websocket_screen_mirror(websocket: WebSocket):
     """WebSocket endpoint for real-time screen mirroring.
@@ -1171,8 +1190,15 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     # 속성이 있는 6th 서비스만 composite 인자를 전달(5thWide는 미지원).
                     if hasattr(hkmc, "cluster_composite_live"):
                         _cap_kwargs["composite"] = hkmc.cluster_composite_live
+                    _hkmc_t0 = time.monotonic()
                     jpeg_bytes = await hkmc.async_screencap_bytes(**_cap_kwargs)
                     await websocket.send_bytes(jpeg_bytes)
+                    # 프레임 사이 휴식 — 캡처 lock 과 CPU 를 재생/입력/이벤트 루프에 돌려준다.
+                    _hkmc_elapsed = time.monotonic() - _hkmc_t0
+                    _hkmc_rest = max(_MIRROR_MIN_GAP_S - _hkmc_elapsed,
+                                     _hkmc_elapsed * _MIRROR_REST_RATIO)
+                    if _hkmc_rest > 0:
+                        await asyncio.sleep(_hkmc_rest)
                 elif is_hkmc:
                     # HKMC 재연결 대기 중 — 빈 프레임 대신 잠시 대기
                     await asyncio.sleep(0.3)

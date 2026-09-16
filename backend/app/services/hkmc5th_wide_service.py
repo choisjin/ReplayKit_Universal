@@ -26,6 +26,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# 소켓 1회 수신 상한. 이미지 패킷은 수 MB 라, 남은 길이 그대로 recv() 하면
+# 청크마다 그 크기의 버퍼를 새로 할당한다(프레임당 수십 회).
+_RECV_CHUNK_MAX = 65536
+
 # ---------------------------------------------------------------------------
 # Protocol constants (from IVILGECommonAgentProtocol.py)
 # ---------------------------------------------------------------------------
@@ -409,7 +413,9 @@ class HKMC5thWideService:
         self._recv_queue: queue.Queue = queue.Queue()
         self._recv_complete = True
         self._recv_packet_len = 0
-        self._recv_data = ""
+        # 수신 중 패킷 조각. 완성 시 한 번만 join 한다 — 대용량 이미지(수 MB)를
+        # 문자열 += 로 누적하면 청크마다 전체를 복사해 수백 MB memcpy 가 된다.
+        self._recv_chunks: list[str] = []
 
         # Image capture state
         self._img_event = threading.Event()
@@ -628,25 +634,26 @@ class HKMC5thWideService:
                             (ord(header_str[4]) << 8) | ord(header_str[5])
                         )
                         self._recv_complete = False
-                        self._recv_data = header_str
+                        self._recv_chunks = [header_str]
                     else:
                         logger.warning("HKMC5thWide bad packet header")
                         self._recv_complete = True
-                        self._recv_data = ""
+                        self._recv_chunks = []
                 else:
                     remaining = self._recv_packet_len + 4
                     try:
-                        payload = self._socket.recv(remaining)
+                        payload = self._socket.recv(min(remaining, _RECV_CHUNK_MAX))
                     except socket.timeout:
                         continue
                     if self._exit_flag or not payload:
                         break
                     payload_str = payload.decode("iso-8859-1")
-                    self._recv_data += payload_str
+                    self._recv_chunks.append(payload_str)
 
                     if len(payload_str) == remaining:
                         self._recv_complete = True
-                        self._recv_queue.put(self._recv_data)
+                        self._recv_queue.put("".join(self._recv_chunks))
+                        self._recv_chunks = []
                         self._decode_response()
                     elif len(payload_str) < remaining:
                         self._recv_complete = False
