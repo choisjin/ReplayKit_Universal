@@ -1686,6 +1686,12 @@ class RecordingService:
         else:
             # ADB actions — use device_id or fallback to active device
             serial = device_id or await self.adb.get_active_device()
+            # device_id 는 관리 ID(예: "Connect_Wide_1")일 수 있다 — adb -s 에는 실제
+            # 시리얼(dev.address)을 넘겨야 한다(미러 입력 API·재생과 동일). ID 를 그대로
+            # 넘기면 "device not found" → 입력 재시도 대기로 빠져 이미지 터치가 무한 로딩됐다.
+            _adb_dev = self.dm.get_device(serial) if serial else None
+            if _adb_dev is not None and _adb_dev.type == "adb" and _adb_dev.address:
+                serial = _adb_dev.address
             if not serial:
                 raise ValueError("No ADB device specified")
             if step_type == StepType.TAP:

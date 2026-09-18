@@ -1260,11 +1260,34 @@ class ADBService:
         """트랜스포트가 돌아올 때까지 최대 timeout 초 대기. 돌아오면 True."""
         if timeout <= 0:
             return False
-        cmd = f'{ADB_Q} -s {serial} wait-for-device'
-        # subprocess timeout 은 정수 — 대기 예산을 올림해서 넘긴다(초과 시 rc=1).
-        _out, _err, rc = await _run_in_executor_timed(
-            _run_sync, cmd, max(1, int(timeout + 0.999)),
-        )
+        # ⚠ _run_sync(shell=True) 를 쓰면 안 된다: Windows 에서 타임아웃 시 cmd.exe 만
+        # 죽고 손자 adb.exe 가 stdout/stderr 파이프를 계속 잡아 communicate() 가 영원히
+        # 블록된다. 존재하지 않는 시리얼이면 wait-for-device 가 끝나지 않으므로 요청이
+        # 무한 대기(이미지 터치 무한 로딩)에 빠졌다. → 셸 없이 adb 를 직접 띄우고
+        # 파이프도 열지 않아(DEVNULL) kill 이 곧바로 먹게 한다.
+        def _wait() -> int:
+            try:
+                proc = subprocess.Popen(
+                    [ADB_PATH, "-s", serial, "wait-for-device"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=_NO_WINDOW,
+                )
+            except OSError as e:
+                logger.warning("wait-for-device 실행 실패: serial=%s (%s)", serial, e)
+                return 1
+            try:
+                return proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+                return 1
+
+        rc = await asyncio.get_event_loop().run_in_executor(None, _wait)
         return rc == 0
 
     @staticmethod

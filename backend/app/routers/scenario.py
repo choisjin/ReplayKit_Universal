@@ -758,8 +758,39 @@ async def record_image_tap(req: ImageTapRequest):
 
     long_press = bool(req.long_press)
     duration_ms = max(1, int(req.duration_ms or 3000))
+
+    # WebOS(Connect Wide, ADB·iSAP 공통): webOS 화면이 떠 있으면 Android/agent 입력이 아니라
+    # webOS 터치스크린으로 보내야 한다(그 영역은 Android 레이어의 hole → adb input 무반응).
+    # 판단은 미러 입력 API(routers/device.py)·재생(_webos_target)과 같은 규칙.
+    webos_ws = None
+    if dev_type in ("adb", "isap_agent"):
+        _ws = dm.get_webos_screen(req.device_id)
+        if _ws is not None and _ws.enabled:
+            _st = req.screen_type
+            if dev_type == "isap_agent":
+                _base = "front_center"
+            else:
+                _base = _st if _st in (None, "", "front_center", "0") else "__other__"
+            if _ws.resolve(_st, _base, max_age=_ws.TOUCH_FG_MAX_AGE) == "webos":
+                webos_ws = _ws
+
     try:
-        if dev_type in ("hkmc_agent", "isap_agent"):
+        if webos_ws is not None:
+            # 매칭 좌표는 캡처(linuxStream 축소본, 예: 1920x720) 픽셀 기준 — 터치 기준인
+            # 클라이언트 좌표계(client_size, 보통 패널 3840x1440)로 비율 환산해야 제자리.
+            # 재생의 _webos_image_tap 과 동일한 환산. x_offset(HKMC 일체형 전용)은 무관.
+            wc_w, wc_h = webos_ws.client_size()
+            wx = int(round(center_x * wc_w / iw)) if (iw and wc_w) else center_x
+            wy = int(round(center_y * wc_h / ih)) if (ih and wc_h) else center_y
+            logger.info(
+                "[WebOS IMAGE TAP/record] capture %sx%s (%s,%s) -> client %sx%s (%s,%s) long_press=%s",
+                iw, ih, center_x, center_y, wc_w, wc_h, wx, wy, long_press,
+            )
+            if long_press:
+                await webos_ws.long_press(wx, wy, duration_ms)
+            else:
+                await webos_ws.tap(wx, wy)
+        elif dev_type in ("hkmc_agent", "isap_agent"):
             await recording_svc._execute_step_action(
                 StepType.HKMC_LONG_PRESS if long_press else StepType.HKMC_TOUCH,
                 {"x": tap_x, "y": center_y, "duration_ms": duration_ms,
