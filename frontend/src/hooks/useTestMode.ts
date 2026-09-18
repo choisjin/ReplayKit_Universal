@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react';
 // 별도 로그인 없이 나만 쓰는 실험 기능 게이트. DevicePage/RecordPage 가 공유한다.
 export const TEST_ONLY_MODULES = new Set<string>(['Frame_Check']);
 
+// 실험적 주 디바이스 타입 — `#test` 모드에서만 스캔/수동추가/모델목록/디바이스 목록·미러 선택에 노출.
+export const TEST_ONLY_DEVICE_TYPES = new Set<string>(['iphone_agent']);
+
 /**
  * URL hash `#test` 여부를 추적하는 훅 (AdminPage 의 `#admin` 과 동일한 방식).
  *

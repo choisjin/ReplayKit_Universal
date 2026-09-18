@@ -1149,6 +1149,13 @@ class PlaybackService:
                         Path(actual_path).write_bytes(img_bytes)
                     else:
                         raise RuntimeError(f"BMW device {ss_device['id']} not connected")
+                elif ss_device["type"] == "iphone_agent":
+                    iphone_svc = self.dm.get_iphone_service(ss_device["id"])
+                    if iphone_svc:
+                        img_bytes = await iphone_svc.async_screencap_bytes(fmt="png")
+                        Path(actual_path).write_bytes(img_bytes)
+                    else:
+                        raise RuntimeError(f"iPhone device {ss_device['id']} not connected")
                 elif ss_device["type"] == "vision_camera":
                     cam = self.dm.get_vision_camera(ss_device["id"])
                     if cam:
@@ -1784,6 +1791,8 @@ class PlaybackService:
         elif step.type == StepType.ICAS_LONG_PRESS:
             st = step.screen_type or p.get("screen_type", "")
             return f"icas_long_press ({p.get('x', 0)}, {p.get('y', 0)}) {p.get('duration_ms', 3000)}ms [{st}]"
+        elif step.type == StepType.IPHONE_BUTTON:
+            return f"iphone_button {p.get('name', '')} ({p.get('state', 'press')})"
         elif step.type == StepType.CONNECTWIDE_KEY:
             ka = p.get("key_action", "short")
             if ka == "hold":
@@ -2213,6 +2222,32 @@ class PlaybackService:
                             return
                 dev.status = "disconnected"
 
+        elif dev.type == "iphone_agent":
+            iph = self.dm.get_iphone_service(device_id)
+            if iph and iph.is_connected:
+                return
+            # iPhone 재연결도 device_manager.connect_device_by_id 재사용 (DDI 마운트→터널 재수립).
+            lock = self.dm.get_reconnect_lock(device_id)
+            async with lock:
+                iph = self.dm.get_iphone_service(device_id)
+                if iph and iph.is_connected:
+                    return
+                for attempt in range(1, max_retries + 1):
+                    if self._should_stop:
+                        return
+                    logger.info("Playback: iPhone reconnect %s attempt %d/%d", device_id, attempt, max_retries)
+                    try:
+                        msg = await self.dm.connect_device_by_id(device_id)
+                        if "connected" in msg.lower() and "failed" not in msg.lower():
+                            logger.info("Playback: iPhone reconnected %s", device_id)
+                            return
+                    except Exception as e:
+                        logger.debug("Playback: iPhone reconnect %s failed: %s", device_id, e)
+                    if attempt < max_retries:
+                        if await self._interruptible_sleep(retry_interval):
+                            return
+                dev.status = "disconnected"
+
         elif dev.type == "adb":
             # 먼저 현재 상태 확인.
             # 스텝마다 액션 전·캡처 전 두 번 불리는 경로라 실측 대신 최근 조회를 재사용한다
@@ -2358,6 +2393,13 @@ class PlaybackService:
         dev = self.dm.get_device(device_id)
         return dev is not None and dev.type == "bmw_agent"
 
+    def _is_iphone_device(self, device_id: Optional[str]) -> bool:
+        """iPhone 에이전트 여부 (generic tap/swipe 스텝을 pymobiledevice3 HID 로 라우팅)."""
+        if not device_id:
+            return False
+        dev = self.dm.get_device(device_id)
+        return dev is not None and dev.type == "iphone_agent"
+
     def _get_agent_service(self, device_id: Optional[str]):
         """Return (svc, kind) where kind ∈ {"hkmc", "isap", "icas", None}.
 
@@ -2403,7 +2445,7 @@ class PlaybackService:
 
     _OCR_CAPTURE_TYPES = ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent",
                           "icas_agent", "mib_agent", "fpk_agent", "gm_info_agent",
-                          "bmw_agent", "vision_camera", "webcam")
+                          "bmw_agent", "iphone_agent", "vision_camera", "webcam")
 
     def _find_ocr_device(self, step: Step) -> Optional[dict]:
         """OCR 스텝에서 스크린샷 대상 디바이스 정보 반환.
@@ -2502,6 +2544,10 @@ class PlaybackService:
                 svc = self.dm.get_bmw_service(dev_id)
                 if svc:
                     return await svc.async_screencap_bytes(screen_type=screen_type, fmt="png")
+            elif dev_type == "iphone_agent":
+                svc = self.dm.get_iphone_service(dev_id)
+                if svc:
+                    return await svc.async_screencap_bytes(fmt="png")
             elif dev_type in ("webcam", "vision_camera"):
                 cam = (self.dm.get_webcam_device(dev_id) if dev_type == "webcam"
                        else self.dm.get_vision_camera(dev_id))
@@ -2558,6 +2604,10 @@ class PlaybackService:
             svc = self.dm.get_bmw_service(dev_id)
             if svc:
                 await svc.async_tap(x, y, screen_type)
+        elif dev_type == "iphone_agent":
+            svc = self.dm.get_iphone_service(dev_id)
+            if svc:
+                await svc.async_tap(x, y)
         else:
             logger.warning("OCR ClickText: 탭 미지원 디바이스 타입 %s", dev_type)
 
@@ -2874,6 +2924,8 @@ class PlaybackService:
                 if ss_dev.type == "bmw_agent":
                     screen_type = step.screen_type or step.params.get("screen_type", "0")
                     return {"type": "bmw_agent", "id": ss_dev.id, "screen_type": screen_type}
+                if ss_dev.type == "iphone_agent":
+                    return {"type": "iphone_agent", "id": ss_dev.id}
                 if ss_dev.type == "vision_camera":
                     return {"type": "vision_camera", "id": ss_dev.id}
                 if ss_dev.type == "webcam":
@@ -2926,6 +2978,8 @@ class PlaybackService:
             elif dev and dev.type == "bmw_agent":
                 screen_type = step.screen_type or step.params.get("screen_type", "0")
                 return {"type": "bmw_agent", "id": dev.id, "screen_type": screen_type}
+            elif dev and dev.type == "iphone_agent":
+                return {"type": "iphone_agent", "id": dev.id}
             elif dev and dev.type == "vision_camera":
                 return {"type": "vision_camera", "id": dev.id}
             elif dev and dev.type == "webcam":
@@ -2964,6 +3018,8 @@ class PlaybackService:
             if dev.type == "icas_agent":
                 screen_type = step.screen_type or step.params.get("screen_type", "HU")
                 return {"type": "icas_agent", "id": dev.id, "screen_type": screen_type}
+            if dev.type == "iphone_agent":
+                return {"type": "iphone_agent", "id": dev.id}
             if dev.type == "vision_camera":
                 return {"type": "vision_camera", "id": dev.id}
             if dev.type == "webcam":
@@ -3759,6 +3815,50 @@ class PlaybackService:
                                       screen_type, int(params.get("duration_ms", 0)),
                                       hold_ms=int(params.get("hold_ms", 0) or 0))
 
+        elif self._is_iphone_device(real_id) and step.type in (
+                StepType.TAP, StepType.SWIPE, StepType.LONG_PRESS, StepType.REPEAT_TAP):
+            # iPhone — USB(pymobiledevice3) 기반. generic 스텝을 iPhone 서비스
+            # (Universal HID 터치/스와이프)로 라우팅. 단일 화면이라 screen_type 무시.
+            svc = self.dm.get_iphone_service(real_id)
+            if not svc or not svc.is_connected:
+                await self._ensure_device_connected(real_id, max_retries=3, retry_interval=2.0)
+                svc = self.dm.get_iphone_service(real_id)
+            if not svc or not svc.is_connected:
+                raise ValueError(f"iPhone device {real_id} not connected")
+            if step.type == StepType.TAP:
+                await svc.async_tap(params["x"], params["y"])
+            elif step.type == StepType.REPEAT_TAP:
+                await svc.async_repeat_tap(params["x"], params["y"],
+                                           int(params.get("count", 5)),
+                                           int(params.get("interval_ms", 100)))
+            elif step.type == StepType.LONG_PRESS:
+                await svc.async_long_press(params["x"], params["y"],
+                                           int(params.get("duration_ms", 1000)))
+            elif step.type == StepType.SWIPE:
+                pts = params.get("points") or []
+                if isinstance(pts, list) and len(pts) >= 2:
+                    x1, y1 = int(pts[0]["x"]), int(pts[0]["y"])
+                    x2, y2 = int(pts[-1]["x"]), int(pts[-1]["y"])
+                    duration_ms = int(params.get("duration_ms", 600) or 600)
+                else:
+                    x1, y1 = params["x1"], params["y1"]
+                    x2, y2 = params["x2"], params["y2"]
+                    duration_ms = int(params.get("duration_ms", 0) or 0)
+                hold_ms = int(params.get("hold_ms", 0) or 0)
+                await svc.async_swipe(x1, y1, x2, y2, duration_ms=duration_ms, hold_ms=hold_ms)
+
+        elif step.type == StepType.IPHONE_BUTTON:
+            dev = self.dm.get_device(real_id) if real_id else None
+            if not dev or dev.type != "iphone_agent":
+                raise ValueError(f"iphone_button step requires an iphone_agent device, got {dev.type if dev else 'none'}")
+            svc = self.dm.get_iphone_service(real_id)
+            if not svc or not svc.is_connected:
+                await self._ensure_device_connected(real_id, max_retries=3, retry_interval=2.0)
+                svc = self.dm.get_iphone_service(real_id)
+            if not svc or not svc.is_connected:
+                raise ValueError(f"iPhone device {real_id} not connected")
+            await svc.async_button(params.get("name", ""), params.get("state", "press"))
+
         elif step.type == StepType.CONNECTWIDE_KEY:
             # Connect Wide (ADB) 하드키 — /dev/vcs_simulator_rx 로 hex 프레임 주입.
             from . import connectwide_adb_service as cw
@@ -4026,6 +4126,11 @@ class PlaybackService:
             png_bytes = await svc.async_screencap_bytes(
                 screen_type=screen_type, fmt="png",
             )
+        elif dev.type == "iphone_agent":
+            svc = self.dm.get_iphone_service(real_id)
+            if not svc:
+                raise RuntimeError(f"image_tap: iPhone device {real_id} not connected")
+            png_bytes = await svc.async_screencap_bytes(fmt="png")
         elif dev.type == "wincontrol":
             wc = self.dm.get_wincontrol_service()
             if not wc.is_attached():
@@ -4151,6 +4256,14 @@ class PlaybackService:
                 await svc.async_long_press(tap_x, center_y, duration_ms, screen_type)
             else:
                 await svc.async_tap(tap_x, center_y, screen_type)
+        elif dev.type == "iphone_agent":
+            svc = self.dm.get_iphone_service(real_id)
+            if not svc:
+                raise RuntimeError(f"image_tap: iPhone device {real_id} not connected")
+            if long_press:
+                await svc.async_long_press(tap_x, center_y, duration_ms)
+            else:
+                await svc.async_tap(tap_x, center_y)
         elif dev.type == "wincontrol":
             wc = self.dm.get_wincontrol_service()
             import asyncio as _asyncio, functools as _ft

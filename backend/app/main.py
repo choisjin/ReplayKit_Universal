@@ -973,6 +973,8 @@ async def websocket_screen_mirror(websocket: WebSocket):
     is_vision_camera = dev and dev.type == "vision_camera"
     is_webcam = dev and dev.type == "webcam"
     is_wincontrol = dev and dev.type == "wincontrol"
+    is_iphone = dev and dev.type == "iphone_agent"
+    iphone_last_frame = None  # 같은 프레임 재전송 방지 (스트림 fps < 루프 주기)
 
     dev_type_label = (
         "hkmc" if is_hkmc else
@@ -983,7 +985,8 @@ async def websocket_screen_mirror(websocket: WebSocket):
             ("gm_info" if is_gm_info else
              ("vision_camera" if is_vision_camera else
               ("webcam" if is_webcam else
-               ("wincontrol" if is_wincontrol else "adb")))))))))
+               ("wincontrol" if is_wincontrol else
+                ("iphone" if is_iphone else "adb"))))))))))
     logger.debug("Screen mirror: device=%s type=%s", target_device_id, dev_type_label)
 
     # scrcpy 제거 — 항상 JPEG screencap 사용
@@ -1445,6 +1448,32 @@ async def websocket_screen_mirror(websocket: WebSocket):
                                             "ConnectionClosedOK", "ConnectionClosedError"):
                                 break
                             logger.warning("GM Info capture error: type=%s repr=%r", cls_name, ce)
+                            await asyncio.sleep(0.5)
+                            continue
+                    else:
+                        await asyncio.sleep(0.3)
+                        continue
+                elif is_iphone:
+                    # iPhone 라이브 미러링 — DVT screenshot 채널 주기 캡처(pymobiledevice3).
+                    iph = device_manager.get_iphone_service(target_device_id)
+                    if iph and iph.is_connected:
+                        try:
+                            if not iph.is_screen_stream_running():
+                                await iph.start_screen_stream(fps)
+                            jpeg_bytes = await iph.get_screen_frame(fmt="jpeg")
+                            if jpeg_bytes and jpeg_bytes is not iphone_last_frame:
+                                await websocket.send_bytes(jpeg_bytes)
+                                iphone_last_frame = jpeg_bytes
+                            await asyncio.sleep(adb_frame_interval)
+                            continue
+                        except WebSocketDisconnect:
+                            break
+                        except Exception as ce:
+                            cls_name = type(ce).__name__
+                            if cls_name in ("ClientDisconnected", "ConnectionClosed",
+                                            "ConnectionClosedOK", "ConnectionClosedError"):
+                                break
+                            logger.warning("iPhone capture error: type=%s repr=%r", cls_name, ce)
                             await asyncio.sleep(0.5)
                             continue
                     else:
@@ -2011,6 +2040,14 @@ async def websocket_screen_mirror(websocket: WebSocket):
                     )
                 except Exception as e:
                     logger.debug("BMW live stream stop on disconnect failed: %s", e)
+        # iPhone DVT screenshot 스트림 정리 — 미종료 시 RSD 연결/스레드가 남는다.
+        if is_iphone:
+            _iph = device_manager.get_iphone_service(target_device_id)
+            if _iph is not None and _iph.is_screen_stream_running():
+                try:
+                    await asyncio.to_thread(_iph.stop_screen_stream)
+                except Exception as e:
+                    logger.debug("iPhone screen stream stop on disconnect failed: %s", e)
 
 
 # 현재 백그라운드 재생 태스크 (단일 재생만 허용)

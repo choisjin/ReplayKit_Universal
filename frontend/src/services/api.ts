@@ -15,6 +15,10 @@ export const deviceApi = {
   screenshot: (deviceId: string, screenType?: string, fmt: 'jpeg' | 'png' = 'jpeg') => api.get(`/device/screenshot/${deviceId}`, { params: { fmt, screen_type: screenType || 'front_center' } }),
   canPanelGrab: () => api.get('/device/can-panel/grab'),
   scan: () => api.get('/device/scan'),
+  // USB 연결 iPhone (pymobiledevice3 usbmux list) — 실패/미설치여도 devices:[] + warning
+  scanIphone: () => api.get('/device/scan-iphone'),
+  listIphoneButtons: (deviceId?: string) =>
+    api.get('/device/iphone-buttons', { params: deviceId ? { device_id: deviceId } : {} }),
   // WebOS(Connect Wide) 설정의 ADB 시리얼 선택용 — 전체 스캔보다 가볍다.
   adbSerials: () => api.get('/device/adb-serials'),
   getScanSettings: () => api.get('/device/scan-settings'),

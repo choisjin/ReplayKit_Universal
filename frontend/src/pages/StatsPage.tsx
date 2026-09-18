@@ -10,7 +10,7 @@ const STEP_TYPE_LABELS: Record<string, string> = {
   module_command: '모듈 명령', hkmc_touch: 'HKMC 터치', hkmc_swipe: 'HKMC 스와이프',
   hkmc_key: 'HKMC 키', hkmc_long_press: 'HKMC 롱프레스', hkmc_multi_touch: 'HKMC 멀티터치',
   icas_touch: 'ICAS 터치', icas_swipe: 'ICAS 스와이프', icas_key: 'ICAS 키', icas_long_press: 'ICAS 롱프레스',
-  connectwide_key: 'Connect Wide 키', multi_touch: '멀티터치', repeat_tap: '반복 탭',
+  connectwide_key: 'Connect Wide 키', iphone_button: 'iPhone 버튼', multi_touch: '멀티터치', repeat_tap: '반복 탭',
   all_random: '랜덤 스트레스', image_tap: '이미지 탭',
   win_tap: 'Win 탭', win_double_click: 'Win 더블클릭', win_click_sequence: 'Win 클릭 시퀀스',
   win_long_press: 'Win 롱프레스', win_swipe: 'Win 스와이프', win_input_text: 'Win 텍스트입력',

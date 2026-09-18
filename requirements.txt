@@ -2,7 +2,7 @@
 # Windows 전용 패키지(pywin32 등)는 sys_platform 마커로 조건부 처리,
 # 또는 제거. CANoe 등 Vector 도구 의존 패키지는 Linux 에서 불가하므로 제외.
 
-aiofiles==23.2.1
+aiofiles==25.1.0  # pymobiledevice3 -> asgiwebdav 가 >=25.1.0 요구 (앱 코드는 aiofiles 미사용)
 altgraph==0.17.5
 annotated-types==0.7.0
 anyio==4.12.1
@@ -142,6 +142,12 @@ wrapt==1.17.3
 wsproto==1.3.2
 xlrd==2.0.2
 zeroconf==0.148.0
+# iPhone Agent (backend/app/iphone_controller) — USB mux/RSD 터널/HID 터치·버튼/DVT 스크린샷.
+# 미설치여도 앱은 정상 기동한다(controller 가 import 실패를 삼키고 연결만 실패).
+pymobiledevice3==11.9.2
+# asgiwebdav(pymobiledevice3 의존)가 chardet 최신(7.x)을 끌어오면 requests 가 매 기동
+# RequestsDependencyWarning 을 낸다 — requests 지원 범위(<6)로 고정.
+chardet>=5,<6
 
 # ---- Windows 전용 (Linux 에서는 자동 스킵) ----
 pywin32==311 ; sys_platform == "win32"

@@ -8,7 +8,7 @@ scikit-image==0.22.0
 numpy==1.26.4
 Pillow==10.2.0
 pydantic==2.5.3
-aiofiles==23.2.1
+aiofiles==25.1.0  # pymobiledevice3 -> asgiwebdav 가 >=25.1.0 요구 (앱 코드는 aiofiles 미사용)
 python-multipart==0.0.6
 openpyxl==3.1.5
 av>=12.0.0

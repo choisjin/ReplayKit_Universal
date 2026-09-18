@@ -84,6 +84,11 @@
           "value": "Phone",
           "enabled": true,
           "agent": "ADB"
+        },
+        {
+          "value": "iPhone",
+          "enabled": true,
+          "agent": "iPhone Agent"
         }
       ]
     },
@@ -283,6 +288,11 @@
     {
       "name": "BMWRSE_Agent",
       "type": "bmw_agent",
+      "enabled": true
+    },
+    {
+      "name": "iPhone Agent",
+      "type": "iphone_agent",
       "enabled": true
     }
   ]

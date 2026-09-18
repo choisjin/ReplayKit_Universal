@@ -7,7 +7,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { deviceApi, resultsApi, scenarioApi, type StepRef } from '../services/api';
 import { useDevice } from '../context/DeviceContext';
 import { useSettings } from '../context/SettingsContext';
-import { useTestMode, TEST_ONLY_MODULES } from '../hooks/useTestMode';
+import { useTestMode, TEST_ONLY_MODULES, TEST_ONLY_DEVICE_TYPES } from '../hooks/useTestMode';
 import { useTranslation } from '../i18n';
 import type { TranslationKey } from '../i18n/translations';
 import { findInvalidNameChars, INVALID_NAME_CHARS_DISPLAY } from '../utils/entityName';
@@ -351,6 +351,15 @@ interface HkmcKeyInfo {
   key?: number;
   visible?: boolean;
   variant?: 'navi' | 'non_navi' | null;  // 키 스펙 적용 대상 (backend 필터링 기준)
+}
+
+// iPhone 하드웨어 버튼 — /device/iphone-buttons 응답 항목
+interface IphoneButtonInfo {
+  key: string;
+  name: string;   // pymobiledevice3 버튼명 (home/lock/volume-up/...)
+  label: string;
+  group: string;
+  visible: boolean;
 }
 
 // Connect Wide (ADB) 하드키 — /device/connectwide-keys 응답 항목
@@ -778,6 +787,7 @@ export default function RecordPage() {
   const [hkmcKeys, setHkmcKeys] = useState<HkmcKeyInfo[]>([]);
   // Connect Wide (ADB) 하드키 — 미러 하단 버튼용
   const [cwKeys, setCwKeys] = useState<ConnectWideKeyInfo[]>([]);
+  const [iphoneButtons, setIphoneButtons] = useState<IphoneButtonInfo[]>([]);
   const [cwKeysModalOpen, setCwKeysModalOpen] = useState(false);
   const [cwKeysDraft, setCwKeysDraft] = useState<ConnectWideKeyInfo[]>([]);
   const [cwKeysSaving, setCwKeysSaving] = useState(false);
@@ -1123,7 +1133,9 @@ export default function RecordPage() {
   }, []);
 
   // 연결된 주 디바이스만 필터
-  const connectedPrimaryDevices = primaryDevices.filter(d => d.status === 'device' || d.status === 'connected');
+  // 테스트 전용 주 디바이스 타입(iPhone 등)은 `#test` 모드에서만 미러/스텝 대상으로 노출
+  const connectedPrimaryDevices = primaryDevices.filter(d => (d.status === 'device' || d.status === 'connected')
+    && (testMode || !TEST_ONLY_DEVICE_TYPES.has(d.type)));
 
   // Auto-select first connected primary device for screen
   useEffect(() => {
@@ -1184,6 +1196,8 @@ export default function RecordPage() {
   // Connect Wide 를 ADB 로 연결한 경우 — 미러 하단에 하드키 버튼 노출
   const isScreenConnectWide = isScreenAdb && screenDevice?.info?.device_model === 'Connect Wide';
   const isScreenBmw = screenDevice?.type === 'bmw_agent';
+  // iPhone — 단일 화면, generic tap/swipe + 미러 하단 하드웨어 버튼(iphone_button)
+  const isScreenIphone = screenDevice?.type === 'iphone_agent';
   // 카메라류(vision_camera/webcam)는 관찰 전용 — 조작(탭/스와이프/키) 금지
   // 화면 조작 불가(관찰/캡처 전용) 디바이스 — 미러 클릭으로 탭/스와이프 스텝이 기록되지 않게 한다.
   // FPK 클러스터는 ksend/입력 경로가 없어 캡처·이미지비교만 가능(백엔드도 조작 요청을 거부).
@@ -1410,6 +1424,19 @@ export default function RecordPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenshotDeviceId, primaryDevices]);
+
+  // iPhone 하드웨어 버튼 목록 조회 — iphone_agent 인 경우만
+  useEffect(() => {
+    const dev = primaryDevices.find(d => d.id === screenshotDeviceId);
+    if (dev?.type === 'iphone_agent') {
+      deviceApi.listIphoneButtons(dev.id).then(res => {
+        setIphoneButtons(res.data.buttons || []);
+      }).catch(() => setIphoneButtons([]));
+    } else {
+      setIphoneButtons([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screenshotDeviceId, keysDevType]);
 
   // Stop screenshot polling when leaving page
   useEffect(() => {
@@ -5801,6 +5828,8 @@ export default function RecordPage() {
                     ? `swipe (${s.params.x1},${s.params.y1})→(${s.params.x2},${s.params.y2})`
                     : s.type === 'hkmc_key' || s.type === 'icas_key'
                     ? <><Tag color="volcano" style={{ margin: 0 }}>KEY</Tag> {s.params.key_name || `cmd:${s.params.cmd}`}</>
+                    : s.type === 'iphone_button'
+                    ? <><Tag color="geekblue" style={{ margin: 0 }}>iPhone</Tag> {s.params.name}{s.params.state && s.params.state !== 'press' ? ` (${s.params.state})` : ''}</>
                     : s.type === 'all_random'
                     ? <><Tag color="magenta" style={{ margin: 0 }}>RAND</Tag> ×{s.params.repeat_count ?? 1} @{s.params.interval_ms ?? 0}ms (HK:{(s.params.hk_keys || []).length}{s.params.sk_region ? ' SK▣' : ''}{s.params.drag_region ? ' DRAG▣' : ''})</>
                     : s.type === 'capture'
@@ -6237,7 +6266,7 @@ export default function RecordPage() {
               <>
               <div style={{
                 position: 'relative', display: 'inline-block', maxWidth: '100%',
-                maxHeight: (viewCropEnabled || ((isScreenHkmc || isScreenICAS) && hkmcKeys.length > 0) || (isScreenConnectWide && cwKeys.length > 0)) ? 'calc(100% - 120px)' : '100%',
+                maxHeight: (viewCropEnabled || ((isScreenHkmc || isScreenICAS) && hkmcKeys.length > 0) || (isScreenConnectWide && cwKeys.length > 0) || (isScreenIphone && iphoneButtons.length > 0)) ? 'calc(100% - 120px)' : '100%',
               }}>
                 {(() => {
                   // 뷰포트 크롭
@@ -6480,7 +6509,7 @@ export default function RecordPage() {
                       </Tooltip>
                     )}
                     {/* 이미지 롱터치 — long press 를 지원하는 디바이스 타입에만 노출 */}
-                    {['adb', 'hkmc_agent', 'isap_agent', 'hkmc5th_wide_agent', 'icas_agent', 'mib_agent', 'gm_info_agent', 'bmw_agent', 'wincontrol'].includes(screenDevice?.type || '') && (
+                    {['adb', 'hkmc_agent', 'isap_agent', 'hkmc5th_wide_agent', 'icas_agent', 'mib_agent', 'gm_info_agent', 'bmw_agent', 'iphone_agent', 'wincontrol'].includes(screenDevice?.type || '') && (
                       <Tooltip title={recording ? t('record.imageLongPressTooltip') : t('record.imageTapDisabled')}>
                         <Button
                           size="small"
@@ -6819,6 +6848,25 @@ export default function RecordPage() {
                     </div>
                   );
                 })()}
+                {/* iPhone 하드웨어 버튼 — 미러 하단. 클릭 = press(누름+뗌) → iphone_button 스텝 */}
+                {isScreenIphone && iphoneButtons.length > 0 && testingStepIndex == null && (
+                  <div style={{ marginTop: 3, width: '100%' }}>
+                    <details open style={{ marginBottom: 2 }}>
+                      <summary style={{ fontSize: 10, color: subTextColor, cursor: 'pointer', userSelect: 'none' }}>
+                        {t('record.iphoneButton')} <span style={{ color: '#888' }}>({iphoneButtons.filter(b => b.visible !== false).length})</span>
+                      </summary>
+                      <div style={{ padding: '2px 0 2px 4px' }}>
+                        {iphoneButtons.filter(b => b.visible !== false).map(b => (
+                          <Button key={b.key} size="small"
+                            style={{ fontSize: 9, padding: '0 6px', height: 22, margin: '0 2px 2px 0' }}
+                            title={b.name}
+                            onClick={() => executeAction('iphone_button', { name: b.name, state: 'press' }, b.label)}
+                          >{b.label}</Button>
+                        ))}
+                      </div>
+                    </details>
+                  </div>
+                )}
               </>
             ) : (
               <div style={{ color: mutedTextColor, textAlign: 'center', padding: 19 }}>

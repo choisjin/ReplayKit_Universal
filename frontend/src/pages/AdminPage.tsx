@@ -419,6 +419,7 @@ export default function AdminPage() {
                   {a.type === 'fpk_agent' && '— VW FPK 클러스터 SSH+프레임버퍼 (캡처 전용, 조작 불가)'}
                   {a.type === 'gm_info_agent' && '— GM Info(QNX) TCP 4445 (터치·스와이프·하드키·캡처)'}
                   {a.type === 'bmw_agent' && '— BMW 후석 듀얼 디스플레이 ADB (WebOS+Android)'}
+                  {a.type === 'iphone_agent' && '— iPhone USB pymobiledevice3 (HID 터치·하드버튼·DVT 캡처, iOS 27+)'}
                   {a.type === 'vision_camera' && '— GigE 비전 카메라 (스크린샷 전용)'}
                   {a.type === 'webcam' && '— USB 웹캠 (관찰 전용)'}
                 </Typography.Text>

@@ -794,7 +794,7 @@ On startup, git pull runs automatically to update to the latest version.</p>
   <tr>
     <td><span class="badge badge-green">iSAP Agent</span></td>
     <td>TCP Socket</td>
-    <td>HKMC Connect Wide. Ports 20000 (front), 20003 (cluster), 20004 (HUD). Connecting to the front port also opens the cluster/HUD ports automatically, so those screens can be picked straight from the mirror screen list (falls back to the front connection when a vehicle has no such port).</td>
+    <td>HKMC Connect Wide. Ports 20000 (front), 20003 (cluster), 20004 (HUD) — each port controls only its own screen, so a dedicated connection is required per screen. Connecting to the front port opens the cluster/HUD ports automatically. Where those ports do not exist, picking cluster/HUD is <b>refused</b>: the front agent ignores the Monitor field and returns the front screen, which would show the front screen as if it were the cluster and send taps to the front panel. For vehicles with separate IPs, set <code>isap_screen_endpoints</code> on the device (discover with <code>tools/isap_probe.py</code>).</td>
   </tr>
   <tr>
     <td><span class="badge badge-green">ICAS Agent</span></td>

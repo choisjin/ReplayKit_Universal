@@ -739,6 +739,7 @@ export default function ScenarioPage() {
     else if (type === 'wait') detail = `${p.duration_ms || 1000}ms`;
     else if (type === 'adb_command') detail = p.command || '';
     else if (type === 'connectwide_key') detail = `${p.key_name || ''}${p.key_action && p.key_action !== 'short' ? ` (${p.key_action})` : ''}`;
+    else if (type === 'iphone_button') detail = `${p.name || ''}${p.state && p.state !== 'press' ? ` (${p.state})` : ''}`;
     else if (type === 'serial_command') detail = `"${p.data || ''}"`;
     else if (type === 'module_command') detail = `${p.function}(${p.args ? Object.values(p.args).map((v: any) => `"${v}"`).join(', ') : ''})`;
     const desc = step.description ? ` [${step.description}]` : '';

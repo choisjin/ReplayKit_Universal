@@ -191,6 +191,7 @@ _DEFAULT_DEVICE_CATALOG: dict = {
         {"name": "FPK Agent",    "type": "fpk_agent",     "enabled": True},
         {"name": "GM Info Agent", "type": "gm_info_agent", "enabled": True},
         {"name": "BMWRSE_Agent", "type": "bmw_agent",     "enabled": True},
+        {"name": "iPhone Agent", "type": "iphone_agent",  "enabled": True},
         {"name": "VisionCamera", "type": "vision_camera", "enabled": True},
         {"name": "Webcam",       "type": "webcam",        "enabled": True},
     ],
@@ -303,7 +304,7 @@ def _build_constructor_kwargs(dev) -> dict | None:
 
 
 class ConnectRequest(BaseModel):
-    type: str  # "adb" | "serial" | "module" | "hkmc_agent" | "isap_agent" | "icas_agent" | "mib_agent" | "fpk_agent" | "gm_info_agent" | "bmw_agent" | "vision_camera" | "webcam" | "ssh"
+    type: str  # "adb" | "serial" | "module" | "hkmc_agent" | "isap_agent" | "icas_agent" | "mib_agent" | "fpk_agent" | "gm_info_agent" | "bmw_agent" | "iphone_agent" | "vision_camera" | "webcam" | "ssh"
     category: str = ""  # "primary" | "auxiliary" — auto-detected if empty
     address: str = ""  # COM port for serial, IP for socket/HKMC/SSH, etc.
     baudrate: Optional[int] = 115200
@@ -472,6 +473,66 @@ async def save_device_catalog(request: Request):
         raise HTTPException(status_code=400, detail="body must be an object")
     _save_device_catalog(body)
     return {"status": "ok"}
+
+
+@router.get("/scan-iphone")
+async def scan_iphone_devices():
+    """pymobiledevice3 usbmux list 로 USB 연결된 iPhone 목록을 반환한다.
+
+    usbmuxd(iTunes/Apple Mobile Device Service)가 없거나 아이폰이 없으면 devices 는
+    빈 배열, 원인은 warning 에 담는다. pymobiledevice3 11.x 는 의존성 버전 경고를
+    stderr 로 내며 exit 1 을 반환하기도 하므로 stdout JSON 을 우선 파싱한다.
+    """
+    import asyncio
+    import os
+    import re
+    import subprocess
+    import sys
+
+    python = (os.environ.get("PYMD_PYTHON") or sys.executable).strip()
+    cmd = [python, "-W", "ignore", "-m", "pymobiledevice3", "usbmux", "list"]
+    kwargs: dict = {"capture_output": True, "text": True, "timeout": 10}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        result = await asyncio.to_thread(subprocess.run, cmd, **kwargs)
+    except Exception as e:
+        return {"devices": [], "count": 0, "warning": f"{type(e).__name__}: {e}"}
+
+    stderr = re.sub(r"\x1b\[[0-9;]*m", "", (result.stderr or "").strip())
+    stdout = (result.stdout or "").strip()
+    devices: list = []
+    if stdout:
+        try:
+            parsed = _json.loads(stdout)
+            if isinstance(parsed, list):
+                devices = parsed
+        except Exception as e:
+            return {"devices": [], "count": 0,
+                    "warning": f"invalid JSON from pymobiledevice3: {e}"}
+    if not devices and result.returncode != 0:
+        return {"devices": [], "count": 0,
+                "warning": stderr[-500:] or f"pymobiledevice3 exited with {result.returncode}"}
+
+    normalized = []
+    seen: set = set()
+    for d in devices:
+        if not isinstance(d, dict):
+            continue
+        udid = (d.get("UniqueDeviceID") or d.get("Identifier")
+                or d.get("UDID") or d.get("SerialNumber") or "")
+        # 같은 기기가 USB + Wi-Fi(Network) 로 두 번 잡힐 수 있다 — UDID 로 dedup
+        if not udid or udid in seen:
+            continue
+        seen.add(udid)
+        normalized.append({
+            "udid": udid,
+            "name": d.get("DeviceName") or d.get("name") or "",
+            "product_type": d.get("ProductType") or d.get("product_type") or "",
+            "ios_version": d.get("ProductVersion") or "",
+            "connection_type": d.get("ConnectionType") or "",
+        })
+    return {"devices": normalized, "count": len(normalized)}
 
 
 @router.get("/scan")
@@ -1025,6 +1086,30 @@ async def connect_device(req: ConnectRequest):
             }
         except RuntimeError as e:
             raise HTTPException(status_code=400, detail=str(e))
+    elif req.type == "iphone_agent":
+        if not req.address:
+            raise HTTPException(status_code=400, detail="iPhone Agent requires address (UDID)")
+        ef = req.extra_fields or {}
+        try:
+            dev = await dm.add_iphone_device(
+                udid=req.address.strip(),
+                device_id=custom_id,
+                name=req.name or "",
+                device_model=req.device_model or "",
+                resolution=ef.get("resolution", "1170x2532") or "1170x2532",
+                python=ef.get("python", "") or "",
+            )
+            try:
+                connect_msg = await dm.connect_device_by_id(dev.id)
+            except Exception as e:
+                connect_msg = f"registered but connect failed: {e}"
+            return {
+                "result": f"iPhone registered: {dev.name} (ID: {dev.id}) — {connect_msg}",
+                "primary": _with_protected_flag(dm.list_primary()),
+                "auxiliary": _with_protected_flag(dm.list_auxiliary()),
+            }
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     elif req.type == "bmw_agent":
         if not req.address:
             raise HTTPException(status_code=400, detail="BMW Agent requires address (ADB serial)")
@@ -1407,6 +1492,43 @@ async def device_input(req: InputRequest):
                     await mib.async_send_key(
                         p["cmd"], p["sub_cmd"], p["key_data"], screen_type, p.get("direction")
                     )
+            return {"result": "ok"}
+
+        # iPhone Agent — generic tap/swipe/long_press/repeat_tap + iPhone 전용 button 계열.
+        # 단일 화면이라 screen_type 무시, 좌표는 픽셀(서비스가 HID 0~65535 로 변환).
+        if (req.action in ("tap", "swipe", "long_press", "repeat_tap",
+                           "iphone_button", "iphone_button_sequence", "iphone_session")
+                and dev and dev.type == "iphone_agent"):
+            iphone = dm.get_iphone_service(req.device_id)
+            if not iphone:
+                raise HTTPException(status_code=400,
+                                    detail=f"iPhone device {req.device_id} not connected")
+            p = req.params
+            if req.action == "tap":
+                await iphone.async_tap(p["x"], p["y"])
+            elif req.action == "repeat_tap":
+                await iphone.async_repeat_tap(p["x"], p["y"], int(p.get("count", 5)),
+                                              int(p.get("interval_ms", 100)))
+            elif req.action == "long_press":
+                await iphone.async_long_press(p["x"], p["y"], int(p.get("duration_ms", 1000)))
+            elif req.action == "swipe":
+                await iphone.async_swipe(p["x1"], p["y1"], p["x2"], p["y2"],
+                                         duration_ms=int(p.get("duration_ms", 0) or 0),
+                                         hold_ms=int(p.get("hold_ms", 0) or 0))
+            elif req.action == "iphone_button":
+                await iphone.async_button(p.get("name", ""), p.get("state", "press"))
+            elif req.action == "iphone_button_sequence":
+                seq = p.get("sequence", [])
+                if not seq:
+                    raise HTTPException(status_code=400, detail="sequence is required")
+                await iphone.async_button_sequence(
+                    [(s.get("name", ""), s.get("state", "press")) for s in seq],
+                    float(p.get("interval", 0.25)))
+            elif req.action == "iphone_session":
+                cmds = p.get("commands", [])
+                if not cmds:
+                    raise HTTPException(status_code=400, detail="commands is required")
+                await iphone.async_session(cmds)
             return {"result": "ok"}
 
         # GM Info Agent — ICAS/MIB 와 동일한 action set(icas_*)을 gm_* 별칭과 함께 받는다.
@@ -2585,6 +2707,25 @@ async def update_mib_keys(req: UpdateMibKeysRequest):
     return {"status": "ok", "device_id": req.device_id, "count": len(clean)}
 
 
+@router.get("/iphone-buttons")
+async def list_iphone_buttons(device_id: Optional[str] = None):
+    """iPhone 하드웨어 버튼 목록. device_id 가 있으면 info["iphone_buttons"] 의 visible 오버라이드를 병합."""
+    from ..services.iphone_service import IPHONE_BUTTONS
+    dev = dm.get_device(device_id) if device_id else None
+    overrides = (dev.info.get("iphone_buttons") if dev else None) or {}
+    buttons = []
+    for key, info in IPHONE_BUTTONS.items():
+        ov = overrides.get(key, {}) or {}
+        buttons.append({
+            "key": key,
+            "name": info["name"],
+            "label": info["label"],
+            "group": info["group"],
+            "visible": ov.get("visible", True),
+        })
+    return {"buttons": buttons}
+
+
 @router.get("/gm-info-keys")
 async def list_gm_info_keys(device_id: Optional[str] = None):
     """List GM Info hardware keys (merged with per-device override)."""
@@ -3351,6 +3492,15 @@ async def get_screenshot(device_id: str, fmt: str = "jpeg", screen_type: str = "
             img_bytes = await gm.async_screencap_bytes(screen_type="HU", fmt=fmt)
             b64 = base64.b64encode(img_bytes).decode("ascii")
             return {"image": b64, "format": fmt}
+        elif dev and dev.type == "iphone_agent":
+            iph = dm.get_iphone_service(device_id)
+            if not iph:
+                raise HTTPException(status_code=400,
+                                    detail=f"iPhone device {device_id} not connected")
+            # iPhone 은 단일 화면 — screen_type 무시.
+            img_bytes = await iph.async_screencap_bytes(fmt=fmt)
+            b64 = base64.b64encode(img_bytes).decode("ascii")
+            return {"image": b64, "format": fmt}
         elif dev and dev.type == "vision_camera":
             cam = dm.get_vision_camera(device_id)
             if not cam:
@@ -3385,7 +3535,7 @@ async def get_screenshot(device_id: str, fmt: str = "jpeg", screen_type: str = "
                 # 캡처 일시 실패: attach 상태는 유지, 빈 응답만 반환
                 return {"image": "", "format": fmt, "attached": wc.is_attached()}
         elif dev and dev.type not in ("adb",):
-            raise HTTPException(status_code=400, detail="Screenshot only available for ADB, HKMC, iSAP, ICAS, VisionCamera, Webcam, or WinControl devices")
+            raise HTTPException(status_code=400, detail="Screenshot only available for ADB, HKMC, iSAP, ICAS, iPhone, VisionCamera, Webcam, or WinControl devices")
         else:
             # ADB device
             adb_serial = dev.address if dev else device_id

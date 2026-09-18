@@ -657,6 +657,30 @@ class ISAPAgentService:
                         screen_type, host, port, self.device_id)
             return sib
 
+    def _require_dedicated(self, screen_type: Optional[str], what: str) -> None:
+        """전용 포트 없이 cluster/HUD 를 다루려 하면 거부한다.
+
+        실기(Connect Wide, agent 0.1)에서 전석 포트(20000)는 **Monitor 바이트도 요청
+        좌표도 무시하고 항상 전석 화면을 돌려준다**(front/cluster/hud 응답 JPEG 바이트가
+        동일). 그대로 두면 전석 화면이 클러스터인 척 보이고, 거기 누른 터치가 전석에
+        그대로 들어간다. 그래서 전용 연결이 없으면 조용히 폴백하지 않고 분명히 실패시킨다.
+
+        한 포트가 전 모니터를 처리하는 에이전트가 확인되면 디바이스 설정에
+        `isap_screen_monitor_fallback: true` 로 예전 동작을 되살릴 수 있다.
+        """
+        if self._secondary or not screen_type or screen_type not in SECONDARY_SCREENS:
+            return
+        if (self._webos_config or {}).get("isap_screen_monitor_fallback"):
+            return
+        ep = self._screen_endpoint(screen_type)
+        where = f"{ep[0]}:{ep[1]}" if ep else "전용 포트"
+        raise ValueError(
+            f"{screen_type} 화면 {what} 불가 — 전용 포트({where}) 연결이 없습니다. "
+            f"이 에이전트는 전석({self.port}) 제어 영역만 열려 있어 요청이 전석 화면으로 "
+            f"나갑니다. 클러스터/HUD 에이전트 주소를 확인해 디바이스 설정의 "
+            f"isap_screen_endpoints 에 지정하세요 (tools/isap_probe.py 로 탐색)."
+        )
+
     def open_secondary_screens(self) -> None:
         """연결 직후 cluster/HUD 전용 포트를 미리 열어둔다 (백그라운드 호출)."""
         if self._secondary:
@@ -1022,6 +1046,7 @@ class ISAPAgentService:
         tgt = self._delegate_for(screen_type)
         if tgt is not self:
             return tgt.screencap_bytes(screen_type=screen_type, fmt=fmt, timeout=timeout)
+        self._require_dedicated(screen_type, "캡처")
         fmt_map = {"jpeg": IMG_JPEG, "png": IMG_PNG, "bmp": IMG_BMP24}
         sub_cmd = fmt_map.get(fmt, IMG_JPEG)
 
@@ -1124,6 +1149,7 @@ class ISAPAgentService:
         tgt = self._delegate_for(screen_type)
         if tgt is not self:
             return tgt.tap(x, y, screen_type)
+        self._require_dedicated(screen_type, "터치")
         with self._capture_lock:
             time.sleep(0.1)
             with self._send_lock:
@@ -1140,6 +1166,7 @@ class ISAPAgentService:
         tgt = self._delegate_for(screen_type)
         if tgt is not self:
             return tgt.repeat_tap(x, y, count, interval_ms, screen_type)
+        self._require_dedicated(screen_type, "터치")
         interval_sec = max(interval_ms, 0) / 1000.0
         with self._capture_lock:
             with self._send_lock:
@@ -1158,6 +1185,7 @@ class ISAPAgentService:
         tgt = self._delegate_for(screen_type)
         if tgt is not self:
             return tgt.long_press(x, y, duration_ms, screen_type)
+        self._require_dedicated(screen_type, "터치")
         with self._capture_lock:
             time.sleep(0.1)
             with self._send_lock:
@@ -1175,6 +1203,7 @@ class ISAPAgentService:
         tgt = self._delegate_for(screen_type)
         if tgt is not self:
             return tgt.swipe(x1, y1, x2, y2, screen_type, duration_ms, hold_ms)
+        self._require_dedicated(screen_type, "스와이프")
         if hold_ms and hold_ms > 0:
             # 드래그앤드롭(앱카드 이동): TOUCH_PRESS → hold → TOUCH_MOVE(보간) → TOUCH_RELEASE.
             # _lcd_drag(고정 fling)는 시작 hold를 표현 못해 ext 터치 시퀀스로 직접 구성.
@@ -1237,6 +1266,7 @@ class ISAPAgentService:
         tgt = self._delegate_for(screen_type)
         if tgt is not self:
             return tgt.multi_finger_swipe(fingers, screen_type, duration_ms, hold_ms)
+        self._require_dedicated(screen_type, "스와이프")
         n = len(fingers)
         fs = [(int(f["x1"]), int(f["y1"]), int(f["x2"]), int(f["y2"])) for f in fingers]
         move_dur = max(int(duration_ms or 0), 200)
@@ -1275,6 +1305,7 @@ class ISAPAgentService:
         tgt = self._delegate_for(screen_type)
         if tgt is not self:
             return tgt.multi_finger_tap(points, screen_type)
+        self._require_dedicated(screen_type, "터치")
         fingers = [{"x1": p["x"], "y1": p["y"], "x2": p["x"], "y2": p["y"]} for p in points]
         if not fingers:
             return

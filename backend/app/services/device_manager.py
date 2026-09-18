@@ -26,6 +26,7 @@ from .mib_agent_service import MIBAgentService
 from .fpk_agent_service import FPKAgentService
 from .gm_info_agent_service import GMInfoAgentService
 from .bmw_agent_service import BMWAgentService
+from .iphone_service import iPhoneAgentService
 from .ssh_service import SSHConnection
 from .wincontrol_service import WinControlService
 from .lincontrol_service import LinControlService
@@ -904,6 +905,7 @@ class DeviceManager:
         self._gm_info_reconnect_attempts: dict[str, int] = {}
         self._bmw_conns: dict[str, BMWAgentService] = {}  # device_id -> BMWAgentService
         self._bmw_reconnect_attempts: dict[str, int] = {}
+        self._iphone_conns: dict[str, iPhoneAgentService] = {}  # device_id -> iPhoneAgentService
         self._adb_reconnect_attempts: dict[str, int] = {}  # device_id -> 연속 재연결 실패 횟수
         # 디바이스별 재연결 락: playback의 _ensure_device_connected와 백그라운드 monitor 루프가
         # 같은 디바이스를 동시에 재연결하지 못하도록 직렬화. race condition 제거용.
@@ -1127,6 +1129,8 @@ class DeviceManager:
             prefix = "GMInfo"
         elif dev_type == "bmw_agent":
             prefix = "BMW"
+        elif dev_type == "iphone_agent":
+            prefix = "iPhone"
         elif dev_type == "vision_camera":
             prefix = "VisionCam"
         elif dev_type == "webcam":
@@ -1149,7 +1153,7 @@ class DeviceManager:
         aux = [
             d.to_dict()
             for d in self._devices.values()
-            if d.category == "auxiliary" or d.type in ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent", "icas_agent", "mib_agent", "fpk_agent", "gm_info_agent", "bmw_agent", "vision_camera", "webcam", "ssh")
+            if d.category == "auxiliary" or d.type in ("adb", "hkmc_agent", "hkmc5th_wide_agent", "isap_agent", "icas_agent", "mib_agent", "fpk_agent", "gm_info_agent", "bmw_agent", "iphone_agent", "vision_camera", "webcam", "ssh")
         ]
         try:
             _AUX_DEVICES_FILE.write_text(json.dumps(aux, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1681,6 +1685,67 @@ class DeviceManager:
             return self._gm_info_conns.get(dev.id)
         return None
 
+    async def add_iphone_device(self, udid: str, device_id: str = "",
+                                name: str = "", device_model: str = "",
+                                resolution: str = "1170x2532",
+                                python: str = "") -> ManagedDevice:
+        """iPhone Agent 디바이스 등록만 (연결은 connect_device_by_id로 별도 수행).
+
+        pymobiledevice3 USB mux 기반 iOS 디바이스 — address 에 UDID 를 저장한다.
+        Generic tap/swipe/long_press/repeat_tap 스텝과 iPhone 전용 button 스텝을 처리한다.
+        """
+        final_id = device_id or self._generate_device_id("iphone_agent", device_model=device_model)
+        display_name = name or f"iPhone ({device_model or udid})"
+        try:
+            rw_s, rh_s = str(resolution).upper().split("X")
+            res_dict = {"width": int(rw_s), "height": int(rh_s)}
+        except Exception:
+            res_dict = {"width": 1170, "height": 2532}
+
+        info: dict = {
+            "udid": udid,
+            "resolution": res_dict,
+            "resolution_str": str(resolution),
+            "input_supported": True,
+            "swipe_supported": True,
+        }
+        if python:
+            info["python"] = python
+        if device_model:
+            info["device_model"] = device_model
+
+        # 재등록이 버튼 오버라이드 등 기존 info 를 지우지 않도록 폼 값만 덮어쓴다.
+        existing = self._devices.get(final_id)
+        if existing is not None and existing.type == "iphone_agent":
+            merged = dict(existing.info)
+            merged.update(info)
+            info = merged
+            if not name:
+                display_name = existing.name
+
+        dev = ManagedDevice(
+            id=final_id,
+            type="iphone_agent",
+            category="primary",
+            address=udid,
+            status="disconnected",
+            name=display_name,
+            info=info,
+        )
+        self._devices[final_id] = dev
+        self._save_auxiliary_devices()
+        return dev
+
+    def get_iphone_service(self, device_id: str) -> Optional[iPhoneAgentService]:
+        """Get iPhoneAgentService instance for a device. Returns None if not found."""
+        svc = self._iphone_conns.get(device_id)
+        if svc:
+            return svc
+        dev = self.get_device(device_id)
+        if dev and dev.type == "iphone_agent":
+            return self._iphone_conns.get(dev.id)
+        return None
+
     async def add_bmw_agent_device(self, serial: str, device_id: str = "",
                                    name: str = "", device_model: str = "",
                                    resolution: str = "1920x1080",
@@ -1873,6 +1938,13 @@ class DeviceManager:
             if dev.type == "gm_info_agent":
                 gm = self._gm_info_conns.get(dev.id)
                 if gm and gm.is_connected:
+                    dev.status = "connected"
+                elif dev.status != "reconnecting":
+                    dev.status = "disconnected"
+                continue
+            if dev.type == "iphone_agent":
+                iph = self._iphone_conns.get(dev.id)
+                if iph and iph.is_connected:
                     dev.status = "connected"
                 elif dev.status != "reconnecting":
                     dev.status = "disconnected"
@@ -2754,6 +2826,13 @@ class DeviceManager:
                 gm_info.disconnect()
             except Exception:
                 pass
+        # Close iPhone Agent (RSD 터널/HID 세션/스크린 스트림 스레드) if applicable
+        iphone = self._iphone_conns.pop(dev.id, None)
+        if iphone:
+            try:
+                await asyncio.to_thread(iphone.disconnect)
+            except Exception:
+                pass
         # Close VisionCamera connection if applicable
         cam = self._vision_cams.pop(dev.id, None)
         if cam:
@@ -3512,6 +3591,54 @@ class DeviceManager:
                 dev.status = "disconnected"
                 return f"FPK connect failed: {dev.id} — {e}"
 
+        elif dev.type == "iphone_agent":
+            try:
+                # 기존 연결 정리 (재연결/재등록 시) — 터널/스레드 정리가 수 초 걸릴 수 있어 오프로드
+                old = self._iphone_conns.pop(dev.id, None)
+                if old:
+                    try:
+                        await asyncio.to_thread(old.disconnect)
+                    except Exception:
+                        pass
+                resolution = dev.info.get("resolution_str") or dev.info.get("resolution", "1170x2532")
+                if isinstance(resolution, dict):
+                    resolution = f"{resolution.get('width', 1170)}x{resolution.get('height', 2532)}"
+                svc = iPhoneAgentService(
+                    udid=dev.address,
+                    device_id=dev.id,
+                    resolution=str(resolution),
+                    python=dev.info.get("python", ""),
+                )
+                ok = await svc.async_connect()
+                if ok:
+                    self._iphone_conns[dev.id] = svc
+                    dev.status = "connected"
+                    _mark_connected()
+                    info = svc.get_info()
+                    w, h = svc.resolution
+                    dev.info["agent_version"] = svc.agent_version
+                    dev.info["screens"] = info["screens"]
+                    dev.info["resolution"] = {"width": w, "height": h}
+                    dev.info["resolution_str"] = f"{w}x{h}"
+                    dev.info["udid"] = dev.address
+                    dev.info["input_supported"] = True
+                    dev.info["swipe_supported"] = True
+                    if info.get("device"):
+                        dev.info["iphone_device"] = info["device"]
+                    return f"iPhone connected: {dev.id} ({dev.address})"
+                else:
+                    dev.status = "disconnected"
+                    reason = getattr(svc, "last_error", "") or "device not connected"
+                    # 실패한 서비스도 터널 프로세스를 띄웠을 수 있으니 정리
+                    try:
+                        await asyncio.to_thread(svc.disconnect)
+                    except Exception:
+                        pass
+                    return f"iPhone connect failed: {dev.id} — {reason}"
+            except Exception as e:
+                dev.status = "disconnected"
+                return f"iPhone connect failed: {dev.id} — {e}"
+
         elif dev.type == "gm_info_agent":
             port = int(dev.info.get("port", 4445) or 4445)
             res_str = dev.info.get("resolution_str")
@@ -3928,6 +4055,17 @@ class DeviceManager:
             dev.status = "disconnected"
             return f"Disconnected: {dev.id}"
 
+        elif dev.type == "iphone_agent":
+            svc = self._iphone_conns.pop(device_id, None)
+            if svc:
+                try:
+                    # controller.close() 가 터널 프로세스 종료/스레드 join 으로 수 초 걸릴 수 있다
+                    await asyncio.to_thread(svc.disconnect)
+                except Exception:
+                    pass
+            dev.status = "disconnected"
+            return f"Disconnected: {dev.id}"
+
         elif dev.type == "bmw_agent":
             svc = self._bmw_conns.pop(device_id, None)
             if svc:
@@ -4005,6 +4143,13 @@ class DeviceManager:
                 pass
             logger.info("GM Info connection closed: %s", device_id)
         self._gm_info_conns.clear()
+        for device_id, iph in list(self._iphone_conns.items()):
+            try:
+                iph.disconnect()
+            except Exception:
+                pass
+            logger.info("iPhone connection closed: %s", device_id)
+        self._iphone_conns.clear()
         for device_id in list(self._ssh_conns.keys()):
             self._close_ssh_conn(device_id)
             logger.info("SSH connection closed: %s", device_id)

@@ -1445,6 +1445,10 @@ class RecordingService:
     # Internal
     # ------------------------------------------------------------------
 
+    def _is_iphone_device(self, device_id: str) -> bool:
+        dev = self.dm.get_device(device_id) if device_id else None
+        return dev is not None and dev.type == "iphone_agent"
+
     async def _execute_step_action(self, step_type: StepType, params: dict, device_id: str = "") -> str | None:
         """Execute an action on the target device. Returns response for serial_command."""
         if step_type == StepType.MODULE_COMMAND:
@@ -1651,6 +1655,32 @@ class RecordingService:
                 if keys_list:
                     await loop.run_in_executor(None,
                         _ft3.partial(wc.send_key_combo, keys_list))
+        elif step_type == StepType.IPHONE_BUTTON or (
+            step_type in (StepType.TAP, StepType.LONG_PRESS, StepType.SWIPE, StepType.REPEAT_TAP)
+            and self._is_iphone_device(device_id)
+        ):
+            # iPhone — generic 터치 스텝은 ADB 가 아닌 pymobiledevice3 HID 로 보낸다.
+            if not device_id:
+                raise ValueError("iphone_button step requires a device_id")
+            dev = self.dm.get_device(device_id)
+            if not dev or dev.type != "iphone_agent":
+                raise ValueError(f"iphone_button step requires an iphone_agent device, got {dev.type if dev else 'none'}")
+            svc = self.dm.get_iphone_service(device_id)
+            if not svc:
+                raise ValueError(f"iPhone device {device_id} not connected")
+            if step_type == StepType.IPHONE_BUTTON:
+                await svc.async_button(params.get("name", ""), params.get("state", "press"))
+            elif step_type == StepType.TAP:
+                await svc.async_tap(params["x"], params["y"])
+            elif step_type == StepType.LONG_PRESS:
+                await svc.async_long_press(params["x"], params["y"], int(params.get("duration_ms", 1000)))
+            elif step_type == StepType.SWIPE:
+                await svc.async_swipe(params["x1"], params["y1"], params["x2"], params["y2"],
+                                      duration_ms=int(params.get("duration_ms", 300) or 0),
+                                      hold_ms=int(params.get("hold_ms", 0) or 0))
+            elif step_type == StepType.REPEAT_TAP:
+                await svc.async_repeat_tap(params["x"], params["y"], int(params.get("count", 5)),
+                                           int(params.get("interval_ms", 100)))
         elif step_type == StepType.WAIT:
             await _async_sleep(params.get("duration_ms", 1000) / 1000.0)
         else:

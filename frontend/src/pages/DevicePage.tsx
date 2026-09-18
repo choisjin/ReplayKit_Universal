@@ -8,13 +8,25 @@ import { useDevice, ManagedDevice } from '../context/DeviceContext';
 import { useSettings } from '../context/SettingsContext';
 import { deviceApi } from '../services/api';
 import { useTranslation } from '../i18n';
-import { useTestMode, TEST_ONLY_MODULES } from '../hooks/useTestMode';
+import { useTestMode, isTestMode, TEST_ONLY_MODULES, TEST_ONLY_DEVICE_TYPES } from '../hooks/useTestMode';
 
 const { Option } = Select;
 
 // CAN 채널 "자동 추천"(여러 속도 스윕) 기능 표시 여부. 현재 비활성(숨김).
 // 다시 노출하려면 true 로 변경.
 const CAN_AUTO_RECOMMEND_ENABLED = false;
+
+// iPhone ProductType → 네이티브 해상도 (backend iphone_controller PRODUCT_TYPE_TO_RESOLUTION 과 동일).
+// 스캔 추가 시 초기 해상도 시드용 — 없는 기종은 연결 시 백엔드 자동 감지.
+const IPHONE_RESOLUTIONS: Record<string, string> = {
+  'iPhone13,1': '1170x2532', 'iPhone13,2': '1170x2532', 'iPhone13,3': '1170x2532', 'iPhone13,4': '1284x2778',
+  'iPhone14,4': '1080x2340', 'iPhone14,5': '1170x2532', 'iPhone14,2': '1170x2532', 'iPhone14,3': '1284x2778',
+  'iPhone14,7': '1170x2532', 'iPhone14,8': '1170x2532', 'iPhone15,2': '1179x2556', 'iPhone15,3': '1290x2796',
+  'iPhone15,4': '1179x2556', 'iPhone15,5': '1290x2796', 'iPhone16,1': '1179x2556', 'iPhone16,2': '1290x2796',
+  'iPhone17,1': '1206x2622', 'iPhone17,2': '1320x2868', 'iPhone17,3': '1179x2556', 'iPhone17,4': '1290x2796',
+  'iPhone17,5': '1206x2622', 'iPhone18,1': '1206x2622', 'iPhone18,2': '1320x2868', 'iPhone18,3': '1179x2556',
+  'iPhone18,4': '1290x2796',
+};
 
 interface ConnectField {
   name: string;
@@ -392,6 +404,8 @@ export default function DevicePage() {
   const [scannedVision, setScannedVision] = useState<{ id: string; mac: string; model: string; serial: string; vendor: string; tl_type: string; ip: string; subnet?: string; gateway?: string }[]>([]);
   const [scannedWebcams, setScannedWebcams] = useState<{ index: number; label: string; width: number; height: number; already_registered?: boolean; in_use_by_recording?: boolean }[]>([]);
   // 마이크(오디오 입력) — AudioMonitor 모듈로 자동 등록되는 보조 디바이스
+  // iPhone (pymobiledevice3 usbmux) — /device/scan 과 별도 호출
+  const [scannedIphone, setScannedIphone] = useState<{ udid: string; name: string; product_type: string; ios_version?: string; connection_type?: string }[]>([]);
   const [scannedAudio, setScannedAudio] = useState<{ index: number; name: string; channels: number; rate: number; already_registered?: boolean }[]>([]);
   const [hasScanned, setHasScanned] = useState(false);
   const [scannedDlt, setScannedDlt] = useState<{ ip: string; port: number }[]>([]);
@@ -430,7 +444,7 @@ export default function DevicePage() {
   // PCAN(PEAK/SysMax 호환) 채널 스캔 결과
   type PcanChannel = { channel: string; device_id?: number | null; controller?: number | null; supports_fd: boolean };
   const [scannedPcan, setScannedPcan] = useState<{ ok: boolean; driver_missing: boolean; channels: PcanChannel[]; error?: string | null }>({ ok: false, driver_missing: false, channels: [] });
-  const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'fpk_agent' | 'gm_info_agent' | 'bmw_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
+  const [connectType, setConnectType] = useState<'adb' | 'serial' | 'module' | 'hkmc_agent' | 'isap_agent' | 'icas_agent' | 'mib_agent' | 'fpk_agent' | 'gm_info_agent' | 'bmw_agent' | 'iphone_agent' | 'vision_camera' | 'webcam' | 'ssh'>('adb');
   // BMW RSE Agent 전용 — 캡처 백엔드(adb screencap vs WebOS 컴포지터) + 해상도 fallback
   const [bmwCaptureBackend, setBmwCaptureBackend] = useState<'auto' | 'adb' | 'webos'>('auto');
   const [bmwResolution, setBmwResolution] = useState<string>('1920x1080');
@@ -578,11 +592,13 @@ export default function DevicePage() {
         if (m.enabled === false) continue;
         const v = typeof m.value === 'string' ? m.value : '';
         if (!v) continue; // value 누락 항목 스킵
+        // 테스트 전용 에이전트(iPhone 등)의 모델은 `#test` 모드에서만 노출
+        if (!testMode && TEST_ONLY_DEVICE_TYPES.has(modelAgentType.get(v) || '')) continue;
         flat.push({ label: v, value: v });
       }
     }
     return flat.sort((a, b) => (a.label || '').localeCompare(b.label || ''));
-  }, [deviceProject, catalogProjects]);
+  }, [deviceProject, catalogProjects, modelAgentType, testMode]);
 
   const isModuleVisible = useCallback((name?: string) => {
     if (!name) return true;
@@ -680,7 +696,7 @@ export default function DevicePage() {
 
   // key → category 해석 (값 없으면 기본 정책 적용)
   const _defaultCategoryForKey = (key: string): ScanCategory => {
-    const primaryKeys = new Set(['adb', 'hkmc', 'isap', 'icas', 'mib', 'fpk', 'bmw', 'vision_camera', 'webcam']);
+    const primaryKeys = new Set(['adb', 'hkmc', 'isap', 'icas', 'mib', 'fpk', 'bmw', 'vision_camera', 'webcam', 'iphone']);
     return primaryKeys.has(key) ? 'primary' : 'auxiliary';
   };
   const scanItemCategory = (key: string): ScanCategory =>
@@ -796,6 +812,7 @@ export default function DevicePage() {
     setScannedBench([]);
     setScannedVision([]);
     setScannedWebcams([]);
+    setScannedIphone([]);
     setScannedDlt([]);
     setScannedSmartbench([]);
     setScannedScar([]);
@@ -813,7 +830,13 @@ export default function DevicePage() {
   const handleScan = async () => {
     setScanning(true);
     try {
-      const [res, ifRes] = await Promise.all([deviceApi.scan(), deviceApi.localInterfaces()]);
+      const [res, ifRes, iphRes] = await Promise.all([
+        deviceApi.scan(), deviceApi.localInterfaces(),
+        isTestMode()
+          ? deviceApi.scanIphone().catch(() => ({ data: { devices: [] } }))
+          : Promise.resolve({ data: { devices: [] } }),
+      ]);
+      setScannedIphone(iphRes.data.devices || []);
       setScannedAdb(res.data.adb_devices || []);
       setScannedSerial(res.data.serial_ports || []);
       setScannedHkmc(res.data.hkmc_devices || []);
@@ -953,7 +976,7 @@ export default function DevicePage() {
         }
       }
       const tcpPort = (devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent' || devType === 'fpk_agent' || devType === 'gm_info_agent') ? hkmcPort : undefined;
-      const model = (devType === 'adb' || devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent' || devType === 'fpk_agent' || devType === 'gm_info_agent' || devType === 'bmw_agent') ? (deviceModel || undefined) : undefined;
+      const model = (devType === 'adb' || devType === 'hkmc_agent' || devType === 'isap_agent' || devType === 'icas_agent' || devType === 'mib_agent' || devType === 'fpk_agent' || devType === 'gm_info_agent' || devType === 'bmw_agent' || devType === 'iphone_agent') ? (deviceModel || undefined) : undefined;
       // ICAS Agent는 SSH 자격증명이 필요 — extra_fields로 전달
       if (devType === 'icas_agent') {
         extra = extra || {};
@@ -1166,6 +1189,23 @@ export default function DevicePage() {
     } catch (e: any) {
       await fetchDevices();
       closeAddModal();
+    }
+    setConnecting(false);
+  };
+
+  // iPhone 스캔 "추가" — UDID 로 등록. 해상도는 ProductType 맵으로 시드하고,
+  // 모르는 기종이면 빈 값 → 백엔드가 연결 시 자동 감지.
+  const handleAddIphone = async (udid: string, productType: string) => {
+    if (!ensurePrimaryProjectModel()) return;
+    setConnecting(true);
+    try {
+      const res = IPHONE_RESOLUTIONS[productType];
+      const extra = res ? { resolution: res } : undefined;
+      const result = await connectDevice('iphone_agent', udid, undefined, '', 'primary', undefined, undefined, extra, '', undefined, deviceModel || undefined);
+      message.success(result);
+      closeAddModal();
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || t('device.connectFailed'));
     }
     setConnecting(false);
   };
@@ -1475,6 +1515,7 @@ export default function DevicePage() {
     for (const d of allDevices) {
       // 실험적(테스트 전용) 모듈 디바이스는 `#test` 모드에서만 목록에 표시.
       if (!testMode && TEST_ONLY_MODULES.has(d.info?.module as string)) continue;
+      if (!testMode && TEST_ONLY_DEVICE_TYPES.has(d.type)) continue;
       const prefix = getDevicePrefix(d.id);
       if (!groups[prefix]) groups[prefix] = [];
       groups[prefix].push(d);
@@ -2838,6 +2879,39 @@ export default function DevicePage() {
                       });
                     }
 
+                    if (testMode && scanItemCategory('iphone') === modalCategory && scannedIphone.length > 0) {
+                      scanTabs.push({
+                        key: 'iphone',
+                        label: <span>{t('device.detectedIphone')} <Tag style={{ marginLeft: 3 }}>{scannedIphone.length}</Tag></span>,
+                        children: (
+                          <List
+                            size="small"
+                            dataSource={scannedIphone}
+                            pagination={scannedIphone.length > PAGE_SIZE ? { pageSize: PAGE_SIZE, size: 'small' } : false}
+                            renderItem={(d) => {
+                              const existing = findExisting(x => x.type === 'iphone_agent' && x.address === d.udid);
+                              return (
+                                <List.Item actions={[
+                                  renderScanAction(existing, t('common.add'), () => handleAddIphone(d.udid, d.product_type), {
+                                    disabled: primaryProjectModelMissing,
+                                    title: primaryProjectModelMissing ? '프로젝트·모델을 먼저 선택하세요' : undefined,
+                                  }),
+                                ]}>
+                                  <div>
+                                    <Tag color="geekblue">iPhone</Tag>
+                                    <strong>{d.name || d.product_type || 'iPhone'}</strong>
+                                    {d.product_type && <Tag style={{ marginLeft: 6 }}>{d.product_type}</Tag>}
+                                    {d.ios_version && <Tag style={{ marginLeft: 3 }}>iOS {d.ios_version}</Tag>}
+                                    <div style={{ fontSize: 10, color: '#888' }}>{d.udid}</div>
+                                  </div>
+                                </List.Item>
+                              );
+                            }}
+                          />
+                        ),
+                      });
+                    }
+
                     if (scanItemCategory('audio') === modalCategory && scannedAudio.length > 0) {
                       scanTabs.push({
                         key: 'audio',
@@ -3359,6 +3433,7 @@ export default function DevicePage() {
                         {modalCategory === 'primary' && <Option value="fpk_agent">FPK Agent (SSH, 캡처 전용)</Option>}
                         {modalCategory === 'primary' && <Option value="gm_info_agent">GM Info Agent (TCP)</Option>}
                         {modalCategory === 'primary' && <Option value="bmw_agent">BMW Agent (ADB)</Option>}
+                        {testMode && modalCategory === 'primary' && <Option value="iphone_agent">iPhone Agent (USB)</Option>}
                         {modalCategory === 'primary' && <Option value="vision_camera">Vision Camera</Option>}
                         {modalCategory === 'primary' && <Option value="webcam">{t('device.webcam')}</Option>}
                         <Option value="serial">{t('device.serialPort')}</Option>
@@ -3677,6 +3752,21 @@ export default function DevicePage() {
                         <div style={{ fontSize: 10, color: '#888' }}>
                           GM Info(QNX) 유닛 — TCP 4445 단일 소켓으로 터치·스와이프·하드키·캡처를 처리합니다.
                           해상도는 첫 캡처 이미지 크기로 자동 보정됩니다.
+                        </div>
+                      </>
+                    )}
+
+                    {!selectedModule && connectType === 'iphone_agent' && (
+                      <>
+                        <Input
+                          placeholder="iPhone UDID (예: 00008101-0012345...)"
+                          value={connectAddress}
+                          onChange={(e) => setConnectAddress(e.target.value)}
+                          onPressEnter={handleConnect}
+                        />
+                        <div style={{ fontSize: 10, color: '#888' }}>
+                          pymobiledevice3 기반 (USB). 아이폰 개발자 모드 ON + "이 컴퓨터 신뢰" 필요, 터치는 iOS 27 이상.
+                          Windows 는 RSD 터널(kernel 모드)에 관리자 권한이 필요할 수 있습니다. 해상도는 연결 시 자동 감지됩니다.
                         </div>
                       </>
                     )}

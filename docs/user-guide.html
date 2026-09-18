@@ -794,7 +794,7 @@ npm run dev</code></pre>
   <tr>
     <td><span class="badge badge-green">iSAP Agent</span></td>
     <td>TCP 소켓</td>
-    <td>HKMC Connect Wide. 포트 20000(전석)/20003(클러스터)/20004(HUD). 전석 포트로 연결하면 클러스터·HUD 전용 포트도 자동으로 함께 열어 미러 화면 목록에서 바로 선택할 수 있습니다 (포트가 없는 차량은 전석 연결로 폴백).</td>
+    <td>HKMC Connect Wide. 포트 20000(전석)/20003(클러스터)/20004(HUD) — 포트별 독립 제어라 화면마다 해당 포트 연결이 필요합니다. 전석 포트로 연결하면 클러스터·HUD 전용 포트도 자동으로 함께 엽니다. 그 포트가 없는 벤치/차량에서는 클러스터·HUD 선택이 <b>거부</b>됩니다 — 전석 에이전트는 Monitor 필드를 무시하고 전석 화면을 돌려주므로, 전석 화면을 클러스터인 척 보여주거나 거기 누른 터치가 전석에 들어가는 것을 막기 위함입니다. 별도 IP 인 차량은 디바이스 설정 <code>isap_screen_endpoints</code> 로 화면별 주소를 지정하세요(<code>tools/isap_probe.py</code> 로 탐색).</td>
   </tr>
   <tr>
     <td><span class="badge badge-green">ICAS Agent</span></td>

@@ -458,6 +458,12 @@ async def capture_expected_image(req: CaptureExpectedImageRequest):
                 raise HTTPException(status_code=400,
                                     detail=f"GM Info device {req.device_id} not connected")
             png_bytes = await gm.async_screencap_bytes(screen_type="HU", fmt="png")
+        elif dev and dev.type == "iphone_agent":
+            iph = dm.get_iphone_service(req.device_id)
+            if not iph:
+                raise HTTPException(status_code=400,
+                                    detail=f"iPhone device {req.device_id} not connected")
+            png_bytes = await iph.async_screencap_bytes(fmt="png")
         elif dev and dev.type == "bmw_agent":
             bmw = dm.get_bmw_service(req.device_id)
             if not bmw:
