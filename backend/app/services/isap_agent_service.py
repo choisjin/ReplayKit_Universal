@@ -446,6 +446,9 @@ class ISAPAgentService:
         # 연결 실패한 화면의 재시도 쿨다운 — 미러 루프가 매 프레임 블로킹 connect 를
         # 반복해 스트림이 멈추는 것을 막는다. screen_type -> 마지막 실패 시각
         self._sibling_failed_at: dict[str, float] = {}
+        self._sibling_fail_count: dict[str, int] = {}
+        # 연속 실패로 포기한 화면 — 재연결/설정 변경 전까지 전석 연결로 고정
+        self._sibling_disabled: set[str] = set()
 
     # ------------------------------------------------------------------
     # Connection
@@ -550,8 +553,13 @@ class ISAPAgentService:
     # 클러스터/HUD 를 요청하면 응답이 오지 않는다. 해당 화면을 처음 쓸 때(또는 연결
     # 직후 백그라운드 프로브에서) 전용 포트로 추가 연결을 열어 그 연결로 보낸다.
 
-    SIBLING_CONNECT_TIMEOUT = 3.0
-    SIBLING_RETRY_COOLDOWN_S = 30.0
+    # 없는 포트로의 connect 는 refuse 가 아니라 timeout 으로 끝나는 벤치가 있다
+    # (실기: 20003/20004 = "timed out"). 그동안 호출 스레드가 멈추므로 짧게 잡는다.
+    SIBLING_CONNECT_TIMEOUT = 1.5
+    SIBLING_RETRY_COOLDOWN_S = 300.0
+    # 연속 실패가 이만큼 쌓이면 해당 화면은 이 연결이 살아있는 동안 재시도하지 않는다
+    # (포트가 없는 차량에서 터치/캡처마다 1.5초씩 멈추는 것을 막는다).
+    SIBLING_MAX_FAILS = 3
 
     def _endpoint_overrides(self) -> dict:
         """dev.info 의 화면별 주소 오버라이드 (`isap_screen_endpoints`)."""
@@ -603,6 +611,8 @@ class ISAPAgentService:
         endpoint = self._screen_endpoint(screen_type)
         if endpoint is None:
             return self
+        if screen_type in self._sibling_disabled:
+            return self
         with self._sibling_lock:
             sib = self._siblings.get(screen_type)
             if sib is not None:
@@ -627,13 +637,22 @@ class ISAPAgentService:
                 logger.debug("iSAP %s 포트 연결 예외 (%s:%d): %s", screen_type, host, port, e)
             if not ok:
                 self._sibling_failed_at[screen_type] = time.monotonic()
+                fails = self._sibling_fail_count.get(screen_type, 0) + 1
+                self._sibling_fail_count[screen_type] = fails
                 logger.warning(
-                    "iSAP %s 전용 포트 연결 실패 (%s:%d) — 전석 연결로 폴백합니다 "
+                    "iSAP %s 전용 포트 연결 실패 (%s:%d, %d회) — 전석 연결로 폴백합니다 "
                     "(해당 화면이 응답하지 않으면 벤치에서 포트가 열려 있는지 확인)",
-                    screen_type, host, port)
+                    screen_type, host, port, fails)
+                if fails >= self.SIBLING_MAX_FAILS:
+                    self._sibling_disabled.add(screen_type)
+                    logger.info(
+                        "iSAP %s 전용 포트를 사용하지 않습니다 (연속 %d회 실패) — 재연결하거나 "
+                        "디바이스 설정의 isap_screen_endpoints 로 주소를 지정하면 다시 시도합니다",
+                        screen_type, fails)
                 return self
             self._siblings[screen_type] = sib
             self._sibling_failed_at.pop(screen_type, None)
+            self._sibling_fail_count.pop(screen_type, None)
             logger.info("iSAP %s 화면 연결 열림: %s:%d (device=%s)",
                         screen_type, host, port, self.device_id)
             return sib
@@ -658,6 +677,8 @@ class ISAPAgentService:
             sibs = list(self._siblings.items())
             self._siblings.clear()
             self._sibling_failed_at.clear()
+            self._sibling_fail_count.clear()
+            self._sibling_disabled.clear()
         for screen, sib in sibs:
             try:
                 sib.disconnect()
@@ -940,6 +961,11 @@ class ISAPAgentService:
     def set_webos_config(self, cfg: Optional[dict]) -> None:
         """디바이스 설정 변경 반영 (편집 모달 저장 시 호출)."""
         self._webos_config = cfg if isinstance(cfg, dict) else {}
+        # 화면별 주소(isap_screen_endpoints)가 바뀌었을 수 있으니 포기 상태를 푼다.
+        with self._sibling_lock:
+            self._sibling_disabled.clear()
+            self._sibling_failed_at.clear()
+            self._sibling_fail_count.clear()
         if self._webos is not None:
             self._webos.set_info(self._webos_config)
 

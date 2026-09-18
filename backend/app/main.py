@@ -1906,6 +1906,12 @@ async def websocket_screen_mirror(websocket: WebSocket):
             except WebSocketDisconnect:
                 raise
             except Exception as e:
+                # 클라이언트가 이미 닫은 소켓에 보내려다 난 오류 — 화면 전환 때 매번
+                # 생기는 정상 종료다. 진짜 캡처 실패를 가리지 않도록 조용히 끝낸다.
+                if isinstance(e, RuntimeError) and "websocket.send" in str(e):
+                    logger.info("Screen mirror: client closed — stopping stream (device=%s screen_type=%r)",
+                                target_device_id, screen_type)
+                    break
                 # 프레임 실패 원인은 프론트에만 보내고 서버 로그엔 남지 않아, "미러가
                 # 무반응"인 상황(예: iSAP cluster 캡처 타임아웃)을 로그로 못 봤다.
                 # 스팸을 피해 10초에 한 번만 남긴다.
