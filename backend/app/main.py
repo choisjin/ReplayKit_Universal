@@ -1028,6 +1028,8 @@ async def websocket_screen_mirror(websocket: WebSocket):
     scrcpy_serial: Optional[str] = None
     # WS 세션 진입 시 ADB 분기에 한 번만 dispatch 의도를 INFO 로그로 출력
     adb_dispatch_logged = False
+    # 프레임 생성 실패 로그 쓰로틀 (초 단위 monotonic)
+    _last_frame_error_log = 0.0
     # WebOS 자동 전환 상태(프론트에 변할 때만 통지)
     _webos_auto_sent = False
     _webos_gate_logged = False   # WebOS 게이트 상태는 세션당 1회만 로깅
@@ -1904,6 +1906,16 @@ async def websocket_screen_mirror(websocket: WebSocket):
             except WebSocketDisconnect:
                 raise
             except Exception as e:
+                # 프레임 실패 원인은 프론트에만 보내고 서버 로그엔 남지 않아, "미러가
+                # 무반응"인 상황(예: iSAP cluster 캡처 타임아웃)을 로그로 못 봤다.
+                # 스팸을 피해 10초에 한 번만 남긴다.
+                _now_err = time.monotonic()
+                if _now_err - _last_frame_error_log >= 10.0:
+                    _last_frame_error_log = _now_err
+                    logger.warning(
+                        "Screen mirror frame failed: device=%s screen_type=%r — %s (%s)",
+                        target_device_id, screen_type, e, type(e).__name__,
+                    )
                 try:
                     await websocket.send_json({
                         "type": "error",

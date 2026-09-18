@@ -123,6 +123,14 @@ SCREEN_PORT_MAP: dict[str, int] = {
     "hud":          20004,
 }
 
+# 포트별 독립 제어(표 68 아래 "독립 제어: 포트 별로 구분된 명령어는 제어 영역에서만
+# 동작 된다"). 즉 전석 포트(20000)로 클러스터/HUD 를 요청하면 에이전트가 응답하지
+# 않는다 — 실기에서 미러를 cluster 로 바꿔도 프레임이 안 오고(타임아웃) 무반응이었다.
+# → 기본 연결과 포트가 다른 화면은 그 화면 전용 포트로 보조 연결(sibling)을 열어
+#   캡처/터치/하드키를 전부 그쪽으로 보낸다. 후석(20001/20002)은 "RSE 가 별도 OS 일 때만"
+#   쓰는 Reserved 라 기존 동작(전석 연결 + Monitor 바이트)을 유지한다.
+SECONDARY_SCREENS: tuple[str, ...] = ("cluster", "hud")
+
 # WebOS 화면(screen_type="webos")은 iSAP 프로토콜 밖이다 — 캡처는 Linux VM 스트림,
 # 터치는 그쪽 터치스크린 evdev 직접 주입. 상세는 webos_screen / webos_stream_service 참고.
 
@@ -365,9 +373,12 @@ class ISAPAgentService:
 
     def __init__(self, host: str, port: int = 20000, device_id: str = "",
                  key_overrides: Optional[dict[str, dict]] = None,
-                 webos_config: Optional[dict] = None):
+                 webos_config: Optional[dict] = None,
+                 secondary: bool = False):
         """
         Args:
+            secondary: 다른 화면 포트(cluster 20003 / HUD 20004)를 담당하는 보조 연결.
+                보조 연결은 자기 화면만 다루고 또 다른 보조 연결을 만들지 않는다.
             webos_config: 디바이스 info dict. device_model 과 webos_* 키만 읽는다
                 (webos_adb_serial / webos_display_id). webos_adb_serial 이 없으면
                 WebOS 화면 비활성.
@@ -425,6 +436,16 @@ class ISAPAgentService:
         self.screen_height_cluster = 0
 
         self.agent_version = ""
+
+        # 화면 전용 포트 보조 연결 (cluster/HUD). screen_type -> ISAPAgentService
+        self._secondary = bool(secondary)
+        self._siblings: dict[str, "ISAPAgentService"] = {}
+        # 보조 연결에서 Monitor 바이트를 강제할 값 (에이전트가 0x00 만 받는 경우 확정)
+        self._monitor_override: Optional[int] = None
+        self._sibling_lock = threading.RLock()
+        # 연결 실패한 화면의 재시도 쿨다운 — 미러 루프가 매 프레임 블로킹 connect 를
+        # 반복해 스트림이 멈추는 것을 막는다. screen_type -> 마지막 실패 시각
+        self._sibling_failed_at: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Connection
@@ -489,10 +510,18 @@ class ISAPAgentService:
         except Exception as e:
             logger.debug("iSAP init probes failed (non-fatal): %s", e)
 
+        # cluster/HUD 전용 포트를 백그라운드로 미리 연결 — 미러 목록에서 바로 고를 수
+        # 있게 한다. 포트가 없는 차량이면 조용히 실패하고 전석 연결만 남는다(폴백).
+        if not self._secondary:
+            threading.Thread(target=self.open_secondary_screens,
+                             name=f"isap-screens-{self.device_id}",
+                             daemon=True).start()
+
         return True
 
     def disconnect(self) -> None:
         self._stop_webos()
+        self._disconnect_siblings()
         self._exit_flag = True
         if self._socket:
             try:
@@ -513,6 +542,127 @@ class ISAPAgentService:
     @property
     def is_connected(self) -> bool:
         return self._connected and self._socket is not None
+
+    # ------------------------------------------------------------------
+    # 화면 전용 포트 보조 연결 (cluster 20003 / HUD 20004)
+    # ------------------------------------------------------------------
+    # 표 68 "독립 제어" — 포트별로 담당 모니터가 정해져 있어 전석 연결(20000)로
+    # 클러스터/HUD 를 요청하면 응답이 오지 않는다. 해당 화면을 처음 쓸 때(또는 연결
+    # 직후 백그라운드 프로브에서) 전용 포트로 추가 연결을 열어 그 연결로 보낸다.
+
+    SIBLING_CONNECT_TIMEOUT = 3.0
+    SIBLING_RETRY_COOLDOWN_S = 30.0
+
+    def _endpoint_overrides(self) -> dict:
+        """dev.info 의 화면별 주소 오버라이드 (`isap_screen_endpoints`)."""
+        ov = (self._webos_config or {}).get("isap_screen_endpoints")
+        return ov if isinstance(ov, dict) else {}
+
+    def _screen_endpoint(self, screen_type: str) -> Optional[tuple[str, int]]:
+        """screen_type 전용 (host, port). 기본 연결과 같으면 None.
+
+        시스템 분리 차량(CLU/HUD 가 별도 IP)은 dev.info 의
+        `isap_screen_endpoints` 로 화면별 주소를 덮어쓸 수 있다.
+        예) {"cluster": "192.168.105.10:20003", "hud": 20004}
+        """
+        port = SCREEN_PORT_MAP.get(screen_type)
+        host = self.host
+        raw = self._endpoint_overrides().get(screen_type)
+        if raw is not None:
+            try:
+                if isinstance(raw, dict):
+                    host = str(raw.get("host") or host)
+                    port = int(raw.get("port") or port or 0)
+                elif isinstance(raw, str) and ":" in raw:
+                    h, _, p = raw.rpartition(":")
+                    host, port = h or host, int(p)
+                else:
+                    port = int(raw)
+            except (TypeError, ValueError):
+                logger.warning("iSAP screen endpoint 설정이 올바르지 않습니다 (%s=%r) — 무시",
+                               screen_type, raw)
+                port = SCREEN_PORT_MAP.get(screen_type)
+        if not port:
+            return None
+        if host == self.host and port == self.port:
+            return None
+        return host, port
+
+    def _delegate_for(self, screen_type: Optional[str]) -> "ISAPAgentService":
+        """screen_type 을 담당하는 서비스 — 자기 자신 또는 화면 전용 포트 연결.
+
+        보조 연결이 없거나 열리지 않으면 자기 자신을 돌려준다(기존 Monitor 바이트
+        동작으로 폴백 — 한 포트가 모든 모니터를 받는 에이전트 호환).
+        """
+        if self._secondary or not screen_type or screen_type == WEBOS_SCREEN:
+            return self
+        if screen_type not in SECONDARY_SCREENS and screen_type not in self._endpoint_overrides():
+            # 후석(20001/20002)은 Reserved — 별도 OS 인 차량만 isap_screen_endpoints 로
+            # 명시했을 때 전용 포트를 쓴다. 그 외엔 전석 연결 + Monitor 바이트(기존 동작).
+            return self
+        endpoint = self._screen_endpoint(screen_type)
+        if endpoint is None:
+            return self
+        with self._sibling_lock:
+            sib = self._siblings.get(screen_type)
+            if sib is not None:
+                if sib.is_connected:
+                    return sib
+                # 끊긴 보조 연결 — 재연결 시도 (쿨다운 적용)
+                try:
+                    sib.disconnect()
+                except Exception:
+                    pass
+                self._siblings.pop(screen_type, None)
+            last_fail = self._sibling_failed_at.get(screen_type, 0.0)
+            if last_fail and (time.monotonic() - last_fail) < self.SIBLING_RETRY_COOLDOWN_S:
+                return self
+            host, port = endpoint
+            sib = ISAPAgentService(host, port, device_id=f"{self.device_id}:{screen_type}",
+                                   key_overrides=self._key_overrides, secondary=True)
+            try:
+                ok = sib.connect(timeout=self.SIBLING_CONNECT_TIMEOUT)
+            except Exception as e:
+                ok = False
+                logger.debug("iSAP %s 포트 연결 예외 (%s:%d): %s", screen_type, host, port, e)
+            if not ok:
+                self._sibling_failed_at[screen_type] = time.monotonic()
+                logger.warning(
+                    "iSAP %s 전용 포트 연결 실패 (%s:%d) — 전석 연결로 폴백합니다 "
+                    "(해당 화면이 응답하지 않으면 벤치에서 포트가 열려 있는지 확인)",
+                    screen_type, host, port)
+                return self
+            self._siblings[screen_type] = sib
+            self._sibling_failed_at.pop(screen_type, None)
+            logger.info("iSAP %s 화면 연결 열림: %s:%d (device=%s)",
+                        screen_type, host, port, self.device_id)
+            return sib
+
+    def open_secondary_screens(self) -> None:
+        """연결 직후 cluster/HUD 전용 포트를 미리 열어둔다 (백그라운드 호출)."""
+        if self._secondary:
+            return
+        screens = list(SECONDARY_SCREENS) + [
+            k for k in self._endpoint_overrides() if k not in SECONDARY_SCREENS
+        ]
+        for screen in screens:
+            if not self.is_connected:
+                return
+            try:
+                self._delegate_for(screen)
+            except Exception as e:
+                logger.debug("iSAP %s 화면 사전 연결 실패: %s", screen, e)
+
+    def _disconnect_siblings(self) -> None:
+        with self._sibling_lock:
+            sibs = list(self._siblings.items())
+            self._siblings.clear()
+            self._sibling_failed_at.clear()
+        for screen, sib in sibs:
+            try:
+                sib.disconnect()
+            except Exception as e:
+                logger.debug("iSAP %s 보조 연결 종료 실패: %s", screen, e)
 
     # ------------------------------------------------------------------
     # Packet send
@@ -701,7 +851,24 @@ class ISAPAgentService:
         self._make_send_packet(CMD_GETSCREENWIDTHHEIGHT, 0, 0, [])
         self._screen_size_event.wait(timeout=3)
 
+    def screen_size_if_connected(self, screen_type: str) -> Optional[tuple[int, int]]:
+        """이미 열려 있는 화면 전용 연결이 보고한 크기 (없으면 None).
+
+        새 연결을 만들지 않는다 — 크기 조회 때문에 블로킹 connect 가 일어나지 않게.
+        """
+        sib = self._siblings.get(screen_type)
+        if sib is not None and sib.is_connected and sib.screen_width_front:
+            return sib.screen_width_front, sib.screen_height_front
+        return None
+
     def get_screen_size(self, screen_type: str = "front_center") -> tuple[int, int]:
+        # 화면 전용 포트 에이전트는 자기 패널 크기를 front 필드로 보고한다.
+        # (보조 연결에서는 default_screen 이 cluster/hud 다)
+        if screen_type == self.default_screen and self.screen_width_front:
+            return self.screen_width_front, self.screen_height_front
+        sz = self.screen_size_if_connected(screen_type)
+        if sz is not None:
+            return sz
         mapping = {
             "front_center": (self.screen_width_front, self.screen_height_front),
             "rear_left":    (self.screen_width_rear_l, self.screen_height_rear_l),
@@ -725,6 +892,9 @@ class ISAPAgentService:
     def _monitor_byte(self, screen_type: str) -> int:
         # webos 는 MONITOR_MAP 에 없다 → 0x00(front). 하드키는 화면이 아니라 물리 키라
         # WebOS 화면을 보는 중에도 전석 기준으로 그대로 전달된다.
+        # 화면 전용 포트 연결에서 0x00 만 받는 에이전트로 확인되면 그 값으로 고정된다.
+        if self._secondary and self._monitor_override is not None:
+            return self._monitor_override
         return MONITOR_MAP.get(screen_type, 0x00)
 
     # ------------------------------------------------------------------
@@ -823,6 +993,9 @@ class ISAPAgentService:
         Agent가 JPEG/PNG/BMP를 직접 지원하면 변환 없이 반환.
         """
         self._webos_guard(screen_type)
+        tgt = self._delegate_for(screen_type)
+        if tgt is not self:
+            return tgt.screencap_bytes(screen_type=screen_type, fmt=fmt, timeout=timeout)
         fmt_map = {"jpeg": IMG_JPEG, "png": IMG_PNG, "bmp": IMG_BMP24}
         sub_cmd = fmt_map.get(fmt, IMG_JPEG)
 
@@ -832,7 +1005,32 @@ class ISAPAgentService:
             self._request_img(0, 0, w, h, screen_type, sub_cmd)
 
             if not self._img_event.wait(timeout=timeout):
-                raise TimeoutError(f"iSAP screenshot timeout ({timeout}s) for {screen_type}")
+                # 화면 전용 포트 연결인데 무응답 — 그 포트의 에이전트가 Monitor 를
+                # 자기 화면 번호(0x03/0x04)가 아니라 0x00 으로 기대할 수 있다.
+                # 한 번만 0x00 으로 재시도하고, 되면 이 연결의 기본값으로 굳힌다.
+                _mon = MONITOR_MAP.get(screen_type, 0x00)
+                if self._secondary and self._monitor_override is None and _mon != 0x00:
+                    self._monitor_override = 0x00
+                    self._img_filename = ""
+                    self._request_img(0, 0, w, h, screen_type, sub_cmd)
+                    if self._img_event.wait(timeout=timeout):
+                        logger.info("iSAP %s 포트(%d): Monitor 바이트 0x00 으로 응답 — 이후 0x00 사용",
+                                    screen_type, self.port)
+                    else:
+                        self._monitor_override = None
+                        raise TimeoutError(
+                            f"iSAP screenshot timeout ({timeout}s) for {screen_type}")
+                elif not self._secondary and screen_type in SECONDARY_SCREENS:
+                    # 전용 포트를 못 열어 전석 연결로 폴백한 상태 — 원인을 그대로 알린다
+                    # (프론트 미러의 에러 태그에 이 문구가 뜬다).
+                    _ep = self._screen_endpoint(screen_type)
+                    _hint = f"{_ep[0]}:{_ep[1]}" if _ep else "전용 포트"
+                    raise TimeoutError(
+                        f"iSAP {screen_type} 화면 응답 없음 — 전용 포트({_hint}) 연결이 없어 "
+                        f"전석 포트({self.port})로 요청했습니다. 벤치에서 해당 포트가 열려 있는지 확인하세요."
+                    )
+                else:
+                    raise TimeoutError(f"iSAP screenshot timeout ({timeout}s) for {screen_type}")
 
             raw = self._img_buffer
             if not raw:
@@ -897,6 +1095,9 @@ class ISAPAgentService:
     def tap(self, x: int, y: int, screen_type: str = "front_center") -> None:
         x, y = int(x), int(y)
         self._webos_guard(screen_type)
+        tgt = self._delegate_for(screen_type)
+        if tgt is not self:
+            return tgt.tap(x, y, screen_type)
         with self._capture_lock:
             time.sleep(0.1)
             with self._send_lock:
@@ -910,6 +1111,9 @@ class ISAPAgentService:
                    screen_type: str = "front_center") -> None:
         x, y = int(x), int(y)
         self._webos_guard(screen_type)
+        tgt = self._delegate_for(screen_type)
+        if tgt is not self:
+            return tgt.repeat_tap(x, y, count, interval_ms, screen_type)
         interval_sec = max(interval_ms, 0) / 1000.0
         with self._capture_lock:
             with self._send_lock:
@@ -925,6 +1129,9 @@ class ISAPAgentService:
                    screen_type: str = "front_center") -> None:
         x, y = int(x), int(y)
         self._webos_guard(screen_type)
+        tgt = self._delegate_for(screen_type)
+        if tgt is not self:
+            return tgt.long_press(x, y, duration_ms, screen_type)
         with self._capture_lock:
             time.sleep(0.1)
             with self._send_lock:
@@ -939,6 +1146,9 @@ class ISAPAgentService:
               hold_ms: int = 0) -> None:
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
         self._webos_guard(screen_type)
+        tgt = self._delegate_for(screen_type)
+        if tgt is not self:
+            return tgt.swipe(x1, y1, x2, y2, screen_type, duration_ms, hold_ms)
         if hold_ms and hold_ms > 0:
             # 드래그앤드롭(앱카드 이동): TOUCH_PRESS → hold → TOUCH_MOVE(보간) → TOUCH_RELEASE.
             # _lcd_drag(고정 fling)는 시작 hold를 표현 못해 ext 터치 시퀀스로 직접 구성.
@@ -998,6 +1208,9 @@ class ISAPAgentService:
         if not fingers:
             return
         self._webos_guard(screen_type)
+        tgt = self._delegate_for(screen_type)
+        if tgt is not self:
+            return tgt.multi_finger_swipe(fingers, screen_type, duration_ms, hold_ms)
         n = len(fingers)
         fs = [(int(f["x1"]), int(f["y1"]), int(f["x2"]), int(f["y2"])) for f in fingers]
         move_dur = max(int(duration_ms or 0), 200)
@@ -1033,6 +1246,9 @@ class ISAPAgentService:
                          screen_type: str = "front_center") -> None:
         """멀티핑거 탭 (시작=끝). points: [{"x","y"}, ...]."""
         self._webos_guard(screen_type)
+        tgt = self._delegate_for(screen_type)
+        if tgt is not self:
+            return tgt.multi_finger_tap(points, screen_type)
         fingers = [{"x1": p["x"], "y1": p["y"], "x2": p["x"], "y2": p["y"]} for p in points]
         if not fingers:
             return
@@ -1071,6 +1287,13 @@ class ISAPAgentService:
             {"success": bool, "data_type": int, "raw": bytes, "data": <parsed>|None}
             data_type이 JSON이면 data에 파싱된 객체, 실패/비JSON이면 None.
         """
+        # CLU/HUD 대상 추출도 포트별 독립 제어 대상 — 전용 연결이 열려 있으면 그쪽으로.
+        _uic_screen = {UIC_SYS_CLU: "cluster", UIC_SYS_HUD: "hud"}.get(target_system)
+        if _uic_screen:
+            tgt = self._delegate_for(_uic_screen)
+            if tgt is not self:
+                return tgt.get_ui_component_info(target_system, extract_scope,
+                                                 layer_no, feature_id, data_type, timeout)
         # Feature ID 5byte ASCII 패딩 (부족 시 0x00, 초과 시 절단)
         fid = (feature_id or "").encode("ascii", errors="ignore")[:5]
         fid = fid + b"\x00" * (5 - len(fid))
@@ -1113,6 +1336,9 @@ class ISAPAgentService:
                  screen_type: str = "front_center",
                  direction: Optional[int] = None) -> None:
         """DataValue(4 BE) + [Dir(1)] + Monitor(1) — 표 111/112."""
+        tgt = self._delegate_for(screen_type)
+        if tgt is not self:
+            return tgt.send_key(cmd, sub_cmd, key_data, screen_type, direction)
         data = [
             (key_data >> 24) & 0xFF,
             (key_data >> 16) & 0xFF,
@@ -1155,6 +1381,10 @@ class ISAPAgentService:
                          hold_ms: int = 0) -> None:
         # key_source는 HKMC CCRC 전용 — iSAP에선 무시 (시그니처 통일)
         _ = key_source
+        tgt = self._delegate_for(screen_type)
+        if tgt is not self:
+            return tgt.send_key_by_name(key_name, sub_cmd, screen_type, direction,
+                                        key_source, hold_ms)
         info = self.resolve_key(key_name)
         if not info:
             raise ValueError(f"Unknown iSAP key: {key_name}")
@@ -1333,7 +1563,19 @@ class ISAPAgentService:
                                  "height": self.screen_height_rear_r or self._DEFAULT_SCREEN_SIZES["rear_right"][1]},
                 "cluster":      {"width": self.screen_width_cluster or self._DEFAULT_SCREEN_SIZES["cluster"][0],
                                  "height": self.screen_height_cluster or self._DEFAULT_SCREEN_SIZES["cluster"][1]},
+                "hud":          {"width": self._DEFAULT_SCREEN_SIZES["hud"][0],
+                                 "height": self._DEFAULT_SCREEN_SIZES["hud"][1]},
         }
+        # 화면 전용 포트 연결이 열려 있으면 그 에이전트가 보고한 실제 패널 크기로 덮어쓴다
+        # (전석 연결의 screen size 응답에는 cluster/HUD 가 안 실려 오는 차량이 있다).
+        secondary_ports: dict[str, int] = {}
+        for screen in SECONDARY_SCREENS:
+            sz = self.screen_size_if_connected(screen)
+            if sz is not None:
+                screens[screen] = {"width": sz[0], "height": sz[1]}
+            sib = self._siblings.get(screen)
+            if sib is not None and sib.is_connected:
+                secondary_ports[screen] = sib.port
         # WebOS(Connect Wide + ADB 시리얼 설정)만 screens 에 추가 — 프론트 화면 선택 목록의 근거.
         if self.webos_enabled:
             ww, wh = self.get_screen_size(WEBOS_SCREEN)
@@ -1346,4 +1588,6 @@ class ISAPAgentService:
             "default_screen": self.default_screen,
             "webos": self.webos_enabled,
             "screens": screens,
+            # 진단용 — 어떤 화면이 전용 포트로 열렸는지 (없으면 전석 연결로 폴백 중)
+            "screen_ports": secondary_ports,
         }

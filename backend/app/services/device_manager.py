@@ -2212,6 +2212,15 @@ class DeviceManager:
                                 logger.info("WebOS mirror size: %s -> %sx%s", dev.id, ww, wh)
                         except Exception as e:
                             logger.debug("WebOS mirror size refresh failed: %s", e)
+                    # cluster/HUD 전용 포트(20003/20004)는 연결 직후 백그라운드로 열린다.
+                    # 열리고 나면 그 에이전트가 보고한 실제 패널 크기가 screens 에 실리므로
+                    # 주기적으로 반영한다 (프론트 좌표 스케일의 근거).
+                    try:
+                        latest_screens = isap.get_info().get("screens") or {}
+                        if latest_screens and dev.info.get("screens") != latest_screens:
+                            dev.info["screens"] = latest_screens
+                    except Exception as e:
+                        logger.debug("iSAP screens refresh failed (%s): %s", dev.id, e)
                     continue
                 port = dev.info.get("port", 0)
                 if not port:

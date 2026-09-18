@@ -794,7 +794,7 @@ On startup, git pull runs automatically to update to the latest version.</p>
   <tr>
     <td><span class="badge badge-green">iSAP Agent</span></td>
     <td>TCP Socket</td>
-    <td>HKMC Connect Wide. Ports 20000 (front), 20003 (cluster), 20004 (HUD).</td>
+    <td>HKMC Connect Wide. Ports 20000 (front), 20003 (cluster), 20004 (HUD). Connecting to the front port also opens the cluster/HUD ports automatically, so those screens can be picked straight from the mirror screen list (falls back to the front connection when a vehicle has no such port).</td>
   </tr>
   <tr>
     <td><span class="badge badge-green">ICAS Agent</span></td>
