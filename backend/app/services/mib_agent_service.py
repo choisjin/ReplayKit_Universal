@@ -672,19 +672,24 @@ class MIBAgentService:
 
         캡처 SSH 락(_ssh_lock)과 독립된 _input_ssh_lock에서 실행되므로,
         스크린샷 SCP가 진행 중이어도 터치/하드키는 즉시 송신됨.
+
+        drain 한 shell 출력에 ksend 실행 실패 흔적(not found/Permission denied 등)이 있으면
+        RuntimeError — fire-and-forget 이라 종전엔 입력이 무음 유실되고 스텝은 pass 였다
+        (0-version 은 ksend 가 휘발성 /tmp 에 있어 시료 재부팅 후 사라지는 경우가 흔함).
         """
-        def _do(shell) -> None:
+        def _do(shell) -> bytes:
+            out = b""
             for c in commands:
                 shell.send(c + "\n")
                 if post_sleep_s > 0:
                     time.sleep(post_sleep_s)
-                self._drain_shell(shell)
+                out += self._drain_shell(shell)
+            return out
 
         with self._input_ssh_lock:
             try:
                 shell = self._get_input_shell()
-                _do(shell)
-                return
+                out = _do(shell)
             except Exception as e:
                 logger.warning("MIB input shell exec failed, retrying: %s", e)
                 # shell 리셋 → 다시 시도 (transport가 살아있으면 재사용, 죽었으면 재연결)
@@ -694,8 +699,32 @@ class MIBAgentService:
                     except Exception:
                         pass
                     self._input_ssh_shell = None
-            shell = self._get_input_shell()
-            _do(shell)
+                shell = self._get_input_shell()
+                out = _do(shell)
+        self._check_ksend_output(out)
+
+    # ksend 실행 자체가 실패했을 때 shell 에 찍히는 문구 (BusyBox sh / QNX ksh 공통)
+    _KSEND_FAIL_MARKERS = ("not found", "No such file", "Permission denied",
+                           "cannot execute", "empty address data")
+
+    def _check_ksend_output(self, out: bytes) -> None:
+        text = out.decode("utf-8", errors="replace") if out else ""
+        hit = next((m for m in self._KSEND_FAIL_MARKERS if m in text), None)
+        if hit is None:
+            return
+        snippet = " | ".join(l.strip() for l in text.splitlines()
+                             if hit in l)[:300]
+        logger.error("MIB ksend 실행 실패 (%s) — 입력이 시료에 전달되지 않았습니다: %s",
+                     self.ksend_bin, snippet)
+        # 경로가 바뀌었을 수 있다(재부팅으로 /tmp/ksend 소실 등) — 반대편 경로 재확인/폴백.
+        try:
+            self._verify_ksend_bin()
+        except Exception as e:
+            logger.debug("MIB ksend re-verify skipped: %s", e)
+        raise RuntimeError(
+            f"ksend 실행 실패: {snippet or hit} — 시료에 {self.ksend_bin} 가 있는지/실행권한"
+            f"(chmod +x)을 확인하세요 (0-version 은 재부팅 시 /tmp 가 비워짐)"
+        )
 
     def connect(self, timeout: float = 10.0) -> bool:
         """캡처/입력 SSH 세션을 모두 확보. 두 세션은 독립이라 한쪽이 바빠도 다른쪽 영향 없음."""
@@ -779,6 +808,22 @@ class MIBAgentService:
                         self.ksend_variant, self.ksend_bin)
             return
         if "PRIMARY_F" in out:
+            # /tmp 로 복사만 하고 chmod +x 를 빠뜨린 경우(0-version 현장에서 실제 발생,
+            # 2026-09-21) — 자동으로 실행권한을 준다. root 로 접속하므로 보통 성공한다.
+            with self._input_ssh_lock:
+                ssh = self._get_input_ssh()
+                stdin, stdout, _ = ssh.exec_command(
+                    f'chmod +x "{self.ksend_bin}" 2>&1 ; [ -x "{self.ksend_bin}" ] && echo FIXED_X',
+                    timeout=5)
+                try:
+                    stdin.close()
+                except Exception:
+                    pass
+                fix_out = stdout.read().decode("utf-8", errors="replace")
+            if "FIXED_X" in fix_out:
+                logger.warning("MIB ksend at %s was not executable — chmod +x 자동 적용",
+                               self.ksend_bin)
+                return
             logger.error(
                 "MIB ksend at %s exists but is not executable — 디바이스에서 "
                 "chmod +x %s 필요. 입력이 전부 무시됩니다.", self.ksend_bin, self.ksend_bin,
