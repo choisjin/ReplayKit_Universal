@@ -72,32 +72,43 @@ def _save_presets(data: dict) -> None:
 # ------------------------------------------------------------
 @router.get("/sources/webcams")
 async def list_webcam_sources():
-    """사용 가능한 웹캠 (주 디바이스로 등록된 인덱스 + 단일 webcam 서비스가 점유 중인 인덱스 제외).
+    """사용 가능한 웹캠 — 다른 곳에서 점유 중인 카메라도 포함한다.
 
-    Compositor는 자체 cv2.VideoCapture를 열기 때문에 다른 곳에서 점유 중인 인덱스는
-    동시에 열 수 없다 (DSHOW 단일 점유 제약).
+    Compositor WebcamCapture 는 이미 열린 카메라(연결된 주 디바이스 / PIP 웹캠)의
+    프레임을 공유받으므로 점유 중이어도 소스로 추가 가능하다. 단, 점유 중인 인덱스를
+    probe 로 재오픈하면 소유자 캡처가 끊길 수 있어 probe 없이 목록에만 넣는다.
+    (PIP 인덱스는 list_devices 가 재오픈 없이 자체 처리)
     """
-    excluded: set[int] = set()
-    # 주 디바이스 등록 webcam
+    shared: dict[int, str] = {}  # 연결된 주 디바이스 웹캠 index → 표시 이름
     try:
         for d in device_manager.list_primary():
-            if d.type == "webcam":
+            if d.type == "webcam" and d.status == "connected":
                 try:
-                    excluded.add(int(d.info.get("device_index", -1)))
+                    shared[int(d.info.get("device_index", -1))] = d.name or d.id
                 except (TypeError, ValueError):
                     pass
     except Exception:
         pass
-    # 단일 webcam 서비스가 열어둔 index
+    shared.pop(-1, None)
+    ws = get_webcam_service()
+    pip_index: Optional[int] = None
     try:
-        ws = get_webcam_service()
         if ws.is_open():
-            excluded.add(int(ws._device_index))  # type: ignore[attr-defined]
+            pip_index = int(ws._device_index)  # type: ignore[attr-defined]
     except Exception:
         pass
-    svc = get_compositor_service()
-    # WebcamService.list_devices는 0..max_index를 probe — compositor도 동일 로직 활용
-    return {"devices": get_webcam_service().list_devices(exclude=excluded)}
+    # 주 디바이스 인덱스가 PIP 와 같으면 PIP 싱글톤이 이미 처리 — probe 제외만 필요
+    devices = ws.list_devices(exclude=set(shared))
+    for dev in devices:
+        if dev.get("index") == pip_index:
+            dev["label"] = f"{dev['label']} — PIP"
+            dev["shared"] = True
+    known = {dev.get("index") for dev in devices}
+    for idx, name in shared.items():
+        if idx not in known:
+            devices.append({"index": idx, "label": f"Camera {idx} — {name}", "shared": True})
+    devices.sort(key=lambda d: d.get("index", 0))
+    return {"devices": devices}
 
 
 @router.get("/sources/windows")
