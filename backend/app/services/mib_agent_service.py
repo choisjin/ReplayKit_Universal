@@ -803,31 +803,8 @@ class MIBAgentService:
             except Exception:
                 pass
             out = stdout.read().decode("utf-8", errors="replace")
-        if "PRIMARY_X" in out:
-            logger.info("MIB ksend binary ok: variant=%s path=%s",
-                        self.ksend_variant, self.ksend_bin)
-            return
-        if "PRIMARY_F" in out:
-            # /tmp 로 복사만 하고 chmod +x 를 빠뜨린 경우(0-version 현장에서 실제 발생,
-            # 2026-09-21) — 자동으로 실행권한을 준다. root 로 접속하므로 보통 성공한다.
-            with self._input_ssh_lock:
-                ssh = self._get_input_ssh()
-                stdin, stdout, _ = ssh.exec_command(
-                    f'chmod +x "{self.ksend_bin}" 2>&1 ; [ -x "{self.ksend_bin}" ] && echo FIXED_X',
-                    timeout=5)
-                try:
-                    stdin.close()
-                except Exception:
-                    pass
-                fix_out = stdout.read().decode("utf-8", errors="replace")
-            if "FIXED_X" in fix_out:
-                logger.warning("MIB ksend at %s was not executable — chmod +x 자동 적용",
-                               self.ksend_bin)
-                return
-            logger.error(
-                "MIB ksend at %s exists but is not executable — 디바이스에서 "
-                "chmod +x %s 필요. 입력이 전부 무시됩니다.", self.ksend_bin, self.ksend_bin,
-            )
+        if "PRIMARY_X" in out or "PRIMARY_F" in out:
+            self._ensure_ksend_runnable(chmod_needed="PRIMARY_X" not in out)
             return
         if "ALT_X" in out:
             logger.warning(
@@ -842,6 +819,53 @@ class MIBAgentService:
         logger.error(
             "MIB ksend binary missing on device: neither %s nor %s is executable. "
             "터치/하드키 입력이 전부 무시됩니다.", self.ksend_bin, alt,
+        )
+
+    def _ensure_ksend_runnable(self, chmod_needed: bool) -> None:
+        """ksend 가 **실제로 실행되는지** 확인하고, 막혀 있으면 chmod +x / remount exec 로 복구.
+
+        0-version 은 ksend 를 /tmp 에 복사해 쓰는데 현장에서 두 가지가 빠진다(2026-09-21):
+          ① chmod +x 누락(-rw-r--r--) ② /tmp 가 noexec 마운트 → mount -o remount,exec /tmp 필요.
+        ②는 `[ -x ]` 가 통과해도 실행 시 Permission denied 라 권한 비트만 봐선 못 잡는다 →
+        인자 없이 실행(usage 출력, 부작용 없음)해 Permission denied 여부로 판정.
+        """
+        b = self.ksend_bin
+        remount = ("mount -o remount,exec /tmp 2>&1 ; "
+                   if b.startswith("/tmp/") else "")
+        script = (
+            f'B="{b}" ; '
+            + ('chmod +x "$B" 2>&1 && echo CHMODDED ; ' if chmod_needed else "")
+            + 'if "$B" 2>&1 | grep -q "Permission denied" ; then echo NOEXEC ; '
+            + remount
+            + 'fi ; '
+            'if "$B" 2>&1 | grep -q "Permission denied" ; then echo STILL_DENIED ; '
+            'else echo RUN_OK ; fi'
+        )
+        with self._input_ssh_lock:
+            ssh = self._get_input_ssh()
+            stdin, stdout, _ = ssh.exec_command(script, timeout=8)
+            try:
+                stdin.close()
+            except Exception:
+                pass
+            out = stdout.read().decode("utf-8", errors="replace")
+        fixes = []
+        if "CHMODDED" in out:
+            fixes.append("chmod +x")
+        if "NOEXEC" in out and remount:
+            fixes.append("mount -o remount,exec /tmp")
+        if "RUN_OK" in out:
+            if fixes:
+                logger.warning("MIB ksend at %s 실행 불가 상태였음 — 자동 복구: %s",
+                               b, ", ".join(fixes))
+            else:
+                logger.info("MIB ksend binary ok: variant=%s path=%s",
+                            self.ksend_variant, b)
+            return
+        logger.error(
+            "MIB ksend at %s 실행 불가(Permission denied) — 자동 복구(%s) 실패. 디바이스에서 "
+            "chmod +x %s ; mount -o remount,exec /tmp 확인 필요. 입력이 전부 무시됩니다. out=%r",
+            b, ", ".join(fixes) or "없음", b, out.strip()[-300:],
         )
 
     def _probe_ksend(self) -> None:
