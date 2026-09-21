@@ -293,12 +293,16 @@ class LinControlService:
             return False
 
     def _client_list(self) -> list:
+        return self._client_list_ex()[0]
+
+    def _client_list_ex(self) -> tuple[list, bool]:
         """_NET_CLIENT_LIST 로 EWMH 호환 WM 의 클라이언트 윈도우 ID 목록 조회.
 
         EWMH 미지원 WM 폴백은 root 의 모든 자식을 walk — 느리지만 호환성 ↑.
+        반환: (윈도우 목록, _NET_CLIENT_LIST 사용 여부)
         """
         if not self._ensure_display():
-            return []
+            return [], False
         try:
             prop = self._get_property(self._root, "_NET_CLIENT_LIST")
             if prop and prop.value:
@@ -309,26 +313,34 @@ class LinControlService:
                         wins.append(self._dpy.create_resource_object("window", int(wid)))
                     except Exception:
                         continue
-                return wins
+                return wins, True
         except Exception:
             pass
         # 폴백: root.query_tree
         try:
             tree = self._root.query_tree()
-            return list(tree.children)
+            return list(tree.children), False
         except Exception:
-            return []
+            return [], False
 
-    def _enum_windows(self) -> list[dict]:
-        """가시 최상위 윈도우 정보 dict 목록. WinControlService 와 동일 스키마."""
+    def _enum_windows(self, include_hidden: bool = False) -> list[dict]:
+        """가시 최상위 윈도우 정보 dict 목록. WinControlService 와 동일 스키마.
+
+        include_hidden=True 면 unmapped(최소화/다른 워크스페이스) 클라이언트 창도 포함하고
+        "hidden": True 로 표시 — 대부분의 WM 은 이런 창을 unmap 하므로 제외하면 실행 중인
+        앱 상당수가 목록에서 사라진다. 단 _NET_CLIENT_LIST 가 있을 때만 (query_tree 폴백은
+        내부 unmapped 창이 대량이라 제외 유지).
+        """
         if not _X11_AVAILABLE or not self._ensure_display():
             return []
         results: list[dict] = []
         with self._dpy_lock:
-            wins = self._client_list()
+            wins, from_client_list = self._client_list_ex()
+            allow_hidden = include_hidden and from_client_list
             for win in wins:
                 try:
-                    if not self._is_mapped(win):
+                    mapped = self._is_mapped(win)
+                    if not mapped and not allow_hidden:
                         continue
                     if not self._is_normal_window(win):
                         continue
@@ -363,16 +375,17 @@ class LinControlService:
                         "class_name": cls_name,
                         "width": w,
                         "height": h,
+                        "hidden": not mapped,
                     })
                 except (Xerror.BadWindow, Xerror.BadDrawable, Exception) as e:
                     logger.debug("enum_window iter error: %s", e)
                     continue
         return results
 
-    def list_processes(self) -> list[dict]:
+    def list_processes(self, include_hidden: bool = False) -> list[dict]:
         if not _X11_AVAILABLE:
             return []
-        return sorted(self._enum_windows(),
+        return sorted(self._enum_windows(include_hidden=include_hidden),
                       key=lambda d: ((d["name"] or "").lower(), (d["title"] or "").lower()))
 
     def find_window(

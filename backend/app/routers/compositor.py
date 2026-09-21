@@ -121,7 +121,20 @@ async def list_window_sources():
     # is_available 는 인스턴스/클래스 양쪽 호환 — Linux 구현은 인스턴스에서 display 연결까지 검증.
     if not helper.is_available():
         return {"available": False, "windows": []}
-    return {"available": True, "windows": helper.list_processes()}
+    # Linux: 최소화/다른 워크스페이스 창도 포함 (보이면 그때부터 캡처됨).
+    # Wayland 세션이면 네이티브 Wayland 앱은 X11 로 열거 불가 → 프론트에 안내 플래그.
+    wayland = False
+    if sys.platform.startswith("linux"):
+        try:
+            from ..services.lincontrol_service import _wayland_session
+            wayland = _wayland_session()
+        except Exception:
+            pass
+    return {
+        "available": True,
+        "wayland": wayland,
+        "windows": helper.list_processes(include_hidden=True),
+    }
 
 
 # ------------------------------------------------------------

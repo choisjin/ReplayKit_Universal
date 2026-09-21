@@ -35,6 +35,7 @@ import WebcamPip from './components/WebcamPip';
 import CompositorEditor from './components/CompositorEditor';
 import AnnouncementBanner from './components/AnnouncementBanner';
 import AnnouncementListModal from './components/AnnouncementListModal';
+import XorgSessionPrompt from './components/XorgSessionPrompt';
 import { AnnouncementsProvider } from './context/AnnouncementsContext';
 import PlaybackStatusBanner from './components/PlaybackStatusBanner';
 import BugReportModal from './components/BugReportModal';
@@ -677,6 +678,8 @@ function AppContent() {
       <CompositorEditor open={compositorOpen} onClose={() => setCompositorOpen(false)} isDark={isDark} />
 
       <AnnouncementListModal />
+
+      <XorgSessionPrompt />
 
       <BugReportModal open={bugReportOpen} onClose={() => setBugReportOpen(false)} />
       <LoginModal

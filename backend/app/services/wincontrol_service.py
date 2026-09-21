@@ -196,6 +196,8 @@ class WinControlService:
                 if w <= 0 or h <= 0:
                     return True
                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                name = ""
+                exe_path = ""
                 try:
                     proc = psutil.Process(pid)
                     name = proc.name()
@@ -203,8 +205,14 @@ class WinControlService:
                         exe_path = proc.exe()
                     except (psutil.AccessDenied, FileNotFoundError):
                         exe_path = ""
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                except psutil.NoSuchProcess:
                     return True
+                except psutil.AccessDenied:
+                    # 권한 부족(다른 사용자/보호 프로세스) — 창은 캡처 가능하므로 버리지 않고
+                    # 표시 이름만 PID 로 대체
+                    pass
+                if not name:
+                    name = f"pid {pid}"
                 try:
                     cls_name = win32gui.GetClassName(hwnd)
                 except Exception:
@@ -218,6 +226,8 @@ class WinControlService:
                     "class_name": cls_name,
                     "width": w,
                     "height": h,
+                    # 최소화 창 — 목록엔 두되 복원 전까지 캡처 내용이 없을 수 있음
+                    "hidden": bool(win32gui.IsIconic(hwnd)),
                 })
             except Exception as e:
                 logger.debug("enum_window callback error: %s", e)
@@ -229,7 +239,7 @@ class WinControlService:
             logger.warning("EnumWindows failed: %s", e)
         return results
 
-    def list_processes(self) -> list[dict]:
+    def list_processes(self, include_hidden: bool = False) -> list[dict]:
         """가시 최상위 윈도우 + PID/프로세스명 목록.
 
         같은 PID 라도 별개의 최상위 창(예: VS_BASE 메인 + CANDB TX CONTROL 자식 툴윈도우)이

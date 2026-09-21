@@ -35,6 +35,7 @@ interface WebcamDevice { index: number; label: string }
 interface WindowProcess {
   pid: number; hwnd: number; name: string; exe_path: string;
   title: string; class_name: string; width: number; height: number;
+  hidden?: boolean;  // 최소화/다른 워크스페이스 — 보이는 상태가 되면 캡처됨
 }
 
 const DEFAULT_CANVAS = {
@@ -105,6 +106,7 @@ export default function CompositorEditor({ open, onClose, isDark }: Props) {
   const [windowPickerOpen, setWindowPickerOpen] = useState(false);
   const [webcamPickerOpen, setWebcamPickerOpen] = useState(false);
   const [windowFilter, setWindowFilter] = useState('');
+  const [windowWayland, setWindowWayland] = useState(false);
 
   // ── Preset state ──────────────────────────────────────────
   const [presets, setPresets] = useState<Record<string, CompositorLayout>>({});
@@ -300,6 +302,7 @@ export default function CompositorEditor({ open, onClose, isDark }: Props) {
         return;
       }
       setWindowList(r.data.windows || []);
+      setWindowWayland(!!r.data?.wayland);
       setWindowFilter('');
       setWindowPickerOpen(true);
     } catch (e: any) {
@@ -860,6 +863,11 @@ export default function CompositorEditor({ open, onClose, isDark }: Props) {
         <Input.Search size="small" placeholder={t('compositor.filterPlaceholder')}
           value={windowFilter} onChange={(e) => setWindowFilter(e.target.value)}
           style={{ marginBottom: 8 }} allowClear />
+        {windowWayland && (
+          <div style={{ fontSize: 11, color: '#faad14', marginBottom: 6, lineHeight: 1.4 }}>
+            {t('compositor.waylandHint')}
+          </div>
+        )}
         <div style={{ maxHeight: '60vh', overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
           {filteredWindows.map(w => (
             <Button key={w.hwnd} size="small" block onClick={() => addWindowSource(w)}
@@ -869,6 +877,7 @@ export default function CompositorEditor({ open, onClose, isDark }: Props) {
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {w.title}
                 </span>
+                {w.hidden && <Tooltip title={t('compositor.hiddenWindowHint')}><Tag color="default">{t('compositor.hiddenWindow')}</Tag></Tooltip>}
                 <Tag>{w.width}×{w.height}</Tag>
               </div>
             </Button>

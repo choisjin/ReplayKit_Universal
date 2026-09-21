@@ -377,6 +377,11 @@ export const serverApi = {
   memoryUsage: () => api.get('/settings/memory-usage'),
   resetMemoryPeak: () => api.post('/settings/memory-usage/reset-peak'),
   getVersion: () => api.get('/settings/version'),
+  // Linux Wayland → Xorg 전환 유도 (윈도우 캡처/제어는 X11 전용)
+  displaySession: () => api.get('/settings/display-session'),
+  // pkexec 관리자 암호 입력을 기다리므로 타임아웃 넉넉히
+  enableXorg: () => api.post('/settings/display-session/enable-xorg', null, { timeout: 200000 }),
+  rebootSystem: () => api.post('/settings/display-session/reboot'),
 };
 
 // Bug report APIs (번들 생성은 백엔드, Manager 업로드는 프론트가 직접)

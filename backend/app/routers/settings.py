@@ -350,6 +350,36 @@ async def power_status():
     return result
 
 
+@router.get("/display-session")
+async def display_session_status():
+    """Linux 그래픽 세션 상태 — Wayland 면 Xorg 전환 유도 (윈도우 캡처/제어는 X11 전용)."""
+    from ..services import display_session
+    return await asyncio.to_thread(display_session.status)
+
+
+@router.post("/display-session/enable-xorg")
+async def display_session_enable_xorg():
+    """GDM WaylandEnable=false 반영 (pkexec 관리자 암호창 — 입력 대기 동안 블로킹이라 스레드)."""
+    from ..services import display_session
+    result = await asyncio.to_thread(display_session.enable_xorg)
+    if not result.get("ok") and not result.get("cancelled"):
+        raise HTTPException(status_code=500, detail=result.get("error") or "Xorg 설정 실패")
+    return result
+
+
+@router.post("/display-session/reboot")
+async def display_session_reboot():
+    """Xorg 설정 반영을 위한 재부팅. 재생 중이면 거부."""
+    from ..services import display_session
+    from ..services.playback_service import is_playback_active
+    if is_playback_active():
+        raise HTTPException(status_code=409, detail="시나리오 재생 중에는 재부팅할 수 없습니다")
+    result = await asyncio.to_thread(display_session.reboot)
+    if not result.get("ok"):
+        raise HTTPException(status_code=500, detail=result.get("error") or "재부팅 실패")
+    return result
+
+
 @router.get("/launcher-log")
 async def get_launcher_log(lines: int = 200, date: str = "", source: str = ""):
     """런처/백엔드 로그 읽기 (날짜별 로그 파일).
