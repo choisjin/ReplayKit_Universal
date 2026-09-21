@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Button, ConfigProvider, Select, Slider, Switch, Tooltip, theme } from 'antd';
+import { App, Button, ConfigProvider, Select, Slider, Switch, Tooltip, theme } from 'antd';
 import {
   PlayCircleOutlined, PauseOutlined, VideoCameraOutlined,
   SettingOutlined, CloseOutlined, MinusOutlined, AppstoreOutlined,
@@ -7,6 +7,11 @@ import {
 } from '@ant-design/icons';
 import { useWebcam } from '../hooks/useWebcam';
 import { useTranslation } from '../i18n';
+import { compositorApi, CompositorLayout } from '../services/api';
+import {
+  COMPOSITOR_PRESET_EVENT, loadCompositorPresetState, parsePresetValue, presetValue,
+  selectCompositorPreset, deselectCompositorPreset,
+} from '../utils/compositorPreset';
 
 interface WebcamDeviceLike {
   deviceId: string;
@@ -42,7 +47,137 @@ export default function WebcamPip({ webcam, onClose, isDark, onOpenCompositor }:
     audioDevices, loadAudioDevices,
   } = webcam as any;
 
+  const { message } = App.useApp();
   const [minimized, setMinimized] = useState(false);
+
+  // ── 합성녹화 프리셋 (카메라 목록의 한 항목으로 선택) ─────────────
+  // presetMode = 선택된 프리셋 이름. 선택 시 프리뷰/수동녹화는 compositor 캔버스,
+  // 재생 녹화는 백엔드가 active+enabled 프리셋으로 합성 녹화한다.
+  const [presets, setPresets] = useState<Record<string, CompositorLayout>>({});
+  const [presetMode, setPresetMode] = useState<string | null>(null);
+  const [compRecording, setCompRecording] = useState(false);
+  const presetModeRef = useRef<string | null>(null);
+  useEffect(() => { presetModeRef.current = presetMode; }, [presetMode]);
+
+  // 프리셋 레이아웃으로 compositor 캡처 기동 (프리뷰용). 이미 캡처 중이면 차분 적용만.
+  const startPresetCapture = useCallback(async (layout: CompositorLayout) => {
+    await compositorApi.configure(layout);
+    const r = await compositorApi.startCapture();
+    const failed: string[] = r.data?.failed || [];
+    const opened: string[] = r.data?.opened || [];
+    if (failed.length && !opened.length) {
+      message.warning(t('compositor.noSourceOpened'));
+    } else if (failed.length) {
+      message.warning(t('compositor.someSourcesFailed', { count: failed.length }));
+    }
+  }, [message, t]);
+
+  const refreshPresets = useCallback(async () => {
+    const st = await loadCompositorPresetState();
+    setPresets(st.presets);
+    return st;
+  }, []);
+
+  // 마운트 시 백엔드 상태(active+enabled)로 선택 복원 + 프리뷰 캡처 보장
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const st = await refreshPresets();
+      if (cancelled || !st.selected) return;
+      setPresetMode(st.selected);
+      try {
+        const cs = await compositorApi.status();
+        if (!cs.data?.capturing) await startPresetCapture(st.presets[st.selected]);
+        setCompRecording(!!cs.data?.recording);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [refreshPresets, startPresetCapture]);
+
+  // 다른 곳(재생 직전 선택 모달)에서 선택이 바뀌면 동기화
+  useEffect(() => {
+    const onChanged = async (ev: Event) => {
+      const selected: string | null = (ev as CustomEvent).detail?.selected ?? null;
+      if (selected === presetModeRef.current) return;
+      const st = await refreshPresets();
+      setPresetMode(selected);
+      if (selected && st.presets[selected]) {
+        try { await startPresetCapture(st.presets[selected]); } catch { /* ignore */ }
+      }
+    };
+    window.addEventListener(COMPOSITOR_PRESET_EVENT, onChanged);
+    return () => window.removeEventListener(COMPOSITOR_PRESET_EVENT, onChanged);
+  }, [refreshPresets, startPresetCapture]);
+
+  // 프리셋 모드에서는 compositor 녹화 상태를 폴링 (재생 자동녹화 포함 REC 표시)
+  useEffect(() => {
+    if (!presetMode) { setCompRecording(false); return; }
+    const id = setInterval(async () => {
+      try {
+        const r = await compositorApi.status();
+        setCompRecording(!!r.data?.recording);
+      } catch { /* ignore */ }
+    }, 2000);
+    return () => clearInterval(id);
+  }, [presetMode]);
+
+  const recording = presetMode ? compRecording : webcamRecording;
+
+  const handleSourceChange = useCallback(async (value: number | string) => {
+    const name = parsePresetValue(value);
+    if (name) {
+      const layout = presets[name];
+      if (!layout) {
+        message.error(t('compositor.presetMissing', { name }));
+        return;
+      }
+      try {
+        presetModeRef.current = name;  // 자기 브로드캐스트에 재반응하지 않도록 선반영
+        await selectCompositorPreset(name);
+        setPresetMode(name);
+        await startPresetCapture(layout);
+        message.success(t('compositor.presetSelected', { name }));
+      } catch (e: any) {
+        message.error(t('compositor.presetApplyFailed') + ': ' + (e?.response?.data?.detail || e?.message || e));
+      }
+      return;
+    }
+    // 웹캠 선택 → 합성 사용 해제 + 프리뷰용 compositor 캡처 정지(에디터 테스트 녹화 중이면 유지)
+    if (presetMode) {
+      presetModeRef.current = null;
+      try {
+        await deselectCompositorPreset();
+        const st = await compositorApi.status();
+        if (!st.data?.recording) await compositorApi.stopCapture();
+      } catch { /* ignore */ }
+      setPresetMode(null);
+    }
+    await handleWebcamChange(value as number);
+  }, [presets, presetMode, handleWebcamChange, startPresetCapture, message, t]);
+
+  // 수동 녹화 — 프리셋 모드면 compositor 캔버스를 녹화
+  const startRecording = useCallback(async () => {
+    if (!presetMode) { await startWebcamRecording(); return; }
+    try {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      await compositorApi.recordStart(`manual_compositor/${ts}.mp4`);
+      setCompRecording(true);
+      message.success(t('compositor.recordStarted'));
+    } catch (e: any) {
+      message.error(t('compositor.recordStartFailed') + ': ' + (e?.response?.data?.detail || e?.message || e));
+    }
+  }, [presetMode, startWebcamRecording, message, t]);
+
+  const stopRecording = useCallback(async () => {
+    if (!presetMode) { await stopWebcamRecording(); return; }
+    try {
+      const r = await compositorApi.recordStop();
+      setCompRecording(false);
+      message.success(t('compositor.recordSaved', { path: r.data?.path || '' }));
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || e?.message || String(e));
+    }
+  }, [presetMode, stopWebcamRecording, message, t]);
   // 타임스탬프는 백엔드 webcam_service._apply_overlay()가 영상 프레임에 직접 그려서 송신.
   // 프론트에서 같은 정보를 또 오버레이하면 두 겹으로 겹쳐 보이므로 여기선 추가 렌더하지 않음.
   // 백엔드 그리기는 녹화 MP4에도 포함되므로 정합성 있는 동작.
@@ -51,9 +186,11 @@ export default function WebcamPip({ webcam, onClose, isDark, onOpenCompositor }:
   const previewWsRef = useRef<WebSocket | null>(null);
   const previousBlobUrlRef = useRef<string>('');
   useEffect(() => {
-    if (!webcamOpen) return;
+    if (!webcamOpen && !presetMode) return;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/webcam`);
+    // 프리셋 모드 = 합성 캔버스 프리뷰
+    const channel = presetMode ? 'compositor' : 'webcam';
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/${channel}`);
     ws.binaryType = 'blob';
     previewWsRef.current = ws;
     ws.onopen = () => {
@@ -77,7 +214,7 @@ export default function WebcamPip({ webcam, onClose, isDark, onOpenCompositor }:
       }
       previewWsRef.current = null;
     };
-  }, [webcamOpen]);
+  }, [webcamOpen, presetMode]);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -145,7 +282,7 @@ export default function WebcamPip({ webcam, onClose, isDark, onOpenCompositor }:
         >
           <VideoCameraOutlined style={{ color: '#1677ff' }} />
           <span style={{ flex: 1, fontSize: 11, fontWeight: 500, color: titleColor }}>{t('webcam.title')}</span>
-          {webcamRecording && (
+          {recording && (
             <span style={{
               background: '#ff4d4f', color: '#fff', padding: '0 6px',
               borderRadius: 3, fontSize: 10, fontWeight: 'bold', lineHeight: '18px',
@@ -168,7 +305,7 @@ export default function WebcamPip({ webcam, onClose, isDark, onOpenCompositor }:
               onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }}
               onLoad={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'visible'; }}
             />
-            {webcamRecording && (
+            {recording && (
               <span style={{
                 position: 'absolute', top: 6, right: 6,
                 background: 'rgba(255,0,0,0.85)', color: '#fff',
@@ -183,15 +320,30 @@ export default function WebcamPip({ webcam, onClose, isDark, onOpenCompositor }:
           <div style={{ display: 'flex', gap: 3, alignItems: 'center', marginBottom: 5 }}>
             <Select
               size="small"
-              value={webcamIndex}
-              onChange={handleWebcamChange}
-              style={{ flex: 1 }}
+              value={presetMode ? presetValue(presetMode) : webcamIndex}
+              onChange={handleSourceChange}
+              onDropdownVisibleChange={(o: boolean) => { if (o) refreshPresets(); }}
+              disabled={recording}
+              style={{ flex: 1, minWidth: 0 }}
               placeholder={t('webcam.select')}
               getPopupContainer={getContainer}
-              options={(webcamDevices as WebcamDeviceLike[]).map((d, i) => ({
-                value: i,
-                label: d.label || t('webcam.camera', { index: String(i) }),
-              }))}
+              options={[
+                {
+                  label: t('compositor.cameraGroup'),
+                  // value 는 장치 index — 목록 위치를 쓰면 제외된 index 가 있을 때 다른 카메라가 열림
+                  options: (webcamDevices as WebcamDeviceLike[]).map((d) => ({
+                    value: Number(d.deviceId),
+                    label: d.label || t('webcam.camera', { index: d.deviceId }),
+                  })),
+                },
+                ...(Object.keys(presets).length > 0 ? [{
+                  label: t('compositor.presetGroup'),
+                  options: Object.keys(presets).map(name => ({
+                    value: presetValue(name),
+                    label: t('compositor.presetOption', { name }),
+                  })),
+                }] : []),
+              ]}
             />
             {/* 음성 녹화 opt-in 토글 — 켜져 있을 때만 녹화 mp4에 마이크 오디오 포함 */}
             <Tooltip title={audioEnabled ? t('webcam.audioOn') : t('webcam.audioOff')}>
@@ -200,15 +352,15 @@ export default function WebcamPip({ webcam, onClose, isDark, onOpenCompositor }:
                 type={audioEnabled ? 'primary' : 'default'}
                 icon={audioEnabled ? <AudioOutlined /> : <AudioMutedOutlined />}
                 onClick={() => setAudioEnabled(!audioEnabled)}
-                disabled={webcamRecording}
+                disabled={recording || !!presetMode}
               />
             </Tooltip>
-            {!webcamRecording ? (
-              <Button size="small" type="primary" danger icon={<PlayCircleOutlined />} onClick={startWebcamRecording}>
+            {!recording ? (
+              <Button size="small" type="primary" danger icon={<PlayCircleOutlined />} onClick={startRecording}>
                 {t('webcam.record')}
               </Button>
             ) : (
-              <Button size="small" danger icon={<PauseOutlined />} onClick={stopWebcamRecording}
+              <Button size="small" danger icon={<PauseOutlined />} onClick={stopRecording}
                 style={{ animation: 'blink 1s infinite' }}>
                 {t('webcam.recordStop')}
               </Button>

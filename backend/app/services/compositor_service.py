@@ -671,6 +671,12 @@ class CompositorService:
     def is_capturing(self) -> bool:
         return self._compose_thread is not None and self._compose_thread.is_alive()
 
+    def running_source_count(self) -> int:
+        """캡처 스레드가 살아있는 소스 수 (이미 실행 중이던 소스 포함)."""
+        with self._sources_lock:
+            return sum(1 for src in self._sources
+                       if src._thread is not None and src._thread.is_alive())
+
     def start_capture(self) -> dict:
         """모든 소스 + compose 스레드 시작. 이미 실행 중이면 미실행 소스만 추가 start.
 

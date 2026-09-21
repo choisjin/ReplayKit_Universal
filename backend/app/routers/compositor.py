@@ -251,7 +251,8 @@ async def delete_preset(name: str):
 
 
 class ActivatePresetRequest(BaseModel):
-    name: Optional[str] = ""
+    # None(생략) = active 유지 — 카메라 목록에서 웹캠으로 돌아갈 때 enabled 만 끄는 용도
+    name: Optional[str] = None
     enabled: Optional[bool] = None
 
 

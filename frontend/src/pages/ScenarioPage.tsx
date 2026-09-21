@@ -18,6 +18,10 @@ import { useTranslation } from '../i18n';
 import type { TranslationKey } from '../i18n';
 import { findInvalidNameChars, INVALID_NAME_CHARS_DISPLAY } from '../utils/entityName';
 import { useWebcamContext } from '../context/WebcamContext';
+import {
+  loadCompositorPresetState, parsePresetValue, presetValue,
+  selectCompositorPreset, deselectCompositorPreset,
+} from '../utils/compositorPreset';
 import { VideoCameraOutlined } from '@ant-design/icons';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
@@ -448,28 +452,59 @@ export default function ScenarioPage() {
 
   // 웹캠 자동 녹화
   const [webcamAutoRecord, setWebcamAutoRecord] = useState(true);
-  // 재생 직전 어떤 웹캠 index로 녹화할지 선택하는 모달.
+  // 재생 직전 어떤 웹캠 index(또는 합성녹화 프리셋)로 녹화할지 선택하는 모달.
   // pickWebcamDevice()가 이 모달을 띄우고 사용자 선택(또는 취소)을 Promise로 반환.
+  // 값: number = 웹캠 device_index, 'preset:<이름>' = 합성녹화 프리셋
   const [webcamPickerOpen, setWebcamPickerOpen] = useState(false);
   const [webcamPickerDevices, setWebcamPickerDevices] = useState<{ index: number; label: string }[]>([]);
-  const [webcamPickerValue, setWebcamPickerValue] = useState<number>(0);
-  const webcamPickerResolveRef = useRef<((idx: number | null) => void) | null>(null);
+  const [webcamPickerPresets, setWebcamPickerPresets] = useState<string[]>([]);
+  const [webcamPickerValue, setWebcamPickerValue] = useState<number | string>(0);
+  const webcamPickerResolveRef = useRef<((v: number | string | null) => void) | null>(null);
 
-  /** 현재 웹캠 목록을 enumerate하여 1개 이상이면 그대로 사용, 2개 이상이면 모달로 선택 받음.
-   *  반환값: 선택된 device_index (null = 사용자 취소 또는 목록 비어있음) */
-  const pickWebcamDevice = useCallback(async (): Promise<number | null> => {
-    const list = await webcam.listWebcamDevices();
-    if (!list || list.length === 0) return null;
-    if (list.length === 1) return list[0].index;
-    // 기본 선택: 현재 webcamIndex (없으면 첫 항목)
-    const defaultIdx = list.find(d => d.index === webcam.webcamIndex)?.index ?? list[0].index;
-    setWebcamPickerDevices(list);
-    setWebcamPickerValue(defaultIdx);
+  /** 웹캠 목록 + 합성녹화 프리셋을 조회하여 후보가 1개면 그대로 사용, 2개 이상이면 모달로 선택 받음.
+   *  반환값: device_index | 'preset:<이름>' (null = 사용자 취소 또는 후보 없음) */
+  const pickWebcamDevice = useCallback(async (): Promise<number | string | null> => {
+    const [list, presetState] = await Promise.all([
+      webcam.listWebcamDevices(),
+      loadCompositorPresetState(),
+    ]);
+    const presetNames = Object.keys(presetState.presets);
+    const devices = list || [];
+    if (devices.length + presetNames.length === 0) return null;
+    if (presetNames.length === 0 && devices.length === 1) return devices[0].index;
+    if (devices.length === 0 && presetNames.length === 1) return presetValue(presetNames[0]);
+    // 기본 선택: 사용 중인 합성 프리셋 → 현재 webcamIndex → 첫 항목
+    const defaultValue: number | string = presetState.selected
+      ? presetValue(presetState.selected)
+      : (devices.find(d => d.index === webcam.webcamIndex)?.index
+        ?? (devices.length ? devices[0].index : presetValue(presetNames[0])));
+    setWebcamPickerDevices(devices);
+    setWebcamPickerPresets(presetNames);
+    setWebcamPickerValue(defaultValue);
     setWebcamPickerOpen(true);
-    return new Promise<number | null>((resolve) => {
+    return new Promise<number | string | null>((resolve) => {
       webcamPickerResolveRef.current = resolve;
     });
   }, [webcam]);
+
+  /** 재생 녹화 소스 준비 — 프리셋이면 합성녹화 사용 지정(캡처는 백엔드가 재생 시작 시 기동),
+   *  웹캠이면 합성 사용 해제 후 웹캠 오픈 대기. 실패/취소 시 false. */
+  const prepareRecordingSource = useCallback(async (): Promise<boolean> => {
+    const picked = await pickWebcamDevice();
+    if (picked === null) return false;
+    const presetName = parsePresetValue(picked);
+    try {
+      if (presetName) {
+        await selectCompositorPreset(presetName);
+        return true;
+      }
+      const st = await loadCompositorPresetState();
+      if (st.selected) await deselectCompositorPreset();
+    } catch {
+      return false;
+    }
+    return ensureWebcamOpen(picked as number);
+  }, [pickWebcamDevice, ensureWebcamOpen]);
   const webcamBlobsRef = useRef<{ repeatIndex: number; blob: Blob }[]>([]);
   const webcamRecordingActiveRef = useRef(false);
   const playbackScrollRef = useRef<HTMLDivElement>(null);
@@ -1150,12 +1185,7 @@ export default function ScenarioPage() {
     // 웹캠 자동녹화: 복수 웹캠이 있으면 사용자에게 index 선택 받기 + 웹캠 열기 + 연결 확인
     let doAutoRecord = false;
     if (webcamAutoRecord) {
-      const pickedIdx = await pickWebcamDevice();
-      if (pickedIdx === null) {
-        message.error(t('webcam.webcamNotOpen'));
-        return;
-      }
-      const ready = await ensureWebcamOpen(pickedIdx);
+      const ready = await prepareRecordingSource();
       if (!ready) {
         message.error(t('webcam.webcamNotOpen'));
         return;
@@ -1489,12 +1519,7 @@ export default function ScenarioPage() {
     // 웹캠 자동녹화: 복수 웹캠이 있으면 사용자에게 index 선택 받기 + 웹캠 열기 + 연결 확인
     let doAutoRecord = false;
     if (webcamAutoRecord) {
-      const pickedIdx = await pickWebcamDevice();
-      if (pickedIdx === null) {
-        message.error(t('webcam.webcamNotOpen'));
-        return;
-      }
-      const ready = await ensureWebcamOpen(pickedIdx);
+      const ready = await prepareRecordingSource();
       if (!ready) {
         message.error(t('webcam.webcamNotOpen'));
         return;
@@ -4102,6 +4127,17 @@ export default function ScenarioPage() {
               <span style={{ fontSize: 11 }}>
                 <Tag color="blue" style={{ marginRight: 3 }}>#{d.index}</Tag>
                 {d.label}
+              </span>
+            </Radio>
+          ))}
+          {webcamPickerPresets.length > 0 && (
+            <div style={{ color: '#888', fontSize: 11, marginTop: 4 }}>{t('compositor.presetGroup')}</div>
+          )}
+          {webcamPickerPresets.map(name => (
+            <Radio key={`preset:${name}`} value={presetValue(name)}>
+              <span style={{ fontSize: 11 }}>
+                <Tag color="purple" style={{ marginRight: 3 }}>{t('compositor.button')}</Tag>
+                {name}
               </span>
             </Radio>
           ))}

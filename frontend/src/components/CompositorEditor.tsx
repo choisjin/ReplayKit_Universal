@@ -23,6 +23,7 @@ import {
   compositorApi, CompositorLayout, CompositorSourceConfig,
 } from '../services/api';
 import { useTranslation } from '../i18n';
+import { COMPOSITOR_PRESET_EVENT, notify as notifyPresetChanged } from '../utils/compositorPreset';
 
 interface Props {
   open: boolean;
@@ -223,6 +224,17 @@ export default function CompositorEditor({ open, onClose, isDark }: Props) {
     return () => clearInterval(id);
   }, [open, loadAll]);
 
+  // 웹캠 PIP/재생 직전 카메라 목록에서 프리셋을 고르면 활성/사용 표시 동기화
+  useEffect(() => {
+    const onChanged = (ev: Event) => {
+      const selected: string | null = (ev as CustomEvent).detail?.selected ?? null;
+      setEnabled(!!selected);
+      if (selected) setActivePreset(selected);
+    };
+    window.addEventListener(COMPOSITOR_PRESET_EVENT, onChanged);
+    return () => window.removeEventListener(COMPOSITOR_PRESET_EVENT, onChanged);
+  }, []);
+
   // ── Preview WS ────────────────────────────────────────────
   useEffect(() => {
     if (!open || !capturing) {
@@ -392,10 +404,11 @@ export default function CompositorEditor({ open, onClose, isDark }: Props) {
       await compositorApi.activatePreset(name, en);
       setActivePreset(name);
       if (en !== undefined) setEnabled(en);
+      if (en ?? enabled) notifyPresetChanged(name);
     } catch (e: any) {
       message.error(e?.response?.data?.detail || e?.message || String(e));
     }
-  }, [message]);
+  }, [enabled, message]);
 
   const toggleEnabled = useCallback(async (en: boolean) => {
     if (en && !activePreset) {
@@ -410,6 +423,7 @@ export default function CompositorEditor({ open, onClose, isDark }: Props) {
     try {
       await compositorApi.activatePreset(activePreset, en);
       setEnabled(en);
+      notifyPresetChanged(en ? activePreset : null);
     } catch (e: any) {
       message.error(e?.message || String(e));
     }

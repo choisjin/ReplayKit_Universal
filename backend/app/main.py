@@ -2073,6 +2073,9 @@ class _WebcamPlaybackSession:
         self.current_started_at: Optional[str] = None
         # "webcam" (단일 카메라 — 기본) | "compositor" (다중 소스 합성)
         self.kind: str = "webcam"
+        # compositor 전용 — 재생 전부터 캡처 중이었으면(PIP 에서 프리셋 선택 → 프리뷰)
+        # 재생 종료 시 capture 는 유지하고 녹화만 멈춘다.
+        self.keep_capture: bool = False
 
     def is_active(self) -> bool:
         return self.temp_dir is not None
@@ -2101,13 +2104,18 @@ async def _compositor_session_start(iteration: int = 1) -> Optional[_WebcamPlayb
             return None
         from .services.compositor_service import get_compositor_service
         svc = get_compositor_service()
+        # PIP 카메라 목록에서 프리셋을 골라 이미 합성 프리뷰가 돌고 있으면 그대로 재사용
+        was_capturing = svc.is_capturing()
         # configure는 가벼움 — 메인 루프에서 처리해도 무방하지만 일관성 위해 thread로
         await asyncio.to_thread(svc.configure, layout)
         result = await asyncio.to_thread(svc.start_capture)
+        # start_capture 는 이미 실행 중인 소스를 opened 에 넣지 않으므로 살아있는 소스 수로 판정
         opened = result.get("opened") or []
-        if not opened:
+        alive = svc.running_source_count() if hasattr(svc, "running_source_count") else len(opened)
+        if not alive:
             logger.warning("Compositor: no source opened — fall back")
-            await asyncio.to_thread(svc.stop_capture)
+            if not was_capturing:
+                await asyncio.to_thread(svc.stop_capture)
             return None
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         session = _WebcamPlaybackSession()
@@ -2117,12 +2125,15 @@ async def _compositor_session_start(iteration: int = 1) -> Optional[_WebcamPlayb
         path = session.temp_dir / f"{_file_prefix_for_kind('compositor')}{iteration}.mp4"
         started = await asyncio.to_thread(svc.start_recording, str(path))
         if not started:
-            await asyncio.to_thread(svc.stop_capture)
+            if not was_capturing:
+                await asyncio.to_thread(svc.stop_capture)
             return None
+        session.keep_capture = was_capturing
         session.current_cycle = iteration
         session.current_path = path
         session.current_started_at = datetime.now(timezone.utc).isoformat()
-        logger.info("Compositor session started: cycle %d → %s (sources opened=%d)", iteration, path, len(opened))
+        logger.info("Compositor session started: cycle %d → %s (sources alive=%d, reuse_capture=%s)",
+                    iteration, path, alive, was_capturing)
         return session
     except Exception as e:
         logger.warning("Failed to start compositor session: %s", e)
@@ -2278,10 +2289,12 @@ def _webcam_session_finalize_sync(session: _WebcamPlaybackSession, result_path: 
             svc: Any = get_compositor_service()
             svc.stop_recording()
             # compositor는 capture도 멈춰야 다음 사용 시 깨끗하게 재구성됨
-            try:
-                svc.stop_capture()
-            except Exception:
-                pass
+            # (단, 재생 전부터 PIP 프리뷰로 돌던 capture 는 유지)
+            if not session.keep_capture:
+                try:
+                    svc.stop_capture()
+                except Exception:
+                    pass
         else:
             from .services.webcam_service import get_webcam_service
             svc = get_webcam_service()
@@ -3415,20 +3428,38 @@ async def websocket_compositor(websocket: WebSocket):
         except (asyncio.TimeoutError, Exception):
             pass
         interval = 1.0 / fps
-        while True:
-            t0 = asyncio.get_event_loop().time()
-            jpg = svc.get_latest_jpeg(quality=quality)
-            if jpg is None:
-                await asyncio.sleep(0.5)
-                continue
+        # 캡처 미실행(jpg None) 구간엔 send 가 없어 끊김을 감지 못함 → recv watcher 로 감지
+        disconnected = asyncio.Event()
+
+        async def _watch_disconnect() -> None:
             try:
-                await websocket.send_bytes(jpg)
+                while True:
+                    msg = await websocket.receive()
+                    if msg.get("type") == "websocket.disconnect":
+                        break
             except Exception:
-                break
-            elapsed = asyncio.get_event_loop().time() - t0
-            sleep_s = interval - elapsed
-            if sleep_s > 0:
-                await asyncio.sleep(sleep_s)
+                pass
+            finally:
+                disconnected.set()
+
+        watcher = asyncio.create_task(_watch_disconnect())
+        try:
+            while not disconnected.is_set():
+                t0 = asyncio.get_event_loop().time()
+                jpg = svc.get_latest_jpeg(quality=quality)
+                if jpg is None:
+                    await asyncio.sleep(0.5)
+                    continue
+                try:
+                    await websocket.send_bytes(jpg)
+                except Exception:
+                    break
+                elapsed = asyncio.get_event_loop().time() - t0
+                sleep_s = interval - elapsed
+                if sleep_s > 0:
+                    await asyncio.sleep(sleep_s)
+        finally:
+            watcher.cancel()
     except WebSocketDisconnect:
         pass
     except Exception as e:
