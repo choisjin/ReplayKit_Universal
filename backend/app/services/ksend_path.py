@@ -54,3 +54,27 @@ def variant_of_path(path: str) -> str:
         if p == path:
             return v
     return "custom"
+
+
+# 0-version 시료에 자동 설치할 번들 ksend (시료 재부팅 시 /tmp 가 비워져 매번 필요).
+BUNDLED_KSEND_REL = ("tools", "ksend.dat")
+
+
+def resolve_bundled_ksend():
+    """번들 ksend 바이너리(tools/ksend.dat) 로컬 경로. 없으면 None.
+
+    adb 번들과 같은 탐색 순서(repo → CWD → 배포 설치 경로)를 쓴다.
+    """
+    from pathlib import Path
+    from .adb_path import _install_root_candidates, _project_root
+
+    rel = Path(*BUNDLED_KSEND_REL)
+    roots = [_project_root(), Path.cwd(), *_install_root_candidates()]
+    for root in roots:
+        cand = root / rel
+        try:
+            if cand.is_file() and cand.stat().st_size > 0:
+                return cand
+        except OSError:
+            continue
+    return None

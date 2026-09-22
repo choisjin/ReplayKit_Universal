@@ -61,6 +61,9 @@ tools/*
 !tools/webos/*
 # WebOS 화면/터치 단독 테스트 CLI (빌드 없이 실기 검증용).
 !tools/webos_test.py
+# VW MIB 0-version 시료용 ksend — 시료 /tmp 는 재부팅마다 비워져 앱이 연결 시
+# 자동 설치한다(mib_agent_service._install_bundled_ksend). 누락 시 터치/하드키 전부 무반응.
+!tools/ksend.dat
 # Windows 배포본 webcam 녹화의 H.264 libx264 인코딩 필수.
 # 누락 시 cv2.VideoWriter(mp4v) fallback → 브라우저에서 재생 불가.
 # capture/ffmpeg_runtime.py + webcam_service.py 둘 다 이 경로 탐색.

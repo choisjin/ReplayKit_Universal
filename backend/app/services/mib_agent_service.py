@@ -32,8 +32,11 @@ from typing import Optional, Callable
 
 from .ksend_path import (
     DEFAULT_KSEND_VARIANT,
+    KSEND_PATHS,
+    KSEND_VARIANT_ZERO,
     normalize_variant,
     other_ksend_path,
+    resolve_bundled_ksend,
     resolve_ksend_path,
 )
 
@@ -674,9 +677,38 @@ class MIBAgentService:
         스크린샷 SCP가 진행 중이어도 터치/하드키는 즉시 송신됨.
 
         drain 한 shell 출력에 ksend 실행 실패 흔적(not found/Permission denied 등)이 있으면
-        RuntimeError — fire-and-forget 이라 종전엔 입력이 무음 유실되고 스텝은 pass 였다
-        (0-version 은 ksend 가 휘발성 /tmp 에 있어 시료 재부팅 후 사라지는 경우가 흔함).
+        ksend 를 복구(chmod/remount/번들 자동설치)하고 **같은 입력을 1회 재전송**한다.
+        복구 못 하면 RuntimeError — fire-and-forget 이라 종전엔 입력이 무음 유실되고 스텝은
+        pass 였다(0-version 은 ksend 가 휘발성 /tmp 에 있어 시료 재부팅 후 사라지는 경우가 흔함).
         """
+        out = self._shell_send(commands, post_sleep_s)
+        hit = self._ksend_fail_hit(out)
+        if hit is None:
+            return
+        text = out.decode("utf-8", errors="replace")
+        snippet = " | ".join(l.strip() for l in text.splitlines() if hit in l)[:300]
+        logger.error("MIB ksend 실행 실패 (%s) — 입력이 시료에 전달되지 않았습니다: %s",
+                     self.ksend_bin, snippet)
+        old_bin = self.ksend_bin
+        fixed = False
+        try:
+            fixed = bool(self._verify_ksend_bin())
+        except Exception as e:
+            logger.debug("MIB ksend re-verify skipped: %s", e)
+        if fixed:
+            # 복구 과정에서 경로가 바뀌었을 수 있다(debug 경로 → 자동설치한 /tmp/ksend)
+            retry = ([c.replace(old_bin, self.ksend_bin) for c in commands]
+                     if old_bin != self.ksend_bin else commands)
+            if self._ksend_fail_hit(self._shell_send(retry, post_sleep_s)) is None:
+                logger.warning("MIB ksend 복구 후 입력 재전송 성공 (%s)", self.ksend_bin)
+                return
+        raise RuntimeError(
+            f"ksend 실행 실패: {snippet or hit} — 시료에 {self.ksend_bin} 가 있는지/실행권한"
+            f"(chmod +x)을 확인하세요 (0-version 은 재부팅 시 /tmp 가 비워짐)"
+        )
+
+    def _shell_send(self, commands: list[str], post_sleep_s: float) -> bytes:
+        """입력 shell 로 명령 송신 + drain 한 출력 반환 (shell dead 면 1회 리셋 재시도)."""
         def _do(shell) -> bytes:
             out = b""
             for c in commands:
@@ -701,30 +733,15 @@ class MIBAgentService:
                     self._input_ssh_shell = None
                 shell = self._get_input_shell()
                 out = _do(shell)
-        self._check_ksend_output(out)
+        return out
 
     # ksend 실행 자체가 실패했을 때 shell 에 찍히는 문구 (BusyBox sh / QNX ksh 공통)
-    _KSEND_FAIL_MARKERS = ("not found", "No such file", "Permission denied",
+    _KSEND_FAIL_MARKERS = ("not found", "No such file", "Permission denied", "Is a directory",
                            "cannot execute", "empty address data")
 
-    def _check_ksend_output(self, out: bytes) -> None:
+    def _ksend_fail_hit(self, out: bytes) -> Optional[str]:
         text = out.decode("utf-8", errors="replace") if out else ""
-        hit = next((m for m in self._KSEND_FAIL_MARKERS if m in text), None)
-        if hit is None:
-            return
-        snippet = " | ".join(l.strip() for l in text.splitlines()
-                             if hit in l)[:300]
-        logger.error("MIB ksend 실행 실패 (%s) — 입력이 시료에 전달되지 않았습니다: %s",
-                     self.ksend_bin, snippet)
-        # 경로가 바뀌었을 수 있다(재부팅으로 /tmp/ksend 소실 등) — 반대편 경로 재확인/폴백.
-        try:
-            self._verify_ksend_bin()
-        except Exception as e:
-            logger.debug("MIB ksend re-verify skipped: %s", e)
-        raise RuntimeError(
-            f"ksend 실행 실패: {snippet or hit} — 시료에 {self.ksend_bin} 가 있는지/실행권한"
-            f"(chmod +x)을 확인하세요 (0-version 은 재부팅 시 /tmp 가 비워짐)"
-        )
+        return next((m for m in self._KSEND_FAIL_MARKERS if m in text), None)
 
     def connect(self, timeout: float = 10.0) -> bool:
         """캡처/입력 SSH 세션을 모두 확보. 두 세션은 독립이라 한쪽이 바빠도 다른쪽 영향 없음."""
@@ -783,18 +800,23 @@ class MIBAgentService:
         logger.info("MIB ksend variant set: %s → %s", self.ksend_variant, self.ksend_bin)
         return self.ksend_bin
 
-    def _verify_ksend_bin(self) -> None:
+    def _verify_ksend_bin(self) -> bool:
         """선택된 ksend 경로의 실행 파일 존재를 확인하고, 없으면 반대편 경로로 폴백.
 
         ksend 는 invoke_shell 로 fire-and-forget 송신되므로 경로가 틀려도 에러가 보이지
         않고 입력만 조용히 사라진다(스텝은 pass 로 기록). 연결 시 1회 확인해 로그로 남긴다.
+        어느 경로에도 실행 가능한 ksend 가 없으면 번들(tools/ksend.dat)을 /tmp/ksend 로
+        자동 설치한다(0-version). 반환: 최종적으로 ksend 가 실행 가능한지.
         """
         alt = other_ksend_path(self.ksend_bin)
         # -x(실행가능) 와 -f(존재) 를 나눠 본다: /tmp 로 복사만 하고 chmod +x 를 빠뜨린 경우가
         # 흔한데, 이때 "파일 없음"으로 오진해 반대 경로로 폴백하면 원인이 가려진다.
-        cmd = (f'( [ -x "{self.ksend_bin}" ] && echo PRIMARY_X ) ; '
+        # 디렉터리도 -x 를 통과하므로 반드시 -f 와 같이 본다 — 현장에서 누가 mkdir /tmp/ksend
+        # 로 "경로를 만들어" 폴더가 된 경우가 있었다(2026-09-22).
+        cmd = (f'( [ -f "{self.ksend_bin}" ] && [ -x "{self.ksend_bin}" ] && echo PRIMARY_X ) ; '
                f'( [ -f "{self.ksend_bin}" ] && echo PRIMARY_F ) ; '
-               f'( [ -x "{alt}" ] && echo ALT_X ) ; echo DONE')
+               f'( [ -d "{self.ksend_bin}" ] && echo PRIMARY_DIR ) ; '
+               f'( [ -f "{alt}" ] && [ -x "{alt}" ] && echo ALT_X ) ; echo DONE')
         with self._input_ssh_lock:
             ssh = self._get_input_ssh()
             stdin, stdout, _ = ssh.exec_command(cmd, timeout=5)
@@ -804,8 +826,10 @@ class MIBAgentService:
                 pass
             out = stdout.read().decode("utf-8", errors="replace")
         if "PRIMARY_X" in out or "PRIMARY_F" in out:
-            self._ensure_ksend_runnable(chmod_needed="PRIMARY_X" not in out)
-            return
+            if self._ensure_ksend_runnable(chmod_needed="PRIMARY_X" not in out):
+                return True
+            # 파일은 있는데 복구로도 실행 불가 — 손상/잘못된 바이너리일 수 있어 번들로 교체 시도.
+            return self._install_bundled_ksend(reason="실행 불가")
         if "ALT_X" in out:
             logger.warning(
                 "MIB ksend not found at %s (variant=%s) — falling back to %s. "
@@ -815,13 +839,73 @@ class MIBAgentService:
             self.ksend_bin = resolve_ksend_path(None, alt)
             self.ksend_variant = normalize_variant(
                 "0-version" if alt.startswith("/tmp") else "debug")
-            return
-        logger.error(
-            "MIB ksend binary missing on device: neither %s nor %s is executable. "
-            "터치/하드키 입력이 전부 무시됩니다.", self.ksend_bin, alt,
-        )
+            return True
+        return self._install_bundled_ksend(
+            reason="디렉터리" if "PRIMARY_DIR" in out else "없음")
 
-    def _ensure_ksend_runnable(self, chmod_needed: bool) -> None:
+    # 자동 설치 연타 방지 — 입력 실패가 몰려도 설치는 이 간격에 1번만
+    _KSEND_INSTALL_MIN_INTERVAL_S = 5.0
+
+    def _install_bundled_ksend(self, reason: str) -> bool:
+        """번들 ksend(tools/ksend.dat)를 시료 /tmp/ksend 로 설치 → 성공 시 그 경로로 전환.
+
+        0-version 빌드는 ksend 를 휘발성 /tmp 에 두므로 시료 재부팅마다 사라진다. SFTP 가
+        없는 sshd 라 exec 채널 stdin 으로 흘려 cat 으로 받는다(.part 후 mv — 반쪽 파일 방지).
+        /tmp 는 noexec 일 수 있어 remount,exec 도 같이. /tmp/ksend 가 **빈** 디렉터리면
+        지우고 설치, 내용이 있으면 건드리지 않는다(누가 무엇을 넣었는지 모름).
+        """
+        target = KSEND_PATHS[KSEND_VARIANT_ZERO]
+        now = time.monotonic()
+        last = getattr(self, "_ksend_install_ts", 0.0)
+        if now - last < self._KSEND_INSTALL_MIN_INTERVAL_S:
+            return False
+        self._ksend_install_ts = now
+        src = resolve_bundled_ksend()
+        if src is None:
+            logger.error(
+                "MIB ksend 사용 불가(%s: %s) + 번들 tools/ksend.dat 없음 — 자동 설치 불가. "
+                "터치/하드키 입력이 전부 무시됩니다.", reason, self.ksend_bin,
+            )
+            return False
+        data = src.read_bytes()
+        script = (
+            f'T="{target}" ; mkdir -p /tmp ; mount -o remount,exec /tmp 2>/dev/null ; '
+            'if [ -d "$T" ] ; then rmdir "$T" 2>/dev/null || { echo KSEND_IS_DIR ; exit 4 ; } ; fi ; '
+            'cat > "$T.part" && mv -f "$T.part" "$T" && chmod +x "$T" && '
+            'if "$T" 2>&1 | grep -q denied ; then echo KSEND_DENIED ; else echo KSEND_INSTALLED ; fi'
+        )
+        with self._input_ssh_lock:
+            ssh = self._get_input_ssh()
+            stdin, stdout, _ = ssh.exec_command(script, timeout=20)
+            try:
+                stdin.write(data)
+                stdin.flush()
+                stdin.channel.shutdown_write()
+            except Exception as e:
+                logger.error("MIB ksend 자동 설치 전송 실패: %s", e)
+                return False
+            out = stdout.read().decode("utf-8", errors="replace")
+        if "KSEND_INSTALLED" in out:
+            self.ksend_bin = target
+            self.ksend_variant = KSEND_VARIANT_ZERO
+            logger.warning(
+                "MIB ksend 자동 설치 완료 (%s → %s, %d bytes, 사유=%s)",
+                src, target, len(data), reason,
+            )
+            return True
+        if "KSEND_IS_DIR" in out:
+            logger.error(
+                "MIB ksend 자동 설치 불가 — %s 가 내용이 있는 디렉터리입니다. 시료에서 "
+                "rm -rf %s 후 재연결하세요. 입력이 전부 무시됩니다.", target, target,
+            )
+        else:
+            logger.error(
+                "MIB ksend 자동 설치 실패 (사유=%s) — out=%r. 입력이 전부 무시됩니다.",
+                reason, out.strip()[-300:],
+            )
+        return False
+
+    def _ensure_ksend_runnable(self, chmod_needed: bool) -> bool:
         """ksend 가 **실제로 실행되는지** 확인하고, 막혀 있으면 chmod +x / remount exec 로 복구.
 
         0-version 은 ksend 를 /tmp 에 복사해 쓰는데 현장에서 두 가지가 빠진다(2026-09-21):
@@ -861,12 +945,13 @@ class MIBAgentService:
             else:
                 logger.info("MIB ksend binary ok: variant=%s path=%s",
                             self.ksend_variant, b)
-            return
+            return True
         logger.error(
             "MIB ksend at %s 실행 불가(Permission denied) — 자동 복구(%s) 실패. 디바이스에서 "
             "chmod +x %s ; mount -o remount,exec /tmp 확인 필요. 입력이 전부 무시됩니다. out=%r",
             b, ", ".join(fixes) or "없음", b, out.strip()[-300:],
         )
+        return False
 
     def _probe_ksend(self) -> None:
         """ksend 입력 경로의 가용성을 진단. 입력 전용 SSH 세션에서 실행.

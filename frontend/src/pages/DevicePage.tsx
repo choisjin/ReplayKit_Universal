@@ -311,6 +311,7 @@ export default function DevicePage() {
       setMibConnectType(dev.type);
       if (dev.type === 'mib_agent') setMibConnectProfile(inferMibProfileKey(dev));
       setMibConnectKsend(inferKsendVariant(dev));
+      setMibConnectPass(dev.info?.password ?? '');
       setMibConnectOpen(true);
       return;
     }
@@ -327,7 +328,7 @@ export default function DevicePage() {
     setConnectingIds(prev => new Set(prev).add(deviceId));
     try {
       // ksend_variant 는 MIB/ICAS 공통 — 백엔드가 절대경로로 변환해 모든 ksend 호출에 적용.
-      const extra: Record<string, any> = { ksend_variant: mibConnectKsend };
+      const extra: Record<string, any> = { ksend_variant: mibConnectKsend, password: mibConnectPass };
       if (isMib && prof) {
         extra.resolution = prof.resolution;
         extra.touch_x_scale = prof.txs;   // null → 백엔드 해상도 공식 기본값 사용
@@ -500,6 +501,8 @@ export default function DevicePage() {
   const [mibConnectType, setMibConnectType] = useState<string>('mib_agent');
   const [mibConnectProfile, setMibConnectProfile] = useState<string>('12.9');
   const [mibConnectKsend, setMibConnectKsend] = useState<string>('debug');
+  // 연결 단계에서 확인/수정하는 SSH(root) 비밀번호 — 연결·ksend 자동 설치가 이 계정으로 들어간다.
+  const [mibConnectPass, setMibConnectPass] = useState<string>('');
   // 등록(수동 연결/스캔 연결) 시 ksend 빌드 — 등록 직후 바로 연결되므로 여기서도 골라야 한다.
   const [addKsendVariant, setAddKsendVariant] = useState<string>('debug');
   const renderAddKsendPicker = () => (
@@ -4295,6 +4298,22 @@ export default function DevicePage() {
             <div style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>
               ksend 경로: {KSEND_VARIANTS.find(v => v.key === mibConnectKsend)?.path}
             </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>
+              root 비밀번호 (SSH) — 저장되어 다음 연결부터 자동 사용됩니다.
+            </div>
+            <Input.Password
+              value={mibConnectPass}
+              onChange={e => setMibConnectPass(e.target.value)}
+              placeholder="(비밀번호 없음이면 비워두기)"
+              onPressEnter={handleMibConnectConfirm}
+            />
+            {mibConnectKsend === '0-version' && (
+              <div style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>
+                0-version: 연결 시 시료 /tmp/ksend 를 확인해 없거나 실행 불가면 자동 설치합니다.
+              </div>
+            )}
           </div>
         </Space>
       </Modal>
