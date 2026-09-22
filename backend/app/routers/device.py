@@ -2092,6 +2092,10 @@ async def update_device(req: UpdateDeviceRequest):
                     svc.resolution = dev.info["resolution_str"]
                 except Exception as e:
                     logger.warning("Failed to update live agent resolution: %s", e)
+        if dev.type == "mib_agent" and "resolution_locked" in req.extra_fields:
+            svc = dm.get_mib_service(dev.id)
+            if svc is not None:
+                svc.set_resolution_locked(bool(dev.info.get("resolution_locked")))
         # MIB 터치 보정 오프셋 라이브 반영 (touch_x_offset/touch_y_offset). reconnect 없이 캘리브레이션.
         if dev.type == "mib_agent" and (
             "touch_x_offset" in req.extra_fields or "touch_y_offset" in req.extra_fields
