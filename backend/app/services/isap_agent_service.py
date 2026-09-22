@@ -871,7 +871,12 @@ class ISAPAgentService:
                         logger.warning("iSAP img write failed: %s", e)
                 self._img_made = True
                 self._img_event.set()
-                logger.debug("iSAP image received: %d bytes", len(raw_bytes))
+                if raw_bytes:
+                    logger.debug("iSAP image received: %d bytes", len(raw_bytes))
+                else:
+                    # 빈 응답은 진단 가치가 있다(Monitor 바이트 거부/준비 전) — 응답 바이트 포함해 남긴다.
+                    logger.info("iSAP image response EMPTY (port %d, resp=0x%02X)",
+                                self.port, ord(msg[8]) if len(msg) > 8 else 0xFF)
 
             elif cmd == CMD_GETUICINFO:
                 # 응답: Response(msg[8]) = 0x21 성공 / 0x20 실패.
@@ -938,7 +943,8 @@ class ISAPAgentService:
         # webos 는 MONITOR_MAP 에 없다 → 0x00(front). 하드키는 화면이 아니라 물리 키라
         # WebOS 화면을 보는 중에도 전석 기준으로 그대로 전달된다.
         # 화면 전용 포트 연결에서 0x00 만 받는 에이전트로 확인되면 그 값으로 고정된다.
-        if self._secondary and self._monitor_override is not None:
+        # (전용 포트를 디바이스 주소로 직접 등록한 경우에도 같은 방식으로 굳힌다)
+        if self._monitor_override is not None:
             return self._monitor_override
         return MONITOR_MAP.get(screen_type, 0x00)
 
@@ -1085,7 +1091,45 @@ class ISAPAgentService:
 
             raw = self._img_buffer
             if not raw:
-                raise ValueError("iSAP empty image buffer")
+                # 응답은 왔는데 이미지가 0 바이트 — 에이전트가 "실패" 로 즉시 답한 경우.
+                # 실기(Connect Wide CLU_iSAP_AGENT v4.0, 20003)는 Monitor=0x03 요청에
+                # 타임아웃이 아니라 빈 응답을 돌려줬다. 위 타임아웃 분기와 같은 이유이므로
+                # 전용 포트 연결이면 0x00 으로 한 번 재시도하고, 되면 그 값으로 굳힌다.
+                _mon = self._monitor_byte(screen_type)
+                # 재시도할 Monitor 값: 보조 연결(0x03/0x04 요청)은 0x00 으로,
+                # 전용 포트(20003/20004)를 디바이스 주소로 직접 등록해 0x00 으로 요청한
+                # 경우는 그 포트의 화면 번호(0x03/0x04)로 — 양쪽 다 실기에서 어느 쪽을
+                # 받는지 에이전트 빌드마다 달라 한 번 바꿔 보고 되는 값으로 굳힌다.
+                _alt: Optional[int] = None
+                if self._monitor_override is None:
+                    if _mon != 0x00:
+                        _alt = 0x00
+                    else:
+                        _port_screen = next((k for k, v in SCREEN_PORT_MAP.items()
+                                             if v == self.port and k in SECONDARY_SCREENS), None)
+                        if _port_screen:
+                            _alt = MONITOR_MAP[_port_screen]
+                if _alt is not None:
+                    self._monitor_override = _alt
+                    self._img_filename = ""
+                    self._request_img(0, 0, w, h, screen_type, sub_cmd)
+                    if self._img_event.wait(timeout=timeout) and self._img_buffer:
+                        logger.info("iSAP %s 포트(%d): Monitor 0x%02X 는 빈 응답, 0x%02X 로 응답 — 이후 0x%02X 사용",
+                                    screen_type, self.port, _mon, _alt, _alt)
+                        raw = self._img_buffer
+                    else:
+                        self._monitor_override = None
+                if not raw:
+                    # 연결 직후 첫 요청이 빈 응답으로 오는 경우(에이전트 준비 전) 대비 — 한 번만 평범하게 재시도.
+                    time.sleep(0.3)
+                    self._img_filename = ""
+                    self._request_img(0, 0, w, h, screen_type, sub_cmd)
+                    if self._img_event.wait(timeout=timeout):
+                        raw = self._img_buffer
+                if not raw:
+                    raise ValueError(
+                        f"iSAP empty image buffer ({screen_type}, port {self.port}, "
+                        f"monitor=0x{self._monitor_byte(screen_type):02X}, region {w}x{h})")
 
         # Agent가 요청한 포맷으로 직접 보내므로 보통 그대로 반환 가능.
         # 혹시 BMP로만 응답하는 agent면 변환.

@@ -151,10 +151,12 @@ class ISAPClient:
         return sizes
 
     def get_image(self, width: int, height: int, monitor: int, fmt: str = "png",
-                  timeout: float = 10.0) -> bytes:
+                  timeout: float = 10.0) -> tuple[bytes, int]:
+        """반환 (이미지 바이트, 응답 코드). 응답 코드 0x21=성공 / 0x20=실패."""
         data = b"".join(v.to_bytes(2, "big") for v in (0, 0, width, height)) + bytes([monitor])
         self.send(CMD_GETIMG, IMG_FORMATS[fmt], 0, data)
-        return self.recv_packet(timeout, CMD_GETIMG)[3]
+        _, _, resp, img = self.recv_packet(timeout, CMD_GETIMG)
+        return img, resp
 
 
 def main() -> int:
@@ -193,15 +195,28 @@ def main() -> int:
         monitor = MONITOR_MAP[screen]
         print(f"request       : {screen} {w}x{h} monitor=0x{monitor:02X} format={args.format} (port {port})")
 
+        # 시도 순서: 요청값 → (전용 포트면) Monitor 0x00 → PNG 포맷.
+        # 전용 포트 에이전트 중 Monitor 를 0x00 으로만 받는 경우가 있고(무응답 또는 빈 응답),
+        # 요청 포맷을 지원하지 않으면 빈 응답이 올 수 있다.
+        attempts = [(monitor, args.format)]
+        if dedicated and monitor != 0x00:
+            attempts.append((0x00, args.format))
+        if args.format != "png":
+            attempts.append((attempts[-1][0], "png"))
         t0 = time.monotonic()
-        try:
-            img = cli.get_image(w, h, monitor, args.format, args.timeout)
-        except TimeoutError:
-            if not dedicated or monitor == 0x00:
-                raise
-            # 전용 포트 에이전트 중 Monitor 를 0x00 으로만 받는 경우가 있다 — 1회 재시도.
-            print("응답 없음 → Monitor 0x00 으로 재시도")
-            img = cli.get_image(w, h, 0x00, args.format, args.timeout)
+        img = b""
+        for i, (mon, fmt) in enumerate(attempts):
+            if i:
+                print(f"재시도: monitor=0x{mon:02X} format={fmt}")
+            try:
+                img, resp = cli.get_image(w, h, mon, fmt, args.timeout)
+            except TimeoutError:
+                print(f"  → 응답 없음 ({args.timeout:.0f}s)")
+                continue
+            print(f"  → 응답 코드 0x{resp:02X}, 데이터 {len(img):,} bytes")
+            if img:
+                args.format = fmt
+                break
         dt = time.monotonic() - t0
     except Exception as e:
         print(f"[실패] {type(e).__name__}: {e}", file=sys.stderr)
@@ -210,7 +225,8 @@ def main() -> int:
         cli.close()
 
     if not img:
-        print("[실패] 빈 이미지 응답", file=sys.stderr)
+        print("[실패] 모든 시도에서 이미지 없음 — 위 응답 코드와 함께 -v 출력을 공유해 주세요",
+              file=sys.stderr)
         return 1
     out = args.output or f"isap_{screen}_{time.strftime('%Y%m%d_%H%M%S')}{IMG_EXT[args.format]}"
     with open(out, "wb") as f:
