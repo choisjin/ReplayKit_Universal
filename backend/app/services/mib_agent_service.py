@@ -429,17 +429,6 @@ class MIBAgentService:
             return False
         if width == self._res_x and height == self._res_y:
             return False
-        if self._resolution_locked:
-            # 사용자가 연결 모달에서 패널 해상도를 직접 골랐다 — 덮어쓰지 않는다
-            # (패널 프로파일의 해상도·터치 보정은 한 세트라 해상도만 바뀌면 터치가 어긋남).
-            # 같은 불일치는 한 번만 알린다(캡처마다 호출됨).
-            if getattr(self, "_res_lock_warned", None) != (width, height):
-                self._res_lock_warned = (width, height)
-                logger.warning(
-                    "MIB 캡처 크기 %dx%d ≠ 선택한 해상도 %dx%d — 수동 선택이라 자동 변경하지 않음",
-                    width, height, self._res_x, self._res_y,
-                )
-            return False
         with self._res_callback_lock:
             new_res = f"{width}x{height}"
             self._resolution = new_res.upper()
@@ -453,15 +442,6 @@ class MIBAgentService:
         else:
             logger.info("MIB resolution auto-detected (no persistence callback): %s", new_res)
         return True
-
-    _resolution_locked = False
-
-    def set_resolution_locked(self, locked: bool) -> None:
-        """True 면 캡처 크기로 해상도를 자동 갱신하지 않는다(수동 패널 선택 존중)."""
-        self._resolution_locked = bool(locked)
-        self._res_lock_warned = None
-        logger.info("MIB resolution lock: %s (%dx%d)", self._resolution_locked,
-                    self._res_x, self._res_y)
 
     def detect_resolution(self) -> tuple[int, int]:
         """1회 캡처를 트리거해 디바이스 실제 해상도를 반환 + 자동 갱신.

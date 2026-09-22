@@ -331,7 +331,6 @@ export default function DevicePage() {
       const extra: Record<string, any> = { ksend_variant: mibConnectKsend, password: mibConnectPass };
       if (isMib && prof) {
         extra.resolution = prof.resolution;
-        extra.resolution_locked = true;   // 캡처 크기로 자동 덮어쓰기 금지 (수동 선택 존중)
         extra.touch_x_scale = prof.txs;   // null → 백엔드 해상도 공식 기본값 사용
         extra.touch_y_scale = prof.tys;
       }

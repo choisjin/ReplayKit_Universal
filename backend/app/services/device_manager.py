@@ -3484,8 +3484,6 @@ class DeviceManager:
                         svc.set_touch_scale(_txs, _tys)
                     except Exception as e:
                         logger.warning("MIB touch scale apply failed: %s", e)
-                # 사용자가 패널(해상도)을 직접 고른 경우 캡처 크기로 자동 덮어쓰기 금지
-                svc.set_resolution_locked(bool(dev.info.get("resolution_locked")))
                 ok = await svc.async_connect()
                 if ok:
                     self._mib_conns[dev.id] = svc
