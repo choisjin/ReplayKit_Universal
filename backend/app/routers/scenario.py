@@ -1824,7 +1824,13 @@ async def stop_playback():
     # 이전 run의 버퍼가 replay되지 않도록 먼저 inactive로 표시.
     mark_playback_active(False)
     # stop()은 내부적으로 bg 재생 태스크 종료까지 대기 (최대 15초).
-    await playback_svc.stop()
+    finished = await playback_svc.stop()
+    if not finished:
+        # 아직 스텝(모듈 커맨드/재연결 대기 등)이 끝나지 않음 — 종료 이벤트는 태스크가
+        # 정리 완료 후 직접 발행한다. 여기서 playback_stopped 를 내면 프론트는 '중지됨'
+        # 으로 넘어가는데 백엔드 is_running 은 True 라 상단 상태바가 갱신되지 않는다.
+        publish_event({"type": "playback_stopping", "source": "rest"})
+        return {"status": "stopping", "was_running": was_running}
     publish_event({"type": "playback_stopped", "result_filename": "", "source": "rest"})
     return {"status": "stopped", "was_running": was_running}
 

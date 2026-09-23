@@ -439,16 +439,20 @@ class PlaybackService:
     def is_paused(self) -> bool:
         return not self._pause_event.is_set()
 
-    async def stop(self) -> None:
+    async def stop(self) -> bool:
         """재생 중단 요청 + 백그라운드 태스크가 실제로 종료될 때까지 대기.
 
-        호출이 리턴되면 이전 run이 완전히 정리된 상태이므로, 호출자는 바로
-        다음 재생을 시작할 수 있다. 장시간 블록되는 액션(예: 모듈 커맨드)이
-        걸려 있으면 최대 15초 대기 후 반환한다.
+        True 를 반환하면 이전 run 이 완전히 정리된 상태이므로 호출자는 바로
+        다음 재생을 시작할 수 있다. 장시간 블록되는 액션(모듈 커맨드·디바이스
+        재연결 대기 등)이 걸려 있으면 최대 15초만 기다리고 False 를 반환한다 —
+        이 경우 재생 태스크는 아직 살아 있고 종료 이벤트(playback_stopped)는
+        태스크 finally 가 정리 완료 후 직접 발행하므로, 호출자가 대신 종료
+        이벤트를 발행하면 안 된다(프론트가 '중지됨'으로 넘어간 뒤 실제 결과
+        이벤트를 놓치고, 상태바는 is_running 을 보므로 계속 '재생 중'으로 남는 불일치).
         """
         self._should_stop = True
         self._pause_event.set()  # 일시정지 중이면 풀어서 루프 종료 가능하게
-        await await_bg_playback_task(timeout=15.0)
+        return await await_bg_playback_task(timeout=15.0)
 
     async def pause(self) -> None:
         self._pause_event.clear()

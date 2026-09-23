@@ -1396,6 +1396,10 @@ export default function ScenarioPage() {
         endPlaying(); setCurrentStepId(null); resumeScreenStream();
         message.error(msg.message); ws.close();
         if (doAutoRecord && webcamRecordingActiveRef.current) { webcam.stopRecordingAuto(); webcamRecordingActiveRef.current = false; webcamBlobsRef.current = []; }
+      } else if (msg.type === 'playback_stopping') {
+        // 중지 요청은 접수됐지만 현재 스텝(모듈 커맨드/재연결 대기 등)이 아직 안 끝남.
+        // 실제 종료(playback_stopped)는 백엔드가 정리 후 같은 WS 로 보내므로 상태를 유지한 채 기다린다.
+        message.info(t('scenario.playStopping'));
       } else if (msg.type === 'playback_stopped') {
         if (liveDurationRef.current) { clearInterval(liveDurationRef.current); liveDurationRef.current = null; }
         endPlaying(); setPaused(false); setCurrentStepId(null); resumeScreenStream();
@@ -1726,6 +1730,10 @@ export default function ScenarioPage() {
         endPlaying(); setPlayingGroupName(null); setCurrentStepId(null); resumeScreenStream();
         message.error(msg.message); ws.close();
         if (doAutoRecord && webcamRecordingActiveRef.current) { webcam.stopRecordingAuto(); webcamRecordingActiveRef.current = false; webcamBlobsRef.current = []; }
+      } else if (msg.type === 'playback_stopping') {
+        // 중지 요청은 접수됐지만 현재 스텝(모듈 커맨드/재연결 대기 등)이 아직 안 끝남.
+        // 실제 종료(playback_stopped)는 백엔드가 정리 후 같은 WS 로 보내므로 상태를 유지한 채 기다린다.
+        message.info(t('scenario.playStopping'));
       } else if (msg.type === 'playback_stopped') {
         if (liveDurationRef.current) { clearInterval(liveDurationRef.current); liveDurationRef.current = null; }
         endPlaying(); setPaused(false); setPlayingGroupName(null); setCurrentStepId(null); resumeScreenStream();

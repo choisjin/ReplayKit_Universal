@@ -3527,8 +3527,13 @@ async def websocket_playback(websocket: WebSocket):
                 # stop()은 내부적으로 백그라운드 재생 태스크가 완전 종료될 때까지 대기.
                 # 반환 시점에 이전 run은 정리되었으므로 바로 다음 play를 받을 수 있다.
                 mark_playback_active(False)  # race 방지: 다른 WS가 연결돼도 이전 run 버퍼 replay 금지
-                await playback_service.stop()
-                publish_event({"type": "playback_stopped", "result_filename": ""})
+                if await playback_service.stop():
+                    publish_event({"type": "playback_stopped", "result_filename": ""})
+                else:
+                    # 현재 스텝이 아직 안 끝남(최대 15초 대기 초과) — 실제 종료 이벤트는
+                    # _run_play_job finally 가 정리 후 발행. 프론트는 이 이벤트를 받고
+                    # WS 를 유지한 채 대기한다.
+                    publish_event({"type": "playback_stopping"})
 
             elif action == "pause":
                 await playback_service.pause()

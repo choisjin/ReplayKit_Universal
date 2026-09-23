@@ -28,7 +28,9 @@ export default function PlaybackStatusBanner() {
       const data = r.data || {};
       setRunning(!!data.running);
       setMonitor(data.monitor || {});
-      if (!data.running && stopping) setStopping(false);
+      // 재생이 끝나면 '중지 중' 표시 해제. (이 함수는 마운트 시 인터벌에 캡처된 클로저라
+      // stopping 값을 조건으로 쓰면 항상 초기값 false 로 남아 다음 재생에서도 스피너가 고착됨)
+      if (!data.running) setStopping(false);
     } catch {
       // backend 연결 실패 등 - 무시
     }
@@ -46,6 +48,8 @@ export default function PlaybackStatusBanner() {
   const handleStop = async () => {
     setStopping(true);
     try {
+      // status === 'stopping' 이면 현재 스텝이 끝날 때까지 백엔드 재생 태스크가 살아 있다.
+      // 폴링이 running=false 를 볼 때까지 '중지 중' 표시를 유지한다.
       await scenarioApi.stopPlayback();
     } catch {
       setStopping(false);
@@ -77,7 +81,11 @@ export default function PlaybackStatusBanner() {
       style={{ marginBottom: 6 }}
       message={
         <Space size="middle" wrap>
-          <strong>{t('playbackBanner.running') || '재생 중'}</strong>
+          <strong>
+            {stopping
+              ? (t('playbackBanner.stopping') || '중지 중 (현재 스텝 종료 대기)')
+              : (t('playbackBanner.running') || '재생 중')}
+          </strong>
           <Tag color="blue">{name}</Tag>
           <span>
             {t('playbackBanner.cycle') || '회차'}: <strong>{cur}/{total}</strong>
@@ -94,7 +102,7 @@ export default function PlaybackStatusBanner() {
             okText={t('common.confirm')}
             cancelText={t('common.cancel')}
           >
-            <Button danger size="small" icon={<StopOutlined />} loading={stopping}>
+            <Button danger size="small" icon={<StopOutlined />} loading={stopping} disabled={stopping}>
               {t('scenario.stop') || '중지'}
             </Button>
           </Popconfirm>
