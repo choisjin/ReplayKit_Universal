@@ -1118,7 +1118,10 @@ async def frame_check_save_image(req: FrameCheckImageRequest):
 class ImportStepsRequest(BaseModel):
     target_name: str
     source_name: str
-    step_indices: list[int]  # 0-based indices
+    step_indices: list[int]  # 0-based indices (레거시 — step_uids 가 있으면 무시)
+    # 정본 식별자. 위치(index)는 프론트가 보던 목록 기준이라 백엔드(디스크/녹화 메모리)
+    # 목록과 어긋날 수 있다 — 미저장 편집이 있으면 엉뚱한 스텝·옛 좌표가 복사됐다.
+    step_uids: Optional[list[str]] = None
     move: bool = False  # True면 복사 후 소스에서 제거 (move 동작)
 
 
@@ -1138,9 +1141,24 @@ async def import_steps(req: ImportStepsRequest):
 
     is_move = req.move and req.source_name != req.target_name
 
+    if req.step_uids:
+        pos_by_uid = {s.uid: i for i, s in enumerate(source.steps)}
+        missing = [u for u in req.step_uids if u not in pos_by_uid]
+        if missing:
+            logger.warning("import-steps: 소스 '%s' 에 없는 uid %d개 — 미저장 편집일 수 있음: %s",
+                           req.source_name, len(missing), missing[:5])
+            raise HTTPException(
+                status_code=409,
+                detail=f"소스 시나리오에서 선택한 스텝 {len(missing)}개를 찾을 수 없습니다 — "
+                       "소스를 저장한 뒤 다시 시도하세요.",
+            )
+        step_indices = [pos_by_uid[u] for u in req.step_uids]
+    else:
+        step_indices = list(req.step_indices)
+
     imported = []
     src_images_to_delete: list[Path] = []
-    for idx in req.step_indices:
+    for idx in step_indices:
         if idx < 0 or idx >= len(source.steps):
             continue
         orig = source.steps[idx]
@@ -1201,8 +1219,8 @@ async def import_steps(req: ImportStepsRequest):
         imported.append(step_data)
 
     # Move: 소스에서 선택된 스텝 제거 + 소스 저장 + 이미지 파일 정리
-    if is_move and req.step_indices:
-        remove_set = {i for i in req.step_indices if 0 <= i < len(source.steps)}
+    if is_move and step_indices:
+        remove_set = {i for i in step_indices if 0 <= i < len(source.steps)}
         remaining = [s for i, s in enumerate(source.steps) if i not in remove_set]
         # goto 는 uid 참조이므로 위치 재매핑이 필요 없다 (예전에는 pos_map 으로 일일이
         # 다시 계산해야 했고, 그 계산이 프론트의 다른 두 구현과 어긋나 있었다).

@@ -1278,7 +1278,7 @@ DltViewerSDK_21.1.3_ver/
 # "tools/" 가 아닌 "tools/*" 로 디렉토리 내용만 ignore 해야 negative 패턴이 적용된다는 git 동작에 주의.
 tools/*
 !tools/scrcpy-server.jar
-!tools/scrcpy-server-v3.3.4.jar
+!tools/scrcpy-server-v4.1.jar
 !tools/ffmpeg.exe
 !tools/ffmpeg
 # VW MIB 0-version ksend — 앱이 연결 시 시료 /tmp/ksend 로 자동 설치(재부팅마다 필요).

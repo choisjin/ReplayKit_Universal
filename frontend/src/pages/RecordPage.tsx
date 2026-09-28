@@ -4863,10 +4863,20 @@ export default function RecordPage() {
     }
 
     // COPY 모드: 기존 백엔드 import-steps 호출 (이미지 파일 복사 포함)
-    const sourceName = importSourceName === '__current__' ? scenarioName : importSourceName;
+    const fromCurrent = importSourceName === '__current__';
+    const sourceName = fromCurrent ? scenarioName : importSourceName;
+    // 백엔드는 소스를 디스크(또는 녹화 메모리)에서 읽는다. 현재 시나리오를 소스로 쓰면
+    // 미저장 편집(좌표 수정·삭제·이동)이 반영되지 않아 옛 좌표나 엉뚱한 스텝이 복사됐다
+    // → 먼저 동기화하고, 위치 대신 uid 로 지정한다.
+    if (fromCurrent && !(await ensureSavedForImageOp())) return;
+    // 현재 시나리오는 동기화 후의 목록(stepsRef)에서 uid 를 읽는다 — 모달을 연 시점의
+    // 스냅샷에는 녹화 중 addStep 이 끝나기 전의 임시 uid 가 남아 있을 수 있다.
+    const pickFrom = fromCurrent ? stepsRef.current : importSourceSteps;
+    const sourceUids = sortedIndices.map(i => pickFrom[i]?.uid);
+    const stepUids = sourceUids.every((u): u is string => !!u) ? sourceUids : undefined;
     setImportLoading(true);
     try {
-      const res = await scenarioApi.importSteps(scenarioName, sourceName, sortedIndices, false);
+      const res = await scenarioApi.importSteps(scenarioName, sourceName, sortedIndices, false, stepUids);
       const imported: Step[] = res.data.steps || [];
       let merged: Step[] = [];
       setSteps(prev => {

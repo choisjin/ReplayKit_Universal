@@ -84,14 +84,18 @@ ADB_PATH = resolve_adb_path()
 #   → 둘 다 번들하고, 호출자(adb_service)가 디바이스 Android SDK 로 우선순위를 정한 뒤
 #     실패 시 다른 버전으로 교차 폴백한다. (SDK>=34 → v3 우선, 그 외 → v1 우선)
 SCRCPY_V1 = "1.25"
-SCRCPY_V3 = "3.3.4"
+# SCRCPY_V3 = 신형(v2+) 서버 슬롯. 2026-09 v3.3.4 → v4.1 업그레이드(식별자명은 호환 유지).
+#   v4.x 변경점: send_codec_meta → send_stream_meta 로 개명(세션 메타 추가). 우리는
+#   raw_stream=true 로 device/frame/stream 메타·dummy byte 를 전부 끄므로 영향 없음
+#   (v4.1 Options.java 확인). jar 가 Kotlin 런타임 포함으로 ~720KB 로 커졌다.
+SCRCPY_V3 = "4.1"
 SCRCPY_VERSION = SCRCPY_V1  # 하위호환 별칭 (기존 로그/외부 참조용 기본값)
 
 # 버전 → 후보 jar 파일명(우선순위순). v1.25 는 레거시 무버전 파일명도 허용한다
 # (이미 배포된 설치본이 tools/scrcpy-server.jar 로 v1.25 를 갖고 있으므로).
 _JAR_FILENAMES: dict[str, tuple[str, ...]] = {
     SCRCPY_V1: ("scrcpy-server-v1.25.jar", "scrcpy-server.jar"),
-    SCRCPY_V3: ("scrcpy-server-v3.3.4.jar",),
+    SCRCPY_V3: ("scrcpy-server-v4.1.jar",),
 }
 
 # 디바이스 측 jar 경로 — 버전별로 분리한다. 단일 경로를 공유하면 버전 전환 시 push 해시
@@ -582,8 +586,8 @@ class ScrcpyServerBackend:
               surface 인코더는 입력이 없으면 출력을 멈춰 NAL 이 끊기는데, 재송출 옵션이
               그 stall 을 막는다(정적 화면 무한 재시작 thrash 의 근본 해결책). :long 필수.
 
-        버전별 옵션 키 차이 (v3.3.4 dex 에서 확인):
-          v1.25            → v3.3.4
+        버전별 옵션 키 차이 (v3.3.4 / v4.1 dex 에서 확인):
+          v1.25            → v3.3.4 / v4.1
           bit_rate         → video_bit_rate
           codec_options    → video_codec_options
           raw_video_stream → raw_stream
