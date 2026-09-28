@@ -122,21 +122,65 @@ def _warn_if_server_restarted(context: str, stderr: str) -> None:
         )
 
 
+def _kill_proc_tree(proc: subprocess.Popen) -> None:
+    """셸(cmd.exe)과 그 아래 adb 클라이언트를 함께 종료한다.
+
+    ⚠ Windows 에서 shell=True 명령이 타임아웃되면 subprocess.run 은 cmd.exe 만 죽이고
+    손자 adb.exe 는 살아남아 stdout/stderr 파이프를 계속 잡는다 → 이어지는
+    communicate() 가 **영원히** 블록된다(타임아웃이 무의미). 입력 탭 하나가 10초를
+    넘기면 그 요청이 흔적 없이 멈춘다(이미지 터치 무한 로딩, v1.1.11 실기).
+    adb 서버(fork-server)는 공유 자원이라 절대 죽이지 않는다.
+    """
+    try:
+        import psutil
+        try:
+            parent = psutil.Process(proc.pid)
+            kids = parent.children(recursive=True)
+        except psutil.Error:
+            kids = []
+        for k in kids:
+            try:
+                if "fork-server" in " ".join(k.cmdline() or []):
+                    continue
+                k.kill()
+            except psutil.Error:
+                pass
+    except ImportError:
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _run_shell(cmd: str, timeout: int) -> tuple[bytes, bytes, int]:
+    """shell=True 실행 — 타임아웃 시 프로세스 트리를 정리하고 반드시 반환한다."""
+    proc = subprocess.Popen(
+        cmd,
+        shell=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=_NO_WINDOW,
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return out, err, proc.returncode
+    except subprocess.TimeoutExpired:
+        _kill_proc_tree(proc)
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            # 그래도 파이프를 잡은 프로세스가 있으면 버리고 돌아간다(요청이 멈추는 것보다 낫다).
+            logger.warning("adb 타임아웃 후 파이프 정리 실패 — 프로세스 방치: %s", cmd)
+        raise
+
+
 def _run_sync(cmd: str, timeout: int = 10) -> tuple[str, str, int]:
     """Run a command synchronously and return (stdout, stderr, returncode)."""
     try:
-        proc = subprocess.run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            timeout=timeout,
-            creationflags=_NO_WINDOW,
-        )
-        return (
-            proc.stdout.decode(errors="replace"),
-            proc.stderr.decode(errors="replace"),
-            proc.returncode,
-        )
+        out, err, rc = _run_shell(cmd, timeout)
+        return out.decode(errors="replace"), err.decode(errors="replace"), rc
     except subprocess.TimeoutExpired:
         return ("", f"Command timed out after {timeout}s: {cmd}", 1)
 
@@ -144,18 +188,8 @@ def _run_sync(cmd: str, timeout: int = 10) -> tuple[str, str, int]:
 def _run_sync_bytes(cmd: str, timeout: int = 10) -> tuple[bytes, str, int]:
     """Run a command synchronously and return raw stdout bytes."""
     try:
-        proc = subprocess.run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            timeout=timeout,
-            creationflags=_NO_WINDOW,
-        )
-        return (
-            proc.stdout,
-            proc.stderr.decode(errors="replace"),
-            proc.returncode,
-        )
+        out, err, rc = _run_shell(cmd, timeout)
+        return out, err.decode(errors="replace"), rc
     except subprocess.TimeoutExpired:
         return (b"", f"Command timed out after {timeout}s: {cmd}", 1)
 
