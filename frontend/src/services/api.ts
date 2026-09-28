@@ -212,7 +212,9 @@ export const scenarioApi = {
     x_offset: xOffset ?? 0,
     long_press: longPress ?? false,
     duration_ms: durationMs ?? 3000,
-  }),
+  // 백엔드가 탭 실행에 상한(30s+롱프레스)을 두지만, 서버 자체가 멈춘 경우에도
+  // 모달이 무한 로딩에 머물지 않도록 요청 타임아웃을 건다.
+  }, { timeout: 30000 + 30000 + (longPress ? (durationMs ?? 3000) : 0) }),
   updateImageTap: (
     scenarioName: string,
     step: StepRef | number,

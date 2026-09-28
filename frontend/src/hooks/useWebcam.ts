@@ -164,8 +164,9 @@ export function useWebcam() {
           target = list[0].index;
           setWebcamIndex(target);
         }
-        await startWebcam(target);
+        // 프로브를 먼저 — 열린 뒤에는 백엔드가 재오픈(=캡처 끊김)을 피해 재프로브하지 않는다.
         await probeWebcamResolutions(target);
+        await startWebcam(target);
       } catch {
         message.error(t('webcam.enumFailed'));
       }
@@ -177,10 +178,12 @@ export function useWebcam() {
   const handleWebcamChange = useCallback(async (idx: number) => {
     setWebcamIndex(idx);
     if (webcamOpen) {
-      await startWebcam(idx);
+      // 다른 장치 프로브 전에 현재 장치를 닫는다 (같은 인덱스면 재프로브 불가)
+      await stopWebcam();
       await probeWebcamResolutions(idx);
+      await startWebcam(idx);
     }
-  }, [webcamOpen, startWebcam, probeWebcamResolutions]);
+  }, [webcamOpen, startWebcam, stopWebcam, probeWebcamResolutions]);
 
   const handleWebcamResolutionChange = useCallback(async (res: string) => {
     setWebcamResolution(res);

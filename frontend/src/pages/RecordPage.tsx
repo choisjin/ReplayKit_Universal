@@ -2815,7 +2815,8 @@ export default function RecordPage() {
       }
     } catch (e: any) {
       const detail = e.response?.data?.detail;
-      message.error(typeof detail === 'string' ? detail : t('record.imageTapFailed'));
+      message.error(typeof detail === 'string' ? detail
+        : e.code === 'ECONNABORTED' ? t('record.imageTapTimeout') : t('record.imageTapFailed'));
     } finally {
       setImageTapBusy(false);
     }

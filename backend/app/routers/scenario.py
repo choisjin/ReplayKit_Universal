@@ -1,5 +1,6 @@
 """Scenario management API routes."""
 
+import asyncio
 import base64
 import json
 import logging
@@ -774,63 +775,41 @@ async def record_image_tap(req: ImageTapRequest):
             if _ws.resolve(_st, _base, max_age=_ws.TOUCH_FG_MAX_AGE) == "webos":
                 webos_ws = _ws
 
+    # 진단: 이 요청이 백엔드에 닿았는지·어느 경로로 갔는지 항상 남긴다
+    # (무한 로딩 보고 시 로그에 흔적이 전혀 없어 원인 단계를 특정할 수 없었다).
+    logger.info(
+        "[IMAGE TAP/record] device=%s type=%s addr=%s screen_type=%s route=%s center=(%s,%s) long_press=%s",
+        req.device_id, dev_type, getattr(dev, "address", None), req.screen_type,
+        "webos" if webos_ws is not None else dev_type, center_x, center_y, long_press,
+    )
+
+    async def _do_tap() -> None:
+        await _execute_image_tap(
+            webos_ws, dev_type, req, iw, ih, center_x, center_y, tap_x,
+            long_press, duration_ms,
+        )
+
+    # 탭 실행이 어떤 이유로든(adb wait-for-device, 에이전트 무응답 등) 끝나지 않으면
+    # 프론트 모달이 영원히 로딩에 머문다 → 상한을 두고 실패로 돌려준다.
+    tap_timeout = 30.0 + (duration_ms / 1000.0 if long_press else 0.0)
     try:
-        if webos_ws is not None:
-            # 매칭 좌표는 캡처(linuxStream 축소본, 예: 1920x720) 픽셀 기준 — 터치 기준인
-            # 클라이언트 좌표계(client_size, 보통 패널 3840x1440)로 비율 환산해야 제자리.
-            # 재생의 _webos_image_tap 과 동일한 환산. x_offset(HKMC 일체형 전용)은 무관.
-            wc_w, wc_h = webos_ws.client_size()
-            wx = int(round(center_x * wc_w / iw)) if (iw and wc_w) else center_x
-            wy = int(round(center_y * wc_h / ih)) if (ih and wc_h) else center_y
-            logger.info(
-                "[WebOS IMAGE TAP/record] capture %sx%s (%s,%s) -> client %sx%s (%s,%s) long_press=%s",
-                iw, ih, center_x, center_y, wc_w, wc_h, wx, wy, long_press,
-            )
-            if long_press:
-                await webos_ws.long_press(wx, wy, duration_ms)
-            else:
-                await webos_ws.tap(wx, wy)
-        elif dev_type in ("hkmc_agent", "isap_agent"):
-            await recording_svc._execute_step_action(
-                StepType.HKMC_LONG_PRESS if long_press else StepType.HKMC_TOUCH,
-                {"x": tap_x, "y": center_y, "duration_ms": duration_ms,
-                 "screen_type": req.screen_type or "front_center"},
-                req.device_id,
-            )
-        elif dev_type == "fpk_agent":
-            raise HTTPException(
-                status_code=400,
-                detail="FPK 클러스터는 화면 조작을 지원하지 않습니다 — 이미지 비교 전용 디바이스입니다.",
-            )
-        elif dev_type in ("icas_agent", "mib_agent", "gm_info_agent"):
-            await recording_svc._execute_step_action(
-                StepType.ICAS_LONG_PRESS if long_press else StepType.ICAS_TOUCH,
-                {"x": tap_x, "y": center_y, "duration_ms": duration_ms,
-                 "screen_type": req.screen_type or "HU"},
-                req.device_id,
-            )
-        elif dev_type == "bmw_agent":
-            # BMW는 generic TAP/LONG_PRESS를 쓰되 선택된 디스플레이(screen_type)를 전달.
-            await recording_svc._execute_step_action(
-                StepType.LONG_PRESS if long_press else StepType.TAP,
-                {"x": center_x, "y": center_y, "duration_ms": duration_ms,
-                 "screen_type": req.screen_type or "0"},
-                req.device_id,
-            )
-        elif dev_type == "wincontrol":
-            await recording_svc._execute_step_action(
-                StepType.WIN_LONG_PRESS if long_press else StepType.WIN_TAP,
-                {"x": center_x, "y": center_y, "duration_ms": duration_ms},
-                req.device_id,
-            )
-        else:
-            # ADB / 그 외 → 일반 TAP / LONG_PRESS
-            await recording_svc._execute_step_action(
-                StepType.LONG_PRESS if long_press else StepType.TAP,
-                {"x": center_x, "y": center_y, "duration_ms": duration_ms},
-                req.device_id,
-            )
+        await asyncio.wait_for(_do_tap(), timeout=tap_timeout)
+    except asyncio.TimeoutError:
+        logger.warning("[IMAGE TAP/record] 탭 실행 %.0fs 초과 — 중단: device=%s route=%s",
+                       tap_timeout, req.device_id,
+                       "webos" if webos_ws is not None else dev_type)
+        try:
+            (save_dir / tpl_filename).unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=504,
+            detail=f"Tap execution timed out ({tap_timeout:.0f}s) — 디바이스 연결 상태를 확인하세요",
+        )
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.warning("[IMAGE TAP/record] 탭 실행 실패: device=%s (%s)", req.device_id, e)
         raise HTTPException(status_code=500, detail=f"Tap execution failed: {e}")
 
     # 5) IMAGE_TAP 스텝 기록 (skip_execute=True 로 이미 실행한 액션 중복 방지)
@@ -872,6 +851,67 @@ async def record_image_tap(req: ImageTapRequest):
         },
         "template_filename": tpl_filename,
     }
+
+
+async def _execute_image_tap(webos_ws, dev_type: str, req: "ImageTapRequest",
+                             iw: int, ih: int, center_x: int, center_y: int, tap_x: int,
+                             long_press: bool, duration_ms: int) -> None:
+    """record_image_tap 의 디바이스별 탭 실행 (타임아웃 래핑을 위해 분리)."""
+    if webos_ws is not None:
+        # 매칭 좌표는 캡처(linuxStream 축소본, 예: 1920x720) 픽셀 기준 — 터치 기준인
+        # 클라이언트 좌표계(client_size, 보통 패널 3840x1440)로 비율 환산해야 제자리.
+        # 재생의 _webos_image_tap 과 동일한 환산. x_offset(HKMC 일체형 전용)은 무관.
+        wc_w, wc_h = webos_ws.client_size()
+        wx = int(round(center_x * wc_w / iw)) if (iw and wc_w) else center_x
+        wy = int(round(center_y * wc_h / ih)) if (ih and wc_h) else center_y
+        logger.info(
+            "[WebOS IMAGE TAP/record] capture %sx%s (%s,%s) -> client %sx%s (%s,%s) long_press=%s",
+            iw, ih, center_x, center_y, wc_w, wc_h, wx, wy, long_press,
+        )
+        if long_press:
+            await webos_ws.long_press(wx, wy, duration_ms)
+        else:
+            await webos_ws.tap(wx, wy)
+    elif dev_type in ("hkmc_agent", "isap_agent"):
+        await recording_svc._execute_step_action(
+            StepType.HKMC_LONG_PRESS if long_press else StepType.HKMC_TOUCH,
+            {"x": tap_x, "y": center_y, "duration_ms": duration_ms,
+             "screen_type": req.screen_type or "front_center"},
+            req.device_id,
+        )
+    elif dev_type == "fpk_agent":
+        raise HTTPException(
+            status_code=400,
+            detail="FPK 클러스터는 화면 조작을 지원하지 않습니다 — 이미지 비교 전용 디바이스입니다.",
+        )
+    elif dev_type in ("icas_agent", "mib_agent", "gm_info_agent"):
+        await recording_svc._execute_step_action(
+            StepType.ICAS_LONG_PRESS if long_press else StepType.ICAS_TOUCH,
+            {"x": tap_x, "y": center_y, "duration_ms": duration_ms,
+             "screen_type": req.screen_type or "HU"},
+            req.device_id,
+        )
+    elif dev_type == "bmw_agent":
+        # BMW는 generic TAP/LONG_PRESS를 쓰되 선택된 디스플레이(screen_type)를 전달.
+        await recording_svc._execute_step_action(
+            StepType.LONG_PRESS if long_press else StepType.TAP,
+            {"x": center_x, "y": center_y, "duration_ms": duration_ms,
+             "screen_type": req.screen_type or "0"},
+            req.device_id,
+        )
+    elif dev_type == "wincontrol":
+        await recording_svc._execute_step_action(
+            StepType.WIN_LONG_PRESS if long_press else StepType.WIN_TAP,
+            {"x": center_x, "y": center_y, "duration_ms": duration_ms},
+            req.device_id,
+        )
+    else:
+        # ADB / 그 외 → 일반 TAP / LONG_PRESS
+        await recording_svc._execute_step_action(
+            StepType.LONG_PRESS if long_press else StepType.TAP,
+            {"x": center_x, "y": center_y, "duration_ms": duration_ms},
+            req.device_id,
+        )
 
 
 class UpdateImageTapRequest(BaseModel):

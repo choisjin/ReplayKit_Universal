@@ -71,8 +71,11 @@ async def probe_resolutions(device_index: int):
         return {"resolutions": []}
     svc = get_webcam_service()
     if svc.is_open() and svc._device_index == device_index:
-        # 현재 열려 있는 장치는 재오픈 피함 — status에서 현재 해상도만 반환
-        return {"resolutions": [f"{svc._width}x{svc._height}"]}
+        # 현재 열려 있는 장치는 재오픈 피함 — 이전 프로브 결과(캐시) + 현재 해상도 반환.
+        # (과거: 현재 해상도만 반환 → PIP 가 640x480 으로 먼저 열린 뒤 조회해 목록이 640x480 하나뿐)
+        current = f"{svc._width}x{svc._height}"
+        cached = svc.cached_resolutions(device_index)
+        return {"resolutions": cached if current in cached else [current, *cached]}
     # ⚠️ 해상도 프로브는 해상도마다 장치를 열어보므로 매우 느리다 → 스레드로 오프로드.
     resolutions = await asyncio.to_thread(svc.probe_resolutions, device_index)
     return {"resolutions": resolutions}

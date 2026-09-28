@@ -361,6 +361,8 @@ class WebcamService:
         self._height: int = 480
         self._requested_fps: float = 30.0
         self._actual_fps: float = 30.0
+        # device_index → 프로브된 지원 해상도 (장치가 열려 있어 재프로브 못 할 때 사용)
+        self._resolution_cache: dict[int, list[str]] = {}
         self._cap: Optional[cv2.VideoCapture] = None
         self._capture_thread: Optional[threading.Thread] = None
         self._stop_flag = threading.Event()
@@ -463,6 +465,11 @@ class WebcamService:
         if cap is None:
             return []
         try:
+            # open() 과 동일한 MJPG 로 프로브 — 포맷별 지원 해상도가 다를 수 있다.
+            try:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            except Exception:
+                pass
             for w, h in candidates:
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
@@ -472,7 +479,13 @@ class WebcamService:
                     supported.append(f"{w}x{h}")
         finally:
             cap.release()
+        if supported:
+            # 열린 상태에선 재프로브가 불가능하므로(재오픈=캡처 끊김) 결과를 기억해 둔다.
+            self._resolution_cache[device_index] = supported
         return supported
+
+    def cached_resolutions(self, device_index: int) -> list[str]:
+        return list(self._resolution_cache.get(device_index, []))
 
     # ------------------------------------------------------------
     # Capture lifecycle
