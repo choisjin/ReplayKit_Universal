@@ -230,13 +230,18 @@ class WebOSScreen:
     def is_webos(self, screen_type: Optional[str]) -> bool:
         return (screen_type or "") == WEBOS_SCREEN
 
-    def resolve(self, screen_type: Optional[str], base_screen: str,
-                max_age: Optional[float] = None) -> str:
+    def resolve(self, screen_type: Optional[str], base_screen: Optional[str],
+                max_age: Optional[float] = None) -> Optional[str]:
         """실제로 쓸 화면을 결정한다.
 
         base_screen(전석/기본 화면)을 보고 있고 webOS 가 전면이면 'webos' 로 바꾼다.
         **캡처와 터치가 같은 판단을 써야** 한다 — 화면은 webOS 인데 터치가 Android 로
         나가면(또는 반대) 엉뚱한 곳이 눌린다.
+
+        ⚠ base_screen 은 None 일 수 있다 — ADB 호출부는 화면 미지정(screen_type=None)을
+        그대로 기본화면으로 넘긴다. `str` 로 선언하면 Cython 배포본이 인자 타입을 강제해
+        "Argument 'base_screen' has incorrect type (expected str, got NoneType)" 로 즉사한다
+        (.py 개발 환경에선 힌트가 무시돼 재현 안 됨).
         """
         st = screen_type or base_screen
         if self.is_webos(st):

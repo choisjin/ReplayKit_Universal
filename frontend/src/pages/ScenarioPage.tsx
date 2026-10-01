@@ -813,19 +813,55 @@ export default function ScenarioPage() {
     } catch { message.error(t('scenario.loadFailed')); }
   };
 
-  const deleteScenario = async (name: string) => {
+  // 시나리오 (일괄) 삭제 — 그룹에 포함된 시나리오가 있으면 경고 후 진행.
+  // 그룹 멤버 제거는 백엔드 delete_scenario 가 함께 처리한다.
+  const deleteScenarios = (names: string[]) => {
+    if (names.length === 0) return;
+    const usedIn: { name: string; groups: string[] }[] = [];
+    for (const n of names) {
+      const gs = Object.keys(groups).filter(g => (groups[g] || []).some(m => m.name === n));
+      if (gs.length > 0) usedIn.push({ name: n, groups: gs });
+    }
     Modal.confirm({
       title: t('scenario.deleteTitle'),
-      content: t('scenario.deleteConfirm', { name }),
+      width: usedIn.length > 0 ? 520 : undefined,
+      okText: t('common.delete'),
+      okType: 'danger',
+      cancelText: t('common.cancel'),
+      content: (
+        <div>
+          <div>
+            {names.length === 1
+              ? t('scenario.deleteConfirm', { name: names[0] })
+              : t('scenario.deleteMultiConfirm', { count: names.length })}
+          </div>
+          {usedIn.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ color: '#faad14', marginBottom: 4 }}>
+                <WarningOutlined /> {t('scenario.deleteInGroupWarn')}
+              </div>
+              <div style={{ maxHeight: 200, overflow: 'auto', fontSize: 12 }}>
+                {usedIn.map(u => (
+                  <div key={u.name}>• <strong>{u.name}</strong> → {u.groups.join(', ')}</div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ),
       onOk: async () => {
-        try {
-          await scenarioApi.delete(name);
-          message.success(t('common.deleteComplete'));
-          if (selectedName === name) setSelectedName(null);
-          setMultiSelectedNames(prev => prev.filter(n => n !== name));
-          fetchScenarios();
-          fetchGroups();
-        } catch { message.error(t('common.deleteFailed')); }
+        let failed = 0;
+        // groups.json read-modify-write 충돌을 피하려고 순차 호출
+        for (const n of names) {
+          try { await scenarioApi.delete(n); } catch { failed++; }
+        }
+        if (failed === 0) message.success(t('common.deleteComplete'));
+        else message.error(`${t('common.deleteFailed')} (${failed}/${names.length})`);
+        if (selectedName && names.includes(selectedName)) setSelectedName(null);
+        setMultiSelectedNames(prev => prev.filter(n => !names.includes(n)));
+        fetchScenarios();
+        fetchFolders();
+        fetchGroups();
       },
     });
   };
@@ -2432,16 +2468,12 @@ export default function ScenarioPage() {
                   },
                 })),
                 { type: 'divider' as const },
-                { key: 'delete', label: t('common.delete'), danger: true, onClick: () => {
+                { key: 'delete', label: t('common.delete'), danger: true, disabled: playing, onClick: () => {
                   const targetName = contextMenu.name;
-                  Modal.confirm({
-                    title: t('scenario.deleteTitle'), okText: t('common.delete'), okType: 'danger', cancelText: t('common.cancel'),
-                    onOk: () => {
-                      scenarioApi.delete(targetName).then(() => { fetchScenarios(); fetchFolders(); });
-                      if (selectedName === targetName) setSelectedName(null);
-                      setMultiSelectedNames(prev => prev.filter(n => n !== targetName));
-                    },
-                  });
+                  // 우클릭한 항목이 다중 선택에 포함돼 있으면 선택 전체 삭제
+                  deleteScenarios(multiSelectedNames.includes(targetName) && multiSelectedNames.length > 1
+                    ? multiSelectedNames
+                    : [targetName]);
                   setContextMenu(null);
                 }},
               ]
@@ -2466,6 +2498,20 @@ export default function ScenarioPage() {
                       .then(res => setFolders(res.data.folders))
                       .catch((e: any) => message.error(e?.response?.data?.detail || 'Failed'));
                   }}>{t('scenario.newFolder')}</Button>
+                  {(() => {
+                    const delTargets = multiSelectedNames.length > 0
+                      ? multiSelectedNames
+                      : (selectedName ? [selectedName] : []);
+                    if (delTargets.length === 0) return null;
+                    return (
+                      <Tooltip title={t('scenario.deleteSelected', { count: delTargets.length })}>
+                        <Button size="small" danger icon={<DeleteOutlined />} disabled={playing}
+                          onClick={() => deleteScenarios(delTargets)}>
+                          {delTargets.length > 1 ? delTargets.length : null}
+                        </Button>
+                      </Tooltip>
+                    );
+                  })()}
                 </div>
                 <Dropdown
                   menu={{ items: contextMenuItems }}
