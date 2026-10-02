@@ -102,7 +102,6 @@ _POLLING_PATHS = (
     "/api/settings/power-status",
     "/api/compositor/status",
     "/api/monitor/ui-focus",
-    "/api/dlt/sessions",
 )
 
 
@@ -3355,55 +3354,6 @@ async def _run_play_group_job(data: dict):
         # 리소스 정리 완료 후에 프론트에 알림 — 결과 상세 진입 시 파일이 모두 제자리에 있도록
         if terminal_event is not None:
             publish_event(terminal_event)
-
-
-@app.websocket("/ws/webcam")
-async def websocket_webcam(websocket: WebSocket):
-    """Webcam preview WebSocket — 백엔드의 최신 프레임을 JPEG binary로 push.
-
-    클라이언트 옵션 (첫 메시지 JSON):
-      {"fps": 15, "quality": 70}
-    fps: 1~30 (기본 15), quality: 1~100 (기본 70)
-
-    녹화와 무관 — 캡처 스레드가 만든 _latest_frame을 단순 fan-out.
-    """
-    from .services.webcam_service import get_webcam_service
-    await websocket.accept()
-    logger.info("Webcam preview WS connected")
-    fps = 15
-    quality = 70
-    svc = get_webcam_service()
-    try:
-        # 클라이언트 옵션 수신 (선택)
-        try:
-            opts = await asyncio.wait_for(websocket.receive_json(), timeout=0.2)
-            if isinstance(opts, dict):
-                fps = max(1, min(30, int(opts.get("fps", fps))))
-                quality = max(1, min(100, int(opts.get("quality", quality))))
-        except (asyncio.TimeoutError, Exception):
-            pass
-        interval = 1.0 / fps
-        while True:
-            t0 = asyncio.get_event_loop().time()
-            jpg = svc.get_latest_jpeg(quality=quality)
-            if jpg is None:
-                # 카메라 미오픈 → 잠시 대기 후 재시도 (옵션: 끊기)
-                await asyncio.sleep(0.5)
-                continue
-            try:
-                await websocket.send_bytes(jpg)
-            except Exception:
-                break
-            elapsed = asyncio.get_event_loop().time() - t0
-            sleep_s = interval - elapsed
-            if sleep_s > 0:
-                await asyncio.sleep(sleep_s)
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        logger.warning("Webcam preview WS error: %s", e)
-    finally:
-        logger.info("Webcam preview WS disconnected")
 
 
 @app.websocket("/ws/compositor")

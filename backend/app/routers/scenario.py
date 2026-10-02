@@ -1258,30 +1258,6 @@ async def import_steps(req: ImportStepsRequest):
     return {"steps": imported, "moved": is_move}
 
 
-class RemoveCropRequest(BaseModel):
-    scenario_name: str
-    step_uid: Optional[str] = None
-    step_index: int = -1
-    crop_index: int
-
-
-@router.post("/record/remove-crop")
-async def remove_crop(req: RemoveCropRequest):
-    """Remove a crop item from a multi-crop step."""
-    scenario = await _resolve_scenario(req.scenario_name)
-
-    step, _ = _resolve_step(scenario, req.step_uid, req.step_index)
-    if req.crop_index < 0 or req.crop_index >= len(step.expected_images):
-        raise HTTPException(status_code=400, detail=f"Invalid crop index: {req.crop_index}")
-
-    removed = step.expected_images.pop(req.crop_index)
-    # Delete the image file (다른 스텝이 같은 파일을 참조 중이면 보존)
-    _safe_unlink_expected(scenario, SCREENSHOTS_DIR / req.scenario_name, removed.image, step)
-
-    await recording_svc.save_scenario(scenario)
-    return {"status": "ok", "removed": removed.image}
-
-
 class CropFromExpectedRequest(BaseModel):
     scenario_name: str
     step_uid: Optional[str] = None
@@ -1580,21 +1556,6 @@ class JumpTarget(BaseModel):
     member_uid: str
     scenario_name: str = ""
     step_uid: Optional[str] = None
-
-
-class UpdateGroupJumpsRequest(BaseModel):
-    group_name: str
-    index: int
-    on_pass_goto: Optional[JumpTarget] = None
-    on_fail_goto: Optional[JumpTarget] = None
-
-
-@router.post("/groups/jumps")
-async def update_group_jumps(req: UpdateGroupJumpsRequest):
-    pass_goto = req.on_pass_goto.model_dump() if req.on_pass_goto else None
-    fail_goto = req.on_fail_goto.model_dump() if req.on_fail_goto else None
-    groups = recording_svc.update_group_jumps(req.group_name, req.index, pass_goto, fail_goto)
-    return {"groups": groups}
 
 
 class UpdateGroupStepJumpsRequest(BaseModel):

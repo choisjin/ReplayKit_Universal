@@ -1317,7 +1317,14 @@ to batch-change <code>device_id</code> and <code>screenshot_device_id</code> for
 <ul>
   <li><strong>Create folder</strong> &mdash; Create a folder with the add-folder button, then <strong>drag</strong> scenarios/groups into it (multi-select with Ctrl/Shift)</li>
   <li><strong>Right-click menu</strong> &mdash; Right-click a scenario/group/folder for Copy, Rename, Move to folder, and Delete actions</li>
+  <li><strong>Delete button / Bulk delete</strong> <span class="badge badge-blue">New</span> &mdash; In the All Scenarios tab, selecting a scenario shows a 🗑 delete button next to <strong>New Folder</strong>. Select multiple scenarios with Ctrl/Shift and the button shows the count and deletes them all at once (right-click &rarr; Delete on a multi-selection works the same way). Disabled during playback.</li>
 </ul>
+<div class="callout callout-warning">
+  <strong>⚠️ Deleting scenarios used in groups</strong>
+  If any of the scenarios to delete belong to a group, the confirmation dialog shows a warning with a <code>scenario &rarr; group</code> list.
+  If you proceed, the scenario is <strong>automatically removed from every group that contains it</strong>.
+  If another group member had a jump pointing to the deleted scenario, a broken-jump notice is shown before group playback.
+</div>
 
 <h3 id="scenario-detail">Scenario Details (Right Panel)</h3>
 <p>The selected scenario's step list is displayed as a table. Management and playback buttons are in the title area:</p>

@@ -3,8 +3,8 @@
 - 소스 enum: /api/compositor/sources/webcams, /windows
 - 프리셋 CRUD: /api/compositor/presets
 - 캡처 lifecycle: /api/compositor/configure, /capture/start, /capture/stop
-- 녹화: /api/compositor/record/start, /record/stop, /record/pause, /record/resume
-- 상태/프리뷰: /api/compositor/status, /api/compositor/preview.jpg
+- 녹화: /api/compositor/record/start, /record/stop
+- 상태: /api/compositor/status
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import sys
@@ -179,19 +179,6 @@ async def status():
     return get_compositor_service().status()
 
 
-@router.get("/preview.jpg")
-async def preview_jpg():
-    svc = get_compositor_service()
-    data = svc.get_latest_jpeg()
-    if data is None:
-        raise HTTPException(status_code=404, detail="No frame available")
-    return Response(
-        content=data,
-        media_type="image/jpeg",
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"},
-    )
-
-
 # ------------------------------------------------------------
 # Recording
 # ------------------------------------------------------------
@@ -218,18 +205,6 @@ async def record_stop():
     if path is None:
         raise HTTPException(status_code=400, detail="Not recording")
     return {"path": path}
-
-
-@router.post("/record/pause")
-async def record_pause():
-    get_compositor_service().pause_recording()
-    return {"ok": True}
-
-
-@router.post("/record/resume")
-async def record_resume():
-    get_compositor_service().resume_recording()
-    return {"ok": True}
 
 
 # ------------------------------------------------------------

@@ -1110,15 +1110,6 @@ class RecordingService:
                     await _check(sj.get(key), f"{label} 스텝점프({sid}) 의 {dirn}")
         return problems
 
-    def update_group_jumps(self, group_name: str, index: int, on_pass_goto, on_fail_goto) -> dict[str, list[dict]]:
-        """Update conditional jump settings for a scenario in a group."""
-        groups = self._load_groups()
-        if group_name in groups and 0 <= index < len(groups[group_name]):
-            groups[group_name][index]["on_pass_goto"] = on_pass_goto
-            groups[group_name][index]["on_fail_goto"] = on_fail_goto
-        self._save_groups(groups)
-        return groups
-
     def update_group_play_count(self, group_name: str, index: int, play_count: int) -> dict[str, list[dict]]:
         """Update per-member play count for a scenario in a group."""
         try:

@@ -1,9 +1,6 @@
 """DLT 뷰어 REST + WebSocket 라우터.
 
 엔드포인트:
-  GET  /api/dlt/sessions                  — 활성 로깅 세션 목록
-  GET  /api/dlt/{session_id}/logs         — 백필용 최근 로그 조회
-  GET  /api/dlt/{session_id}/step-marks   — 스텝 마킹 위치
   POST /api/dlt/{session_id}/search-all   — 전체 로그 검색
   POST /api/dlt/{session_id}/search-section — 스텝 구간 검색
   WS   /ws/dlt/{session_id}               — 실시간 로그 스트리밍
@@ -32,37 +29,6 @@ router = APIRouter(prefix="/api/dlt", tags=["dlt"])
 def _decode_session(session_id: str) -> str:
     """URL 경로로 올라온 session_id(host:port)에서 %3A 디코딩."""
     return urllib.parse.unquote(session_id)
-
-
-@router.get("/sessions")
-async def list_sessions():
-    """현재 활성 DLT 로깅 세션 목록."""
-    return {"sessions": DLT_HUB.list_sessions()}
-
-
-@router.get("/{session_id}/logs")
-async def get_recent_logs(session_id: str, limit: int = 1000):
-    """세션의 최근 N줄 로그 반환 (뷰어 오픈 시 backfill용)."""
-    sid = _decode_session(session_id)
-    inst = get_active_session(sid)
-    if not inst:
-        raise HTTPException(404, f"DLT session '{sid}' not active")
-    return {
-        "session_id": sid,
-        "logs": inst.GetRecentLogs(limit),
-        "total": inst._msg_counter,
-    }
-
-
-@router.get("/{session_id}/step-marks")
-async def get_step_marks(session_id: str):
-    """세션의 스텝 마킹 위치."""
-    sid = _decode_session(session_id)
-    inst = get_active_session(sid)
-    if not inst:
-        raise HTTPException(404, f"DLT session '{sid}' not active")
-    marks = inst.GetStepMarks()
-    return {"session_id": sid, "marks": [{"step": k, "index": v} for k, v in sorted(marks.items())]}
 
 
 class SearchAllRequest(BaseModel):

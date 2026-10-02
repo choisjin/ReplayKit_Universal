@@ -55,12 +55,6 @@ async def set_current_user(req: UserSelectRequest):
     return {"user": user, "temporary": login_service.is_temporary_login()}
 
 
-@router.delete("/current")
-async def clear_current_user():
-    login_service.set_login_user(None)
-    return {"user": None}
-
-
 @router.get("/config")
 async def get_login_config():
     """로그인 모달 구성 — 프로젝트/모델 목록(주 디바이스 카탈로그 원본) +

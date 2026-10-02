@@ -1,9 +1,7 @@
-"""Android logcat 뷰어 REST + WebSocket 라우터 (serial_log.py와 동일 패턴).
+"""Android logcat 뷰어 WebSocket 라우터 (serial_log.py와 동일 패턴).
 
 엔드포인트:
-  GET  /api/logcat-log/sessions                  — 활성 logcat 세션 목록
-  GET  /api/logcat-log/{session_id}/logs         — 백필용 최근 로그 조회
-  WS   /ws/logcat-log/{session_id}               — 실시간 로그 스트리밍
+  WS   /ws/logcat-log/{session_id}               — 실시간 로그 스트리밍 (접속 시 backfill)
   WS   /ws/logcat-lifecycle                      — 세션 시작/종료 이벤트
 
 session_id = device serial.
@@ -17,7 +15,7 @@ import logging
 import queue
 import urllib.parse
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..services.logcat_service import LOGCAT_HUB, get_logcat_service
 
@@ -28,24 +26,6 @@ router = APIRouter(prefix="/api/logcat-log", tags=["logcat-log"])
 
 def _decode_session(session_id: str) -> str:
     return urllib.parse.unquote(session_id)
-
-
-@router.get("/sessions")
-async def list_sessions():
-    return {"sessions": LOGCAT_HUB.list_sessions()}
-
-
-@router.get("/{session_id}/logs")
-async def get_recent_logs(session_id: str, limit: int = 1000):
-    sid = _decode_session(session_id)
-    snap = get_logcat_service().session_snapshot(sid, limit)
-    if snap is None:
-        raise HTTPException(404, f"Logcat session '{sid}' not active")
-    return {
-        "session_id": sid,
-        "logs": snap["logs"],
-        "total": snap["total"],
-    }
 
 
 # ── WebSocket: 실시간 로그 스트림 ─────────────────────────────────────

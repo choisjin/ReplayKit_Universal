@@ -1,9 +1,7 @@
-"""Serial 뷰어 REST + WebSocket 라우터.
+"""Serial 뷰어 WebSocket 라우터.
 
 엔드포인트:
-  GET  /api/serial-log/sessions                  — 활성 로깅 세션 목록
-  GET  /api/serial-log/{session_id}/logs         — 백필용 최근 로그 조회
-  WS   /ws/serial-log/{session_id}               — 실시간 로그 스트리밍
+  WS   /ws/serial-log/{session_id}               — 실시간 로그 스트리밍 (접속 시 backfill)
   WS   /ws/serial-lifecycle                      — 세션 시작/종료 이벤트
 """
 
@@ -15,7 +13,7 @@ import logging
 import queue
 import urllib.parse
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..plugins.SerialLogging import SERIAL_HUB, get_active_session
 
@@ -26,24 +24,6 @@ router = APIRouter(prefix="/api/serial-log", tags=["serial-log"])
 
 def _decode_session(session_id: str) -> str:
     return urllib.parse.unquote(session_id)
-
-
-@router.get("/sessions")
-async def list_sessions():
-    return {"sessions": SERIAL_HUB.list_sessions()}
-
-
-@router.get("/{session_id}/logs")
-async def get_recent_logs(session_id: str, limit: int = 1000):
-    sid = _decode_session(session_id)
-    inst = get_active_session(sid)
-    if not inst:
-        raise HTTPException(404, f"Serial session '{sid}' not active")
-    return {
-        "session_id": sid,
-        "logs": inst._GetRecentLogs(limit),
-        "total": inst._line_counter,
-    }
 
 
 # ── WebSocket: 실시간 로그 스트림 ─────────────────────────────────────

@@ -11,7 +11,6 @@ const api = axios.create({
 // Device APIs
 export const deviceApi = {
   list: () => api.get('/device/list'),
-  getInfo: (deviceId: string) => api.get(`/device/info/${deviceId}`),
   screenshot: (deviceId: string, screenType?: string, fmt: 'jpeg' | 'png' = 'jpeg') => api.get(`/device/screenshot/${deviceId}`, { params: { fmt, screen_type: screenType || 'front_center' } }),
   canPanelGrab: () => api.get('/device/can-panel/grab'),
   scan: () => api.get('/device/scan'),
@@ -85,7 +84,6 @@ export const deviceApi = {
     api.post('/device/vision-force-ip', { mac, ip, subnet, gateway }),
   dltViewerLaunch: (projectFile?: string, logFile?: string) =>
     api.post('/device/dlt-viewer/launch', { project_file: projectFile || '', log_file: logFile || '' }),
-  dltViewerClose: () => api.post('/device/dlt-viewer/close'),
   connectRegistered: (deviceIds?: string[]) =>
     api.post('/device/connect-registered', { device_ids: deviceIds || [] }),
   disconnectOne: (deviceId: string) =>
@@ -99,8 +97,6 @@ export const deviceApi = {
   winStatus: () => api.get('/device/wincontrol/status'),
   winAttach: (hwnd: number) => api.post('/device/wincontrol/attach', { hwnd }),
   winDetach: () => api.post('/device/wincontrol/detach'),
-  winResize: (clientW: number, clientH: number) =>
-    api.post('/device/wincontrol/resize', { client_w: clientW, client_h: clientH }),
 };
 
 // 모듈 함수 파라미터 DB (CSV) APIs — 자주 쓰는 인자 조합 저장/공유
@@ -154,8 +150,6 @@ export const scenarioApi = {
     api.post('/scenario/record/sync-steps', { scenario_name: scenarioName, steps }),
   stopRecording: () => api.post('/scenario/record/stop'),
   recordingStatus: () => api.get('/scenario/record/status'),
-  play: (name: string, verify = true) =>
-    api.post(`/scenario/${encodeURIComponent(name)}/play`, { verify }),
   stopPlayback: () => api.post('/scenario/playback/stop'),
   playbackStatus: () => api.get('/scenario/playback/status'),
   saveExpectedImage: (scenarioName: string, step: StepRef | number, imageBase64: string, crop?: { x: number; y: number; width: number; height: number }, compareMode?: string, cropLabel?: string, preserveCrops?: boolean, screenType?: string) =>
@@ -166,8 +160,6 @@ export const scenarioApi = {
     api.post('/scenario/record/remove-expected-image', { scenario_name: scenarioName, ...stepRefBody(step) }),
   importSteps: (targetName: string, sourceName: string, stepIndices: number[], move: boolean = false, stepUids?: string[]) =>
     api.post('/scenario/record/import-steps', { target_name: targetName, source_name: sourceName, step_indices: stepIndices, move, step_uids: stepUids }),
-  removeCrop: (scenarioName: string, step: StepRef | number, cropIndex: number) =>
-    api.post('/scenario/record/remove-crop', { scenario_name: scenarioName, ...stepRefBody(step), crop_index: cropIndex }),
   cropFromExpected: (scenarioName: string, step: StepRef | number, crop: { x: number; y: number; width: number; height: number }, cropLabel?: string, replaceIndex?: number) =>
     api.post('/scenario/record/crop-from-expected', { scenario_name: scenarioName, ...stepRefBody(step), crop, crop_label: cropLabel || '', replace_index: replaceIndex }),
   updateStep: (scenarioName: string, step: StepRef | number, updates: Record<string, any>) =>
@@ -273,8 +265,6 @@ export const scenarioApi = {
     api.post('/scenario/groups/remove', { group_name: groupName, index }),
   reorderGroup: (groupName: string, orderedIndices: number[]) =>
     api.post('/scenario/groups/reorder', { group_name: groupName, ordered_indices: orderedIndices }),
-  updateGroupJumps: (groupName: string, index: number, on_pass_goto: { member_uid: string; scenario_name?: string; step_uid?: string | null } | null, on_fail_goto: { member_uid: string; scenario_name?: string; step_uid?: string | null } | null) =>
-    api.post('/scenario/groups/jumps', { group_name: groupName, index, on_pass_goto, on_fail_goto }),
   updateGroupStepJumps: (groupName: string, index: number, stepUid: string, on_pass_goto: { member_uid: string; scenario_name?: string; step_uid?: string | null } | null, on_fail_goto: { member_uid: string; scenario_name?: string; step_uid?: string | null } | null, exclude_pass_from_result = false, exclude_fail_from_result = false) =>
     api.post('/scenario/groups/step-jumps', { group_name: groupName, index, step_uid: stepUid, on_pass_goto, on_fail_goto, exclude_pass_from_result, exclude_fail_from_result }),
   updateGroupPlayCount: (groupName: string, index: number, playCount: number) =>
@@ -369,7 +359,6 @@ export const resultsApi = {
 
 // Server management APIs
 export const serverApi = {
-  restart: () => api.post('/settings/server-restart'),
   updateAndRestart: () => api.post('/settings/update-and-restart'),
   diskUsage: () => api.get('/settings/disk-usage'),
   openResultsFolder: () => api.post('/settings/open-results-folder'),
@@ -451,8 +440,6 @@ export const compositorApi = {
   status: () => api.get('/compositor/status'),
   recordStart: (output_path: string) => api.post('/compositor/record/start', { output_path }),
   recordStop: () => api.post('/compositor/record/stop'),
-  recordPause: () => api.post('/compositor/record/pause'),
-  recordResume: () => api.post('/compositor/record/resume'),
   // Presets
   listPresets: () => api.get('/compositor/presets'),
   savePreset: (name: string, layout: CompositorLayout) =>
@@ -479,7 +466,6 @@ export const userApi = {
   // temporary=true — 임시 로그인: 이번 실행 동안만, 다음 실행 시 로그인 창 재표시
   setCurrent: (user: Partial<LoginUser> & { name: string; temporary?: boolean }) =>
     api.post<{ user: LoginUser | null; temporary: boolean }>('/user/current', user),
-  clear: () => api.delete('/user/current'),
   config: () => api.get<{ projects: LoginProject[]; jira_ready: boolean }>('/user/config'),
   search: (keyword: string) =>
     api.get<{ users: { name: string; title: string; team: string; display_name: string; user_id: string }[] }>(

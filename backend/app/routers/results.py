@@ -2422,12 +2422,3 @@ async def get_result(filename: str):
     # (dict로 반환하면 FastAPI가 이벤트 루프에서 다시 json.dumps 해 루프를 막는다)
     raw = await asyncio.to_thread(filepath.read_bytes)
     return Response(content=raw, media_type="application/json")
-
-
-@router.get("/image/{scenario_name}/{image_path:path}")
-async def get_image(scenario_name: str, image_path: str):
-    """Serve a screenshot image."""
-    filepath = SCREENSHOTS_DIR / scenario_name / image_path
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail="Image not found")
-    return FileResponse(str(filepath), media_type="image/png")
