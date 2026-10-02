@@ -41,6 +41,13 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# 재생/스텝 테스트 중단 신호 — 녹음 루프를 즉시 끝낸다.
+try:
+    from backend.app.services.run_abort import is_abort_requested as _is_abort_requested
+except Exception:  # 앱 밖 단독 실행 폴백
+    def _is_abort_requested() -> bool:
+        return False
+
 # pyaudio 는 선택 의존성. 미설치여도 import 는 성공해야 스텝 목록/가이드가 동작한다.
 try:  # pragma: no cover - 환경 의존
     import pyaudio
@@ -1267,6 +1274,8 @@ class AudioMonitor:
         started = time.monotonic()
         try:
             while time.monotonic() - started < dur:
+                if _is_abort_requested():
+                    break
                 frames.append(stream.read(DEFAULT_CHUNK, exception_on_overflow=False))
         except Exception as e:
             return f"FAIL: 녹음 실패 — {e}"
@@ -1276,6 +1285,9 @@ class AudioMonitor:
                 stream.close()
             except Exception:
                 pass
+        if _is_abort_requested():
+            # 잘린 기준음을 저장하면 이후 비교 기준이 깨지므로 기존 기준음을 그대로 둔다
+            return f"STOPPED: 기준음 '{reference_name}' 녹음 중 중단됨 (저장 안 함)"
 
         wav_path = _reference_dir() / f"{_safe_name(reference_name)}.wav"
         try:
@@ -1379,6 +1391,8 @@ class AudioMonitor:
         started = time.monotonic()
         try:
             while time.monotonic() - started < rec_dur:
+                if _is_abort_requested():
+                    break
                 frames.append(stream.read(DEFAULT_CHUNK, exception_on_overflow=False))
         except Exception as e:
             return f"FAIL: 녹음 실패 — {e}"
@@ -1417,6 +1431,10 @@ class AudioMonitor:
 
         logger.info("AudioMonitor RecordAndCompare: recorded %.1fs from [%d] %s → %s",
                     rec_dur, idx, name, wav1)
+        if _is_abort_requested():
+            # 중단 — 녹음분은 저장해 두고 (불완전한 길이라) 기준음 비교는 건너뛴다
+            got = len(audio_bytes) / 2.0 / max(1, self._rate * CHANNELS)
+            return f"STOPPED: 녹음 중 중단됨 ({got:.1f}s 저장, 비교 생략) — {wav1}"
 
         # ── 기준음(reference) 로드 ──
         wav2 = _reference_dir() / f"{_safe_name(reference_name)}.wav"

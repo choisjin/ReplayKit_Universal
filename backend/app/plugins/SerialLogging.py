@@ -30,6 +30,18 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# 재생/스텝 테스트 중단 신호 — 키워드 대기 루프를 현재 회차에서 끝낸다.
+try:
+    from backend.app.services.run_abort import abort_sleep as _abort_sleep
+    from backend.app.services.run_abort import is_abort_requested as _is_abort_requested
+except Exception:  # 앱 밖 단독 실행 폴백
+    def _abort_sleep(seconds: float) -> bool:
+        time.sleep(seconds)
+        return False
+
+    def _is_abort_requested() -> bool:
+        return False
+
 
 # ==========================================================================
 # Serial 뷰어용 Pub/Sub 허브 — DLT_HUB와 동일 패턴.
@@ -619,7 +631,8 @@ class SerialLogging:
             for ln, ts in zip(snapshot_logs, snapshot_ts):
                 if keyword in ln:
                     hits.append((ts, ln))
-            _time_mod.sleep(0.1)
+            if _abort_sleep(0.1):
+                break
 
         # 마지막 한 번 더 확인 — deadline 직전 도착한 라인 누락 방지
         with self._lock:
@@ -643,6 +656,8 @@ class SerialLogging:
             first = hits[0][1].strip()[:120]
             return (f"FAIL: keyword '{keyword}' detected {len(hits)} time(s) "
                     f"after command — {first}")
+        if _is_abort_requested():
+            return f"STOPPED: keyword '{keyword}' 감시 중 중단됨 (미검출)"
         return f"PASS: keyword '{keyword}' not detected within {float(time):g}s after command"
 
     def SendCommand_pass_on_keyword(self, command: str, keyword: str, time: float = 5,
@@ -707,7 +722,8 @@ class SerialLogging:
                 if keyword in ln:
                     summary = ln.strip()[:120]
                     return f"PASS: keyword '{keyword}' detected — {summary}"
-            _time_mod.sleep(0.1)
+            if _abort_sleep(0.1):
+                break
 
         # 최종 확인
         with self._lock:
@@ -717,6 +733,9 @@ class SerialLogging:
             if keyword in ln:
                 summary = ln.strip()[:120]
                 return f"PASS: keyword '{keyword}' detected — {summary}"
+
+        if _is_abort_requested():
+            return f"STOPPED: keyword '{keyword}' 대기 중 중단됨 (미검출)"
 
         # 타임아웃 — fail row 1건 보고
         fail_ts = _time_mod.time()
@@ -794,7 +813,8 @@ class SerialLogging:
             for ln in snapshot_logs:
                 if keyword in ln:
                     return f"PASS: keyword '{keyword}' detected — {ln.strip()[:120]}"
-            _time_mod.sleep(0.1)
+            if _abort_sleep(0.1):
+                break
 
         # 3) 최종 확인 — deadline 직전 도착 라인 누락 방지
         with self._lock:
@@ -802,6 +822,9 @@ class SerialLogging:
         for ln in tail_logs:
             if keyword in ln:
                 return f"PASS: keyword '{keyword}' detected — {ln.strip()[:120]}"
+
+        if _is_abort_requested():
+            return f"STOPPED: keyword '{keyword}' 대기 중 중단됨 (미검출)"
 
         # 타임아웃 — fail row 1건 보고
         parent_step_id, parent_repeat_index = self._current_step_context()
@@ -860,7 +883,8 @@ class SerialLogging:
             for ln, ts in zip(snapshot_logs, snapshot_ts):
                 if keyword in ln:
                     hits.append((ts, ln))
-            _time_mod.sleep(0.1)
+            if _abort_sleep(0.1):
+                break
 
         # 3) 최종 확인
         with self._lock:
@@ -882,6 +906,8 @@ class SerialLogging:
                 pass
             return (f"FAIL: keyword '{keyword}' detected {len(hits)} time(s) — "
                     f"{hits[0][1].strip()[:120]}")
+        if _is_abort_requested():
+            return f"STOPPED: keyword '{keyword}' 감시 중 중단됨 (미검출)"
         return f"PASS: keyword '{keyword}' not detected within {float(time):g}s"
 
     # ------------------------------------------------------------------

@@ -52,6 +52,7 @@ from .services.isap_agent_service import MONITOR_MAP as _ISAP_MONITOR_MAP
 from .services.capture.scrcpy_server import log_scrcpy_status as _log_scrcpy_status
 from .models.scenario import ScenarioResult
 from .services.recording_service import GROUP_JUMP_END, GROUP_JUMP_STOP_ALL
+from .services.run_abort import clear_abort
 from .services.playback_service import (
     RESULTS_DIR as _RESULTS_DIR,
     STEPS_NDJSON_NAME as _STEPS_NDJSON_NAME,
@@ -496,7 +497,9 @@ async def _remote_play(scenario_name: str, repeat: int, verify: bool):
                 break
 
         result.finished_at = datetime.now(timezone.utc).isoformat()
-        if result.failed_steps > 0 or result.error_steps > 0:
+        if playback_service._should_stop:
+            result.status = "stopped"
+        elif result.failed_steps > 0 or result.error_steps > 0:
             result.status = "fail"
         else:
             result.status = "pass"
@@ -507,6 +510,14 @@ async def _remote_play(scenario_name: str, repeat: int, verify: bool):
         if hasattr(playback_service, '_monitor_state'):
             playback_service._monitor_state["error_message"] = str(e)
     finally:
+        # 중단 시 시나리오가 띄운 로그 취득·녹화 등 백그라운드 모듈을 종료·저장 (단일 재생과 동일 정책)
+        if playback_service._should_stop:
+            try:
+                from .services.module_service import cleanup_active_instances
+                await asyncio.to_thread(cleanup_active_instances, "playback_stopped")
+            except Exception as e:
+                logger.warning("module cleanup failed (remote): %s", e)
+            clear_abort()
         if hasattr(playback_service, '_monitor_state'):
             playback_service._monitor_state["status"] = "idle"
 
@@ -2905,6 +2916,8 @@ async def _run_play_job(data: dict):
         playback_service._cleanup_run_output_dir()
         if _is_multi_cycle:
             playback_service._running = False
+        # 모듈 정리까지 끝났으므로 중단 신호 해제 — 이후 단발 모듈 호출에 남지 않게
+        clear_abort()
         # 모든 리소스 정리가 끝난 뒤에야 프론트에 종료 이벤트 전파
         # (이전 순서에선 publish가 먼저 나가 프론트가 결과 상세에 진입 → 파일이 아직 없어 404 발생)
         if terminal_event is not None:
@@ -3351,6 +3364,7 @@ async def _run_play_group_job(data: dict):
                 logger.warning("module cleanup failed (group): %s", e)
         # 모듈 정리 후 글로벌 run_dir 참조 해제
         playback_service._cleanup_run_output_dir()
+        clear_abort()
         # 리소스 정리 완료 후에 프론트에 알림 — 결과 상세 진입 시 파일이 모두 제자리에 있도록
         if terminal_event is not None:
             publish_event(terminal_event)

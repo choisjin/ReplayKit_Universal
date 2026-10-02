@@ -151,6 +151,7 @@ export const scenarioApi = {
   stopRecording: () => api.post('/scenario/record/stop'),
   recordingStatus: () => api.get('/scenario/record/status'),
   stopPlayback: () => api.post('/scenario/playback/stop'),
+  stopTestStep: () => api.post('/scenario/test-step/stop'),
   playbackStatus: () => api.get('/scenario/playback/status'),
   saveExpectedImage: (scenarioName: string, step: StepRef | number, imageBase64: string, crop?: { x: number; y: number; width: number; height: number }, compareMode?: string, cropLabel?: string, preserveCrops?: boolean, screenType?: string) =>
     api.post('/scenario/record/save-expected-image', { scenario_name: scenarioName, ...stepRefBody(step), image_base64: imageBase64, crop, compare_mode: compareMode, crop_label: cropLabel, preserve_crops: preserveCrops || false, screen_type: screenType }),

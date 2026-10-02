@@ -62,6 +62,7 @@ from .adb_service import ADBService
 from .device_manager import DeviceManager
 from .image_compare_service import ImageCompareService
 from .module_service import execute_module_function
+from .run_abort import STOPPED_PREFIX, clear_abort, is_abort_requested, request_abort
 
 from ..utils.cv_io import safe_imread, safe_imwrite
 
@@ -430,6 +431,27 @@ class PlaybackService:
         self._run_output_dir: Optional[Path] = None  # 런별 출력 디렉토리
         self._run_output_dir_owned = False  # 이 함수가 직접 output dir을 만들었는지
         self._group_scenario_index: int = 0  # 그룹 내 시나리오 순서 (1-based, 0=단일)
+        # 진행 중인 스텝 테스트 정보 — 상단 상태바 표시/중단용 (None=스텝 테스트 없음)
+        self._step_test_state: Optional[dict] = None
+
+    @property
+    def _should_stop(self) -> bool:
+        return self.__should_stop
+
+    @_should_stop.setter
+    def _should_stop(self, value: bool) -> None:
+        # 재생 중단 플래그를 모듈 스레드용 abort 신호와 연동 — 실행 중인 모듈 함수의
+        # 대기/폴링 루프도 현재 회차에서 끝난다. 새 재생 시작(False)은 신호도 해제.
+        self.__should_stop = bool(value)
+        if value:
+            request_abort()
+        else:
+            clear_abort()
+
+    @property
+    def _wait_aborted(self) -> bool:
+        """wait 를 건너뛸 상황 — 재생 중단 또는 스텝 테스트 중단(abort 신호만 set)."""
+        return self.__should_stop or is_abort_requested()
 
     @property
     def is_running(self) -> bool:
@@ -454,6 +476,22 @@ class PlaybackService:
         self._pause_event.set()  # 일시정지 중이면 풀어서 루프 종료 가능하게
         return await await_bg_playback_task(timeout=15.0)
 
+    @property
+    def step_test_state(self) -> Optional[dict]:
+        return self._step_test_state
+
+    def stop_step_test(self) -> bool:
+        """스텝 테스트 중단 — 실행 중인 동작은 끝까지 수행하되 wait/감시 루프는 즉시 끝낸다.
+
+        _should_stop 은 건드리지 않아(액션 실행 전 중단 체크에 걸리지 않음) 동작 자체는
+        시행되고, abort 신호만 set 해 대기·폴링이 현재 회차에서 빠져나오게 한다.
+        """
+        if self._step_test_state is None:
+            return False
+        self._step_test_state["stopping"] = True
+        request_abort()
+        return True
+
     async def pause(self) -> None:
         self._pause_event.clear()
 
@@ -466,15 +504,16 @@ class PlaybackService:
         return self._should_stop
 
     async def _interruptible_sleep(self, seconds: float) -> bool:
-        """중단 가능한 sleep. _should_stop이면 즉시 반환. 중단 시 True 반환."""
-        interval = 0.5
-        remaining = seconds
-        while remaining > 0:
-            if self._should_stop:
+        """중단 가능한 sleep. 재생/스텝 테스트 중단이면 즉시 반환. 중단 시 True 반환."""
+        interval = 0.1
+        end = time.monotonic() + seconds
+        while True:
+            if self._wait_aborted:
                 return True
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return False
             await asyncio.sleep(min(interval, remaining))
-            remaining -= interval
-        return False
 
     # 마지막 이 시간(초)만큼은 asyncio.sleep 대신 perf_counter busy-wait 로 마감한다.
     # 타이머 해상도를 1ms 로 올려도(_set_timer_resolution) 커널 스케줄 지터가 남으므로,
@@ -484,16 +523,16 @@ class PlaybackService:
     async def _precise_sleep(self, seconds: float) -> bool:
         """고정밀 sleep. 큰 부분은 asyncio.sleep 로 이벤트 루프에 양보하고,
         끝의 ~1.5ms 는 busy-wait 로 마감해 저 밀리초 wait 를 틱 격자 양자화 없이
-        정확히 잰다. _should_stop 이면 즉시 중단(True 반환).
+        정확히 잰다. 재생/스텝 테스트 중단이면 즉시 중단(True 반환).
 
         - _set_timer_resolution(1ms) 와 함께 쓰여야 asyncio.sleep 청크도 정확해진다.
         - perf_counter 는 wall-clock 점프에 영향받지 않는 단조 시계라 duration 측정에 적합.
         """
         if seconds <= 0:
-            return self._should_stop
+            return self._wait_aborted
         end = time.perf_counter() + seconds
         while True:
-            if self._should_stop:
+            if self._wait_aborted:
                 return True
             remaining = end - time.perf_counter()
             if remaining <= self._PRECISE_SPIN_S:
@@ -502,7 +541,7 @@ class PlaybackService:
             await asyncio.sleep(min(remaining - self._PRECISE_SPIN_S, 0.05))
         # 마지막 구간 busy-wait — 틱 격자/스케줄 지터 우회
         while time.perf_counter() < end:
-            if self._should_stop:
+            if self._wait_aborted:
                 return True
         return False
 
@@ -853,10 +892,25 @@ class PlaybackService:
         # 매 호출마다 고유 ms timestamp → actual_<ms> 서브디렉토리 사용
         self._result_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         self._group_scenario_index = 0
+        state = {
+            "scenario_name": scenario_name,
+            "step_id": step.id,
+            "command": self._format_command(step),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "stopping": False,
+        }
+        self._step_test_state = state
         try:
             return await self._execute_step(step, scenario_name, verify=True)
         finally:
             self._result_timestamp = ""
+            # 동시에 다른 스텝 테스트가 시작됐다면 그 상태는 남겨둔다
+            if self._step_test_state is state:
+                self._step_test_state = None
+                # 스텝 테스트 중단 신호가 다음 모듈 호출에 남지 않도록 해제
+                # (재생 중단이 걸린 상태면 재생 쪽 신호이므로 유지)
+                if not self.__should_stop:
+                    clear_abort()
 
     # ------------------------------------------------------------------
     # Internal
@@ -987,13 +1041,18 @@ class PlaybackService:
                 step_result.message = mod_result
                 step_result.capture_video = _capture_video_rel(step, mod_result)
                 has_expected = step.expected_image or (step.compare_mode == CompareMode.MULTI_CROP and step.expected_images)
-                if not has_expected and mod_result.startswith("FAIL:"):
+                if mod_result.startswith(STOPPED_PREFIX):
+                    # 중단으로 대기/감시 루프가 조기 종료됨 — FAIL 이 아닌 중단으로 기록
+                    step_result.status = "error"
+                elif not has_expected and mod_result.startswith("FAIL:"):
                     step_result.status = "fail"
 
-            # Wait (중단 가능) — 스텝 딜레이도 고정밀 sleep으로 틱 격자 양자화 회피
+            # Wait (중단 가능) — 스텝 딜레이도 고정밀 sleep으로 틱 격자 양자화 회피.
+            # 중단 시 wait·검증은 건너뛰되, 이미 실행된 액션의 출력은 메시지에 남긴다.
             if await self._precise_sleep(step.delay_after_ms / 1000.0):
                 step_result.status = "error"
-                step_result.message = "Stopped by user"
+                prev_msg = step_result.message
+                step_result.message = f"Stopped by user — {prev_msg}" if prev_msg else "Stopped by user"
                 return step_result
             t3 = time.time()
 
@@ -2779,7 +2838,8 @@ class PlaybackService:
                 await self._tap_ocr_device(dev_info, x, y)
                 clicked.append((target, x, y, matched, score))
                 if interval and idx < len(targets) - 1:
-                    await asyncio.sleep(interval)
+                    if await self._interruptible_sleep(interval):
+                        break
 
             block = _detected_block(items, ox, oy, scope)
             if len(clicked) == 1:
@@ -3571,7 +3631,8 @@ class PlaybackService:
             rand_scenario_name = getattr(self, "_current_scenario_name", "") or ""
             rand_repeat_idx = int(getattr(self, "_current_repeat_index", 1) or 1)
             for _i in range(repeat_count):
-                if self._should_stop:
+                # 중단 시 현재 회차까지만 수행하고 종료 (스텝 테스트 중단 포함)
+                if self._wait_aborted:
                     break
                 roll = _rnd.random()
                 action_summary = ""
@@ -3681,10 +3742,10 @@ class PlaybackService:
                     "total_ms": int(actual_ms),
                 })
                 while elapsed < total_s:
-                    if self._should_stop:
-                        return
                     sleep_s = min(CHUNK_S, total_s - elapsed)
-                    await self._interruptible_sleep(sleep_s)
+                    # 중단 시 남은 wait 는 무시하고 즉시 빠져나온다
+                    if await self._interruptible_sleep(sleep_s):
+                        return
                     elapsed += sleep_s
                     if elapsed >= next_progress or elapsed >= total_s:
                         publish_event({

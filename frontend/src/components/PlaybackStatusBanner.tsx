@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Popconfirm, Progress, Space, Tag } from 'antd';
-import { PlayCircleOutlined, StopOutlined } from '@ant-design/icons';
+import { ExperimentOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons';
 import { scenarioApi } from '../services/api';
 import { useTranslation } from '../i18n';
 
@@ -15,35 +15,79 @@ interface MonitorState {
   error?: number;
 }
 
+interface StepTestState {
+  scenario_name?: string;
+  step_id?: number;
+  command?: string;
+  started_at?: string;
+  stopping?: boolean;
+}
+
+/** 스텝 테스트 시작 시 RecordPage 가 발행 — 폴링 주기를 기다리지 않고 바로 상태바를 띄운다. */
+export const STEP_TEST_EVENT = 'replaykit:step-test';
+
+const POLL_IDLE_MS = 3000;
+const POLL_STEP_TEST_MS = 1000;
+
 export default function PlaybackStatusBanner() {
   const { t } = useTranslation();
   const [running, setRunning] = useState(false);
   const [monitor, setMonitor] = useState<MonitorState>({});
   const [stopping, setStopping] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [stepTest, setStepTest] = useState<StepTestState | null>(null);
+  const [stepTestStopping, setStepTestStopping] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const fetchStatus = async () => {
+  const fetchStatus = async (): Promise<boolean> => {
     try {
       const r = await scenarioApi.playbackStatus();
       const data = r.data || {};
       setRunning(!!data.running);
       setMonitor(data.monitor || {});
-      // 재생이 끝나면 '중지 중' 표시 해제. (이 함수는 마운트 시 인터벌에 캡처된 클로저라
+      // 재생이 끝나면 '중지 중' 표시 해제. (이 함수는 마운트 시 타이머에 캡처된 클로저라
       // stopping 값을 조건으로 쓰면 항상 초기값 false 로 남아 다음 재생에서도 스피너가 고착됨)
       if (!data.running) setStopping(false);
+      const st: StepTestState | null = data.step_test || null;
+      setStepTest(st);
+      setStepTestStopping(!!st?.stopping);
+      return !!st;
     } catch {
       // backend 연결 실패 등 - 무시
+      return false;
     }
   };
 
   useEffect(() => {
-    fetchStatus();
-    timerRef.current = setInterval(fetchStatus, 3000);
+    let alive = true;
+    // 스텝 테스트 진행 중엔 1초, 평소엔 3초 주기로 폴링 (setTimeout 체인 — 주기 가변)
+    const tick = async () => {
+      const stepTestActive = await fetchStatus();
+      if (!alive) return;
+      timerRef.current = setTimeout(tick, stepTestActive ? POLL_STEP_TEST_MS : POLL_IDLE_MS);
+    };
+    const kick = () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      tick();
+    };
+    tick();
+    window.addEventListener(STEP_TEST_EVENT, kick);
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      alive = false;
+      window.removeEventListener(STEP_TEST_EVENT, kick);
+      if (timerRef.current) clearTimeout(timerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleStopStepTest = async () => {
+    setStepTestStopping(true);
+    try {
+      await scenarioApi.stopTestStep();
+    } catch {
+      setStepTestStopping(false);
+    }
+    setTimeout(fetchStatus, 300);
+  };
 
   const handleStop = async () => {
     setStopping(true);
@@ -58,7 +102,45 @@ export default function PlaybackStatusBanner() {
     setTimeout(fetchStatus, 500);
   };
 
-  if (!running) return null;
+  if (!running) {
+    if (!stepTest) return null;
+    return (
+      <Alert
+        type="info"
+        showIcon
+        icon={<ExperimentOutlined />}
+        style={{ marginBottom: 6 }}
+        message={
+          <Space size="middle" wrap>
+            <strong>
+              {stepTestStopping
+                ? (t('playbackBanner.stepTestStopping') || '스텝 테스트 중지 중 (동작은 수행, 대기 생략)')
+                : (t('playbackBanner.stepTestRunning') || '스텝 테스트 중')}
+            </strong>
+            {stepTest.scenario_name && <Tag color="blue">{stepTest.scenario_name}</Tag>}
+            {stepTest.step_id != null && (
+              <span>
+                {t('playbackBanner.step') || '스텝'}: <strong>{stepTest.step_id}</strong>
+              </span>
+            )}
+            {stepTest.command && (
+              <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{stepTest.command}</span>
+            )}
+            <Popconfirm
+              title={t('playbackBanner.stepTestStopConfirm') || '스텝 테스트를 중단하시겠습니까?'}
+              onConfirm={handleStopStepTest}
+              okText={t('common.confirm')}
+              cancelText={t('common.cancel')}
+            >
+              <Button danger size="small" icon={<StopOutlined />} loading={stepTestStopping} disabled={stepTestStopping}>
+                {t('scenario.stop') || '중지'}
+              </Button>
+            </Popconfirm>
+          </Space>
+        }
+      />
+    );
+  }
 
   const cur = monitor.current_cycle || 0;
   const total = monitor.total_cycles || 1;

@@ -191,6 +191,35 @@ class CMD:
         except Exception as e:
             return f"ERROR: {e}"
 
+    def Disconnect(self) -> str:
+        """RunBackground 로 띄운 프로세스(트리)를 모두 종료 — 재생 중단/오류 시 정리용.
+
+        shell=True 라 PID 는 cmd.exe 이므로 자식까지 /T 로 함께 내린다. 먼저 정상 종료를
+        요청하고(3초), 남아 있으면 강제 종료한다.
+        """
+        killed = []
+        for pid, proc in list(self._bg_processes.items()):
+            if proc.poll() is None:
+                try:
+                    subprocess.run(["taskkill", "/T", "/PID", str(pid)],
+                                   capture_output=True, timeout=5,
+                                   creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+                    try:
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                                       capture_output=True, timeout=5,
+                                       creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+                    killed.append(str(pid))
+                except Exception:
+                    try:
+                        proc.kill()
+                        killed.append(str(pid))
+                    except Exception:
+                        pass
+            self._bg_processes.pop(pid, None)
+        return f"ok: stopped background {', '.join(killed)}" if killed else "ok"
+
     def ListBackground(self) -> str:
         """실행 중인 백그라운드 프로세스 목록.
 

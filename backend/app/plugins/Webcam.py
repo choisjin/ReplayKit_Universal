@@ -78,10 +78,10 @@ def _step_context() -> tuple[Optional[int], int]:
 
 
 def _playback_stop_requested() -> bool:
-    """재생 중지 요청 여부 — 긴 캡처 도중 사용자가 중지하면 거기서 끊고 저장한다."""
+    """재생/스텝 테스트 중지 요청 여부 — 긴 캡처 도중 사용자가 중지하면 거기서 끊고 저장한다."""
     try:
-        from backend.app.dependencies import playback_service
-        return bool(getattr(playback_service, "_should_stop", False))
+        from backend.app.services.run_abort import is_abort_requested
+        return is_abort_requested()
     except Exception:
         return False
 
@@ -397,11 +397,13 @@ class Webcam:
         _pb._set_timer_resolution(True)
         written = 0
         unique = 1
+        stopped = False
         try:
             prev = first
             t0 = _time.monotonic()
             while written < total:
                 if _playback_stop_requested():
+                    stopped = True
                     break
                 end_at = t0 + total * period
                 frame, ts = self._wait_new(peek, prev, max(0.0, min(end_at - _time.monotonic(), 0.5)))
@@ -415,9 +417,14 @@ class Webcam:
                     written += 1
                 prev = frame
                 unique += 1
-            while written < total:  # 남은 슬롯(카메라 정체/종료 경계)은 마지막 프레임으로
+            # 남은 슬롯(카메라 정체/종료 경계)은 마지막 프레임으로 — 중지 시엔 채우지 않고
+            # 실제 녹화한 길이까지만 저장한다.
+            while written < total and not stopped:
                 writer.put(prev[:h2, :w2])
                 written += 1
+            if written == 0:  # 첫 슬롯 전에 중지돼도 빈 파일 대신 1프레임은 남긴다
+                writer.put(prev[:h2, :w2])
+                written = 1
         finally:
             _pb._set_timer_resolution(False)
             ok = writer.finish()
@@ -425,6 +432,9 @@ class Webcam:
         if not ok or not out_path.exists() or out_path.stat().st_size == 0:
             return f"FAIL: Webcam capture — encoding failed ({writer.error or 'empty file'})"
         note = "" if writer.mode == "ffmpeg" else " (ffmpeg 없음 — mp4v, 브라우저 재생 불가할 수 있음)"
+        if stopped:
+            duration = max(written / fps, period)
+            note += " (중지 요청으로 조기 종료·저장)"
         real_fps = unique / duration
         logger.info("Webcam capture saved: %s (%.1fs @ %.2ffps, %d frames, unique %d, %dx%d, src=%s)",
                     out_path, duration, fps, written, unique, w2, h2, source)

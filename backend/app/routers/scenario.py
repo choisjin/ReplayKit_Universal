@@ -1725,6 +1725,17 @@ async def test_step(req: TestStepRequest):
     return result.model_dump()
 
 
+@router.post("/test-step/stop")
+async def stop_test_step():
+    """진행 중인 스텝 테스트 중단.
+
+    오류 방지를 위해 실행 중인 동작은 끝까지 수행하고, wait·키워드 감시 같은
+    대기/루프만 즉시 끝낸다. 결과는 원래 test-step 요청의 응답으로 돌아간다.
+    """
+    stopped = playback_svc.stop_step_test()
+    return {"status": "stopping" if stopped else "idle"}
+
+
 @router.delete("/cmd-result/{task_id}")
 async def cancel_cmd_task(task_id: str):
     """백그라운드 태스크 취소 요청. SSH 스트리밍 reader가 다음 tick에 채널을 닫고 종료한다."""
@@ -1856,10 +1867,14 @@ async def stop_playback():
 
 @router.get("/playback/status")
 async def playback_status():
-    """Check if playback is running + current monitor state (scenario name, progress)."""
+    """Check if playback is running + current monitor state (scenario name, progress).
+
+    step_test: 진행 중인 스텝 테스트 정보(없으면 null) — 상단 상태바 표시/중단용.
+    """
     return {
         "running": playback_svc.is_running,
         "monitor": getattr(playback_svc, "_monitor_state", {}) or {},
+        "step_test": playback_svc.step_test_state,
     }
 
 

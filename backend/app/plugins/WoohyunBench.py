@@ -997,8 +997,13 @@ class WoohyunBench:
 
         # 3. 신규 캡처 구조로 지정 시간(ms) 동안 수집 후 검증
         self.canmsg_start()
-        import time as _time  # 파라미터 time과의 충돌 및 Shadowing 해결
-        _time.sleep(max(0.0, float(time) / 1000.0))
+        # 수집 대기 — 재생/스텝 테스트 중단 시 즉시 깨어나 지금까지 받은 프레임으로 정리
+        try:
+            from backend.app.services.run_abort import abort_sleep as _abort_sleep
+        except Exception:
+            import time as _time  # 파라미터 time과의 충돌 및 Shadowing 해결
+            _abort_sleep = _time.sleep
+        _abort_sleep(max(0.0, float(time) / 1000.0))
         return self.canmsg_stop(mcu=mcu, channel=ch_key, msg_id=msg_id, data=data)
 
 

@@ -211,6 +211,32 @@ class SHELL:
         except Exception as e:
             return f"ERROR: {e}"
 
+    def Disconnect(self) -> str:
+        """RunBackground 로 띄운 프로세스 그룹을 모두 종료 — 재생 중단/오류 시 정리용.
+
+        start_new_session 으로 분리된 세션이라 프로세스 그룹 단위로 SIGTERM(정상 종료 요청)
+        후 3초 내 안 끝나면 SIGKILL.
+        """
+        import signal
+        killed = []
+        for pid, proc in list(self._bg_processes.items()):
+            if proc.poll() is None:
+                try:
+                    os.killpg(pid, signal.SIGTERM)
+                    try:
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(pid, signal.SIGKILL)
+                    killed.append(str(pid))
+                except Exception:
+                    try:
+                        proc.kill()
+                        killed.append(str(pid))
+                    except Exception:
+                        pass
+            self._bg_processes.pop(pid, None)
+        return f"ok: stopped background {', '.join(killed)}" if killed else "ok"
+
     def ListBackground(self) -> str:
         """실행 중인 백그라운드 프로세스 목록.
 

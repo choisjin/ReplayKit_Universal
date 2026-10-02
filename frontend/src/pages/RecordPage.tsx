@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Button, Card, Checkbox, Col, Dropdown, Image, Input, Modal, Radio, Row, Segmented, Select, Slider, Space, InputNumber, message, List, Tabs, Tag, Popover, Tooltip, Splitter } from 'antd';
 import { PlayCircleOutlined, PauseOutlined, PlusOutlined, SwapOutlined, FolderOpenOutlined, SaveOutlined, DeleteOutlined, BranchesOutlined, ScissorOutlined, CameraOutlined, ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined, EditOutlined, CopyOutlined, ZoomInOutlined, ZoomOutOutlined, HolderOutlined, SettingOutlined, StopOutlined, QuestionCircleOutlined, FundProjectionScreenOutlined, ReloadOutlined, FieldTimeOutlined, SearchOutlined, RetweetOutlined } from '@ant-design/icons';
+import { STEP_TEST_EVENT } from '../components/PlaybackStatusBanner';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -3364,7 +3365,16 @@ export default function RecordPage() {
       const overrides = (!hasExplicitDevice && screenshotDeviceId)
         ? { screenshotDeviceId, screenType }
         : undefined;
-      const res = await scenarioApi.testStep(scenarioName, stepRef(stepIdx), currentStep, overrides);
+      // 상단 상태바(스텝 테스트 중 + 중지 버튼)를 폴링 주기 기다리지 않고 바로 띄운다.
+      // 요청이 백엔드에 도달해 상태가 기록될 시간을 조금 준 뒤 갱신.
+      const kickBanner = window.setTimeout(() => window.dispatchEvent(new Event(STEP_TEST_EVENT)), 300);
+      let res;
+      try {
+        res = await scenarioApi.testStep(scenarioName, stepRef(stepIdx), currentStep, overrides);
+      } finally {
+        window.clearTimeout(kickBanner);
+        window.dispatchEvent(new Event(STEP_TEST_EVENT));  // 종료 즉시 상태바 내림
+      }
       // _stepIdx: 결과 모달의 기대이미지 교체가 어느 스텝을 갱신할지 알아야 한다
       const result = { ...res.data, _ts: Date.now(), _stepIdx: stepIdx };
       setTestResult(result);

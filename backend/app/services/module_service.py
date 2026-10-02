@@ -1205,9 +1205,11 @@ def get_module_functions(module_name: str) -> list[dict]:
         # SCAR.Disconnect 는 device_manager 연결해제/등록삭제 시 netns 복원용으로 자동 호출 —
         # 시나리오 스텝에 노출할 필요 없음 (Reconnect/Setup/SendApi/Exec 등은 그대로 노출).
         "SCAR": {"Disconnect"},
-        "CMD": {"CheckCapture", "RunCapture", "ListBackground"},
+        # CANoe_Ctrl.Disconnect 는 재생 중단/종료 정리(cleanup_active_instances)용 — 스텝 노출 불필요
+        "CANoe_Ctrl": {"Disconnect"},
+        "CMD": {"CheckCapture", "RunCapture", "ListBackground", "Disconnect"},
         # SHELL 은 CMD 의 Linux/macOS 대응 모듈 — 노출 정책 동일
-        "SHELL": {"CheckCapture", "RunCapture", "RunBackground", "ListBackground"},
+        "SHELL": {"CheckCapture", "RunCapture", "RunBackground", "ListBackground", "Disconnect"},
         # CANoe_RBS 내부 비교/유틸 헬퍼는 시나리오 스텝에 노출할 필요 없음
         # (CompareValue/CompareString/compareDIAG/GetByteDataList 는 Check* 함수가 내부 사용,
         #  make_timestamp_log_dir 는 Init 내부 사용).

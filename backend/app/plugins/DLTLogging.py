@@ -41,6 +41,18 @@ from typing import Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
+# 재생/스텝 테스트 중단 신호 — 키워드 대기·감시 루프를 현재 회차에서 끝낸다.
+try:
+    from backend.app.services.run_abort import abort_sleep as _abort_sleep
+    from backend.app.services.run_abort import is_abort_requested as _is_abort_requested
+except Exception:  # 앱 밖 단독 실행 폴백
+    def _abort_sleep(seconds: float) -> bool:
+        time.sleep(seconds)
+        return False
+
+    def _is_abort_requested() -> bool:
+        return False
+
 # 메모리 링버퍼 최대 라인 수 — 전체 로그의 정본은 스트림 파일이며, 메모리는
 # 최근 N줄만 유지한다 (장시간 로깅 시 무한 메모리 증가 → 전체 성능 저하 방지).
 _RING_MAX = 100_000
@@ -712,8 +724,12 @@ class DLTLogging:
                     total_len, save_path, keyword, check_count,
                     matched=False, reason="max_checks",
                 )
-
-            time.sleep(interval)
+            if _abort_sleep(interval):
+                logger.info("[DLTLogging] WatchAndStop STOPPED '%s' after %d checks", keyword, check_count)
+                return self._watch_save_and_stop(
+                    total_len, save_path, keyword, check_count,
+                    matched=False, reason="stopped",
+                )
 
     def _watch_save_and_stop(self, end_abs: int, save_path: str, keyword: str,
                              check_count: int, matched: bool, reason: str = "") -> str:
@@ -763,6 +779,8 @@ class DLTLogging:
             tail += f" (+ raw: {raw_saved})"
         if matched:
             return f"PASS: '{keyword}' found after {check_count} checks — {tail}"
+        if reason == "stopped":
+            return f"STOPPED: '{keyword}' 감시 중 중단됨 ({check_count} checks) — {tail}"
         if reason == "timeout":
             return f"FAIL: '{keyword}' not found within timeout ({check_count} checks) — {tail}"
         return f"FAIL: '{keyword}' not found after {check_count} checks — {tail}"
@@ -1185,7 +1203,8 @@ class DLTLogging:
                     return f"PASS: {line}"
 
             check_abs = total
-            time.sleep(0.3)
+            if _abort_sleep(0.3):
+                return f"STOPPED: keyword '{keyword}' 대기 중 중단됨 (미검출)"
 
         logger.info("[DLTLogging] WaitLog FAIL: '%s' not found in %ds", keyword, timeout_sec)
         return f"FAIL: keyword '{keyword}' not found within {int(timeout_sec)}s"
@@ -1253,8 +1272,8 @@ class DLTLogging:
                 # 전체 wall-clock이 timeout(총 대기 시간)에 수렴하게 한다. (스캔 시간이
                 # 매 회차 위에 더해져 timeout을 초과하던 문제 수정.)
                 remaining = (start + attempt * interval) - time.monotonic()
-                if remaining > 0:
-                    time.sleep(remaining)
+                if remaining > 0 and _abort_sleep(remaining):
+                    return f"STOPPED: keyword '{keyword}' 대기 중 중단됨 ({attempt}/{max_retries}회차 미검출)"
 
         logger.info("[DLTLogging] ExpectFound FAIL: '%s' not found after %d retries (%.0fs)",
                     keyword, max_retries, timeout_sec)
@@ -1304,8 +1323,8 @@ class DLTLogging:
                 # 다음 체크 예정 시각까지만 대기 — 스캔 시간을 interval에서 차감해
                 # 전체 wall-clock이 timeout(총 대기 시간)에 수렴하게 한다.
                 remaining = (start + attempt * interval) - time.monotonic()
-                if remaining > 0:
-                    time.sleep(remaining)
+                if remaining > 0 and _abort_sleep(remaining):
+                    return f"STOPPED: keyword '{keyword}' 감시 중 중단됨 ({attempt}/{max_retries}회차까지 미검출)"
 
         logger.info("[DLTLogging] ExpectNotFound PASS: '%s' not found after %d checks (%.0fs)",
                     keyword, max_retries, timeout_sec)

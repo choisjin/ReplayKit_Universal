@@ -33,6 +33,14 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# 재생/스텝 테스트 중단 신호 — 측정 폴링·대기를 즉시 끝낸다(동작 자체는 수행).
+try:
+    from backend.app.services.run_abort import abort_sleep as _abort_sleep
+except Exception:  # 앱 밖 단독 실행 폴백
+    def _abort_sleep(seconds: float) -> bool:
+        time.sleep(seconds)
+        return False
+
 # brainstem 은 선택 의존성(pip install brainstem). 미설치여도 모듈 자체는 import 돼야
 # 스텝 목록/가이드가 정상 동작한다 — 실제 사용 시점에만 실패시킨다.
 try:  # pragma: no cover - 환경 의존
@@ -329,7 +337,9 @@ class Acroname:
                             f"in {lo}~{hi} (samples={len(samples)})")
                 if time.monotonic() >= deadline:
                     break
-                time.sleep(_POLL_INTERVAL_S)
+                if _abort_sleep(_POLL_INTERVAL_S):
+                    return (f"STOPPED: [{h.label}] port{p} {kind} 측정 대기 중 중단됨 "
+                            f"(최근값 {samples[-10:]})")
             tail = samples[-10:]
             return (f"FAIL: [{h.label}] port{p} {kind} {lo}~{hi}{unit} 범위에 들어오지 않음 "
                     f"(최근값 {tail})")
@@ -373,7 +383,7 @@ class Acroname:
             err = self._retry_busy(h.stem.usb.setPortDisable, p)
             if not _ok(err):
                 return f"FAIL: [{h.label}] port{p} disable 실패 — {_err_name(err)}"
-            time.sleep(wait_ms / 1000.0)
+            _abort_sleep(wait_ms / 1000.0)  # 중단 시 off 대기만 건너뛰고 재활성화는 수행
             err = self._retry_busy(h.stem.usb.setPortEnable, p)
             if not _ok(err):
                 return f"FAIL: [{h.label}] port{p} 재활성화 실패 — {_err_name(err)}"

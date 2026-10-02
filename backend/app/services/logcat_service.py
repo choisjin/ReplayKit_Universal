@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 # adb 바이너리 — adb_service와 동일 규약(번들 adb 우선, PATH 'adb' 폴백).
 from .adb_path import resolve_adb_path
+from .run_abort import abort_sleep, is_abort_requested
 ADB_PATH = resolve_adb_path()
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
@@ -617,12 +618,16 @@ class _LogcatSession:
             for ln in lines:
                 if keyword in ln:
                     return f"PASS: keyword '{keyword}' detected — {ln.strip()[:120]}"
-            _t.sleep(0.1)
+            if abort_sleep(0.1):  # 재생/스텝 테스트 중단 — 현재 회차에서 종료
+                break
 
         lines, _ts, check_abs = self._lines_since(check_abs)
         for ln in lines:
             if keyword in ln:
                 return f"PASS: keyword '{keyword}' detected — {ln.strip()[:120]}"
+
+        if is_abort_requested():
+            return f"STOPPED: keyword '{keyword}' 대기 중 중단됨 (미검출)"
 
         parent_step_id, parent_repeat_index = _current_step_context()
         try:
@@ -660,7 +665,8 @@ class _LogcatSession:
             for ln, ts in zip(lines, lines_ts):
                 if keyword in ln:
                     hits.append((ts, ln))
-            _t.sleep(0.1)
+            if abort_sleep(0.1):  # 재생/스텝 테스트 중단 — 현재 회차에서 종료
+                break
 
         lines, lines_ts, check_abs = self._lines_since(check_abs)
         for ln, ts in zip(lines, lines_ts):
@@ -679,6 +685,8 @@ class _LogcatSession:
                 pass
             return (f"FAIL: keyword '{keyword}' detected {len(hits)} time(s) — "
                     f"{hits[0][1].strip()[:120]}")
+        if is_abort_requested():
+            return f"STOPPED: keyword '{keyword}' 감시 중 중단됨 (미검출)"
         return (f"PASS: keyword '{keyword}' not detected within {float(time_s):g}s"
                 + self._link_note())
 

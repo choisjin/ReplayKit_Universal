@@ -815,11 +815,17 @@ class CANoe_Ctrl:
                 'service_id': f'{service_id:02X}'
             }
 
-    def __del__(self):
+    def Disconnect(self):
+        """주기 송신·Tester Present·로깅(저장)을 정리하고 버스를 닫는다.
+
+        재생 중단/종료 시 cleanup_active_instances 가 호출 — Tester Present 스레드가
+        self 를 붙잡고 있으면 __del__ 이 끝내 불리지 않아 주기 송신이 계속 남던 문제를 막는다.
+        여러 번 호출해도 안전(idempotent).
+        """
         try:
             # Stop tester present thread first
             if self.tester_present_running:
-                self.stop_tester_present()
+                self.canoe_stop_tester_present()
 
             # Stop all periodic tasks
             for busNum in range(0, len(self.bus)):
@@ -874,15 +880,25 @@ class CANoe_Ctrl:
                 except:
                     pass
 
+            self.stack = None
+            self.CANoe_recv = None
+            self.CANoe_logger = None
+            self.CANoe_logger_full = None
+
             # Finally shutdown buses
             for busNum in range(0, len(self.bus)):
                 try:
                     self.bus[busNum].shutdown()
                 except:
                     pass
+            self.bus = []
 
         except Exception as e:
             pass  # Silently ignore cleanup errors
+        return "OK"
+
+    def __del__(self):
+        self.Disconnect()
 
 
 if __name__ == '__main__':
